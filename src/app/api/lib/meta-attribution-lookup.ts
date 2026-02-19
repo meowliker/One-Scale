@@ -228,7 +228,7 @@ async function buildLookup(storeId: string): Promise<MetaAttributionLookup> {
   // Fast path: most active entities are already in local endpoint snapshots.
   ingestFromSnapshots(storeId, lookup);
 
-  const token = getMetaToken(storeId);
+  const token = await getMetaToken(storeId);
   if (!token?.accessToken) return lookup;
 
   const accounts = getStoreAdAccounts(storeId)

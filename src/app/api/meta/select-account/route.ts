@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    setMetaAccount(storeId, accountId, accountName);
+    await setMetaAccount(storeId, accountId, accountName);
 
     return NextResponse.json({ success: true });
   } catch {

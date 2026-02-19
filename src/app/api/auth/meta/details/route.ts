@@ -60,7 +60,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
 
-  const token = getMetaToken(storeId);
+  const token = await getMetaToken(storeId);
   if (!token) {
     return NextResponse.json({ error: 'Not connected to Meta' }, { status: 401 });
   }

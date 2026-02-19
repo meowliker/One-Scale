@@ -79,7 +79,7 @@ export async function GET(request: NextRequest) {
     const tokenData: ShopifyTokenPayload = await tokenResponse.json();
 
     // Store token in database
-    setShopifyToken(storeId, {
+    await setShopifyToken(storeId, {
       accessToken: tokenData.access_token,
       platform: 'shopify',
       storeId,

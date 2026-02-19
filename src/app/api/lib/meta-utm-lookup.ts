@@ -105,7 +105,7 @@ async function fetchAllPages<T>(
 }
 
 async function buildLookups(storeId: string): Promise<LookupMaps> {
-  const token = getMetaToken(storeId);
+  const token = await getMetaToken(storeId);
   const emptyMaps: LookupMaps = {
     campaignByName: new Map(),
     adSetByName: new Map(),

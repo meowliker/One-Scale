@@ -42,7 +42,7 @@ function mapEventName(name: string): string {
 }
 
 export async function forwardToMetaCapi(input: ForwardToMetaInput): Promise<void> {
-  const token = getMetaToken(input.storeId);
+  const token = await getMetaToken(input.storeId);
   if (!token?.accessToken) {
     throw new Error('Meta not connected');
   }

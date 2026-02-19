@@ -73,7 +73,7 @@ export async function GET(request: NextRequest) {
     const longLivedToken: MetaTokenPayload = await longLivedResponse.json();
 
     // Store token in database
-    setMetaToken(storeId, {
+    await setMetaToken(storeId, {
       accessToken: longLivedToken.access_token,
       platform: 'meta',
       storeId,
