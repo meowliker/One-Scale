@@ -3,6 +3,9 @@ import path from 'path';
 import fs from 'fs';
 import { decryptSecret, encryptSecret } from '@/app/api/lib/crypto';
 
+const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+
 function resolveDbPath(): string {
   if (process.env.SQLITE_DB_PATH && process.env.SQLITE_DB_PATH.trim()) {
     return process.env.SQLITE_DB_PATH.trim();
@@ -17,6 +20,71 @@ function resolveDbPath(): string {
 }
 
 const DB_PATH = resolveDbPath();
+
+export function isSupabasePersistenceEnabled(): boolean {
+  return !!(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
+}
+
+function waitFor<T>(promise: Promise<T>): T {
+  const flag = new Int32Array(new SharedArrayBuffer(4));
+  let result: T | undefined;
+  let error: unknown;
+
+  promise
+    .then((value) => {
+      result = value;
+      Atomics.store(flag, 0, 1);
+      Atomics.notify(flag, 0, 1);
+    })
+    .catch((err) => {
+      error = err;
+      Atomics.store(flag, 0, 1);
+      Atomics.notify(flag, 0, 1);
+    });
+
+  while (Atomics.load(flag, 0) === 0) {
+    Atomics.wait(flag, 0, 0, 100);
+  }
+
+  if (error) {
+    throw error;
+  }
+  return result as T;
+}
+
+function supabaseHeaders(extra?: Record<string, string>): Record<string, string> {
+  return {
+    apikey: SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+    'Content-Type': 'application/json',
+    ...extra,
+  };
+}
+
+async function supabaseFetch<T>(pathWithQuery: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1${pathWithQuery}`, {
+    ...init,
+    headers: {
+      ...supabaseHeaders(),
+      ...(init?.headers || {}),
+    },
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`Supabase request failed: ${res.status} ${txt}`);
+  }
+  if (res.status === 204) return undefined as T;
+  return res.json() as Promise<T>;
+}
+
+function safeSupabase<T>(fn: () => T): T | null {
+  try {
+    return fn();
+  } catch {
+    return null;
+  }
+}
 
 // Store db on globalThis so it survives Next.js HMR (hot module replacement).
 // Without this, each HMR reload creates a new native SQLite handle while the
@@ -407,6 +475,23 @@ export interface DbConnection {
 }
 
 export function getConnection(storeId: string, platform: 'meta' | 'shopify'): DbConnection | null {
+  if (isSupabasePersistenceEnabled()) {
+    const row = safeSupabase(() =>
+      waitFor(
+        supabaseFetch<DbConnection[]>(
+          `/connections?store_id=eq.${encodeURIComponent(storeId)}&platform=eq.${platform}&select=*&limit=1`
+        )
+      )
+    )?.[0];
+    if (row) {
+      return {
+        ...row,
+        access_token: decryptSecret(row.access_token),
+        refresh_token: row.refresh_token ? decryptSecret(row.refresh_token) : null,
+      };
+    }
+  }
+
   const db = getDb();
   const row = db.prepare(
     'SELECT * FROM connections WHERE store_id = ? AND platform = ?'
@@ -431,6 +516,35 @@ export function upsertConnection(data: {
   shopName?: string;
   scopes?: string;
 }): void {
+  if (isSupabasePersistenceEnabled()) {
+    safeSupabase(() =>
+      waitFor(
+        supabaseFetch<DbConnection[]>(
+          `/connections?on_conflict=store_id,platform`,
+          {
+            method: 'POST',
+            headers: supabaseHeaders({
+              Prefer: 'resolution=merge-duplicates,return=representation',
+            }),
+            body: JSON.stringify([{
+              store_id: data.storeId,
+              platform: data.platform,
+              access_token: encryptSecret(data.accessToken),
+              refresh_token: data.refreshToken ? encryptSecret(data.refreshToken) : null,
+              expires_at: data.expiresAt ?? null,
+              account_id: data.accountId ?? null,
+              account_name: data.accountName ?? null,
+              shop_domain: data.shopDomain ?? null,
+              shop_name: data.shopName ?? null,
+              scopes: data.scopes ?? null,
+              last_synced: new Date().toISOString(),
+            }]),
+          }
+        )
+      )
+    );
+  }
+
   const db = getDb();
   const encryptedAccessToken = encryptSecret(data.accessToken);
   const encryptedRefreshToken = data.refreshToken ? encryptSecret(data.refreshToken) : null;
@@ -462,6 +576,27 @@ export function upsertConnection(data: {
 }
 
 export function updateConnectionAccount(storeId: string, platform: 'meta' | 'shopify', accountId: string, accountName: string): void {
+  if (isSupabasePersistenceEnabled()) {
+    safeSupabase(() =>
+      waitFor(
+        supabaseFetch<DbConnection[]>(
+          `/connections?store_id=eq.${encodeURIComponent(storeId)}&platform=eq.${platform}`,
+          {
+            method: 'PATCH',
+            headers: supabaseHeaders({
+              Prefer: 'return=representation',
+            }),
+            body: JSON.stringify({
+              account_id: accountId,
+              account_name: accountName,
+              last_synced: new Date().toISOString(),
+            }),
+          }
+        )
+      )
+    );
+  }
+
   const db = getDb();
   db.prepare(
     'UPDATE connections SET account_id = ?, account_name = ? WHERE store_id = ? AND platform = ?'
@@ -469,6 +604,19 @@ export function updateConnectionAccount(storeId: string, platform: 'meta' | 'sho
 }
 
 export function deleteConnection(storeId: string, platform: 'meta' | 'shopify'): void {
+  if (isSupabasePersistenceEnabled()) {
+    safeSupabase(() =>
+      waitFor(
+        supabaseFetch<unknown>(
+          `/connections?store_id=eq.${encodeURIComponent(storeId)}&platform=eq.${platform}`,
+          {
+            method: 'DELETE',
+          }
+        )
+      )
+    );
+  }
+
   const db = getDb();
   db.prepare(
     'DELETE FROM connections WHERE store_id = ? AND platform = ?'
@@ -506,6 +654,31 @@ export function getAllMetaConnections(): Array<{
   accountName: string | null;
   connectedAt: string;
 }> {
+  if (isSupabasePersistenceEnabled()) {
+    const rows = safeSupabase(() =>
+      waitFor(
+        supabaseFetch<Array<{
+          store_id: string;
+          account_id: string | null;
+          account_name: string | null;
+          connected_at: string;
+          stores: { name: string } | null;
+        }>>(
+          '/connections?platform=eq.meta&select=store_id,account_id,account_name,connected_at,stores(name)&order=connected_at.desc'
+        )
+      )
+    );
+    if (rows) {
+      return rows.map((r) => ({
+        storeId: r.store_id,
+        storeName: r.stores?.name || r.store_id,
+        accountId: r.account_id,
+        accountName: r.account_name,
+        connectedAt: r.connected_at,
+      }));
+    }
+  }
+
   const db = getDb();
   const rows = db.prepare(`
     SELECT c.store_id, s.name as store_name, c.account_id, c.account_name, c.connected_at
@@ -613,6 +786,29 @@ export interface AppCredentials {
 }
 
 export function getAppCredentials(platform: 'meta' | 'shopify'): AppCredentials | null {
+  if (platform === 'meta' && process.env.META_APP_ID && process.env.META_APP_SECRET) {
+    return {
+      id: 0,
+      platform: 'meta',
+      app_id: process.env.META_APP_ID,
+      app_secret: process.env.META_APP_SECRET,
+      redirect_uri: process.env.META_REDIRECT_URI || '',
+      scopes: null,
+      updated_at: new Date().toISOString(),
+    };
+  }
+  if (platform === 'shopify' && process.env.SHOPIFY_API_KEY && process.env.SHOPIFY_API_SECRET) {
+    return {
+      id: 0,
+      platform: 'shopify',
+      app_id: process.env.SHOPIFY_API_KEY,
+      app_secret: process.env.SHOPIFY_API_SECRET,
+      redirect_uri: process.env.SHOPIFY_REDIRECT_URI || '',
+      scopes: process.env.SHOPIFY_SCOPES || null,
+      updated_at: new Date().toISOString(),
+    };
+  }
+
   const db = getDb();
   const row = db.prepare(
     'SELECT * FROM app_credentials WHERE platform = ?'
@@ -683,6 +879,27 @@ export interface DbStoreAdAccount {
 }
 
 export function getAllStores(): Array<DbStore & { adAccounts: DbStoreAdAccount[]; shopifyConnected: boolean; metaConnected: boolean }> {
+  if (isSupabasePersistenceEnabled()) {
+    const stores = safeSupabase(() => waitFor(supabaseFetch<DbStore[]>('/stores?select=*&order=created_at.desc')));
+    const adAccounts = safeSupabase(() => waitFor(supabaseFetch<Array<DbStoreAdAccount & { is_active: boolean | number }>>('/store_ad_accounts?select=*')));
+    const connections = safeSupabase(() => waitFor(supabaseFetch<Array<{ store_id: string; platform: 'meta' | 'shopify' }>>('/connections?select=store_id,platform')));
+    if (stores && adAccounts && connections) {
+      return stores.map((store) => {
+        const mapped = adAccounts
+          .filter((a) => a.store_id === store.id)
+          .map((a) => ({ ...a, is_active: a.is_active ? 1 : 0 })) as DbStoreAdAccount[];
+        const metaConnected = connections.some((c) => c.store_id === store.id && c.platform === 'meta');
+        const shopifyConnected = connections.some((c) => c.store_id === store.id && c.platform === 'shopify');
+        return {
+          ...store,
+          adAccounts: mapped,
+          metaConnected,
+          shopifyConnected,
+        };
+      });
+    }
+  }
+
   const db = getDb();
   const stores = db.prepare('SELECT * FROM stores ORDER BY created_at DESC').all() as DbStore[];
 
@@ -708,12 +925,34 @@ export function getAllStores(): Array<DbStore & { adAccounts: DbStoreAdAccount[]
 }
 
 export function getStore(storeId: string): DbStore | null {
+  if (isSupabasePersistenceEnabled()) {
+    const row = safeSupabase(() =>
+      waitFor(
+        supabaseFetch<DbStore[]>(
+          `/stores?id=eq.${encodeURIComponent(storeId)}&select=*&limit=1`
+        )
+      )
+    )?.[0];
+    if (row) return row;
+  }
+
   const db = getDb();
   const row = db.prepare('SELECT * FROM stores WHERE id = ?').get(storeId) as DbStore | undefined;
   return row ?? null;
 }
 
 export function getStoreByDomain(domain: string): DbStore | null {
+  if (isSupabasePersistenceEnabled()) {
+    const cleanedRemote = domain.replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase();
+    const rows = safeSupabase(() =>
+      waitFor(supabaseFetch<DbStore[]>('/stores?select=*'))
+    );
+    if (rows) {
+      const match = rows.find((r) => (r.domain || '').toLowerCase() === cleanedRemote);
+      if (match) return match;
+    }
+  }
+
   const db = getDb();
   const cleaned = domain.replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase();
   const row = db.prepare(
@@ -730,6 +969,30 @@ export function createStore(data: {
   apiKey?: string;
   apiSecret?: string;
 }): DbStore {
+  if (isSupabasePersistenceEnabled()) {
+    safeSupabase(() =>
+      waitFor(
+        supabaseFetch<DbStore[]>(
+          '/stores?on_conflict=id',
+          {
+            method: 'POST',
+            headers: supabaseHeaders({
+              Prefer: 'resolution=merge-duplicates,return=representation',
+            }),
+            body: JSON.stringify([{
+              id: data.id,
+              name: data.name,
+              domain: data.domain,
+              platform: data.platform || 'shopify',
+              api_key: data.apiKey || null,
+              api_secret: data.apiSecret || null,
+            }]),
+          }
+        )
+      )
+    );
+  }
+
   const db = getDb();
   db.prepare(
     'INSERT INTO stores (id, name, domain, platform, api_key, api_secret) VALUES (?, ?, ?, ?, ?, ?)'
@@ -738,6 +1001,14 @@ export function createStore(data: {
 }
 
 export function deleteStore(storeId: string): void {
+  if (isSupabasePersistenceEnabled()) {
+    safeSupabase(() =>
+      waitFor(
+        supabaseFetch<unknown>(`/stores?id=eq.${encodeURIComponent(storeId)}`, { method: 'DELETE' })
+      )
+    );
+  }
+
   const db = getDb();
   // Delete connections for this store too
   db.prepare('DELETE FROM connections WHERE store_id = ?').run(storeId);
@@ -748,6 +1019,19 @@ export function deleteStore(storeId: string): void {
 // ------ Store Ad Account Mapping CRUD ------
 
 export function getStoreAdAccounts(storeId: string): DbStoreAdAccount[] {
+  if (isSupabasePersistenceEnabled()) {
+    const rows = safeSupabase(() =>
+      waitFor(
+        supabaseFetch<Array<DbStoreAdAccount & { is_active: boolean | number }>>(
+          `/store_ad_accounts?store_id=eq.${encodeURIComponent(storeId)}&select=*&order=created_at.asc`
+        )
+      )
+    );
+    if (rows) {
+      return rows.map((r) => ({ ...r, is_active: r.is_active ? 1 : 0 })) as DbStoreAdAccount[];
+    }
+  }
+
   const db = getDb();
   return db.prepare(
     'SELECT * FROM store_ad_accounts WHERE store_id = ? ORDER BY created_at ASC'
@@ -762,6 +1046,33 @@ export function addStoreAdAccount(data: {
   currency?: string;
   timezone?: string;
 }): DbStoreAdAccount {
+  if (isSupabasePersistenceEnabled()) {
+    const rows = safeSupabase(() =>
+      waitFor(
+        supabaseFetch<Array<DbStoreAdAccount & { is_active: boolean | number }>>(
+          '/store_ad_accounts?on_conflict=store_id,ad_account_id',
+          {
+            method: 'POST',
+            headers: supabaseHeaders({
+              Prefer: 'resolution=merge-duplicates,return=representation',
+            }),
+            body: JSON.stringify([{
+              store_id: data.storeId,
+              ad_account_id: data.adAccountId,
+              ad_account_name: data.adAccountName,
+              platform: data.platform || 'meta',
+              currency: data.currency ?? null,
+              timezone: data.timezone ?? null,
+            }]),
+          }
+        )
+      )
+    );
+    if (rows?.[0]) {
+      return { ...rows[0], is_active: rows[0].is_active ? 1 : 0 } as DbStoreAdAccount;
+    }
+  }
+
   const db = getDb();
   db.prepare(`
     INSERT INTO store_ad_accounts (store_id, ad_account_id, ad_account_name, platform, currency, timezone)
@@ -785,6 +1096,17 @@ export function addStoreAdAccount(data: {
 }
 
 export function removeStoreAdAccount(storeId: string, adAccountId: string): void {
+  if (isSupabasePersistenceEnabled()) {
+    safeSupabase(() =>
+      waitFor(
+        supabaseFetch<unknown>(
+          `/store_ad_accounts?store_id=eq.${encodeURIComponent(storeId)}&ad_account_id=eq.${encodeURIComponent(adAccountId)}`,
+          { method: 'DELETE' }
+        )
+      )
+    );
+  }
+
   const db = getDb();
   db.prepare(
     'DELETE FROM store_ad_accounts WHERE store_id = ? AND ad_account_id = ?'
@@ -792,6 +1114,25 @@ export function removeStoreAdAccount(storeId: string, adAccountId: string): void
 }
 
 export function toggleStoreAdAccount(storeId: string, adAccountId: string, isActive: boolean): void {
+  if (isSupabasePersistenceEnabled()) {
+    safeSupabase(() =>
+      waitFor(
+        supabaseFetch<unknown>(
+          `/store_ad_accounts?store_id=eq.${encodeURIComponent(storeId)}&ad_account_id=eq.${encodeURIComponent(adAccountId)}`,
+          {
+            method: 'PATCH',
+            headers: supabaseHeaders({
+              Prefer: 'return=minimal',
+            }),
+            body: JSON.stringify({
+              is_active: !!isActive,
+            }),
+          }
+        )
+      )
+    );
+  }
+
   const db = getDb();
   db.prepare(
     'UPDATE store_ad_accounts SET is_active = ? WHERE store_id = ? AND ad_account_id = ?'
