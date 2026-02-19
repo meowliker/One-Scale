@@ -1960,7 +1960,7 @@ export function CreativeInsightsTab({ data, filterPreset }: CreativeInsightsTabP
           setBulkActionLoading(false);
         }}
         title={selectedAdSetReview ? `Ad Set Review: ${selectedAdSetReview.adSetName}` : 'Ad Set Review'}
-        size="xl"
+        size="lg"
       >
         {!selectedAdSetReview ? null : (
           <div className="space-y-4 max-h-[76vh] overflow-y-auto rounded-xl border border-white/10 bg-gradient-to-b from-[#1f2848] via-[#1c2340] to-[#171d34] p-4 pr-2">
