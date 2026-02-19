@@ -1,10 +1,35 @@
 import { getConnection, upsertConnection, deleteConnection, updateConnectionAccount, getStore } from './db';
 import { getShopifyAccessToken } from './shopify-client';
 import type { OAuthTokens } from '@/types/auth';
+import {
+  deletePersistentConnection,
+  getPersistentConnection,
+  hydrateStoreFromSupabase,
+  isSupabasePersistenceEnabled,
+  updatePersistentConnectionAccount,
+  upsertPersistentConnection,
+} from './supabase-persistence';
 
 // ------ Get Tokens ------
 
-export function getMetaToken(storeId: string): OAuthTokens | null {
+export async function getMetaToken(storeId: string): Promise<OAuthTokens | null> {
+  if (isSupabasePersistenceEnabled()) {
+    await hydrateStoreFromSupabase(storeId);
+    const persistentConn = await getPersistentConnection(storeId, 'meta');
+    if (persistentConn) {
+      if (persistentConn.expires_at && persistentConn.expires_at < Date.now()) {
+        return null;
+      }
+      return {
+        accessToken: persistentConn.access_token,
+        platform: 'meta',
+        storeId: persistentConn.store_id,
+        accountId: persistentConn.account_id ?? undefined,
+        expiresAt: persistentConn.expires_at ?? undefined,
+      };
+    }
+  }
+
   const conn = getConnection(storeId, 'meta');
   if (!conn) return null;
 
@@ -23,6 +48,59 @@ export function getMetaToken(storeId: string): OAuthTokens | null {
 }
 
 export async function getShopifyToken(storeId: string): Promise<OAuthTokens | null> {
+  if (isSupabasePersistenceEnabled()) {
+    await hydrateStoreFromSupabase(storeId);
+    const persistentConn = await getPersistentConnection(storeId, 'shopify');
+    if (persistentConn) {
+      const now = Math.floor(Date.now() / 1000);
+      if (persistentConn.expires_at && persistentConn.expires_at < now) {
+        const store = getStore(storeId);
+        if (store?.api_key && store?.api_secret && persistentConn.shop_domain) {
+          try {
+            const tokenData = await getShopifyAccessToken(
+              persistentConn.shop_domain,
+              store.api_key,
+              store.api_secret
+            );
+            const newExpiresAt = Math.floor(Date.now() / 1000) + tokenData.expires_in;
+            upsertConnection({
+              storeId,
+              platform: 'shopify',
+              accessToken: tokenData.access_token,
+              expiresAt: newExpiresAt,
+              shopDomain: persistentConn.shop_domain,
+              shopName: persistentConn.shop_name ?? undefined,
+            });
+            await upsertPersistentConnection({
+              storeId,
+              platform: 'shopify',
+              accessToken: tokenData.access_token,
+              expiresAt: newExpiresAt,
+              shopDomain: persistentConn.shop_domain,
+              shopName: persistentConn.shop_name ?? undefined,
+            });
+            return {
+              accessToken: tokenData.access_token,
+              platform: 'shopify',
+              storeId,
+              shopDomain: persistentConn.shop_domain ?? undefined,
+            };
+          } catch {
+            return null;
+          }
+        }
+        return null;
+      }
+
+      return {
+        accessToken: persistentConn.access_token,
+        platform: 'shopify',
+        storeId: persistentConn.store_id,
+        shopDomain: persistentConn.shop_domain ?? undefined,
+      };
+    }
+  }
+
   const conn = getConnection(storeId, 'shopify');
   if (!conn) return null;
 
@@ -74,7 +152,7 @@ export async function getShopifyToken(storeId: string): Promise<OAuthTokens | nu
 
 // ------ Set Tokens ------
 
-export function setMetaToken(storeId: string, payload: OAuthTokens): void {
+export async function setMetaToken(storeId: string, payload: OAuthTokens): Promise<void> {
   upsertConnection({
     storeId,
     platform: 'meta',
@@ -83,25 +161,49 @@ export function setMetaToken(storeId: string, payload: OAuthTokens): void {
     expiresAt: payload.expiresAt,
     accountId: payload.accountId,
   });
+  if (isSupabasePersistenceEnabled()) {
+    await upsertPersistentConnection({
+      storeId,
+      platform: 'meta',
+      accessToken: payload.accessToken,
+      refreshToken: payload.refreshToken,
+      expiresAt: payload.expiresAt,
+      accountId: payload.accountId,
+    });
+  }
 }
 
-export function setShopifyToken(storeId: string, payload: OAuthTokens): void {
+export async function setShopifyToken(storeId: string, payload: OAuthTokens): Promise<void> {
   upsertConnection({
     storeId,
     platform: 'shopify',
     accessToken: payload.accessToken,
     shopDomain: payload.shopDomain,
   });
+  if (isSupabasePersistenceEnabled()) {
+    await upsertPersistentConnection({
+      storeId,
+      platform: 'shopify',
+      accessToken: payload.accessToken,
+      shopDomain: payload.shopDomain,
+    });
+  }
 }
 
 // ------ Clear Token ------
 
-export function clearToken(platform: 'meta' | 'shopify', storeId: string): void {
+export async function clearToken(platform: 'meta' | 'shopify', storeId: string): Promise<void> {
   deleteConnection(storeId, platform);
+  if (isSupabasePersistenceEnabled()) {
+    await deletePersistentConnection(storeId, platform);
+  }
 }
 
 // ------ Update Account ------
 
-export function setMetaAccount(storeId: string, accountId: string, accountName: string): void {
+export async function setMetaAccount(storeId: string, accountId: string, accountName: string): Promise<void> {
   updateConnectionAccount(storeId, 'meta', accountId, accountName);
+  if (isSupabasePersistenceEnabled()) {
+    await updatePersistentConnectionAccount(storeId, 'meta', accountId, accountName);
+  }
 }

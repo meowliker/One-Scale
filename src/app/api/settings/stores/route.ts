@@ -3,10 +3,19 @@ import { randomBytes } from 'crypto';
 import { getAllStores, createStore, deleteStore, getStore } from '@/app/api/lib/db';
 import { upsertConnection } from '@/app/api/lib/db';
 import { fetchFromShopify, getShopifyAccessToken } from '@/app/api/lib/shopify-client';
+import {
+  deletePersistentStore,
+  isSupabasePersistenceEnabled,
+  listPersistentStores,
+  upsertPersistentConnection,
+  upsertPersistentStore,
+} from '@/app/api/lib/supabase-persistence';
 
 export async function GET() {
   try {
-    const stores = getAllStores();
+    const stores = isSupabasePersistenceEnabled()
+      ? await listPersistentStores()
+      : getAllStores();
 
     // Map to frontend-friendly shape
     const result = stores.map((s) => ({
@@ -106,7 +115,7 @@ export async function POST(request: NextRequest) {
     // Generate a unique store ID
     const storeId = `store-${randomBytes(6).toString('hex')}`;
 
-    // Create the store in DB (save client ID + secret for token refresh)
+    // Create the store locally (fast path) and in Supabase (durable path)
     const store = createStore({
       id: storeId,
       name: shopName || name,
@@ -126,6 +135,25 @@ export async function POST(request: NextRequest) {
       shopDomain: cleanDomain,
       shopName: shopName || name,
     });
+
+    if (isSupabasePersistenceEnabled()) {
+      await upsertPersistentStore({
+        id: store.id,
+        name: store.name,
+        domain: store.domain,
+        platform: store.platform,
+        apiKey: shopifyApiKey,
+        apiSecret: shopifyApiSecret,
+      });
+      await upsertPersistentConnection({
+        storeId: store.id,
+        platform: 'shopify',
+        accessToken,
+        expiresAt,
+        shopDomain: cleanDomain,
+        shopName: shopName || name,
+      });
+    }
 
     return NextResponse.json({
       store: {
@@ -172,6 +200,9 @@ export async function DELETE(request: NextRequest) {
     }
 
     deleteStore(storeId);
+    if (isSupabasePersistenceEnabled()) {
+      await deletePersistentStore(storeId);
+    }
     return NextResponse.json({ success: true });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
