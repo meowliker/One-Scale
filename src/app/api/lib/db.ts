@@ -3,7 +3,20 @@ import path from 'path';
 import fs from 'fs';
 import { decryptSecret, encryptSecret } from '@/app/api/lib/crypto';
 
-const DB_PATH = path.join(process.cwd(), 'data', 'app.db');
+function resolveDbPath(): string {
+  if (process.env.SQLITE_DB_PATH && process.env.SQLITE_DB_PATH.trim()) {
+    return process.env.SQLITE_DB_PATH.trim();
+  }
+
+  // Vercel serverless runtime has a read-only app directory; use /tmp.
+  if (process.env.VERCEL) {
+    return '/tmp/one-scale/app.db';
+  }
+
+  return path.join(process.cwd(), 'data', 'app.db');
+}
+
+const DB_PATH = resolveDbPath();
 
 // Store db on globalThis so it survives Next.js HMR (hot module replacement).
 // Without this, each HMR reload creates a new native SQLite handle while the
