@@ -402,7 +402,7 @@ export function LatestActionsCell({ entityId, actions: actionsProp, activitiesFu
 
   if (actions.length === 0) {
     return (
-      <td className="whitespace-nowrap px-3 py-3">
+      <td className="whitespace-nowrap px-4 py-3.5">
         {!activitiesFullyLoaded ? (
           <span className="text-[10px] text-text-dimmed italic" title="No activity in last 7 days. Click 'Full history' in the column header to load more.">
             No recent activity
@@ -418,7 +418,7 @@ export function LatestActionsCell({ entityId, actions: actionsProp, activitiesFu
   const overflowCount = actions.length - 3;
 
   return (
-    <td className="whitespace-nowrap px-3 py-3">
+    <td className="whitespace-nowrap px-4 py-3.5">
       <div className="group/actions flex items-center gap-1">
         {visibleActions.map((action) => (
           <div

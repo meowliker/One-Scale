@@ -146,20 +146,22 @@ export default function AdsManagerPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-text-primary">Ads Manager</h1>
-          <p className="text-sm text-text-secondary mt-1">Manage your Meta campaigns, ad sets, and ads</p>
+    <div className="light">
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold" style={{ color: '#1a1d2e' }}>Ads Manager</h1>
+            <p className="text-sm mt-1" style={{ color: '#5b6178' }}>Manage your Meta campaigns, ad sets, and ads</p>
+          </div>
+          {dateRange && (
+            <DateRangePicker dateRange={dateRange} onRangeChange={handleDateRangeChange} />
+          )}
         </div>
-        {dateRange && (
-          <DateRangePicker dateRange={dateRange} onRangeChange={handleDateRangeChange} />
-        )}
+        <AdsManagerClient
+          initialCampaigns={campaigns}
+          dateRange={clientDateRange}
+        />
       </div>
-      <AdsManagerClient
-        initialCampaigns={campaigns}
-        dateRange={clientDateRange}
-      />
     </div>
   );
 }

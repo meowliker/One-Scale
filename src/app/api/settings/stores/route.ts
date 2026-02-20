@@ -16,6 +16,7 @@ import {
   upsertPersistentConnection,
   upsertPersistentStore,
 } from '@/app/api/lib/supabase-persistence';
+import { resolveDeploymentBaseUrl } from '@/app/api/lib/resolve-base-url';
 
 export async function GET(request: NextRequest) {
   try {
@@ -197,7 +198,7 @@ export async function POST(request: NextRequest) {
 
     // Auto-setup tracking: pixel, webhooks, backfill (fire-and-forget, don't block response)
     try {
-      const setupBaseUrl = process.env.NEXT_PUBLIC_APP_URL || `https://${request.headers.get('host')}`;
+      const setupBaseUrl = resolveDeploymentBaseUrl(request);
       fetch(new URL('/api/tracking/auto-setup', setupBaseUrl), {
         method: 'POST',
         headers: {

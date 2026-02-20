@@ -72,26 +72,26 @@
   --color-text-dimmed: #475569;
 }
 
-/* ===== Light Theme ===== */
+/* ===== Light Theme (Futuristic 2050) ===== */
 .light {
-  --color-background: #f8fafc;
-  --color-foreground: #0f172a;
+  --color-background: #f4f7fc;
+  --color-foreground: #1a1d2e;
   --color-surface: #ffffff;
   --color-surface-elevated: #ffffff;
-  --color-surface-hover: #f1f5f9;
-  --color-surface-active: #e2e8f0;
-  --color-border: #e2e8f0;
-  --color-border-light: #cbd5e1;
+  --color-surface-hover: #f0f4ff;
+  --color-surface-active: #e8eeff;
+  --color-border: #e2e8f4;
+  --color-border-light: #d0d9ed;
   --color-border-focus: #7c5cfc;
   --color-primary: #7c5cfc;
   --color-primary-light: #8b6fff;
   --color-primary-dark: #5b3fd4;
   --color-primary-glow: rgba(124, 92, 252, 0.10);
   --color-primary-ring: rgba(124, 92, 252, 0.2);
-  --color-text-primary: #0f172a;
-  --color-text-secondary: #475569;
-  --color-text-muted: #64748b;
-  --color-text-dimmed: #94a3b8;
+  --color-text-primary: #1a1d2e;
+  --color-text-secondary: #5b6178;
+  --color-text-muted: #8892a8;
+  --color-text-dimmed: #b0b8cc;
 }
 
 /* ===== Global Styles ===== */
@@ -174,6 +174,50 @@ body {
   animation: count-up 0.5s ease-out forwards;
 }
 
+/* Futuristic Ads Manager animations */
+@keyframes gradient-shift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+@keyframes float-subtle {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-2px); }
+}
+
+@keyframes border-glow {
+  0%, 100% { border-color: rgba(124, 92, 252, 0.2); }
+  50% { border-color: rgba(124, 92, 252, 0.5); }
+}
+
+@keyframes scan-line {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 rgba(124, 92, 252, 0.3); }
+  70% { box-shadow: 0 0 0 6px rgba(124, 92, 252, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(124, 92, 252, 0); }
+}
+
+.animate-gradient-shift {
+  background-size: 200% 200%;
+  animation: gradient-shift 8s ease infinite;
+}
+
+.animate-float {
+  animation: float-subtle 3s ease-in-out infinite;
+}
+
+.animate-border-glow {
+  animation: border-glow 2s ease-in-out infinite;
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 2s ease-in-out infinite;
+}
+
 /* Glassmorphism */
 .glass {
   background: rgba(22, 24, 35, 0.6);
@@ -183,7 +227,8 @@ body {
 }
 
 .light .glass {
-  background: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(226, 232, 244, 0.8);
 }
 
 .glass-light {
@@ -195,11 +240,176 @@ body {
 
 .light .glass-light {
   background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(226, 232, 244, 0.6);
 }
 
 /* Glow effect for important cards */
 .card-glow {
   box-shadow: 0 0 20px var(--color-primary-glow), 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+/* Futuristic glassmorphism for light theme */
+.glass-futuristic {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow:
+    0 4px 30px rgba(0, 0, 0, 0.04),
+    0 1px 3px rgba(0, 0, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.glass-futuristic-hover:hover {
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow:
+    0 8px 40px rgba(124, 92, 252, 0.08),
+    0 2px 8px rgba(0, 0, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+/* Futuristic table styles for light theme */
+.futuristic-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.futuristic-table thead tr {
+  background: linear-gradient(135deg, rgba(244, 247, 252, 0.95), rgba(232, 238, 255, 0.8));
+  backdrop-filter: blur(12px);
+}
+
+.futuristic-table thead th {
+  color: #5b6178;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 14px 16px;
+  position: relative;
+}
+
+.futuristic-table thead th::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 25%;
+  height: 50%;
+  width: 1px;
+  background: linear-gradient(to bottom, transparent, rgba(124, 92, 252, 0.15), transparent);
+}
+
+.futuristic-table thead th:last-child::after {
+  display: none;
+}
+
+.futuristic-table tbody tr {
+  border-bottom: 1px solid rgba(226, 232, 244, 0.6);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.futuristic-table tbody tr:hover {
+  background: linear-gradient(135deg, rgba(124, 92, 252, 0.03), rgba(59, 130, 246, 0.02));
+  transform: scale(1.001);
+  box-shadow: 0 2px 12px rgba(124, 92, 252, 0.06);
+}
+
+/* Column resize handle */
+.col-resize-handle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: col-resize;
+  user-select: none;
+  touch-action: none;
+  background: transparent;
+  transition: background 0.2s ease;
+  z-index: 10;
+}
+
+.col-resize-handle:hover,
+.col-resize-handle.active {
+  background: linear-gradient(to bottom, transparent, rgba(124, 92, 252, 0.6), transparent);
+}
+
+.col-resize-handle::after {
+  content: '';
+  position: absolute;
+  right: -3px;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+}
+
+/* Status badges - futuristic */
+.badge-active-futuristic {
+  background: linear-gradient(135deg, #dcfce7, #bbf7d0);
+  color: #166534;
+  border: 1px solid rgba(22, 163, 74, 0.2);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.1);
+}
+
+.badge-paused-futuristic {
+  background: linear-gradient(135deg, #f1f5f9, #e2e8f0);
+  color: #475569;
+  border: 1px solid rgba(71, 85, 105, 0.15);
+}
+
+/* Futuristic card with subtle animated border */
+.card-futuristic {
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 16px;
+  border: 1px solid rgba(226, 232, 244, 0.8);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.03),
+    0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.card-futuristic:hover {
+  border-color: rgba(124, 92, 252, 0.3);
+  box-shadow:
+    0 8px 32px rgba(124, 92, 252, 0.06),
+    0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+/* Futuristic scrollbar for light theme */
+.light .futuristic-scroll::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.light .futuristic-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.light .futuristic-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(to bottom, rgba(124, 92, 252, 0.2), rgba(124, 92, 252, 0.1));
+  border-radius: 4px;
+}
+.light .futuristic-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(to bottom, rgba(124, 92, 252, 0.4), rgba(124, 92, 252, 0.2));
+}
+
+/* Animated gradient border for table container */
+.gradient-border-animated {
+  position: relative;
+  border-radius: 16px;
+  overflow: hidden;
+}
+.gradient-border-animated::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 16px;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(124, 92, 252, 0.2), rgba(59, 130, 246, 0.1), rgba(124, 92, 252, 0.2));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: gradient-shift 8s ease infinite;
+  background-size: 200% 200%;
 }
 
 /* ===== Dark table styles ===== */

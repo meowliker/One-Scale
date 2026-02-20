@@ -56,7 +56,7 @@ export function PerformanceSparkline({ entityId, data: dataProp }: PerformanceSp
 
   if (!data || data.length === 0) {
     return (
-      <td className="whitespace-nowrap px-3 py-3 text-center text-xs text-text-dimmed">
+      <td className="whitespace-nowrap px-4 py-3.5 text-center text-xs text-text-dimmed/40">
         --
       </td>
     );
@@ -76,7 +76,7 @@ export function PerformanceSparkline({ entityId, data: dataProp }: PerformanceSp
   return (
     <td
       ref={cellRef}
-      className="relative whitespace-nowrap px-3 py-3"
+      className="relative whitespace-nowrap px-4 py-3.5"
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
@@ -110,7 +110,7 @@ export function PerformanceSparkline({ entityId, data: dataProp }: PerformanceSp
       {/* Hover tooltip (rendered via portal to avoid overflow clipping) */}
       <PortalTooltip anchorRef={cellRef} visible={showTooltip}>
         <div
-          className="rounded-lg border border-border-light bg-surface-elevated shadow-xl"
+          className="rounded-2xl border border-border/30 bg-white/95 backdrop-blur-xl shadow-[0_8px_40px_rgba(0,0,0,0.08)]"
           style={{ width: 272, padding: 16 }}
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
@@ -139,7 +139,7 @@ export function PerformanceSparkline({ entityId, data: dataProp }: PerformanceSp
               </defs>
               <CartesianGrid
                 strokeDasharray="3 3"
-                stroke="#1e2235"
+                stroke="#e8eeff"
                 horizontal
                 vertical={false}
               />
@@ -158,13 +158,15 @@ export function PerformanceSparkline({ entityId, data: dataProp }: PerformanceSp
               />
               <RechartsTooltip
                 contentStyle={{
-                  background: '#12141d',
-                  border: '1px solid #282d42',
-                  borderRadius: 6,
+                  background: 'rgba(255, 255, 255, 0.95)',
+                  border: '1px solid rgba(226, 232, 244, 0.6)',
+                  borderRadius: 12,
                   fontSize: 11,
-                  color: '#f1f5f9',
+                  color: '#1a1d2e',
+                  backdropFilter: 'blur(12px)',
+                  boxShadow: '0 4px 20px rgba(0, 0, 0, 0.06)',
                 }}
-                labelStyle={{ color: '#94a3b8', fontSize: 10 }}
+                labelStyle={{ color: '#5b6178', fontSize: 10 }}
                 formatter={(value: number | undefined) => [
                   value != null ? value.toFixed(2) : '--',
                   'ROAS',
@@ -176,8 +178,8 @@ export function PerformanceSparkline({ entityId, data: dataProp }: PerformanceSp
                 stroke={trendColor}
                 strokeWidth={2}
                 fill={`url(#${gradientId}-lg)`}
-                dot={{ r: 2.5, fill: trendColor, stroke: '#1a1d2b', strokeWidth: 1.5 }}
-                activeDot={{ r: 4, fill: trendColor, stroke: '#1a1d2b', strokeWidth: 2 }}
+                dot={{ r: 2.5, fill: trendColor, stroke: '#ffffff', strokeWidth: 1.5 }}
+                activeDot={{ r: 4, fill: trendColor, stroke: '#ffffff', strokeWidth: 2 }}
                 isAnimationActive={false}
               />
             </AreaChart>

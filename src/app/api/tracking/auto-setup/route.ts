@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
+import { resolveDeploymentBaseUrl } from '@/app/api/lib/resolve-base-url';
 
 export const maxDuration = 60;
 
@@ -93,10 +94,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
 
-  const resolvedBaseUrl =
-    bodyBaseUrl ||
-    process.env.NEXT_PUBLIC_APP_URL ||
-    `https://${request.headers.get('host')}`;
+  const resolvedBaseUrl = resolveDeploymentBaseUrl(request, bodyBaseUrl);
 
   const cookieHeader = request.headers.get('cookie') || '';
 

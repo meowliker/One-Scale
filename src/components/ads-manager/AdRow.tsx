@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { motion } from 'framer-motion';
 import {
   Play,
   Image as ImageIcon,
@@ -93,21 +94,26 @@ export function AdRow({
 
   return (
     <>
-      <tr
+      <motion.tr
         id={rowId}
+        layout
+        initial={{ opacity: 0, y: 4 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2, delay: 0.05 }}
         className={cn(
-          'border-b border-border bg-surface hover:bg-surface-hover transition-colors',
-          isSelected && 'bg-primary/10 hover:bg-primary/10',
-          isHighlighted && 'bg-amber-500/10 ring-1 ring-inset ring-amber-400/70'
+          'group border-b border-border/15 bg-white/40 backdrop-blur-sm transition-all duration-200',
+          'hover:bg-primary/[0.01]',
+          isSelected && 'bg-primary/[0.04] ring-1 ring-inset ring-primary/20',
+          isHighlighted && 'bg-amber-50/80 ring-1 ring-inset ring-amber-300/50'
         )}
       >
         {/* Checkbox */}
-        <td className="w-10 whitespace-nowrap py-2 pl-16 pr-3">
+        <td className="w-10 whitespace-nowrap py-2.5 pl-16 pr-4">
           <Checkbox checked={isSelected} onChange={onToggleSelect} />
         </td>
 
         {/* Toggle */}
-        <td className="w-12 whitespace-nowrap px-3 py-2">
+        <td className="w-12 whitespace-nowrap px-4 py-2.5">
           <Toggle
             checked={isActive}
             onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
@@ -116,7 +122,7 @@ export function AdRow({
         </td>
 
         {/* Name + Creative Thumbnail */}
-        <td className="whitespace-nowrap px-3 py-2">
+        <td className="whitespace-nowrap px-4 py-2.5">
           <div className="flex items-center gap-3 pl-8">
             {/* Creative thumbnail — clickable to open preview */}
             <button
@@ -229,11 +235,15 @@ export function AdRow({
         </td>
 
         {/* Status */}
-        <td className="whitespace-nowrap px-3 py-2">
+        <td className="whitespace-nowrap px-4 py-2.5">
           <div className="flex items-center gap-2">
-            <Badge variant={statusVariant}>
+            <span className={cn(
+              'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold tracking-wide',
+              isActive && !deliveryBlocked ? 'badge-active-futuristic' : 'badge-paused-futuristic'
+            )}>
+              {isActive && !deliveryBlocked && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />}
               {statusLabel}
-            </Badge>
+            </span>
             {issues.length > 0 && (
               <button
                 onClick={() => setShowIssueDetails(true)}
@@ -251,12 +261,12 @@ export function AdRow({
         </td>
 
         {/* Budget — N/A for ads */}
-        <td className="whitespace-nowrap px-3 py-2 text-sm text-text-dimmed">
+        <td className="whitespace-nowrap px-4 py-2.5 text-sm text-text-dimmed">
           &mdash;
         </td>
 
         {/* Bid Strategy — N/A for ads */}
-        <td className="whitespace-nowrap px-3 py-2 text-sm text-text-dimmed">
+        <td className="whitespace-nowrap px-4 py-2.5 text-sm text-text-dimmed">
           &mdash;
         </td>
 
@@ -274,7 +284,7 @@ export function AdRow({
             value={getMetricValue(ad.metrics as unknown as Record<string, number>, key)}
           />
         ))}
-      </tr>
+      </motion.tr>
 
       {/* Creative Preview Modal */}
       {previewOpen && (

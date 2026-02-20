@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getShopifyToken } from '@/app/api/lib/tokens';
+import { resolveDeploymentBaseUrl } from '@/app/api/lib/resolve-base-url';
 
 const SHOPIFY_API_VERSION = '2024-01';
 
@@ -18,24 +19,6 @@ interface ShopifyWebhook {
   topic: string;
   address: string;
   format: string;
-}
-
-function resolveBaseUrl(request: NextRequest, overrideBaseUrl?: string): string {
-  if (overrideBaseUrl) {
-    const trimmed = overrideBaseUrl.trim().replace(/\/+$/, '');
-    if (trimmed) return trimmed;
-  }
-  const candidates = [
-    process.env.NEXT_PUBLIC_APP_URL,
-    process.env.NEXT_PUBLIC_API_BASE_URL,
-  ];
-  for (const raw of candidates) {
-    if (raw && raw.trim()) {
-      const trimmed = raw.trim().replace(/\/+$/, '');
-      if (trimmed) return trimmed;
-    }
-  }
-  return new URL(request.url).origin;
 }
 
 export async function POST(request: NextRequest) {
@@ -60,7 +43,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Shopify not connected for this store' }, { status: 401 });
   }
 
-  const baseUrl = resolveBaseUrl(request, overrideBaseUrl);
+  const baseUrl = resolveDeploymentBaseUrl(request, overrideBaseUrl);
   const webhookAddress = `${baseUrl}/api/shopify/webhooks`;
 
   try {

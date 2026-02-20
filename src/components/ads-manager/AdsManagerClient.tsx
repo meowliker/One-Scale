@@ -77,7 +77,7 @@ function SortableFixedHeader({
   onSort: (key: string) => void;
 }) {
   return (
-    <th className="whitespace-nowrap px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-text-muted">
+    <th className="whitespace-nowrap px-4 py-3.5 text-left text-[0.65rem] font-bold uppercase tracking-[0.1em] text-text-muted">
       <button
         onClick={() => onSort(sortKeyName)}
         className="group/sort flex items-center gap-1 cursor-pointer hover:text-text transition-colors"
@@ -1577,7 +1577,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   }, [campaigns, expandedAdSets, expandedCampaigns, loadAdSetsForCampaign, loadAdsForAdSet, scrollToRow, toggleExpandAdSet, toggleExpandCampaign]);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <AdsManagerToolbar
         search={search}
         onSearchChange={setSearch}
@@ -1615,30 +1615,30 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         collisionDetection={closestCenter}
         onDragEnd={handleDragEnd}
       >
-        <div className="overflow-x-auto rounded-lg border border-border bg-surface-elevated shadow-sm">
-          <table className="w-full min-w-[1200px] border-collapse">
+        <div className="overflow-x-auto rounded-2xl gradient-border-animated bg-white/90 backdrop-blur-xl shadow-[0_8px_40px_rgba(0,0,0,0.04)] futuristic-scroll">
+          <table className="w-full min-w-[1200px] futuristic-table">
             <thead>
-              <tr className="sticky top-0 z-10 border-b border-border bg-surface">
-                <th className="w-10 whitespace-nowrap px-3 py-3 text-left">
+              <tr className="sticky top-0 z-20 border-b border-border/30 bg-gradient-to-r from-[#f8faff] via-[#f4f0ff] to-[#f8faff] backdrop-blur-xl">
+                <th className="w-10 whitespace-nowrap px-4 py-3.5 text-left">
                   <Checkbox
                     checked={allSelected}
                     onChange={handleSelectAll}
                     indeterminate={someSelected}
                   />
                 </th>
-                <th className="w-12 whitespace-nowrap px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-text-muted">
+                <th className="w-12 whitespace-nowrap px-4 py-3.5 text-left text-[0.65rem] font-bold uppercase tracking-[0.1em] text-text-muted">
                   On/Off
                 </th>
                 <SortableFixedHeader label="Name" sortKeyName="name" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} />
                 <SortableFixedHeader label="Status" sortKeyName="status" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} />
                 <SortableFixedHeader label="Budget" sortKeyName="budget" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} />
-                <th className="whitespace-nowrap px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-text-muted">
+                <th className="whitespace-nowrap px-4 py-3.5 text-left text-[0.65rem] font-bold uppercase tracking-[0.1em] text-text-muted">
                   Bid Strategy
                 </th>
-                <th className="whitespace-nowrap px-3 py-3 text-center text-xs font-medium uppercase tracking-wider text-text-muted">
+                <th className="whitespace-nowrap px-4 py-3.5 text-center text-[0.65rem] font-bold uppercase tracking-[0.1em] text-text-muted">
                   Performance
                 </th>
-                <th className="whitespace-nowrap px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-text-muted">
+                <th className="whitespace-nowrap px-4 py-3.5 text-left text-[0.65rem] font-bold uppercase tracking-[0.1em] text-text-muted">
                   <div className="flex items-center gap-2">
                     <span>Latest Actions</span>
                     {!activitiesFullyLoaded && (
@@ -1683,7 +1683,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
             <tbody>
               {sortedCampaigns.length === 0 ? (
                 <tr>
-                  <td colSpan={totalColumns} className="px-6 py-12 text-center text-sm text-text-muted">
+                  <td colSpan={totalColumns} className="px-6 py-16 text-center text-sm text-text-muted/60">
                     No campaigns found.
                   </td>
                 </tr>
@@ -1745,21 +1745,21 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
             </tbody>
             {sortedCampaigns.length > 0 && (
               <tfoot>
-                <tr className="border-t-2 border-primary/30 bg-surface-hover/70">
-                  <td className="w-10 whitespace-nowrap px-3 py-3" />
-                  <td className="w-12 whitespace-nowrap px-3 py-3" />
-                  <td className="whitespace-nowrap px-3 py-3 text-sm font-semibold text-text-primary">
+                <tr className="border-t border-primary/20 bg-gradient-to-r from-primary/[0.03] via-transparent to-primary/[0.03]">
+                  <td className="w-10 whitespace-nowrap px-4 py-3.5" />
+                  <td className="w-12 whitespace-nowrap px-4 py-3.5" />
+                  <td className="whitespace-nowrap px-4 py-3.5 text-sm font-semibold text-text-primary">
                     Totals ({totals.campaignCount} campaigns)
                   </td>
-                  <td className="whitespace-nowrap px-3 py-3 text-xs text-text-secondary">
+                  <td className="whitespace-nowrap px-4 py-3.5 text-xs text-text-secondary">
                     {totals.activeCampaigns} active
                   </td>
-                  <td className="whitespace-nowrap px-3 py-3 text-sm font-semibold text-text-primary">
+                  <td className="whitespace-nowrap px-4 py-3.5 text-sm font-semibold text-text-primary">
                     &mdash;
                   </td>
-                  <td className="whitespace-nowrap px-3 py-3 text-sm text-text-dimmed">&mdash;</td>
-                  <td className="whitespace-nowrap px-3 py-3 text-sm text-text-dimmed">&mdash;</td>
-                  <td className="whitespace-nowrap px-3 py-3 text-sm text-text-dimmed">&mdash;</td>
+                  <td className="whitespace-nowrap px-4 py-3.5 text-sm text-text-dimmed">&mdash;</td>
+                  <td className="whitespace-nowrap px-4 py-3.5 text-sm text-text-dimmed">&mdash;</td>
+                  <td className="whitespace-nowrap px-4 py-3.5 text-sm text-text-dimmed">&mdash;</td>
                   {columnOrder.map((key) => (
                     <MetricCell
                       key={`totals-${key}`}

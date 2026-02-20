@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { resolveDeploymentBaseUrl } from '@/app/api/lib/resolve-base-url';
 
 export const maxDuration = 300; // 5 minutes for cron
 
@@ -32,8 +33,7 @@ export async function GET(request: NextRequest) {
   const stores = (await storesRes.json()) as Array<{ id: string; domain: string }>;
 
   // Resolve base URL for internal API calls
-  const baseUrl =
-    process.env.NEXT_PUBLIC_APP_URL || `https://${request.headers.get('host')}`;
+  const baseUrl = resolveDeploymentBaseUrl(request);
 
   const results: Array<{
     storeId: string;

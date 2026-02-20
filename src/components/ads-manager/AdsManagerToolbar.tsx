@@ -72,26 +72,26 @@ export function AdsManagerToolbar({
     : 'Up to date';
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-4">
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-4 glass-futuristic rounded-2xl px-5 py-3.5">
         <div className="flex items-center gap-4">
-          <div className="w-72">
+          <div className="w-80">
             <SearchInput
               value={search}
               onChange={onSearchChange}
               placeholder="Search campaigns..."
             />
           </div>
-          <div className="flex items-center rounded-lg border border-border-light bg-surface-elevated p-0.5">
+          <div className="flex items-center rounded-xl border border-border/50 bg-white/60 p-1 backdrop-blur-sm">
             {filterButtons.map((btn) => (
               <button
                 key={btn.value}
                 onClick={() => onStatusFilterChange(btn.value)}
                 className={cn(
-                  'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+                  'px-3 py-1.5 text-sm font-medium transition-all duration-200',
                   statusFilter === btn.value
-                    ? 'bg-gray-900 text-white shadow-sm'
-                    : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'
+                    ? 'bg-gradient-to-r from-primary to-primary-dark text-white shadow-md shadow-primary/20 rounded-lg'
+                    : 'text-text-secondary hover:text-text-primary hover:bg-white/80 rounded-lg'
                 )}
               >
                 {btn.label}
@@ -106,12 +106,12 @@ export function AdsManagerToolbar({
           {attributionCoverage && (
             <Link
               href="/dashboard/attribution"
-              className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-xs hover:bg-emerald-500/15"
+              className="inline-flex items-center gap-2 rounded-xl border border-emerald-200/50 bg-gradient-to-r from-emerald-50 to-teal-50 px-4 py-2.5 text-xs hover:shadow-md hover:shadow-emerald-100/50 transition-all duration-300"
             >
-              <span className="font-semibold text-emerald-200">
+              <span className="font-semibold text-emerald-700">
                 Attribution {Math.max(0, Math.min(100, attributionCoverage.percent)).toFixed(1)}%
               </span>
-              <span className="text-emerald-100/80">
+              <span className="text-emerald-600/80">
                 {attributionCoverage.mapped}/{attributionCoverage.total} purchases ({attributionCoverage.windowDays}d)
               </span>
               {attributionCoverage.loading && (
@@ -124,10 +124,10 @@ export function AdsManagerToolbar({
             <button
               onClick={() => setColumnPickerOpen((prev) => !prev)}
               className={cn(
-                'inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium shadow-sm transition-colors',
+                'inline-flex items-center gap-2 border px-4 py-2 text-sm font-medium transition-all duration-200',
                 columnPickerOpen
-                  ? 'border-primary bg-primary/10 text-primary-light'
-                  : 'border-border-light bg-surface-elevated text-text-secondary hover:bg-surface-hover'
+                  ? 'border-primary/30 bg-primary/5 text-primary shadow-md shadow-primary/10 rounded-xl'
+                  : 'border-border/40 bg-white/70 text-text-secondary hover:bg-white hover:shadow-md rounded-xl backdrop-blur-sm'
               )}
             >
               <Columns3 className="h-4 w-4" />
@@ -141,10 +141,10 @@ export function AdsManagerToolbar({
           <button
             onClick={onToggleErrorCenter}
             className={cn(
-              'inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium shadow-sm transition-colors',
+              'inline-flex items-center gap-2 border px-3 py-2 text-sm font-medium transition-all duration-200',
               showErrorCenter
-                ? 'border-amber-400/50 bg-amber-500/15 text-amber-200'
-                : 'border-border-light bg-surface-elevated text-text-secondary hover:bg-surface-hover'
+                ? 'border-amber-300/50 bg-amber-50 text-amber-700 shadow-md shadow-amber-100/30 rounded-xl'
+                : 'border-border/40 bg-white/70 text-text-secondary hover:bg-white hover:shadow-md rounded-xl backdrop-blur-sm'
             )}
           >
             {showErrorCenter ? <LayoutDashboard className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
@@ -165,7 +165,7 @@ export function AdsManagerToolbar({
           </button>
           <Link
             href="/dashboard/ads-manager/create"
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-dark transition-colors"
+            className="inline-flex items-center gap-2 bg-gradient-to-r from-primary to-primary-dark hover:from-primary-dark hover:to-primary rounded-xl shadow-lg shadow-primary/20 hover:shadow-xl hover:shadow-primary/30 px-4 py-2 text-sm font-medium text-white transition-all duration-300 hover:-translate-y-0.5"
           >
             <Plus className="h-4 w-4" />
             Create Campaign
@@ -179,10 +179,10 @@ export function AdsManagerToolbar({
             {isRunning && <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />}
             <span>Sync {Math.max(0, Math.min(100, Math.round(syncPercent)))}%</span>
           </span>
-          <div className="h-1.5 w-36 overflow-hidden rounded-full bg-surface-hover">
+          <div className="h-1 w-40 overflow-hidden rounded-full bg-border/30">
             <div
               className={cn(
-                'h-full rounded-full bg-primary transition-all duration-500',
+                'h-full rounded-full bg-gradient-to-r from-primary to-info transition-all duration-500',
                 isRunning && 'animate-pulse'
               )}
               style={{ width: `${Math.max(0, Math.min(100, syncPercent))}%` }}
