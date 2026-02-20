@@ -7,6 +7,14 @@ import {
   getTrackingRecentUnattributedPurchases,
   getTrackingTopMappedEntities,
 } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled, listPersistentStoreAdAccounts } from '@/app/api/lib/supabase-persistence';
+import {
+  getRecentPersistentMetaEndpointSnapshots,
+  getPersistentTrackingAttributionCoverage,
+  getPersistentTrackingRecentPurchasesWithMapping,
+  getPersistentTrackingRecentUnattributedPurchases,
+  getPersistentTrackingTopMappedEntities,
+} from '@/app/api/lib/supabase-tracking';
 import { fetchFromMeta } from '@/app/api/lib/meta-client';
 import { getMetaToken } from '@/app/api/lib/tokens';
 
@@ -62,8 +70,12 @@ async function getCampaignNameLookup(storeId: string): Promise<Map<string, strin
     return lookup;
   }
 
-  const accountIds = getStoreAdAccounts(storeId)
-    .filter((row) => row.platform === 'meta' && row.is_active === 1)
+  const sb = isSupabasePersistenceEnabled();
+  const allAccounts = sb
+    ? await listPersistentStoreAdAccounts(storeId)
+    : getStoreAdAccounts(storeId);
+  const accountIds = allAccounts
+    .filter((row) => row.platform === 'meta' && (row.is_active === 1 || (row.is_active as unknown) === true))
     .map((row) => row.ad_account_id);
 
   await Promise.all(
@@ -92,14 +104,17 @@ async function getCampaignNameLookup(storeId: string): Promise<Map<string, strin
   return lookup;
 }
 
-function getSnapshotNameLookups(storeId: string): {
+async function getSnapshotNameLookups(storeId: string): Promise<{
   adSetById: Map<string, string>;
   adById: Map<string, string>;
-} {
+}> {
+  const sb = isSupabasePersistenceEnabled();
   const adSetById = new Map<string, string>();
   const adById = new Map<string, string>();
 
-  const adSetSnapshots = getRecentMetaEndpointSnapshots<unknown[]>(storeId, 'adsets', 200);
+  const adSetSnapshots = sb
+    ? await getRecentPersistentMetaEndpointSnapshots<unknown[]>(storeId, 'adsets', 200)
+    : getRecentMetaEndpointSnapshots<unknown[]>(storeId, 'adsets', 200);
   for (const snap of adSetSnapshots) {
     if (!Array.isArray(snap.data)) continue;
     for (const raw of snap.data) {
@@ -111,7 +126,9 @@ function getSnapshotNameLookups(storeId: string): {
     }
   }
 
-  const adSnapshots = getRecentMetaEndpointSnapshots<unknown[]>(storeId, 'ads', 200);
+  const adSnapshots = sb
+    ? await getRecentPersistentMetaEndpointSnapshots<unknown[]>(storeId, 'ads', 200)
+    : getRecentMetaEndpointSnapshots<unknown[]>(storeId, 'ads', 200);
   for (const snap of adSnapshots) {
     if (!Array.isArray(snap.data)) continue;
     for (const raw of snap.data) {
@@ -316,18 +333,30 @@ export async function GET(request: NextRequest) {
   const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
   try {
-    const coverage = getTrackingAttributionCoverage(storeId, sinceIso, untilIso);
+    const sb = isSupabasePersistenceEnabled();
+    const coverage = sb
+      ? await getPersistentTrackingAttributionCoverage(storeId, sinceIso, untilIso)
+      : getTrackingAttributionCoverage(storeId, sinceIso, untilIso);
     const sampleLimit = Math.max(300, Math.min(10_000, coverage.total_purchases || 1_000));
-    const [campaignRows, adSetRows, adRows, unattributedRows, recentPurchases, campaignNames] = await Promise.all([
-      getTrackingTopMappedEntities(storeId, sinceIso, untilIso, 'campaign', 12),
-      getTrackingTopMappedEntities(storeId, sinceIso, untilIso, 'adset', 12),
-      getTrackingTopMappedEntities(storeId, sinceIso, untilIso, 'ad', 12),
-      getTrackingRecentUnattributedPurchases(storeId, sinceIso, untilIso, 30),
-      getTrackingRecentPurchasesWithMapping(storeId, sinceIso, untilIso, sampleLimit),
+    const [campaignRows, adSetRows, adRows, unattributedRows, recentPurchases, campaignNames, snapshotLookups] = await Promise.all([
+      sb
+        ? getPersistentTrackingTopMappedEntities(storeId, sinceIso, untilIso, 'campaign', 12)
+        : getTrackingTopMappedEntities(storeId, sinceIso, untilIso, 'campaign', 12),
+      sb
+        ? getPersistentTrackingTopMappedEntities(storeId, sinceIso, untilIso, 'adset', 12)
+        : getTrackingTopMappedEntities(storeId, sinceIso, untilIso, 'adset', 12),
+      sb
+        ? getPersistentTrackingTopMappedEntities(storeId, sinceIso, untilIso, 'ad', 12)
+        : getTrackingTopMappedEntities(storeId, sinceIso, untilIso, 'ad', 12),
+      sb
+        ? getPersistentTrackingRecentUnattributedPurchases(storeId, sinceIso, untilIso, 30)
+        : getTrackingRecentUnattributedPurchases(storeId, sinceIso, untilIso, 30),
+      sb
+        ? getPersistentTrackingRecentPurchasesWithMapping(storeId, sinceIso, untilIso, sampleLimit)
+        : getTrackingRecentPurchasesWithMapping(storeId, sinceIso, untilIso, sampleLimit),
       getCampaignNameLookup(storeId),
+      getSnapshotNameLookups(storeId),
     ]);
-
-    const snapshotLookups = getSnapshotNameLookups(storeId);
 
     const percent =
       coverage.total_purchases > 0

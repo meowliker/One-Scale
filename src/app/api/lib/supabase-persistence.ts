@@ -75,6 +75,95 @@ export async function listPersistentStores(): Promise<Array<DbStore & { adAccoun
   }));
 }
 
+export async function getPersistentStore(storeId: string): Promise<DbStore | null> {
+  const rows = await rest<DbStore[]>(
+    `/stores?id=eq.${encodeURIComponent(storeId)}&select=*&limit=1`
+  );
+  return rows[0] || null;
+}
+
+export async function getPersistentConnectionStatus(storeId: string): Promise<{
+  meta: {
+    connected: boolean;
+    accountId?: string;
+    accountName?: string;
+    lastSynced?: string;
+  };
+  shopify: {
+    connected: boolean;
+    shopDomain?: string;
+    shopName?: string;
+    lastSynced?: string;
+  };
+}> {
+  const [metaConn, shopifyConn] = await Promise.all([
+    getPersistentConnection(storeId, 'meta'),
+    getPersistentConnection(storeId, 'shopify'),
+  ]);
+
+  return {
+    meta: {
+      connected: !!metaConn,
+      accountId: metaConn?.account_id ?? undefined,
+      accountName: metaConn?.account_name ?? undefined,
+      lastSynced: metaConn?.last_synced ?? undefined,
+    },
+    shopify: {
+      connected: !!shopifyConn,
+      shopDomain: shopifyConn?.shop_domain ?? undefined,
+      shopName: shopifyConn?.shop_name ?? undefined,
+      lastSynced: shopifyConn?.last_synced ?? undefined,
+    },
+  };
+}
+
+export async function getAllPersistentMetaConnections(): Promise<Array<{
+  storeId: string;
+  storeName: string;
+  accountId: string | null;
+  accountName: string | null;
+  connectedAt: string;
+}>> {
+  // Supabase REST API doesn't support JOINs directly, so we fetch both tables
+  const [connections, stores] = await Promise.all([
+    rest<Array<{
+      store_id: string;
+      account_id: string | null;
+      account_name: string | null;
+      connected_at: string;
+    }>>("/connections?platform=eq.meta&select=store_id,account_id,account_name,connected_at&order=connected_at.desc"),
+    rest<Array<{ id: string; name: string }>>('/stores?select=id,name'),
+  ]);
+
+  const storeMap = new Map(stores.map((s) => [s.id, s.name]));
+
+  return connections.map((c) => ({
+    storeId: c.store_id,
+    storeName: storeMap.get(c.store_id) || c.store_id,
+    accountId: c.account_id,
+    accountName: c.account_name,
+    connectedAt: c.connected_at,
+  }));
+}
+
+export async function copyPersistentMetaConnection(fromStoreId: string, toStoreId: string): Promise<void> {
+  const source = await getPersistentConnection(fromStoreId, 'meta');
+  if (!source) {
+    throw new Error(`No Meta connection found for store ${fromStoreId}`);
+  }
+
+  await upsertPersistentConnection({
+    storeId: toStoreId,
+    platform: 'meta',
+    accessToken: source.access_token,
+    refreshToken: source.refresh_token ?? undefined,
+    expiresAt: source.expires_at ?? undefined,
+    accountId: source.account_id ?? undefined,
+    accountName: source.account_name ?? undefined,
+    scopes: source.scopes ?? undefined,
+  });
+}
+
 export async function upsertPersistentStore(data: {
   id: string;
   name: string;
@@ -392,6 +481,487 @@ export async function deletePersistentAppCredentials(
 ): Promise<void> {
   await rest(
     `/app_credentials?platform=eq.${encodeURIComponent(platform)}`,
+    { method: 'DELETE' }
+  );
+}
+
+// ------ P&L Product Costs (Supabase-backed) ------
+
+export interface PersistentProductCost {
+  id: number;
+  store_id: string;
+  product_id: string;
+  product_name: string;
+  sku: string | null;
+  cost_per_unit: number;
+  cost_type: 'fixed' | 'percentage';
+  effective_date: string;
+  created_at: string;
+}
+
+export async function getPersistentProductCosts(
+  storeId: string
+): Promise<PersistentProductCost[]> {
+  return rest<PersistentProductCost[]>(
+    `/pnl_product_costs?store_id=eq.${encodeURIComponent(storeId)}&select=*&order=product_name.asc,effective_date.desc`
+  );
+}
+
+export async function upsertPersistentProductCost(data: {
+  storeId: string;
+  productId: string;
+  productName: string;
+  sku?: string;
+  costPerUnit: number;
+  costType?: 'fixed' | 'percentage';
+  effectiveDate?: string;
+}): Promise<void> {
+  const payload = {
+    store_id: data.storeId,
+    product_id: data.productId,
+    product_name: data.productName,
+    sku: data.sku ?? null,
+    cost_per_unit: data.costPerUnit,
+    cost_type: data.costType || 'fixed',
+    effective_date: data.effectiveDate || new Date().toISOString().split('T')[0],
+  };
+
+  await rest(
+    '/pnl_product_costs?on_conflict=store_id,product_id,effective_date',
+    {
+      method: 'POST',
+      headers: {
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify([payload]),
+    }
+  );
+}
+
+export async function deletePersistentProductCost(id: number): Promise<void> {
+  await rest(`/pnl_product_costs?id=eq.${id}`, { method: 'DELETE' });
+}
+
+// ------ P&L Shipping Settings (Supabase-backed) ------
+
+export interface PersistentShippingSettings {
+  id: number;
+  store_id: string;
+  method: 'flat_rate' | 'percentage' | 'equal_charged' | 'per_item';
+  flat_rate: number;
+  percentage: number;
+  per_item_rate: number;
+  updated_at: string;
+}
+
+export async function getPersistentShippingSettings(
+  storeId: string
+): Promise<PersistentShippingSettings | null> {
+  const rows = await rest<PersistentShippingSettings[]>(
+    `/pnl_shipping_settings?store_id=eq.${encodeURIComponent(storeId)}&select=*&limit=1`
+  );
+  return rows[0] || null;
+}
+
+export async function upsertPersistentShippingSettings(data: {
+  storeId: string;
+  method: 'flat_rate' | 'percentage' | 'equal_charged' | 'per_item';
+  flatRate?: number;
+  percentage?: number;
+  perItemRate?: number;
+}): Promise<void> {
+  const payload = {
+    store_id: data.storeId,
+    method: data.method,
+    flat_rate: data.flatRate ?? 0,
+    percentage: data.percentage ?? 0,
+    per_item_rate: data.perItemRate ?? 0,
+    updated_at: new Date().toISOString(),
+  };
+
+  await rest(
+    '/pnl_shipping_settings?on_conflict=store_id',
+    {
+      method: 'POST',
+      headers: {
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify([payload]),
+    }
+  );
+}
+
+// ------ P&L Payment Fees (Supabase-backed) ------
+
+export interface PersistentPaymentFee {
+  id: number;
+  store_id: string;
+  gateway_name: string;
+  fee_percentage: number;
+  fee_fixed: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+export async function getPersistentPaymentFees(
+  storeId: string
+): Promise<PersistentPaymentFee[]> {
+  return rest<PersistentPaymentFee[]>(
+    `/pnl_payment_fees?store_id=eq.${encodeURIComponent(storeId)}&select=*&order=gateway_name.asc`
+  );
+}
+
+export async function upsertPersistentPaymentFee(data: {
+  storeId: string;
+  gatewayName: string;
+  feePercentage: number;
+  feeFixed: number;
+  isActive?: boolean;
+}): Promise<void> {
+  const payload = {
+    store_id: data.storeId,
+    gateway_name: data.gatewayName,
+    fee_percentage: data.feePercentage,
+    fee_fixed: data.feeFixed,
+    is_active: data.isActive !== false,
+  };
+
+  await rest(
+    '/pnl_payment_fees?on_conflict=store_id,gateway_name',
+    {
+      method: 'POST',
+      headers: {
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify([payload]),
+    }
+  );
+}
+
+export async function deletePersistentPaymentFee(id: number): Promise<void> {
+  await rest(`/pnl_payment_fees?id=eq.${id}`, { method: 'DELETE' });
+}
+
+// ------ P&L Custom Expenses (Supabase-backed) ------
+
+export interface PersistentCustomExpense {
+  id: number;
+  store_id: string;
+  name: string;
+  category: 'fixed' | 'variable';
+  amount: number;
+  frequency: 'daily' | 'weekly' | 'monthly' | 'yearly' | 'one_time';
+  distribution: 'daily' | 'hourly' | 'smart';
+  start_date: string | null;
+  end_date: string | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+export async function getPersistentCustomExpenses(
+  storeId: string
+): Promise<PersistentCustomExpense[]> {
+  return rest<PersistentCustomExpense[]>(
+    `/pnl_custom_expenses?store_id=eq.${encodeURIComponent(storeId)}&select=*&order=created_at.desc`
+  );
+}
+
+export async function addPersistentCustomExpense(data: {
+  storeId: string;
+  name: string;
+  category?: 'fixed' | 'variable';
+  amount: number;
+  frequency?: 'daily' | 'weekly' | 'monthly' | 'yearly' | 'one_time';
+  distribution?: 'daily' | 'hourly' | 'smart';
+  startDate?: string;
+  endDate?: string;
+}): Promise<void> {
+  const payload = {
+    store_id: data.storeId,
+    name: data.name,
+    category: data.category || 'fixed',
+    amount: data.amount,
+    frequency: data.frequency || 'monthly',
+    distribution: data.distribution || 'daily',
+    start_date: data.startDate ?? null,
+    end_date: data.endDate ?? null,
+    is_active: true,
+  };
+
+  await rest('/pnl_custom_expenses', {
+    method: 'POST',
+    headers: { Prefer: 'return=minimal' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updatePersistentCustomExpense(
+  id: number,
+  data: {
+    name?: string;
+    category?: 'fixed' | 'variable';
+    amount?: number;
+    frequency?: 'daily' | 'weekly' | 'monthly' | 'yearly' | 'one_time';
+    distribution?: 'daily' | 'hourly' | 'smart';
+    startDate?: string;
+    endDate?: string;
+    isActive?: boolean;
+  }
+): Promise<void> {
+  const payload: Record<string, unknown> = {};
+
+  if (data.name !== undefined) payload.name = data.name;
+  if (data.category !== undefined) payload.category = data.category;
+  if (data.amount !== undefined) payload.amount = data.amount;
+  if (data.frequency !== undefined) payload.frequency = data.frequency;
+  if (data.distribution !== undefined) payload.distribution = data.distribution;
+  if (data.startDate !== undefined) payload.start_date = data.startDate;
+  if (data.endDate !== undefined) payload.end_date = data.endDate;
+  if (data.isActive !== undefined) payload.is_active = data.isActive;
+
+  if (Object.keys(payload).length === 0) return;
+
+  await rest(`/pnl_custom_expenses?id=eq.${id}`, {
+    method: 'PATCH',
+    headers: { Prefer: 'return=minimal' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deletePersistentCustomExpense(id: number): Promise<void> {
+  await rest(`/pnl_custom_expenses?id=eq.${id}`, { method: 'DELETE' });
+}
+
+// ------ P&L Handling Fees (Supabase-backed) ------
+
+export interface PersistentHandlingFees {
+  id: number;
+  store_id: string;
+  fee_type: 'per_order' | 'per_item' | 'percentage';
+  amount: number;
+  updated_at: string;
+}
+
+export async function getPersistentHandlingFees(
+  storeId: string
+): Promise<PersistentHandlingFees | null> {
+  const rows = await rest<PersistentHandlingFees[]>(
+    `/pnl_handling_fees?store_id=eq.${encodeURIComponent(storeId)}&select=*&limit=1`
+  );
+  return rows[0] || null;
+}
+
+export async function upsertPersistentHandlingFees(data: {
+  storeId: string;
+  feeType: 'per_order' | 'per_item' | 'percentage';
+  amount: number;
+}): Promise<void> {
+  const payload = {
+    store_id: data.storeId,
+    fee_type: data.feeType,
+    amount: data.amount,
+    updated_at: new Date().toISOString(),
+  };
+
+  await rest(
+    '/pnl_handling_fees?on_conflict=store_id',
+    {
+      method: 'POST',
+      headers: {
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify([payload]),
+    }
+  );
+}
+
+// ------ P&L Store Settings (Supabase-backed) ------
+
+export interface PersistentPnlStoreSettings {
+  id: number;
+  store_id: string;
+  product_type: 'physical' | 'digital';
+  updated_at: string;
+}
+
+export async function getPersistentPnlStoreSettings(
+  storeId: string
+): Promise<PersistentPnlStoreSettings | null> {
+  const rows = await rest<PersistentPnlStoreSettings[]>(
+    `/pnl_store_settings?store_id=eq.${encodeURIComponent(storeId)}&select=*&limit=1`
+  );
+  return rows[0] || null;
+}
+
+export async function upsertPersistentPnlStoreSettings(
+  storeId: string,
+  data: { productType: 'physical' | 'digital' }
+): Promise<void> {
+  const payload = {
+    store_id: storeId,
+    product_type: data.productType,
+    updated_at: new Date().toISOString(),
+  };
+
+  await rest(
+    '/pnl_store_settings?on_conflict=store_id',
+    {
+      method: 'POST',
+      headers: {
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify([payload]),
+    }
+  );
+}
+
+// ------ P&L Daily Cache (Supabase-backed) ------
+
+export interface PersistentPnlDailyCacheRow {
+  id: number;
+  store_id: string;
+  date: string;
+  revenue: number;
+  cogs: number;
+  ad_spend: number;
+  shipping: number;
+  fees: number;
+  refunds: number;
+  net_profit: number;
+  margin: number;
+  order_count: number;
+  full_refund_count: number;
+  partial_refund_count: number;
+  full_refund_amount: number;
+  partial_refund_amount: number;
+  synced_at: string;
+}
+
+export async function getPersistentCachedPnLDays(
+  storeId: string,
+  startDate: string,
+  endDate: string
+): Promise<PersistentPnlDailyCacheRow[]> {
+  return rest<PersistentPnlDailyCacheRow[]>(
+    `/pnl_daily_cache?store_id=eq.${encodeURIComponent(storeId)}&date=gte.${encodeURIComponent(startDate)}&date=lte.${encodeURIComponent(endDate)}&select=*&order=date.asc`
+  );
+}
+
+export async function getPersistentPnlCacheLastSynced(
+  storeId: string
+): Promise<string | null> {
+  const rows = await rest<Array<{ synced_at: string }>>(
+    `/pnl_daily_cache?store_id=eq.${encodeURIComponent(storeId)}&select=synced_at&order=synced_at.desc&limit=1`
+  );
+  return rows[0]?.synced_at ?? null;
+}
+
+export async function upsertPersistentCachedPnLDay(
+  storeId: string,
+  date: string,
+  data: {
+    revenue: number;
+    cogs: number;
+    adSpend: number;
+    shipping: number;
+    fees: number;
+    refunds: number;
+    netProfit: number;
+    margin: number;
+    orderCount?: number;
+    fullRefundCount?: number;
+    partialRefundCount?: number;
+    fullRefundAmount?: number;
+    partialRefundAmount?: number;
+  }
+): Promise<void> {
+  const payload = {
+    store_id: storeId,
+    date,
+    revenue: data.revenue,
+    cogs: data.cogs,
+    ad_spend: data.adSpend,
+    shipping: data.shipping,
+    fees: data.fees,
+    refunds: data.refunds,
+    net_profit: data.netProfit,
+    margin: data.margin,
+    order_count: data.orderCount ?? 0,
+    full_refund_count: data.fullRefundCount ?? 0,
+    partial_refund_count: data.partialRefundCount ?? 0,
+    full_refund_amount: data.fullRefundAmount ?? 0,
+    partial_refund_amount: data.partialRefundAmount ?? 0,
+    synced_at: new Date().toISOString(),
+  };
+
+  await rest(
+    '/pnl_daily_cache?on_conflict=store_id,date',
+    {
+      method: 'POST',
+      headers: {
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify([payload]),
+    }
+  );
+}
+
+export async function batchUpsertPersistentCachedPnLDays(
+  storeId: string,
+  rows: Array<{
+    date: string;
+    revenue: number;
+    cogs: number;
+    adSpend: number;
+    shipping: number;
+    fees: number;
+    refunds: number;
+    netProfit: number;
+    margin: number;
+    orderCount?: number;
+    fullRefundCount?: number;
+    partialRefundCount?: number;
+    fullRefundAmount?: number;
+    partialRefundAmount?: number;
+  }>
+): Promise<void> {
+  if (rows.length === 0) return;
+
+  const now = new Date().toISOString();
+  const payloads = rows.map((entry) => ({
+    store_id: storeId,
+    date: entry.date,
+    revenue: entry.revenue,
+    cogs: entry.cogs,
+    ad_spend: entry.adSpend,
+    shipping: entry.shipping,
+    fees: entry.fees,
+    refunds: entry.refunds,
+    net_profit: entry.netProfit,
+    margin: entry.margin,
+    order_count: entry.orderCount ?? 0,
+    full_refund_count: entry.fullRefundCount ?? 0,
+    partial_refund_count: entry.partialRefundCount ?? 0,
+    full_refund_amount: entry.fullRefundAmount ?? 0,
+    partial_refund_amount: entry.partialRefundAmount ?? 0,
+    synced_at: now,
+  }));
+
+  await rest(
+    '/pnl_daily_cache?on_conflict=store_id,date',
+    {
+      method: 'POST',
+      headers: {
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify(payloads),
+    }
+  );
+}
+
+export async function clearPersistentCachedPnL(storeId: string): Promise<void> {
+  await rest(
+    `/pnl_daily_cache?store_id=eq.${encodeURIComponent(storeId)}`,
     { method: 'DELETE' }
   );
 }

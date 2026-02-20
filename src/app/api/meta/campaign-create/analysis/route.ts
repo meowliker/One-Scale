@@ -5,6 +5,12 @@ import {
   getRecentMetaEndpointSnapshots,
   getStore,
 } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled, listPersistentStores } from '@/app/api/lib/supabase-persistence';
+import {
+  getPersistentMetaEndpointSnapshot,
+  getLatestPersistentMetaEndpointSnapshot,
+  getRecentPersistentMetaEndpointSnapshots,
+} from '@/app/api/lib/supabase-tracking';
 import type { Ad, AdSet, CampaignObjective } from '@/types/campaign';
 import type { Creative } from '@/types/creative';
 import type { CampaignCreateAnalysis, CampaignCreateCopyOption } from '@/types/campaignCreate';
@@ -137,20 +143,21 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
 
+  const useSupabase = isSupabasePersistenceEnabled();
+
   const cached = analysisCache.get(storeId);
   if (cached && Date.now() - cached.at < ANALYSIS_CACHE_TTL_MS) {
     return NextResponse.json(cached.data);
   }
 
-  const exactCreativeSnapshot = getMetaEndpointSnapshot<Creative[]>(
-    storeId,
-    'creatives',
-    'default',
-    'datePreset:last_30d'
-  );
+  const exactCreativeSnapshot = useSupabase
+    ? await getPersistentMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default', 'datePreset:last_30d')
+    : getMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default', 'datePreset:last_30d');
   const latestCreativeSnapshot = exactCreativeSnapshot
     ? null
-    : getLatestMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default');
+    : (useSupabase
+      ? await getLatestPersistentMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default')
+      : getLatestMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default'));
   const creatives = (exactCreativeSnapshot?.data || latestCreativeSnapshot?.data || []).filter(Boolean);
   const creativeById = new Map<string, Creative>();
   for (const creative of creatives) {
@@ -161,7 +168,9 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const adSnapshots = getRecentMetaEndpointSnapshots<Ad[]>(storeId, 'ads', 120);
+  const adSnapshots = useSupabase
+    ? await getRecentPersistentMetaEndpointSnapshots<Ad[]>(storeId, 'ads', 120)
+    : getRecentMetaEndpointSnapshots<Ad[]>(storeId, 'ads', 120);
   const adRows = adSnapshots
     .flatMap((snapshot) => (Array.isArray(snapshot.data) ? snapshot.data : []))
     .filter(Boolean);
@@ -176,7 +185,10 @@ export async function GET(request: NextRequest) {
   }
 
   if (creatives.length === 0 && adDeduped.size === 0) {
-    const storeDomain = (getStore(storeId)?.domain || '').trim();
+    const storeRow = useSupabase
+      ? (await listPersistentStores()).find((s) => s.id === storeId)
+      : getStore(storeId);
+    const storeDomain = (storeRow?.domain || '').trim();
     const fallbackDestinationUrl = normalizeHttpUrl(storeDomain);
     const empty: CampaignCreateAnalysis = {
       winnerChips: {},
@@ -347,7 +359,9 @@ export async function GET(request: NextRequest) {
       .sort((a, b) => b.roas - a.roas || b.spend - a.spend)[0] ||
     ourCopyOptions[0];
 
-  const adSetSnapshots = getRecentMetaEndpointSnapshots<AdSet[]>(storeId, 'adsets', 100);
+  const adSetSnapshots = useSupabase
+    ? await getRecentPersistentMetaEndpointSnapshots<AdSet[]>(storeId, 'adsets', 100)
+    : getRecentMetaEndpointSnapshots<AdSet[]>(storeId, 'adsets', 100);
   const adSets = adSetSnapshots
     .flatMap((snapshot) => (Array.isArray(snapshot.data) ? snapshot.data : []))
     .filter(Boolean);
@@ -458,7 +472,10 @@ export async function GET(request: NextRequest) {
       .sort((a, b) => b.spend - a.spend)
       .map((row) => row.urlTags.trim())
       .find((value) => value.length > 0) || '';
-  const storeDomain = (getStore(storeId)?.domain || '').trim();
+  const storeRow2 = useSupabase
+    ? (await listPersistentStores()).find((s) => s.id === storeId)
+    : getStore(storeId);
+  const storeDomain = (storeRow2?.domain || '').trim();
   const recommendedDestinationUrl = topDestinationUrl || normalizeHttpUrl(storeDomain);
   const recommendedUrlTags = topUrlTags || DEFAULT_URL_TAGS;
 

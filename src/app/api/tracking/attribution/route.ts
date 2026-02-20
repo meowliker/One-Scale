@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getTrackingConfig, getTrackingEventsSince } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
+import { getPersistentTrackingConfig, getPersistentTrackingEventsSince } from '@/app/api/lib/supabase-tracking';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -8,11 +10,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
 
-  const cfg = getTrackingConfig(storeId);
+  const sb = isSupabasePersistenceEnabled();
+  const cfg = sb ? await getPersistentTrackingConfig(storeId) : getTrackingConfig(storeId);
   const windowDays = cfg?.attribution_window === '1day' ? 1 : cfg?.attribution_window === '28day' ? 28 : 7;
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
 
-  const events = getTrackingEventsSince(storeId, since);
+  const events = sb ? await getPersistentTrackingEventsSince(storeId, since) : getTrackingEventsSince(storeId, since);
   const purchases = events.filter((e) => e.event_name === 'Purchase');
   const touches = events.filter((e) => e.event_name !== 'Purchase' && !!(e.click_id || e.session_id));
 

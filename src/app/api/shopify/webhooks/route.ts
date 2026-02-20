@@ -11,6 +11,16 @@ import {
 } from '@/app/api/lib/db';
 import { forwardToMetaCapi } from '@/app/api/lib/meta-capi';
 import { resolveMetaEntityIdsFromUtms } from '@/app/api/lib/meta-attribution-lookup';
+import { isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
+import {
+  getPersistentStoreByDomain,
+  getPersistentTrackingConfig,
+  getPersistentTrackingShopifyPurchaseEventIdByOrderId,
+  insertPersistentTrackingEvent,
+  markPersistentTrackingEventMetaDelivery,
+  getPersistentScoredTrackingAttributionBySignals,
+  getPersistentTrackingAttributionByTimeProximity,
+} from '@/app/api/lib/supabase-tracking';
 
 function verifyShopifyHmac(rawBody: string, secret: string, hmacHeader: string): boolean {
   const digest = createHmac('sha256', secret).update(rawBody, 'utf8').digest('base64');
@@ -259,7 +269,8 @@ function shouldAcceptFallbackAttribution(
   return fallback.confidence >= 0.55;
 }
 
-function mergeEntityIdsWithFallback(
+async function mergeEntityIdsWithFallback(
+  sb: boolean,
   storeId: string,
   occurredAt: string,
   fbc: string | null,
@@ -267,19 +278,25 @@ function mergeEntityIdsWithFallback(
   emailHash: string | null,
   clickId: string | null,
   entityIds: { campaignId: string | null; adSetId: string | null; adId: string | null }
-): {
+): Promise<{
   entityIds: { campaignId: string | null; adSetId: string | null; adId: string | null };
   fallbackAttribution: FallbackAttributionMeta | null;
-} {
-  const tryTimeProximityModel = () => {
+}> {
+  const tryTimeProximityModel = async () => {
     const hasSignal = Boolean(clickId || fbc || fbp || emailHash);
     if (!hasSignal) return null;
 
-    const timeProximity = getTrackingAttributionByTimeProximity({
-      storeId,
-      occurredAt,
-      windowMinutes: 10,
-    });
+    const timeProximity = sb
+      ? await getPersistentTrackingAttributionByTimeProximity({
+          storeId,
+          occurredAt,
+          windowMinutes: 10,
+        })
+      : getTrackingAttributionByTimeProximity({
+          storeId,
+          occurredAt,
+          windowMinutes: 10,
+        });
     if (!timeProximity) return null;
 
     const matchedSignals: Array<'click_id' | 'fbc' | 'fbp' | 'email_hash'> = [];
@@ -309,19 +326,30 @@ function mergeEntityIdsWithFallback(
   if (entityIds.campaignId || entityIds.adSetId || entityIds.adId) {
     return { entityIds, fallbackAttribution: null };
   }
-  const fallback = getScoredTrackingAttributionBySignals({
-    storeId,
-    beforeIso: occurredAt,
-    clickId,
-    fbc,
-    fbp,
-    emailHash,
-  });
+
+  const fallback = sb
+    ? await getPersistentScoredTrackingAttributionBySignals({
+        storeId,
+        beforeIso: occurredAt,
+        clickId,
+        fbc,
+        fbp,
+        emailHash,
+      })
+    : getScoredTrackingAttributionBySignals({
+        storeId,
+        beforeIso: occurredAt,
+        clickId,
+        fbc,
+        fbp,
+        emailHash,
+      });
+
   if (!fallback) {
-    return tryTimeProximityModel() || { entityIds, fallbackAttribution: null };
+    return (await tryTimeProximityModel()) || { entityIds, fallbackAttribution: null };
   }
   if (!shouldAcceptFallbackAttribution(fallback)) {
-    return tryTimeProximityModel() || { entityIds, fallbackAttribution: null };
+    return (await tryTimeProximityModel()) || { entityIds, fallbackAttribution: null };
   }
   const acceptedFallback = fallback;
 
@@ -396,7 +424,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Missing Shopify webhook headers' }, { status: 400 });
   }
 
-  const store = getStoreByDomain(shopDomain);
+  const sb = isSupabasePersistenceEnabled();
+  const store = sb ? await getPersistentStoreByDomain(shopDomain) : getStoreByDomain(shopDomain);
   if (!store?.api_secret) {
     return NextResponse.json({ error: 'Unknown store or missing webhook secret' }, { status: 401 });
   }
@@ -413,7 +442,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid webhook payload' }, { status: 400 });
   }
 
-  const cfg = getTrackingConfig(store.id);
+  const cfg = sb ? await getPersistentTrackingConfig(store.id) : getTrackingConfig(store.id);
   const createdAt = (payload.created_at as string) || new Date().toISOString();
 
   if (topic === 'orders/create' || topic === 'orders/updated') {
@@ -428,7 +457,8 @@ export async function POST(request: NextRequest) {
     const fbp = readFbp(payload);
     const emailHash = readEmailHash(payload);
     const directEntityIds = readEntityIdsFromPayload(payload);
-    const merged = mergeEntityIdsWithFallback(
+    const merged = await mergeEntityIdsWithFallback(
+      sb,
       store.id,
       createdAt,
       fbc,
@@ -450,7 +480,11 @@ export async function POST(request: NextRequest) {
       adSetId: entityIds.adSetId,
       adId: entityIds.adId,
     });
-    const eventId = getTrackingShopifyPurchaseEventIdByOrderId(store.id, orderId) || `shopify-order-${orderId}`;
+
+    const eventId = sb
+      ? (await getPersistentTrackingShopifyPurchaseEventIdByOrderId(store.id, orderId)) || `shopify-order-${orderId}`
+      : getTrackingShopifyPurchaseEventIdByOrderId(store.id, orderId) || `shopify-order-${orderId}`;
+
     const hasDirectMapping = !!(directEntityIds.campaignId || directEntityIds.adSetId || directEntityIds.adId);
     const hasUtmInputs = !!(utmCampaign || utmMedium || utmContent);
     const attributionMethod =
@@ -470,11 +504,11 @@ export async function POST(request: NextRequest) {
       fallbackAttribution: attributionMethod === 'modeled' ? merged.fallbackAttribution : null,
     });
 
-    const inserted = insertTrackingEvent({
+    const eventData = {
       storeId: store.id,
       eventName: 'Purchase',
       eventId,
-      source: 'shopify',
+      source: 'shopify' as const,
       occurredAt: createdAt,
       clickId,
       fbp,
@@ -487,12 +521,21 @@ export async function POST(request: NextRequest) {
       adSetId: entityIds.adSetId,
       adId: entityIds.adId,
       payloadJson,
-    }).inserted;
+    };
+
+    let inserted = false;
+    if (sb) {
+      const result = await insertPersistentTrackingEvent(eventData);
+      inserted = result.inserted;
+    } else {
+      const result = insertTrackingEvent(eventData);
+      inserted = result.inserted;
+    }
 
     if (
       inserted &&
       cfg &&
-      cfg.server_side_enabled === 1 &&
+      (cfg.server_side_enabled === 1 || (cfg.server_side_enabled as unknown) === true) &&
       ENABLE_META_CAPI_FORWARDING &&
       financialStatus !== 'refunded'
     ) {
@@ -511,14 +554,28 @@ export async function POST(request: NextRequest) {
           currency,
           externalId: orderId,
         });
-        markTrackingEventMetaDelivery({ storeId: store.id, eventId, forwarded: true });
+        if (sb) {
+          await markPersistentTrackingEventMetaDelivery({ storeId: store.id, eventId, forwarded: true });
+        } else {
+          markTrackingEventMetaDelivery({ storeId: store.id, eventId, forwarded: true });
+        }
       } catch (err) {
-        markTrackingEventMetaDelivery({
-          storeId: store.id,
-          eventId,
-          forwarded: false,
-          error: err instanceof Error ? err.message.slice(0, 500) : 'Meta forward failed',
-        });
+        const errMsg = err instanceof Error ? err.message.slice(0, 500) : 'Meta forward failed';
+        if (sb) {
+          await markPersistentTrackingEventMetaDelivery({
+            storeId: store.id,
+            eventId,
+            forwarded: false,
+            error: errMsg,
+          });
+        } else {
+          markTrackingEventMetaDelivery({
+            storeId: store.id,
+            eventId,
+            forwarded: false,
+            error: errMsg,
+          });
+        }
       }
     }
 
@@ -534,7 +591,8 @@ export async function POST(request: NextRequest) {
     const fbp = readFbp(payload);
     const emailHash = readEmailHash(payload);
     const directEntityIds = readEntityIdsFromPayload(payload);
-    const merged = mergeEntityIdsWithFallback(
+    const merged = await mergeEntityIdsWithFallback(
+      sb,
       store.id,
       createdAt,
       fbc,
@@ -566,11 +624,12 @@ export async function POST(request: NextRequest) {
     const hasUtmInputs = !!(utmCampaign || utmMedium || utmContent);
     const attributionMethod =
       merged.fallbackAttribution && !hasDirectMapping && !hasUtmInputs ? 'modeled' : 'deterministic';
-    insertTrackingEvent({
+
+    const refundEventData = {
       storeId: store.id,
       eventName: 'Refund',
       eventId,
-      source: 'shopify',
+      source: 'shopify' as const,
       occurredAt: createdAt,
       clickId,
       fbp,
@@ -597,7 +656,13 @@ export async function POST(request: NextRequest) {
         attributionMethod,
         fallbackAttribution: attributionMethod === 'modeled' ? merged.fallbackAttribution : null,
       }),
-    });
+    };
+
+    if (sb) {
+      await insertPersistentTrackingEvent(refundEventData);
+    } else {
+      insertTrackingEvent(refundEventData);
+    }
     return NextResponse.json({ ok: true });
   }
 

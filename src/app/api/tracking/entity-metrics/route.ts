@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fromZonedTime, format as formatTz } from 'date-fns-tz';
 import { getStoreAdAccounts, getTrackingEntityMetrics } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled, listPersistentStoreAdAccounts } from '@/app/api/lib/supabase-persistence';
+import { getPersistentTrackingEntityMetrics } from '@/app/api/lib/supabase-tracking';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -30,8 +32,11 @@ function toDateBounds(
   };
 }
 
-function getStoreTimezone(storeId: string): string {
-  const accounts = getStoreAdAccounts(storeId).filter((a) => a.platform === 'meta' && a.is_active === 1);
+async function getStoreTimezone(storeId: string, useSupabase: boolean): Promise<string> {
+  const allAccounts = useSupabase
+    ? await listPersistentStoreAdAccounts(storeId)
+    : getStoreAdAccounts(storeId);
+  const accounts = allAccounts.filter((a) => a.platform === 'meta' && (a.is_active === 1 || (a.is_active as unknown) === true));
   return accounts.find((a) => a.timezone)?.timezone || accounts[0]?.timezone || DEFAULT_TZ;
 }
 
@@ -56,9 +61,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
 
-  const timezone = getStoreTimezone(storeId);
+  const sb = isSupabasePersistenceEnabled();
+  const timezone = await getStoreTimezone(storeId, sb);
   const bounds = toDateBounds(searchParams.get('since'), searchParams.get('until'), timezone);
-  const rows = getTrackingEntityMetrics(storeId, bounds.sinceIso, bounds.untilIso);
+  const rows = sb
+    ? await getPersistentTrackingEntityMetrics(storeId, bounds.sinceIso, bounds.untilIso)
+    : getTrackingEntityMetrics(storeId, bounds.sinceIso, bounds.untilIso);
 
   const campaigns: Record<string, EntityMetricSummary> = {};
   const adSets: Record<string, EntityMetricSummary> = {};

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { copyMetaConnection, getStore } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled, getPersistentStore, copyPersistentMetaConnection } from '@/app/api/lib/supabase-persistence';
 
 /**
  * POST /api/auth/meta/copy-connection
@@ -28,9 +29,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const sb = isSupabasePersistenceEnabled();
+
     // Validate both stores exist
-    const fromStore = getStore(fromStoreId);
-    const toStore = getStore(toStoreId);
+    const fromStore = sb ? await getPersistentStore(fromStoreId) : getStore(fromStoreId);
+    const toStore = sb ? await getPersistentStore(toStoreId) : getStore(toStoreId);
 
     if (!fromStore) {
       return NextResponse.json({ error: 'Source store not found' }, { status: 404 });
@@ -40,7 +43,11 @@ export async function POST(request: NextRequest) {
     }
 
     // Copy the connection
-    copyMetaConnection(fromStoreId, toStoreId);
+    if (sb) {
+      await copyPersistentMetaConnection(fromStoreId, toStoreId);
+    } else {
+      copyMetaConnection(fromStoreId, toStoreId);
+    }
 
     return NextResponse.json({
       success: true,

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getMetaToken } from '@/app/api/lib/tokens';
 import { fetchFromMeta } from '@/app/api/lib/meta-client';
 import { getAllStores, getStoreAdAccounts } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled, listPersistentStores, listPersistentStoreAdAccounts } from '@/app/api/lib/supabase-persistence';
 
 // Map Meta event_type strings to our ActionType
 function mapEventType(eventType: string): string | null {
@@ -289,7 +290,8 @@ export async function GET(request: NextRequest) {
 
   // Auto-detect storeId if not provided — find first store with a Meta connection
   if (!storeId) {
-    const allStores = getAllStores();
+    const useSupabase = isSupabasePersistenceEnabled();
+    const allStores = useSupabase ? await listPersistentStores() : getAllStores();
     const storeWithMeta = allStores.find((s) => s.metaConnected);
     if (storeWithMeta) {
       storeId = storeWithMeta.id;
@@ -311,7 +313,9 @@ export async function GET(request: NextRequest) {
     accountIds = accountIdsParam.split(',').filter(Boolean);
   }
   if (accountIds.length === 0) {
-    const mapped = getStoreAdAccounts(storeId);
+    const mapped = isSupabasePersistenceEnabled()
+      ? await listPersistentStoreAdAccounts(storeId)
+      : getStoreAdAccounts(storeId);
     accountIds = mapped
       .filter((a) => a.platform === 'meta' && a.is_active === 1)
       .map((a) => a.ad_account_id);

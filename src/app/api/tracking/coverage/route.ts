@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getTrackingAttributionCoverage } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
+import { getPersistentTrackingAttributionCoverage } from '@/app/api/lib/supabase-tracking';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -22,7 +24,10 @@ export async function GET(request: NextRequest) {
   const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
   try {
-    const coverage = getTrackingAttributionCoverage(storeId, sinceIso, untilIso);
+    const sb = isSupabasePersistenceEnabled();
+    const coverage = sb
+      ? await getPersistentTrackingAttributionCoverage(storeId, sinceIso, untilIso)
+      : getTrackingAttributionCoverage(storeId, sinceIso, untilIso);
     const percent =
       coverage.total_purchases > 0
         ? Math.round((coverage.mapped_purchases / coverage.total_purchases) * 10000) / 100

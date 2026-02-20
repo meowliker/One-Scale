@@ -1,4 +1,5 @@
 import { getStoreAdAccounts } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled, listPersistentStoreAdAccounts } from '@/app/api/lib/supabase-persistence';
 import { fetchFromMeta } from '@/app/api/lib/meta-client';
 import { getMetaToken } from '@/app/api/lib/tokens';
 
@@ -117,8 +118,11 @@ async function buildLookups(storeId: string): Promise<LookupMaps> {
 
   if (!token?.accessToken) return emptyMaps;
 
-  const accountIds = getStoreAdAccounts(storeId)
-    .filter((a) => a.platform === 'meta' && a.is_active === 1)
+  const sb = isSupabasePersistenceEnabled();
+  const accountIds = (sb
+    ? await listPersistentStoreAdAccounts(storeId)
+    : getStoreAdAccounts(storeId))
+    .filter((a) => a.platform === 'meta' && (a.is_active === 1 || (a.is_active as unknown) === true))
     .map((a) => a.ad_account_id);
   if (accountIds.length === 0) return emptyMaps;
 

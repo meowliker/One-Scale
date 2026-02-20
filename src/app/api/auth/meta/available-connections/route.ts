@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllMetaConnections } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled, getAllPersistentMetaConnections } from '@/app/api/lib/supabase-persistence';
 
 /**
  * GET /api/auth/meta/available-connections?excludeStoreId=xxx
@@ -13,7 +14,8 @@ export async function GET(request: NextRequest) {
   const excludeStoreId = searchParams.get('excludeStoreId');
 
   try {
-    let connections = getAllMetaConnections();
+    const sb = isSupabasePersistenceEnabled();
+    let connections = sb ? await getAllPersistentMetaConnections() : getAllMetaConnections();
 
     // Exclude the current store (no need to show "copy from yourself")
     if (excludeStoreId) {

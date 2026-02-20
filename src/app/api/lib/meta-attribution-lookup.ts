@@ -1,4 +1,6 @@
 import { getRecentMetaEndpointSnapshots, getStoreAdAccounts } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled, listPersistentStoreAdAccounts } from '@/app/api/lib/supabase-persistence';
+import { getRecentPersistentMetaEndpointSnapshots } from '@/app/api/lib/supabase-tracking';
 import { fetchFromMeta } from '@/app/api/lib/meta-client';
 import { getMetaToken } from '@/app/api/lib/tokens';
 
@@ -133,8 +135,10 @@ function findLookupId(map: Map<string, string>, raw: string | null | undefined):
   return bestId;
 }
 
-function ingestFromSnapshots(storeId: string, lookup: MetaAttributionLookup): void {
-  const campaignSnapshots = getRecentMetaEndpointSnapshots<unknown[]>(storeId, 'campaigns', 120);
+async function ingestFromSnapshots(storeId: string, lookup: MetaAttributionLookup, useSupabase: boolean): Promise<void> {
+  const campaignSnapshots = useSupabase
+    ? await getRecentPersistentMetaEndpointSnapshots<unknown[]>(storeId, 'campaigns', 120)
+    : getRecentMetaEndpointSnapshots<unknown[]>(storeId, 'campaigns', 120);
   for (const snapshot of campaignSnapshots) {
     if (!Array.isArray(snapshot.data)) continue;
     for (const raw of snapshot.data) {
@@ -143,7 +147,9 @@ function ingestFromSnapshots(storeId: string, lookup: MetaAttributionLookup): vo
     }
   }
 
-  const adSetSnapshots = getRecentMetaEndpointSnapshots<unknown[]>(storeId, 'adsets', 120);
+  const adSetSnapshots = useSupabase
+    ? await getRecentPersistentMetaEndpointSnapshots<unknown[]>(storeId, 'adsets', 120)
+    : getRecentMetaEndpointSnapshots<unknown[]>(storeId, 'adsets', 120);
   for (const snapshot of adSetSnapshots) {
     if (!Array.isArray(snapshot.data)) continue;
     for (const raw of snapshot.data) {
@@ -152,7 +158,9 @@ function ingestFromSnapshots(storeId: string, lookup: MetaAttributionLookup): vo
     }
   }
 
-  const adSnapshots = getRecentMetaEndpointSnapshots<unknown[]>(storeId, 'ads', 120);
+  const adSnapshots = useSupabase
+    ? await getRecentPersistentMetaEndpointSnapshots<unknown[]>(storeId, 'ads', 120)
+    : getRecentMetaEndpointSnapshots<unknown[]>(storeId, 'ads', 120);
   for (const snapshot of adSnapshots) {
     if (!Array.isArray(snapshot.data)) continue;
     for (const raw of snapshot.data) {
@@ -223,16 +231,19 @@ async function fetchCampaignNames(accessToken: string, accountId: string, lookup
 }
 
 async function buildLookup(storeId: string): Promise<MetaAttributionLookup> {
+  const sb = isSupabasePersistenceEnabled();
   const lookup = createLookup();
 
   // Fast path: most active entities are already in local endpoint snapshots.
-  ingestFromSnapshots(storeId, lookup);
+  await ingestFromSnapshots(storeId, lookup, sb);
 
   const token = await getMetaToken(storeId);
   if (!token?.accessToken) return lookup;
 
-  const accounts = getStoreAdAccounts(storeId)
-    .filter((a) => a.platform === 'meta' && a.is_active === 1)
+  const accounts = (sb
+    ? await listPersistentStoreAdAccounts(storeId)
+    : getStoreAdAccounts(storeId))
+    .filter((a) => a.platform === 'meta' && (a.is_active === 1 || (a.is_active as unknown) === true))
     .map((a) => a.ad_account_id);
   if (accounts.length === 0) return lookup;
 

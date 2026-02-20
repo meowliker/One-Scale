@@ -4,6 +4,16 @@ import { fetchFromMeta, mapInsightsToMetrics } from '@/app/api/lib/meta-client';
 import { getLatestMetaEndpointSnapshot, getMetaEndpointSnapshot, getRecentMetaEndpointSnapshots, getStoreAdAccounts, upsertMetaEndpointSnapshot } from '@/app/api/lib/db';
 import type { AdSet } from '@/types/campaign';
 import type { Creative } from '@/types/creative';
+import {
+  isSupabasePersistenceEnabled,
+  listPersistentStoreAdAccounts,
+} from '@/app/api/lib/supabase-persistence';
+import {
+  upsertPersistentMetaEndpointSnapshot,
+  getPersistentMetaEndpointSnapshot,
+  getLatestPersistentMetaEndpointSnapshot,
+  getRecentPersistentMetaEndpointSnapshots,
+} from '@/app/api/lib/supabase-tracking';
 
 type MetaRow = Record<string, unknown>;
 
@@ -78,8 +88,10 @@ function deriveCreativeDeliveryStatus(
   return effectiveStatus || configuredStatus || 'Unknown';
 }
 
-function deriveCreativesFromAdSetSnapshots(storeId: string): Creative[] {
-  const snapshots = getRecentMetaEndpointSnapshots<AdSet[]>(storeId, 'adsets', 120);
+async function deriveCreativesFromAdSetSnapshots(storeId: string, useSupabase: boolean): Promise<Creative[]> {
+  const snapshots = useSupabase
+    ? await getRecentPersistentMetaEndpointSnapshots<AdSet[]>(storeId, 'adsets', 120)
+    : getRecentMetaEndpointSnapshots<AdSet[]>(storeId, 'adsets', 120);
   if (snapshots.length === 0) return [];
 
   const adSets = snapshots
@@ -578,8 +590,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
 
+  const useSupabase = isSupabasePersistenceEnabled();
+
   if (preferCache) {
-    const exactSnapshot = getMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default', `datePreset:${datePreset}`);
+    const exactSnapshot = useSupabase
+      ? await getPersistentMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default', `datePreset:${datePreset}`)
+      : getMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default', `datePreset:${datePreset}`);
     if (exactSnapshot && exactSnapshot.data.length > 0) {
       return NextResponse.json({
         data: exactSnapshot.data,
@@ -591,7 +607,9 @@ export async function GET(request: NextRequest) {
     }
 
     const last30Snapshot = datePreset !== 'last_30d'
-      ? getMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default', 'datePreset:last_30d')
+      ? (useSupabase
+          ? await getPersistentMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default', 'datePreset:last_30d')
+          : getMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default', 'datePreset:last_30d'))
       : null;
     if (last30Snapshot && last30Snapshot.data.length > 0) {
       return NextResponse.json({
@@ -603,7 +621,9 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const latestSnapshot = getLatestMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default');
+    const latestSnapshot = useSupabase
+      ? await getLatestPersistentMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default')
+      : getLatestMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default');
     if (latestSnapshot && latestSnapshot.data.length > 0) {
       return NextResponse.json({
         data: latestSnapshot.data,
@@ -614,10 +634,15 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const adSetDerived = deriveCreativesFromAdSetSnapshots(storeId);
+    const adSetDerived = await deriveCreativesFromAdSetSnapshots(storeId, useSupabase);
     if (hasCreativeSignal(adSetDerived)) {
-      upsertMetaEndpointSnapshot(storeId, 'creatives', 'default', `datePreset:${datePreset}`, adSetDerived);
-      upsertMetaEndpointSnapshot(storeId, 'creatives', 'default', 'latest', adSetDerived);
+      if (useSupabase) {
+        await upsertPersistentMetaEndpointSnapshot(storeId, 'creatives', 'default', `datePreset:${datePreset}`, adSetDerived);
+        await upsertPersistentMetaEndpointSnapshot(storeId, 'creatives', 'default', 'latest', adSetDerived);
+      } else {
+        upsertMetaEndpointSnapshot(storeId, 'creatives', 'default', `datePreset:${datePreset}`, adSetDerived);
+        upsertMetaEndpointSnapshot(storeId, 'creatives', 'default', 'latest', adSetDerived);
+      }
       return NextResponse.json({
         data: adSetDerived,
         stale: true,
@@ -637,9 +662,11 @@ export async function GET(request: NextRequest) {
     if (accountIds) {
       targetIds = accountIds.split(',').filter(Boolean);
     } else {
-      const mapped = getStoreAdAccounts(storeId);
+      const mapped = useSupabase
+        ? await listPersistentStoreAdAccounts(storeId)
+        : getStoreAdAccounts(storeId);
       targetIds = mapped
-        .filter((a) => a.platform === 'meta' && a.is_active === 1)
+        .filter((a) => a.platform === 'meta' && (a.is_active === 1 || (a.is_active as unknown) === true))
         .map((a) => a.ad_account_id);
     }
 
@@ -771,13 +798,23 @@ export async function GET(request: NextRequest) {
     const rows = [...deduped.values()];
 
     if (hasCreativeSignal(rows)) {
-      upsertMetaEndpointSnapshot(storeId, 'creatives', 'default', `datePreset:${datePreset}`, rows);
-      upsertMetaEndpointSnapshot(storeId, 'creatives', 'default', 'latest', rows);
+      if (useSupabase) {
+        await upsertPersistentMetaEndpointSnapshot(storeId, 'creatives', 'default', `datePreset:${datePreset}`, rows);
+        await upsertPersistentMetaEndpointSnapshot(storeId, 'creatives', 'default', 'latest', rows);
+      } else {
+        upsertMetaEndpointSnapshot(storeId, 'creatives', 'default', `datePreset:${datePreset}`, rows);
+        upsertMetaEndpointSnapshot(storeId, 'creatives', 'default', 'latest', rows);
+      }
     } else {
-      const adSetDerived = deriveCreativesFromAdSetSnapshots(storeId);
+      const adSetDerived = await deriveCreativesFromAdSetSnapshots(storeId, useSupabase);
       if (hasCreativeSignal(adSetDerived)) {
-        upsertMetaEndpointSnapshot(storeId, 'creatives', 'default', `datePreset:${datePreset}`, adSetDerived);
-        upsertMetaEndpointSnapshot(storeId, 'creatives', 'default', 'latest', adSetDerived);
+        if (useSupabase) {
+          await upsertPersistentMetaEndpointSnapshot(storeId, 'creatives', 'default', `datePreset:${datePreset}`, adSetDerived);
+          await upsertPersistentMetaEndpointSnapshot(storeId, 'creatives', 'default', 'latest', adSetDerived);
+        } else {
+          upsertMetaEndpointSnapshot(storeId, 'creatives', 'default', `datePreset:${datePreset}`, adSetDerived);
+          upsertMetaEndpointSnapshot(storeId, 'creatives', 'default', 'latest', adSetDerived);
+        }
         return NextResponse.json({
           data: adSetDerived,
           stale: true,
@@ -786,8 +823,12 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      const exactSnapshot = getMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default', `datePreset:${datePreset}`);
-      const latestSnapshot = exactSnapshot ?? getLatestMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default');
+      const exactSnapshot = useSupabase
+        ? await getPersistentMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default', `datePreset:${datePreset}`)
+        : getMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default', `datePreset:${datePreset}`);
+      const latestSnapshot = exactSnapshot ?? (useSupabase
+        ? await getLatestPersistentMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default')
+        : getLatestMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default'));
       if (latestSnapshot && latestSnapshot.data.length > 0) {
         return NextResponse.json({
           data: latestSnapshot.data,
@@ -816,7 +857,9 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(payload);
   } catch (err) {
-    const latestSnapshot = getLatestMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default');
+    const latestSnapshot = useSupabase
+      ? await getLatestPersistentMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default')
+      : getLatestMetaEndpointSnapshot<Creative[]>(storeId, 'creatives', 'default');
     if (latestSnapshot && latestSnapshot.data.length > 0) {
       return NextResponse.json({
         data: latestSnapshot.data,

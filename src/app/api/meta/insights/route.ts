@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getMetaToken } from '@/app/api/lib/tokens';
 import { fetchFromMeta, fetchMetaInsights, fetchMetaHourlyInsights, mapInsightsToMetrics } from '@/app/api/lib/meta-client';
 import { getMetaEndpointSnapshot, getLatestMetaEndpointSnapshot, getStoreAdAccounts, upsertMetaEndpointSnapshot } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled, listPersistentStoreAdAccounts } from '@/app/api/lib/supabase-persistence';
+import {
+  getPersistentMetaEndpointSnapshot,
+  getLatestPersistentMetaEndpointSnapshot,
+  upsertPersistentMetaEndpointSnapshot,
+} from '@/app/api/lib/supabase-tracking';
 
 type MetricMap = Record<string, number>;
 
@@ -72,6 +78,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
 
+  const useSupabase = isSupabasePersistenceEnabled();
+
   // Determine which accounts to fetch insights for
   let targetIds: string[] = [];
   if (objectId) {
@@ -79,7 +87,9 @@ export async function GET(request: NextRequest) {
   } else if (accountIds) {
     targetIds = accountIds.split(',').filter(Boolean);
   } else {
-    const mapped = getStoreAdAccounts(storeId);
+    const mapped = useSupabase
+      ? await listPersistentStoreAdAccounts(storeId)
+      : getStoreAdAccounts(storeId);
     targetIds = mapped
       .filter((a) => a.platform === 'meta' && a.is_active === 1)
       .map((a) => a.ad_account_id);
@@ -101,7 +111,9 @@ export async function GET(request: NextRequest) {
   const isStrictPresetRequest = datePreset !== 'last_30d';
 
   if (preferCache) {
-    const exactSnapshot = getMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId, exactVariant);
+    const exactSnapshot = useSupabase
+      ? await getPersistentMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId, exactVariant)
+      : getMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId, exactVariant);
     if (exactSnapshot && exactSnapshot.data.length > 0) {
       return NextResponse.json({
         data: exactSnapshot.data,
@@ -112,7 +124,9 @@ export async function GET(request: NextRequest) {
       });
     }
     if (!isStrictPresetRequest) {
-      const last30Snapshot = getMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId, last30Variant);
+      const last30Snapshot = useSupabase
+        ? await getPersistentMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId, last30Variant)
+        : getMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId, last30Variant);
       if (last30Snapshot && last30Snapshot.data.length > 0) {
         return NextResponse.json({
           data: last30Snapshot.data,
@@ -124,9 +138,13 @@ export async function GET(request: NextRequest) {
       }
     }
     if (!isStrictPresetRequest) {
-      const latestSnapshot =
-        getMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId, latestVariant)
-        || getLatestMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId);
+      const latestExact = useSupabase
+        ? await getPersistentMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId, latestVariant)
+        : getMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId, latestVariant);
+      const latestSnapshot = latestExact
+        || (useSupabase
+          ? await getLatestPersistentMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId)
+          : getLatestMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId));
       if (latestSnapshot && latestSnapshot.data.length > 0) {
         return NextResponse.json({
           data: latestSnapshot.data,
@@ -189,8 +207,15 @@ export async function GET(request: NextRequest) {
           return { date, hour, metrics: m };
         });
 
-      upsertMetaEndpointSnapshot(storeId, 'insights', scopeId, exactVariant, hourlyInsights);
-      upsertMetaEndpointSnapshot(storeId, 'insights', scopeId, latestVariant, hourlyInsights);
+      if (useSupabase) {
+        await Promise.all([
+          upsertPersistentMetaEndpointSnapshot(storeId, 'insights', scopeId, exactVariant, hourlyInsights),
+          upsertPersistentMetaEndpointSnapshot(storeId, 'insights', scopeId, latestVariant, hourlyInsights),
+        ]);
+      } else {
+        upsertMetaEndpointSnapshot(storeId, 'insights', scopeId, exactVariant, hourlyInsights);
+        upsertMetaEndpointSnapshot(storeId, 'insights', scopeId, latestVariant, hourlyInsights);
+      }
       return NextResponse.json({ data: hourlyInsights });
     }
 
@@ -270,10 +295,20 @@ export async function GET(request: NextRequest) {
         })
         .sort((a, b) => (b.metrics?.spend || 0) - (a.metrics?.spend || 0));
 
-      upsertMetaEndpointSnapshot(storeId, 'insights', scopeId, exactVariant, breakdownInsights);
-      upsertMetaEndpointSnapshot(storeId, 'insights', scopeId, latestVariant, breakdownInsights);
-      if (datePreset === 'last_30d') {
-        upsertMetaEndpointSnapshot(storeId, 'insights', scopeId, last30Variant, breakdownInsights);
+      if (useSupabase) {
+        await Promise.all([
+          upsertPersistentMetaEndpointSnapshot(storeId, 'insights', scopeId, exactVariant, breakdownInsights),
+          upsertPersistentMetaEndpointSnapshot(storeId, 'insights', scopeId, latestVariant, breakdownInsights),
+          datePreset === 'last_30d'
+            ? upsertPersistentMetaEndpointSnapshot(storeId, 'insights', scopeId, last30Variant, breakdownInsights)
+            : Promise.resolve(),
+        ]);
+      } else {
+        upsertMetaEndpointSnapshot(storeId, 'insights', scopeId, exactVariant, breakdownInsights);
+        upsertMetaEndpointSnapshot(storeId, 'insights', scopeId, latestVariant, breakdownInsights);
+        if (datePreset === 'last_30d') {
+          upsertMetaEndpointSnapshot(storeId, 'insights', scopeId, last30Variant, breakdownInsights);
+        }
       }
       return NextResponse.json({ data: breakdownInsights });
     }
@@ -318,25 +353,39 @@ export async function GET(request: NextRequest) {
         };
       });
 
-    upsertMetaEndpointSnapshot(storeId, 'insights', scopeId, exactVariant, insights);
-    upsertMetaEndpointSnapshot(storeId, 'insights', scopeId, latestVariant, insights);
-    if (datePreset === 'last_30d') {
-      upsertMetaEndpointSnapshot(storeId, 'insights', scopeId, last30Variant, insights);
+    if (useSupabase) {
+      await Promise.all([
+        upsertPersistentMetaEndpointSnapshot(storeId, 'insights', scopeId, exactVariant, insights),
+        upsertPersistentMetaEndpointSnapshot(storeId, 'insights', scopeId, latestVariant, insights),
+        datePreset === 'last_30d'
+          ? upsertPersistentMetaEndpointSnapshot(storeId, 'insights', scopeId, last30Variant, insights)
+          : Promise.resolve(),
+      ]);
+    } else {
+      upsertMetaEndpointSnapshot(storeId, 'insights', scopeId, exactVariant, insights);
+      upsertMetaEndpointSnapshot(storeId, 'insights', scopeId, latestVariant, insights);
+      if (datePreset === 'last_30d') {
+        upsertMetaEndpointSnapshot(storeId, 'insights', scopeId, last30Variant, insights);
+      }
     }
     return NextResponse.json({ data: insights });
   } catch (err) {
-    const exactSnapshot = getMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId, exactVariant);
-    if (exactSnapshot && exactSnapshot.data.length > 0) {
+    const errExactSnapshot = useSupabase
+      ? await getPersistentMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId, exactVariant)
+      : getMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId, exactVariant);
+    if (errExactSnapshot && errExactSnapshot.data.length > 0) {
       return NextResponse.json({
-        data: exactSnapshot.data,
+        data: errExactSnapshot.data,
         cached: true,
         stale: true,
-        snapshotAt: exactSnapshot.updatedAt,
+        snapshotAt: errExactSnapshot.updatedAt,
         staleReason: 'live_error_exact',
       });
     }
     if (!isStrictPresetRequest) {
-      const last30Snapshot = getMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId, last30Variant);
+      const last30Snapshot = useSupabase
+        ? await getPersistentMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId, last30Variant)
+        : getMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId, last30Variant);
       if (last30Snapshot && last30Snapshot.data.length > 0) {
         return NextResponse.json({
           data: last30Snapshot.data,
@@ -348,9 +397,13 @@ export async function GET(request: NextRequest) {
       }
     }
     if (!isStrictPresetRequest) {
-      const latestSnapshot =
-        getMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId, latestVariant)
-        || getLatestMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId);
+      const errLatestExact = useSupabase
+        ? await getPersistentMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId, latestVariant)
+        : getMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId, latestVariant);
+      const latestSnapshot = errLatestExact
+        || (useSupabase
+          ? await getLatestPersistentMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId)
+          : getLatestMetaEndpointSnapshot<unknown[]>(storeId, 'insights', scopeId));
       if (latestSnapshot && latestSnapshot.data.length > 0) {
         return NextResponse.json({
           data: latestSnapshot.data,

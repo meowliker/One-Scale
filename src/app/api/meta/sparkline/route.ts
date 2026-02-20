@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getMetaToken } from '@/app/api/lib/tokens';
 import { fetchFromMeta } from '@/app/api/lib/meta-client';
 import { getStoreAdAccounts } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled, listPersistentStoreAdAccounts } from '@/app/api/lib/supabase-persistence';
 
 /**
  * OPTIMIZED: Uses a SINGLE account-level insights call with level=campaign
@@ -41,7 +42,9 @@ export async function GET(request: NextRequest) {
   } else {
     // Auto-detect from store
     try {
-      const storeAccounts = getStoreAdAccounts(storeId);
+      const storeAccounts = isSupabasePersistenceEnabled()
+        ? await listPersistentStoreAdAccounts(storeId)
+        : getStoreAdAccounts(storeId);
       adAccountIds = storeAccounts
         .filter((a) => a.platform === 'meta' && a.is_active === 1)
         .map((a) => a.ad_account_id);

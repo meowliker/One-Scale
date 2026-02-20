@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getMetaToken } from '@/app/api/lib/tokens';
 import { fetchMetaAdSets, MetaRateLimitError } from '@/app/api/lib/meta-client';
 import { getLatestMetaEndpointSnapshot, getMetaEndpointSnapshot, upsertMetaEndpointSnapshot } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
+import {
+  getPersistentMetaEndpointSnapshot,
+  getLatestPersistentMetaEndpointSnapshot,
+  upsertPersistentMetaEndpointSnapshot,
+} from '@/app/api/lib/supabase-tracking';
 import type { AdSet } from '@/types/campaign';
 
 const adSetCache = new Map<string, { at: number; data: AdSet[] }>();
@@ -46,6 +52,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'campaignId is required' }, { status: 400 });
   }
 
+  const useSupabase = isSupabasePersistenceEnabled();
   const dateRange = since && until ? { since, until } : undefined;
   const cacheKey = [storeId, campaignId, since || '', until || '', strictDate ? 'strict' : 'flex', mode].join('|');
   const exactVariant = `mode:${mode}|since:${since || ''}|until:${until || ''}|strict:${strictDate ? '1' : '0'}`;
@@ -57,7 +64,9 @@ export async function GET(request: NextRequest) {
   }
 
   if (preferCache) {
-    const exactSnapshot = getMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, exactVariant);
+    const exactSnapshot = useSupabase
+      ? await getPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, exactVariant)
+      : getMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, exactVariant);
     if (exactSnapshot && exactSnapshot.data.length > 0) {
       return NextResponse.json({
         data: exactSnapshot.data,
@@ -67,7 +76,9 @@ export async function GET(request: NextRequest) {
         staleReason: 'snapshot_exact_fast',
       });
     }
-    const modeSnapshot = getMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, `mode:${mode}`);
+    const modeSnapshot = useSupabase
+      ? await getPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, `mode:${mode}`)
+      : getMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, `mode:${mode}`);
     if (modeSnapshot && modeSnapshot.data.length > 0) {
       return NextResponse.json({
         data: modeSnapshot.data,
@@ -77,7 +88,9 @@ export async function GET(request: NextRequest) {
         staleReason: 'snapshot_mode_fast',
       });
     }
-    const latestSnapshot = getLatestMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId);
+    const latestSnapshot = useSupabase
+      ? await getLatestPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId)
+      : getLatestMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId);
     if (latestSnapshot && latestSnapshot.data.length > 0) {
       return NextResponse.json({
         data: latestSnapshot.data,
@@ -128,10 +141,20 @@ export async function GET(request: NextRequest) {
       throw new Error('Failed to fetch ad sets');
     }
     adSetCache.set(cacheKey, { at: Date.now(), data: adSets });
-    upsertMetaEndpointSnapshot(storeId, 'adsets', campaignId, exactVariant, adSets);
-    upsertMetaEndpointSnapshot(storeId, 'adsets', campaignId, 'latest', adSets);
-    if (hasAdSetSignal(adSets)) {
-      upsertMetaEndpointSnapshot(storeId, 'adsets', campaignId, `mode:${mode}`, adSets);
+    if (useSupabase) {
+      await Promise.all([
+        upsertPersistentMetaEndpointSnapshot(storeId, 'adsets', campaignId, exactVariant, adSets),
+        upsertPersistentMetaEndpointSnapshot(storeId, 'adsets', campaignId, 'latest', adSets),
+        hasAdSetSignal(adSets)
+          ? upsertPersistentMetaEndpointSnapshot(storeId, 'adsets', campaignId, `mode:${mode}`, adSets)
+          : Promise.resolve(),
+      ]);
+    } else {
+      upsertMetaEndpointSnapshot(storeId, 'adsets', campaignId, exactVariant, adSets);
+      upsertMetaEndpointSnapshot(storeId, 'adsets', campaignId, 'latest', adSets);
+      if (hasAdSetSignal(adSets)) {
+        upsertMetaEndpointSnapshot(storeId, 'adsets', campaignId, `mode:${mode}`, adSets);
+      }
     }
     return NextResponse.json({ data: adSets });
   } catch (err) {
@@ -141,7 +164,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ data: fallback.data, cached: true, stale: true });
     }
 
-    const exactSnapshot = getMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, exactVariant);
+    const exactSnapshot = useSupabase
+      ? await getPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, exactVariant)
+      : getMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, exactVariant);
     if (exactSnapshot && exactSnapshot.data.length > 0) {
       adSetCache.set(cacheKey, { at: Date.now(), data: exactSnapshot.data });
       return NextResponse.json({
@@ -152,7 +177,9 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const snapshot = getLatestMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId);
+    const snapshot = useSupabase
+      ? await getLatestPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId)
+      : getLatestMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId);
     if (snapshot && snapshot.data.length > 0) {
       adSetCache.set(cacheKey, { at: Date.now(), data: snapshot.data });
       return NextResponse.json({

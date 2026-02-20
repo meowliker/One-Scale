@@ -1,6 +1,13 @@
 import { createHash, randomUUID } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { getTrackingConfig, getTrackingConfigByPixelId, insertTrackingEvent, markTrackingEventMetaDelivery } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
+import {
+  getPersistentTrackingConfig,
+  getPersistentTrackingConfigByPixelId,
+  insertPersistentTrackingEvent,
+  markPersistentTrackingEventMetaDelivery,
+} from '@/app/api/lib/supabase-tracking';
 import { forwardToMetaCapi } from '@/app/api/lib/meta-capi';
 
 interface TrackingCollectBody {
@@ -132,6 +139,7 @@ export async function OPTIONS() {
 }
 
 export async function POST(request: NextRequest) {
+  const sb = isSupabasePersistenceEnabled();
   const { searchParams } = new URL(request.url);
   const storeIdFromQuery = searchParams.get('storeId');
 
@@ -148,8 +156,10 @@ export async function POST(request: NextRequest) {
 
   let storeId = storeIdFromQuery || '';
   if (!storeId && body.pixelId) {
-    const cfg = getTrackingConfigByPixelId(body.pixelId);
-    if (cfg) storeId = cfg.store_id;
+    const cfgByPixel = sb
+      ? await getPersistentTrackingConfigByPixelId(body.pixelId)
+      : getTrackingConfigByPixelId(body.pixelId);
+    if (cfgByPixel) storeId = cfgByPixel.store_id;
   }
   if (!storeId) {
     return withCors(NextResponse.json({ error: 'storeId or valid pixelId is required' }, { status: 400 }));
@@ -162,11 +172,11 @@ export async function POST(request: NextRequest) {
   const phoneHash = sha256(normalizePhone(body.user?.phone));
   const entityIds = parseEntityIds(body);
 
-  const insertResult = insertTrackingEvent({
+  const insertData = {
     storeId,
     eventName: body.eventName,
     eventId,
-    source: body.source || 'browser',
+    source: body.source || 'browser' as const,
     occurredAt: eventTime,
     pageUrl: body.pageUrl,
     referrer: body.referrer,
@@ -186,15 +196,21 @@ export async function POST(request: NextRequest) {
     adSetId: entityIds.adSetId,
     adId: entityIds.adId,
     payloadJson: body.properties ? JSON.stringify(body.properties) : null,
-  });
+  };
+
+  const insertResult = sb
+    ? await insertPersistentTrackingEvent(insertData)
+    : insertTrackingEvent(insertData);
 
   // Forward key commerce events to Meta CAPI (best effort, deduped by event_id).
   const trackable = new Set(['PageView', 'ViewContent', 'AddToCart', 'InitiateCheckout', 'Purchase']);
-  const cfg = getTrackingConfig(storeId);
+  const cfg = sb
+    ? await getPersistentTrackingConfig(storeId)
+    : getTrackingConfig(storeId);
   if (
     insertResult.inserted &&
     cfg &&
-    cfg.server_side_enabled === 1 &&
+    (cfg.server_side_enabled === 1 || (cfg.server_side_enabled as unknown) === true) &&
     ENABLE_META_CAPI_FORWARDING &&
     trackable.has(body.eventName)
   ) {
@@ -214,14 +230,27 @@ export async function POST(request: NextRequest) {
         value: typeof body.value === 'number' ? body.value : null,
         currency: body.currency || null,
       });
-      markTrackingEventMetaDelivery({ storeId, eventId, forwarded: true });
+      if (sb) {
+        await markPersistentTrackingEventMetaDelivery({ storeId, eventId, forwarded: true });
+      } else {
+        markTrackingEventMetaDelivery({ storeId, eventId, forwarded: true });
+      }
     } catch (err) {
-      markTrackingEventMetaDelivery({
-        storeId,
-        eventId,
-        forwarded: false,
-        error: err instanceof Error ? err.message.slice(0, 500) : 'Meta forward failed',
-      });
+      if (sb) {
+        await markPersistentTrackingEventMetaDelivery({
+          storeId,
+          eventId,
+          forwarded: false,
+          error: err instanceof Error ? err.message.slice(0, 500) : 'Meta forward failed',
+        });
+      } else {
+        markTrackingEventMetaDelivery({
+          storeId,
+          eventId,
+          forwarded: false,
+          error: err instanceof Error ? err.message.slice(0, 500) : 'Meta forward failed',
+        });
+      }
     }
   }
 

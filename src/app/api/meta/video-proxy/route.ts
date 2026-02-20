@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getMetaToken } from '@/app/api/lib/tokens';
 import { fetchFromMeta } from '@/app/api/lib/meta-client';
 import { getStoreAdAccounts } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled, listPersistentStoreAdAccounts } from '@/app/api/lib/supabase-persistence';
 
 /**
  * Proxy Meta video source URLs through our server.
@@ -54,7 +55,9 @@ export async function GET(request: NextRequest) {
 
     // Strategy 2: Search through mapped ad accounts' advideos
     if (!sourceUrl) {
-      const adAccounts = getStoreAdAccounts(storeId);
+      const adAccounts = isSupabasePersistenceEnabled()
+        ? await listPersistentStoreAdAccounts(storeId)
+        : getStoreAdAccounts(storeId);
       for (const account of adAccounts) {
         if (!account.is_active) continue;
         try {

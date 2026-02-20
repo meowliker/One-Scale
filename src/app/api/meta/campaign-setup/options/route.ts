@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getMetaToken } from '@/app/api/lib/tokens';
 import { fetchFromMeta } from '@/app/api/lib/meta-client';
 import { getStoreAdAccounts } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled, listPersistentStoreAdAccounts } from '@/app/api/lib/supabase-persistence';
 import type {
   CampaignConversionEvent,
   CampaignSetupOptions,
@@ -95,7 +96,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
 
-  const linkedAccounts = getStoreAdAccounts(storeId)
+  const allStoreAccounts = isSupabasePersistenceEnabled()
+    ? await listPersistentStoreAdAccounts(storeId)
+    : getStoreAdAccounts(storeId);
+  const linkedAccounts = allStoreAccounts
     .filter((account) => account.platform === 'meta')
     .sort((a, b) => (b.is_active - a.is_active))
     .map((account) => ({

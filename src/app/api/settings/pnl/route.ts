@@ -18,6 +18,26 @@ import {
   getPnlStoreSettings,
   upsertPnlStoreSettings,
 } from '@/app/api/lib/db';
+import {
+  isSupabasePersistenceEnabled,
+  getPersistentStore,
+  getPersistentProductCosts,
+  upsertPersistentProductCost,
+  deletePersistentProductCost,
+  getPersistentShippingSettings,
+  upsertPersistentShippingSettings,
+  getPersistentPaymentFees,
+  upsertPersistentPaymentFee,
+  deletePersistentPaymentFee,
+  getPersistentCustomExpenses,
+  addPersistentCustomExpense,
+  updatePersistentCustomExpense,
+  deletePersistentCustomExpense,
+  getPersistentHandlingFees,
+  upsertPersistentHandlingFees,
+  getPersistentPnlStoreSettings,
+  upsertPersistentPnlStoreSettings,
+} from '@/app/api/lib/supabase-persistence';
 
 // ---------- GET /api/settings/pnl?storeId=xxx ----------
 // Returns all P&L cost settings for a store.
@@ -30,12 +50,15 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
     }
 
-    const store = getStore(storeId);
+    const sb = isSupabasePersistenceEnabled();
+
+    const store = sb ? await getPersistentStore(storeId) : getStore(storeId);
     if (!store) {
       return NextResponse.json({ error: 'Store not found' }, { status: 404 });
     }
 
-    const productCosts = getProductCosts(storeId).map((pc) => ({
+    const rawProductCosts = sb ? await getPersistentProductCosts(storeId) : getProductCosts(storeId);
+    const productCosts = rawProductCosts.map((pc) => ({
       id: pc.id,
       productId: pc.product_id,
       productName: pc.product_name,
@@ -46,7 +69,7 @@ export async function GET(request: NextRequest) {
       createdAt: pc.created_at,
     }));
 
-    const shippingRaw = getShippingSettings(storeId);
+    const shippingRaw = sb ? await getPersistentShippingSettings(storeId) : getShippingSettings(storeId);
     const shipping = shippingRaw
       ? {
           method: shippingRaw.method,
@@ -57,16 +80,18 @@ export async function GET(request: NextRequest) {
         }
       : null;
 
-    const paymentFees = getPaymentFees(storeId).map((pf) => ({
+    const rawPaymentFees = sb ? await getPersistentPaymentFees(storeId) : getPaymentFees(storeId);
+    const paymentFees = rawPaymentFees.map((pf) => ({
       id: pf.id,
       gatewayName: pf.gateway_name,
       feePercentage: pf.fee_percentage,
       feeFixed: pf.fee_fixed,
-      isActive: pf.is_active === 1,
+      isActive: pf.is_active === 1 || pf.is_active === true,
       createdAt: pf.created_at,
     }));
 
-    const customExpenses = getCustomExpenses(storeId).map((ce) => ({
+    const rawCustomExpenses = sb ? await getPersistentCustomExpenses(storeId) : getCustomExpenses(storeId);
+    const customExpenses = rawCustomExpenses.map((ce) => ({
       id: ce.id,
       name: ce.name,
       category: ce.category,
@@ -75,11 +100,11 @@ export async function GET(request: NextRequest) {
       distribution: ce.distribution,
       startDate: ce.start_date,
       endDate: ce.end_date,
-      isActive: ce.is_active === 1,
+      isActive: ce.is_active === 1 || ce.is_active === true,
       createdAt: ce.created_at,
     }));
 
-    const handlingRaw = getHandlingFees(storeId);
+    const handlingRaw = sb ? await getPersistentHandlingFees(storeId) : getHandlingFees(storeId);
     const handling = handlingRaw
       ? {
           feeType: handlingRaw.fee_type,
@@ -88,7 +113,7 @@ export async function GET(request: NextRequest) {
         }
       : null;
 
-    const storeSettingsRaw = getPnlStoreSettings(storeId);
+    const storeSettingsRaw = sb ? await getPersistentPnlStoreSettings(storeId) : getPnlStoreSettings(storeId);
     const productType = storeSettingsRaw?.product_type || 'physical';
 
     return NextResponse.json({
@@ -118,7 +143,9 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
     }
 
-    const store = getStore(storeId);
+    const sb = isSupabasePersistenceEnabled();
+
+    const store = sb ? await getPersistentStore(storeId) : getStore(storeId);
     if (!store) {
       return NextResponse.json({ error: 'Store not found' }, { status: 404 });
     }
@@ -135,46 +162,92 @@ export async function PUT(request: NextRequest) {
 
     switch (section) {
       case 'product_type':
-        upsertPnlStoreSettings(storeId, {
-          productType: data.productType as 'physical' | 'digital',
-        });
+        if (sb) {
+          await upsertPersistentPnlStoreSettings(storeId, {
+            productType: data.productType as 'physical' | 'digital',
+          });
+        } else {
+          upsertPnlStoreSettings(storeId, {
+            productType: data.productType as 'physical' | 'digital',
+          });
+        }
         break;
 
       case 'shipping':
-        upsertShippingSettings(storeId, {
-          method: data.method as 'flat_rate' | 'percentage' | 'equal_charged' | 'per_item',
-          flatRate: data.flatRate as number | undefined,
-          percentage: data.percentage as number | undefined,
-          perItemRate: data.perItemRate as number | undefined,
-        });
+        if (sb) {
+          await upsertPersistentShippingSettings({
+            storeId,
+            method: data.method as 'flat_rate' | 'percentage' | 'equal_charged' | 'per_item',
+            flatRate: data.flatRate as number | undefined,
+            percentage: data.percentage as number | undefined,
+            perItemRate: data.perItemRate as number | undefined,
+          });
+        } else {
+          upsertShippingSettings(storeId, {
+            method: data.method as 'flat_rate' | 'percentage' | 'equal_charged' | 'per_item',
+            flatRate: data.flatRate as number | undefined,
+            percentage: data.percentage as number | undefined,
+            perItemRate: data.perItemRate as number | undefined,
+          });
+        }
         break;
 
       case 'handling':
-        upsertHandlingFees(storeId, {
-          feeType: data.feeType as 'per_order' | 'per_item' | 'percentage',
-          amount: data.amount as number,
-        });
+        if (sb) {
+          await upsertPersistentHandlingFees({
+            storeId,
+            feeType: data.feeType as 'per_order' | 'per_item' | 'percentage',
+            amount: data.amount as number,
+          });
+        } else {
+          upsertHandlingFees(storeId, {
+            feeType: data.feeType as 'per_order' | 'per_item' | 'percentage',
+            amount: data.amount as number,
+          });
+        }
         break;
 
       case 'payment_fees':
-        upsertPaymentFee(storeId, {
-          gatewayName: data.gatewayName as string,
-          feePercentage: data.feePercentage as number,
-          feeFixed: data.feeFixed as number,
-          isActive: data.isActive as boolean | undefined,
-        });
+        if (sb) {
+          await upsertPersistentPaymentFee({
+            storeId,
+            gatewayName: data.gatewayName as string,
+            feePercentage: data.feePercentage as number,
+            feeFixed: data.feeFixed as number,
+            isActive: data.isActive as boolean | undefined,
+          });
+        } else {
+          upsertPaymentFee(storeId, {
+            gatewayName: data.gatewayName as string,
+            feePercentage: data.feePercentage as number,
+            feeFixed: data.feeFixed as number,
+            isActive: data.isActive as boolean | undefined,
+          });
+        }
         break;
 
       case 'product_costs':
-        upsertProductCost({
-          storeId,
-          productId: data.productId as string,
-          productName: data.productName as string,
-          sku: data.sku as string | undefined,
-          costPerUnit: data.costPerUnit as number,
-          costType: data.costType as 'fixed' | 'percentage' | undefined,
-          effectiveDate: data.effectiveDate as string | undefined,
-        });
+        if (sb) {
+          await upsertPersistentProductCost({
+            storeId,
+            productId: data.productId as string,
+            productName: data.productName as string,
+            sku: data.sku as string | undefined,
+            costPerUnit: data.costPerUnit as number,
+            costType: data.costType as 'fixed' | 'percentage' | undefined,
+            effectiveDate: data.effectiveDate as string | undefined,
+          });
+        } else {
+          upsertProductCost({
+            storeId,
+            productId: data.productId as string,
+            productName: data.productName as string,
+            sku: data.sku as string | undefined,
+            costPerUnit: data.costPerUnit as number,
+            costType: data.costType as 'fixed' | 'percentage' | undefined,
+            effectiveDate: data.effectiveDate as string | undefined,
+          });
+        }
         break;
 
       case 'custom_expenses': {
@@ -185,16 +258,29 @@ export async function PUT(request: NextRequest) {
             { status: 400 }
           );
         }
-        updateCustomExpense(expenseId, {
-          name: data.name as string | undefined,
-          category: data.category as 'fixed' | 'variable' | undefined,
-          amount: data.amount as number | undefined,
-          frequency: data.frequency as 'daily' | 'weekly' | 'monthly' | 'yearly' | 'one_time' | undefined,
-          distribution: data.distribution as 'daily' | 'hourly' | 'smart' | undefined,
-          startDate: data.startDate as string | undefined,
-          endDate: data.endDate as string | undefined,
-          isActive: data.isActive as boolean | undefined,
-        });
+        if (sb) {
+          await updatePersistentCustomExpense(expenseId, {
+            name: data.name as string | undefined,
+            category: data.category as 'fixed' | 'variable' | undefined,
+            amount: data.amount as number | undefined,
+            frequency: data.frequency as 'daily' | 'weekly' | 'monthly' | 'yearly' | 'one_time' | undefined,
+            distribution: data.distribution as 'daily' | 'hourly' | 'smart' | undefined,
+            startDate: data.startDate as string | undefined,
+            endDate: data.endDate as string | undefined,
+            isActive: data.isActive as boolean | undefined,
+          });
+        } else {
+          updateCustomExpense(expenseId, {
+            name: data.name as string | undefined,
+            category: data.category as 'fixed' | 'variable' | undefined,
+            amount: data.amount as number | undefined,
+            frequency: data.frequency as 'daily' | 'weekly' | 'monthly' | 'yearly' | 'one_time' | undefined,
+            distribution: data.distribution as 'daily' | 'hourly' | 'smart' | undefined,
+            startDate: data.startDate as string | undefined,
+            endDate: data.endDate as string | undefined,
+            isActive: data.isActive as boolean | undefined,
+          });
+        }
         break;
       }
 
@@ -224,7 +310,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
     }
 
-    const store = getStore(storeId);
+    const sb = isSupabasePersistenceEnabled();
+
+    const store = sb ? await getPersistentStore(storeId) : getStore(storeId);
     if (!store) {
       return NextResponse.json({ error: 'Store not found' }, { status: 404 });
     }
@@ -247,15 +335,27 @@ export async function POST(request: NextRequest) {
             { status: 400 }
           );
         }
-        upsertProductCost({
-          storeId,
-          productId: data.productId as string,
-          productName: data.productName as string,
-          sku: data.sku as string | undefined,
-          costPerUnit: (data.costPerUnit as number) ?? 0,
-          costType: data.costType as 'fixed' | 'percentage' | undefined,
-          effectiveDate: data.effectiveDate as string | undefined,
-        });
+        if (sb) {
+          await upsertPersistentProductCost({
+            storeId,
+            productId: data.productId as string,
+            productName: data.productName as string,
+            sku: data.sku as string | undefined,
+            costPerUnit: (data.costPerUnit as number) ?? 0,
+            costType: data.costType as 'fixed' | 'percentage' | undefined,
+            effectiveDate: data.effectiveDate as string | undefined,
+          });
+        } else {
+          upsertProductCost({
+            storeId,
+            productId: data.productId as string,
+            productName: data.productName as string,
+            sku: data.sku as string | undefined,
+            costPerUnit: (data.costPerUnit as number) ?? 0,
+            costType: data.costType as 'fixed' | 'percentage' | undefined,
+            effectiveDate: data.effectiveDate as string | undefined,
+          });
+        }
         break;
 
       case 'payment_fees':
@@ -265,12 +365,22 @@ export async function POST(request: NextRequest) {
             { status: 400 }
           );
         }
-        upsertPaymentFee(storeId, {
-          gatewayName: data.gatewayName as string,
-          feePercentage: (data.feePercentage as number) ?? 0,
-          feeFixed: (data.feeFixed as number) ?? 0,
-          isActive: data.isActive as boolean | undefined,
-        });
+        if (sb) {
+          await upsertPersistentPaymentFee({
+            storeId,
+            gatewayName: data.gatewayName as string,
+            feePercentage: (data.feePercentage as number) ?? 0,
+            feeFixed: (data.feeFixed as number) ?? 0,
+            isActive: data.isActive as boolean | undefined,
+          });
+        } else {
+          upsertPaymentFee(storeId, {
+            gatewayName: data.gatewayName as string,
+            feePercentage: (data.feePercentage as number) ?? 0,
+            feeFixed: (data.feeFixed as number) ?? 0,
+            isActive: data.isActive as boolean | undefined,
+          });
+        }
         break;
 
       case 'custom_expenses':
@@ -280,16 +390,29 @@ export async function POST(request: NextRequest) {
             { status: 400 }
           );
         }
-        addCustomExpense(storeId, {
-          name: data.name as string,
-          category: data.category as 'fixed' | 'variable' | undefined,
-          amount: (data.amount as number) ?? 0,
-          frequency: data.frequency as 'daily' | 'weekly' | 'monthly' | 'yearly' | 'one_time' | undefined,
-          distribution: data.distribution as 'daily' | 'hourly' | 'smart' | undefined,
-          startDate: data.startDate as string | undefined,
-          endDate: data.endDate as string | undefined,
-          isActive: data.isActive as boolean | undefined,
-        });
+        if (sb) {
+          await addPersistentCustomExpense({
+            storeId,
+            name: data.name as string,
+            category: data.category as 'fixed' | 'variable' | undefined,
+            amount: (data.amount as number) ?? 0,
+            frequency: data.frequency as 'daily' | 'weekly' | 'monthly' | 'yearly' | 'one_time' | undefined,
+            distribution: data.distribution as 'daily' | 'hourly' | 'smart' | undefined,
+            startDate: data.startDate as string | undefined,
+            endDate: data.endDate as string | undefined,
+          });
+        } else {
+          addCustomExpense(storeId, {
+            name: data.name as string,
+            category: data.category as 'fixed' | 'variable' | undefined,
+            amount: (data.amount as number) ?? 0,
+            frequency: data.frequency as 'daily' | 'weekly' | 'monthly' | 'yearly' | 'one_time' | undefined,
+            distribution: data.distribution as 'daily' | 'hourly' | 'smart' | undefined,
+            startDate: data.startDate as string | undefined,
+            endDate: data.endDate as string | undefined,
+            isActive: data.isActive as boolean | undefined,
+          });
+        }
         break;
 
       default:
@@ -302,7 +425,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, section });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
-    if (msg.includes('UNIQUE constraint failed')) {
+    if (msg.includes('UNIQUE constraint failed') || msg.includes('duplicate key')) {
       return NextResponse.json(
         { error: 'An item with these details already exists' },
         { status: 409 }
@@ -331,25 +454,45 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'id is required' }, { status: 400 });
     }
 
-    const store = getStore(storeId);
+    const sb = isSupabasePersistenceEnabled();
+
+    const store = sb ? await getPersistentStore(storeId) : getStore(storeId);
     if (!store) {
       return NextResponse.json({ error: 'Store not found' }, { status: 404 });
     }
 
     switch (section) {
       case 'product_costs':
-        // id = productId for product costs
-        deleteProductCost(storeId, id);
+        if (sb) {
+          // For Supabase: find the row by storeId + productId, then delete by numeric ID
+          const costs = await getPersistentProductCosts(storeId);
+          const cost = costs.find((c) => c.product_id === id);
+          if (cost) await deletePersistentProductCost(cost.id);
+        } else {
+          // id = productId for product costs
+          deleteProductCost(storeId, id);
+        }
         break;
 
       case 'payment_fees':
-        // id = gatewayName for payment fees
-        deletePaymentFee(storeId, id);
+        if (sb) {
+          // For Supabase: find the row by storeId + gatewayName, then delete by numeric ID
+          const fees = await getPersistentPaymentFees(storeId);
+          const fee = fees.find((f) => f.gateway_name === id);
+          if (fee) await deletePersistentPaymentFee(fee.id);
+        } else {
+          // id = gatewayName for payment fees
+          deletePaymentFee(storeId, id);
+        }
         break;
 
       case 'custom_expenses':
         // id = numeric expense id
-        deleteCustomExpense(parseInt(id, 10));
+        if (sb) {
+          await deletePersistentCustomExpense(parseInt(id, 10));
+        } else {
+          deleteCustomExpense(parseInt(id, 10));
+        }
         break;
 
       default:

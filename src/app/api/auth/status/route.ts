@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getConnectionStatus } from '@/app/api/lib/db';
 import { canWorkspaceAccessStore } from '@/app/api/lib/auth-users';
-import { hydrateStoreFromSupabase, isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
+import { isSupabasePersistenceEnabled, getPersistentConnectionStatus } from '@/app/api/lib/supabase-persistence';
 import { readSessionFromRequest } from '@/lib/auth/request-session';
 
 export async function GET(request: NextRequest) {
@@ -21,8 +21,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Store not found' }, { status: 404 });
   }
 
-  if (isSupabasePersistenceEnabled()) {
-    await hydrateStoreFromSupabase(storeId);
+  const sb = isSupabasePersistenceEnabled();
+  if (sb) {
+    const status = await getPersistentConnectionStatus(storeId);
+    return NextResponse.json(status);
   }
   const status = getConnectionStatus(storeId);
   return NextResponse.json(status);

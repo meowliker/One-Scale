@@ -5,6 +5,11 @@ import {
   getStoreAdAccounts,
   getTrackingRecentPurchasesWithMapping,
 } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled, listPersistentStoreAdAccounts } from '@/app/api/lib/supabase-persistence';
+import {
+  getRecentPersistentMetaEndpointSnapshots,
+  getPersistentTrackingRecentPurchasesWithMapping,
+} from '@/app/api/lib/supabase-tracking';
 import { fetchFromMeta } from '@/app/api/lib/meta-client';
 import { getMetaToken } from '@/app/api/lib/tokens';
 
@@ -56,8 +61,11 @@ const CAMPAIGN_LOOKUP_TTL_MS = 30 * 60 * 1000;
 const campaignLookupCache = new Map<string, { at: number; map: Map<string, string> }>();
 const DEFAULT_TZ = 'America/New_York';
 
-function getStoreTimezone(storeId: string): string {
-  const accounts = getStoreAdAccounts(storeId).filter((a) => a.platform === 'meta' && a.is_active === 1);
+async function getStoreTimezone(storeId: string, useSupabase: boolean): Promise<string> {
+  const allAccounts = useSupabase
+    ? await listPersistentStoreAdAccounts(storeId)
+    : getStoreAdAccounts(storeId);
+  const accounts = allAccounts.filter((a) => a.platform === 'meta' && (a.is_active === 1 || (a.is_active as unknown) === true));
   const tz = accounts.find((a) => a.timezone)?.timezone || accounts[0]?.timezone || DEFAULT_TZ;
   return tz || DEFAULT_TZ;
 }
@@ -86,8 +94,12 @@ async function getCampaignNameLookup(storeId: string): Promise<Map<string, strin
     return lookup;
   }
 
-  const accountIds = getStoreAdAccounts(storeId)
-    .filter((row) => row.platform === 'meta' && row.is_active === 1)
+  const sb = isSupabasePersistenceEnabled();
+  const allAccounts = sb
+    ? await listPersistentStoreAdAccounts(storeId)
+    : getStoreAdAccounts(storeId);
+  const accountIds = allAccounts
+    .filter((row) => row.platform === 'meta' && (row.is_active === 1 || (row.is_active as unknown) === true))
     .map((row) => row.ad_account_id);
 
   await Promise.all(
@@ -116,14 +128,17 @@ async function getCampaignNameLookup(storeId: string): Promise<Map<string, strin
   return lookup;
 }
 
-function getSnapshotNameLookups(storeId: string): {
+async function getSnapshotNameLookups(storeId: string): Promise<{
   adSetById: Map<string, string>;
   adById: Map<string, string>;
-} {
+}> {
+  const sb = isSupabasePersistenceEnabled();
   const adSetById = new Map<string, string>();
   const adById = new Map<string, string>();
 
-  const adSetSnapshots = getRecentMetaEndpointSnapshots<unknown[]>(storeId, 'adsets', 200);
+  const adSetSnapshots = sb
+    ? await getRecentPersistentMetaEndpointSnapshots<unknown[]>(storeId, 'adsets', 200)
+    : getRecentMetaEndpointSnapshots<unknown[]>(storeId, 'adsets', 200);
   for (const snap of adSetSnapshots) {
     if (!Array.isArray(snap.data)) continue;
     for (const raw of snap.data) {
@@ -135,7 +150,9 @@ function getSnapshotNameLookups(storeId: string): {
     }
   }
 
-  const adSnapshots = getRecentMetaEndpointSnapshots<unknown[]>(storeId, 'ads', 200);
+  const adSnapshots = sb
+    ? await getRecentPersistentMetaEndpointSnapshots<unknown[]>(storeId, 'ads', 200)
+    : getRecentMetaEndpointSnapshots<unknown[]>(storeId, 'ads', 200);
   for (const snap of adSnapshots) {
     if (!Array.isArray(snap.data)) continue;
     for (const raw of snap.data) {
@@ -192,14 +209,19 @@ export async function GET(request: NextRequest) {
   const liveLimit = Number.isFinite(limitParsed) ? Math.max(10, Math.min(120, Math.floor(limitParsed))) : 40;
 
   try {
-    const timezone = getStoreTimezone(storeId);
+    const sb = isSupabasePersistenceEnabled();
+    const timezone = await getStoreTimezone(storeId, sb);
     const bounds = getTodayBoundsInTz(timezone);
     const nowIso = new Date().toISOString();
-    const allTodayRowsRaw = getTrackingRecentPurchasesWithMapping(storeId, bounds.startIso, nowIso, 5000);
+    const allTodayRowsRaw = sb
+      ? await getPersistentTrackingRecentPurchasesWithMapping(storeId, bounds.startIso, nowIso, 5000)
+      : getTrackingRecentPurchasesWithMapping(storeId, bounds.startIso, nowIso, 5000);
     const allTodayRows = dedupePurchaseRows(allTodayRowsRaw);
     const rows = allTodayRows.slice(0, liveLimit);
-    const [campaignLookup] = await Promise.all([getCampaignNameLookup(storeId)]);
-    const snapshotLookup = getSnapshotNameLookups(storeId);
+    const [campaignLookup, snapshotLookup] = await Promise.all([
+      getCampaignNameLookup(storeId),
+      getSnapshotNameLookups(storeId),
+    ]);
 
     const mappedRevenue = allTodayRows.reduce((sum, row) => {
       const mapped = !!(row.campaign_id || row.adset_id || row.ad_id);

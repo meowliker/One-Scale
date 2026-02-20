@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getTrackingConfig } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
+import { getPersistentTrackingConfig } from '@/app/api/lib/supabase-tracking';
 import { getShopifyToken } from '@/app/api/lib/tokens';
 
 const SHOPIFY_API_VERSION = '2024-01';
@@ -150,7 +152,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
 
-  const cfg = getTrackingConfig(storeId);
+  const sb = isSupabasePersistenceEnabled();
+  const cfg = sb ? await getPersistentTrackingConfig(storeId) : getTrackingConfig(storeId);
   if (!cfg?.pixel_id || !cfg?.domain) {
     return NextResponse.json({ error: 'Tracking config missing pixel/domain' }, { status: 400 });
   }

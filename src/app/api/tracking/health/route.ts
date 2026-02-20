@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { countTrackingServerEvents24h, getLatestTrackingEventAt, getTrackingConfig, getTrackingEventSummaries } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
+import {
+  countPersistentTrackingServerEvents24h,
+  getLatestPersistentTrackingEventAt,
+  getPersistentTrackingConfig,
+  getPersistentTrackingEventSummaries,
+} from '@/app/api/lib/supabase-tracking';
 import type { HealthCheck, TrackingHealth } from '@/types/tracking';
 
 function overallFromChecks(checks: HealthCheck[]): 'healthy' | 'warning' | 'error' {
@@ -16,13 +23,14 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const sb = isSupabasePersistenceEnabled();
     const nowIso = new Date().toISOString();
-    const cfg = getTrackingConfig(storeId);
-    const summaries = getTrackingEventSummaries(storeId);
+    const cfg = sb ? await getPersistentTrackingConfig(storeId) : getTrackingConfig(storeId);
+    const summaries = sb ? await getPersistentTrackingEventSummaries(storeId) : getTrackingEventSummaries(storeId);
     const purchase = summaries.find((s) => s.event_name === 'Purchase');
     const pageView = summaries.find((s) => s.event_name === 'PageView');
-    const latestEventAt = getLatestTrackingEventAt(storeId);
-    const serverEvent24h = countTrackingServerEvents24h(storeId);
+    const latestEventAt = sb ? await getLatestPersistentTrackingEventAt(storeId) : getLatestTrackingEventAt(storeId);
+    const serverEvent24h = sb ? await countPersistentTrackingServerEvents24h(storeId) : countTrackingServerEvents24h(storeId);
 
     const freshnessMinutes = latestEventAt
       ? Math.floor((Date.now() - new Date(latestEventAt).getTime()) / 60_000)

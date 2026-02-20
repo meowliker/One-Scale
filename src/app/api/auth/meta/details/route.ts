@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getMetaToken } from '@/app/api/lib/tokens';
 import { getConnection, getStoreAdAccounts } from '@/app/api/lib/db';
+import {
+  isSupabasePersistenceEnabled,
+  getPersistentConnection,
+  listPersistentStoreAdAccounts,
+} from '@/app/api/lib/supabase-persistence';
 
 const GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 
@@ -65,7 +70,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Not connected to Meta' }, { status: 401 });
   }
 
-  const conn = getConnection(storeId, 'meta');
+  const sb = isSupabasePersistenceEnabled();
+  const conn = sb ? await getPersistentConnection(storeId, 'meta') : getConnection(storeId, 'meta');
   const at = token.accessToken;
 
   const adAccountFields = 'id,name,account_id,currency,timezone_name,account_status,amount_spent,business{id,name}';
@@ -140,6 +146,11 @@ export async function GET(request: NextRequest) {
 
     const allAccounts = Array.from(allAccountsMap.values());
 
+    // Get selected ad accounts from store_ad_accounts table
+    const selectedAdAccounts = sb
+      ? await listPersistentStoreAdAccounts(storeId)
+      : getStoreAdAccounts(storeId);
+
     return NextResponse.json({
       connected: true,
       user,
@@ -156,7 +167,7 @@ export async function GET(request: NextRequest) {
         business: acc.business || null,
       })),
       // Return all linked ad accounts from the store_ad_accounts table
-      selectedAccounts: getStoreAdAccounts(storeId)
+      selectedAccounts: selectedAdAccounts
         .filter((a) => a.platform === 'meta')
         .map((a) => ({ id: a.ad_account_id, name: a.ad_account_name })),
       connectedAt: conn?.connected_at,

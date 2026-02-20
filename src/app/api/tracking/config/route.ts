@@ -2,6 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getStore, getTrackingConfig, upsertTrackingConfig } from '@/app/api/lib/db';
 import type { TrackingConfig, TrackingEvent } from '@/types/tracking';
 import { getTrackingEventSummaries } from '@/app/api/lib/db';
+import {
+  isSupabasePersistenceEnabled,
+  getPersistentStore,
+} from '@/app/api/lib/supabase-persistence';
+import {
+  getPersistentTrackingConfig,
+  upsertPersistentTrackingConfig,
+  getPersistentTrackingEventSummaries,
+} from '@/app/api/lib/supabase-tracking';
 
 const DEFAULT_EVENTS: Array<{ name: string; displayName: string }> = [
   { name: 'PageView', displayName: 'Page View' },
@@ -16,22 +25,42 @@ function defaultPixelId(storeId: string): string {
   return `TW-${suffix || 'PIXEL'}`;
 }
 
-function toConfig(storeId: string): TrackingConfig {
-  const store = getStore(storeId);
-  const existing = getTrackingConfig(storeId);
+async function toConfig(storeId: string): Promise<TrackingConfig> {
+  const sb = isSupabasePersistenceEnabled();
+
+  const store = sb ? await getPersistentStore(storeId) : getStore(storeId);
+  const existing = sb ? await getPersistentTrackingConfig(storeId) : getTrackingConfig(storeId);
+
   if (!existing) {
     const domain = store?.domain || `${storeId}.myshopify.com`;
-    upsertTrackingConfig(storeId, {
-      pixelId: defaultPixelId(storeId),
-      domain,
-      serverSideEnabled: false,
-      attributionModel: 'last_click',
-      attributionWindow: '7day',
-    });
+    if (sb) {
+      await upsertPersistentTrackingConfig(storeId, {
+        pixelId: defaultPixelId(storeId),
+        domain,
+        serverSideEnabled: false,
+        attributionModel: 'last_click',
+        attributionWindow: '7day',
+      });
+    } else {
+      upsertTrackingConfig(storeId, {
+        pixelId: defaultPixelId(storeId),
+        domain,
+        serverSideEnabled: false,
+        attributionModel: 'last_click',
+        attributionWindow: '7day',
+      });
+    }
   }
 
-  const cfg = getTrackingConfig(storeId)!;
-  const summaryByName = new Map(getTrackingEventSummaries(storeId).map((s) => [s.event_name, s]));
+  const cfg = sb
+    ? (await getPersistentTrackingConfig(storeId))!
+    : getTrackingConfig(storeId)!;
+
+  const summaries = sb
+    ? await getPersistentTrackingEventSummaries(storeId)
+    : getTrackingEventSummaries(storeId);
+
+  const summaryByName = new Map(summaries.map((s) => [s.event_name, s]));
   const events: TrackingEvent[] = DEFAULT_EVENTS.map((evt) => {
     const summary = summaryByName.get(evt.name);
     const count24h = summary?.count_24h || 0;
@@ -48,7 +77,7 @@ function toConfig(storeId: string): TrackingConfig {
   return {
     pixelId: cfg.pixel_id,
     domain: cfg.domain,
-    serverSideEnabled: cfg.server_side_enabled === 1,
+    serverSideEnabled: cfg.server_side_enabled === 1 || (cfg.server_side_enabled as unknown) === true,
     attributionModel: cfg.attribution_model,
     attributionWindow: cfg.attribution_window,
     events,
@@ -62,7 +91,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
   try {
-    return NextResponse.json({ data: toConfig(storeId) });
+    return NextResponse.json({ data: await toConfig(storeId) });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to load tracking config';
     return NextResponse.json({ error: message }, { status: 500 });
@@ -77,6 +106,7 @@ export async function PUT(request: NextRequest) {
   }
 
   try {
+    const sb = isSupabasePersistenceEnabled();
     const body = await request.json() as Partial<{
       pixelId: string;
       domain: string;
@@ -85,16 +115,27 @@ export async function PUT(request: NextRequest) {
       attributionWindow: '1day' | '7day' | '28day';
     }>;
 
-    const existing = toConfig(storeId);
-    upsertTrackingConfig(storeId, {
-      pixelId: body.pixelId || existing.pixelId,
-      domain: body.domain || existing.domain,
-      serverSideEnabled: body.serverSideEnabled ?? existing.serverSideEnabled,
-      attributionModel: body.attributionModel || existing.attributionModel,
-      attributionWindow: body.attributionWindow || existing.attributionWindow,
-    });
+    const existing = await toConfig(storeId);
 
-    return NextResponse.json({ data: toConfig(storeId) });
+    if (sb) {
+      await upsertPersistentTrackingConfig(storeId, {
+        pixelId: body.pixelId || existing.pixelId,
+        domain: body.domain || existing.domain,
+        serverSideEnabled: body.serverSideEnabled ?? existing.serverSideEnabled,
+        attributionModel: body.attributionModel || existing.attributionModel,
+        attributionWindow: body.attributionWindow || existing.attributionWindow,
+      });
+    } else {
+      upsertTrackingConfig(storeId, {
+        pixelId: body.pixelId || existing.pixelId,
+        domain: body.domain || existing.domain,
+        serverSideEnabled: body.serverSideEnabled ?? existing.serverSideEnabled,
+        attributionModel: body.attributionModel || existing.attributionModel,
+        attributionWindow: body.attributionWindow || existing.attributionWindow,
+      });
+    }
+
+    return NextResponse.json({ data: await toConfig(storeId) });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to update tracking config';
     return NextResponse.json({ error: message }, { status: 500 });

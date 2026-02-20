@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getMetaToken } from '@/app/api/lib/tokens';
 import { fetchFromMeta } from '@/app/api/lib/meta-client';
 import { getStoreAdAccounts, getAllStores } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled, listPersistentStores, listPersistentStoreAdAccounts } from '@/app/api/lib/supabase-persistence';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -9,7 +10,8 @@ export async function GET(request: NextRequest) {
 
   // Auto-detect store if not provided — find first store with a Meta connection
   if (!storeId) {
-    const allStores = getAllStores();
+    const useSupabase = isSupabasePersistenceEnabled();
+    const allStores = useSupabase ? await listPersistentStores() : getAllStores();
     const storeWithMeta = allStores.find((s) => s.metaConnected);
     if (storeWithMeta) {
       storeId = storeWithMeta.id;
@@ -23,16 +25,18 @@ export async function GET(request: NextRequest) {
 
   const token = await getMetaToken(storeId);
   if (!token) {
-    const allStores = getAllStores();
+    const allStores2 = isSupabasePersistenceEnabled() ? await listPersistentStores() : getAllStores();
     return NextResponse.json({
       error: 'Not authenticated — token not found or expired for this storeId',
       storeIdUsed: storeId,
-      availableStores: allStores.map((s) => ({ id: s.id, name: s.name, metaConnected: s.metaConnected })),
+      availableStores: allStores2.map((s) => ({ id: s.id, name: s.name, metaConnected: s.metaConnected })),
       hint: 'Try visiting this URL without ?storeId to auto-detect, or use one of the store IDs listed above',
     }, { status: 401 });
   }
 
-  const mapped = getStoreAdAccounts(storeId);
+  const mapped = isSupabasePersistenceEnabled()
+    ? await listPersistentStoreAdAccounts(storeId)
+    : getStoreAdAccounts(storeId);
   const activeAccounts = mapped.filter(a => a.platform === 'meta' && a.is_active === 1);
 
   if (activeAccounts.length === 0) {

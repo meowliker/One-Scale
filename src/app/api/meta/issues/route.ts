@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getMetaToken } from '@/app/api/lib/tokens';
 import { fetchFromMeta } from '@/app/api/lib/meta-client';
 import { getStoreAdAccounts } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled, listPersistentStoreAdAccounts } from '@/app/api/lib/supabase-persistence';
 
 type IssueSeverity = 'critical' | 'warning';
 type IssueKind = 'ad_policy_rejected' | 'ad_with_issues' | 'learning_limited' | 'low_quality';
@@ -132,7 +133,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Not authenticated with Meta' }, { status: 401 });
   }
 
-  const mapped = getStoreAdAccounts(storeId)
+  const useSupabase = isSupabasePersistenceEnabled();
+  const allAccounts = useSupabase
+    ? await listPersistentStoreAdAccounts(storeId)
+    : getStoreAdAccounts(storeId);
+  const mapped = allAccounts
     .filter((a) => a.platform === 'meta' && a.is_active === 1)
     .map((a) => a.ad_account_id);
   if (mapped.length === 0) {

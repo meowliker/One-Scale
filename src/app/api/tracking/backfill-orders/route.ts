@@ -6,6 +6,14 @@ import {
   getTrackingShopifyPurchaseEventIdByOrderId,
   insertTrackingEvent,
 } from '@/app/api/lib/db';
+import type { DbTrackingAttributionScored } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
+import {
+  getPersistentScoredTrackingAttributionBySignals,
+  getPersistentTrackingAttributionByTimeProximity,
+  getPersistentTrackingShopifyPurchaseEventIdByOrderId,
+  insertPersistentTrackingEvent,
+} from '@/app/api/lib/supabase-tracking';
 import { resolveMetaEntityIdsFromUtms } from '@/app/api/lib/meta-attribution-lookup';
 import { fetchFromShopify } from '@/app/api/lib/shopify-client';
 import { getShopifyToken } from '@/app/api/lib/tokens';
@@ -288,7 +296,7 @@ function getRefundAmount(refund: RawRefund): number {
 }
 
 function shouldAcceptFallbackAttribution(
-  fallback: ReturnType<typeof getScoredTrackingAttributionBySignals> | undefined
+  fallback: DbTrackingAttributionScored | null | undefined
 ): boolean {
   if (!fallback) return false;
   if (!(fallback.campaignId || fallback.adSetId || fallback.adId)) return false;
@@ -300,6 +308,7 @@ function shouldAcceptFallbackAttribution(
 }
 
 export async function POST(request: NextRequest) {
+  const sb = isSupabasePersistenceEnabled();
   const { searchParams } = new URL(request.url);
   const storeId = searchParams.get('storeId');
   if (!storeId) {
@@ -335,7 +344,7 @@ export async function POST(request: NextRequest) {
   let updatedRefundEvents = 0;
   let mappedUpdatedPurchases = 0;
   let mappedUpdatedRefunds = 0;
-  const attributionCache = new Map<string, ReturnType<typeof getScoredTrackingAttributionBySignals>>();
+  const attributionCache = new Map<string, DbTrackingAttributionScored | null>();
 
   while (pages < maxPages) {
     const response = await fetchFromShopify<{ orders: RawShopifyOrder[] }>(
@@ -389,17 +398,11 @@ export async function POST(request: NextRequest) {
         const occurredDay = String(occurredAt || '').slice(0, 10);
         const cacheKey = [clickId || '', fbc || '', fbp || '', emailHash || '', occurredDay].join('|');
         if (!attributionCache.has(cacheKey)) {
-          attributionCache.set(
-            cacheKey,
-            getScoredTrackingAttributionBySignals({
-              storeId,
-              beforeIso: occurredAt,
-              clickId,
-              fbc,
-              fbp,
-              emailHash,
-            })
-          );
+          const lookupInput = { storeId, beforeIso: occurredAt, clickId, fbc, fbp, emailHash };
+          const result = sb
+            ? await getPersistentScoredTrackingAttributionBySignals(lookupInput)
+            : getScoredTrackingAttributionBySignals(lookupInput);
+          attributionCache.set(cacheKey, result);
         }
         const fallback = attributionCache.get(cacheKey);
         if (fallback && shouldAcceptFallbackAttribution(fallback)) {
@@ -418,11 +421,9 @@ export async function POST(request: NextRequest) {
             strategy: 'signal_match',
           };
         } else if (clickId || fbc || fbp || emailHash) {
-          const timeProximity = getTrackingAttributionByTimeProximity({
-            storeId,
-            occurredAt,
-            windowMinutes: 10,
-          });
+          const timeProximity = sb
+            ? await getPersistentTrackingAttributionByTimeProximity({ storeId, occurredAt, windowMinutes: 10 })
+            : getTrackingAttributionByTimeProximity({ storeId, occurredAt, windowMinutes: 10 });
           if (timeProximity) {
             entityIds = {
               campaignId: timeProximity.campaignId,
@@ -460,12 +461,14 @@ export async function POST(request: NextRequest) {
       const attributionMethod =
         fallbackAttributionMeta && !hasDirectMapping && !hasUtmInputs ? 'modeled' : 'deterministic';
 
-      const existingShopifyPurchaseEventId = getTrackingShopifyPurchaseEventIdByOrderId(storeId, orderId);
-      const upsertOrderEvent = insertTrackingEvent({
+      const existingShopifyPurchaseEventId = sb
+        ? await getPersistentTrackingShopifyPurchaseEventIdByOrderId(storeId, orderId)
+        : getTrackingShopifyPurchaseEventIdByOrderId(storeId, orderId);
+      const orderEventData = {
         storeId,
         eventName: 'Purchase',
         eventId: existingShopifyPurchaseEventId || `shopify-order-${orderId}`,
-        source: 'shopify',
+        source: 'shopify' as const,
         occurredAt,
         clickId,
         fbp,
@@ -490,7 +493,10 @@ export async function POST(request: NextRequest) {
           attributionMethod,
           fallbackAttribution: attributionMethod === 'modeled' ? fallbackAttributionMeta : null,
         }),
-      });
+      };
+      const upsertOrderEvent = sb
+        ? await insertPersistentTrackingEvent(orderEventData)
+        : insertTrackingEvent(orderEventData);
 
       if (upsertOrderEvent.inserted) {
         insertedPurchaseEvents += 1;
@@ -514,15 +520,16 @@ export async function POST(request: NextRequest) {
               ]
             : [];
 
-      refunds.forEach((refund, idx) => {
+      for (let idx = 0; idx < refunds.length; idx++) {
+        const refund = refunds[idx];
         const refundId = String(refund.id || `${orderId}-${idx + 1}`);
         const refundAmount = getRefundAmount(refund);
-        if (refundAmount <= 0) return;
-        const upsertRefund = insertTrackingEvent({
+        if (refundAmount <= 0) continue;
+        const refundEventData = {
           storeId,
           eventName: 'Refund',
           eventId: `shopify-refund-${refundId}`,
-          source: 'shopify',
+          source: 'shopify' as const,
           occurredAt: refund.created_at || order.updated_at || occurredAt,
           clickId,
           fbp,
@@ -547,7 +554,10 @@ export async function POST(request: NextRequest) {
             utmContent: utmContent || null,
             fallbackAttribution: fallbackAttributionMeta,
           }),
-        });
+        };
+        const upsertRefund = sb
+          ? await insertPersistentTrackingEvent(refundEventData)
+          : insertTrackingEvent(refundEventData);
         if (upsertRefund.inserted) {
           insertedRefundEvents += 1;
           if (entityIds.campaignId || entityIds.adSetId || entityIds.adId) mappedRefundEvents += 1;
@@ -555,7 +565,7 @@ export async function POST(request: NextRequest) {
           updatedRefundEvents += 1;
           if (entityIds.campaignId || entityIds.adSetId || entityIds.adId) mappedUpdatedRefunds += 1;
         }
-      });
+      }
     }
 
     const lastOrderId = orders[orders.length - 1]?.id;

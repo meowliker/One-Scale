@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStoreAdAccounts } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled, listPersistentStoreAdAccounts } from '@/app/api/lib/supabase-persistence';
 import { fetchFromMeta, MetaRateLimitError } from '@/app/api/lib/meta-client';
 import { getMetaToken } from '@/app/api/lib/tokens';
 
@@ -156,8 +157,11 @@ async function handle(request: NextRequest, explicitApply?: boolean) {
   const activeOnly = parseBoolean(body.activeOnly ?? searchParams.get('activeOnly'), true);
   const maxUpdates = clampMaxUpdates(body.maxUpdates ?? searchParams.get('maxUpdates'));
 
-  const accountIds = getStoreAdAccounts(storeId)
-    .filter((row) => row.platform === 'meta' && row.is_active === 1)
+  const sb = isSupabasePersistenceEnabled();
+  const accountIds = (sb
+    ? await listPersistentStoreAdAccounts(storeId)
+    : getStoreAdAccounts(storeId))
+    .filter((row) => row.platform === 'meta' && (row.is_active === 1 || (row.is_active as unknown) === true))
     .map((row) => row.ad_account_id);
 
   if (accountIds.length === 0) {
