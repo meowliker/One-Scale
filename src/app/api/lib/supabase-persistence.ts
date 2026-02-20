@@ -23,22 +23,20 @@ const HYDRATE_TTL_MS = 30_000;
 
 export function isSupabasePersistenceEnabled(): boolean {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return false;
-  // New Supabase secret keys (sb_secret_*) cannot be used as apikey headers.
-  // For REST calls we also need a publishable/anon key.
-  if (SUPABASE_SERVICE_ROLE_KEY.startsWith('sb_secret_') && !SUPABASE_ANON_KEY) {
-    return false;
-  }
   return true;
 }
 
 function headers(extra?: Record<string, string>): Record<string, string> {
-  const apiKey = SUPABASE_ANON_KEY || SUPABASE_SERVICE_ROLE_KEY;
-  return {
-    apikey: apiKey,
-    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+  const out: Record<string, string> = {
+    apikey: SUPABASE_SERVICE_ROLE_KEY,
     'Content-Type': 'application/json',
     ...extra,
   };
+  // Legacy keys are JWT-like and can be used as Bearer tokens.
+  if (SUPABASE_SERVICE_ROLE_KEY.split('.').length === 3) {
+    out.Authorization = `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`;
+  }
+  return out;
 }
 
 async function rest<T>(path: string, init?: RequestInit): Promise<T> {

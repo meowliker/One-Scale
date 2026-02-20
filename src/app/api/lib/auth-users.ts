@@ -41,27 +41,27 @@ function getSupabaseConfig() {
 }
 
 function assertSupabaseAuthEnabled(): void {
-  const { url, serviceRole, anon, dbProvider } = getSupabaseConfig();
+  const { url, serviceRole, dbProvider } = getSupabaseConfig();
   if (dbProvider !== 'supabase') {
     throw new Error('Auth persistence requires DB_PROVIDER=supabase.');
   }
   if (!url || !serviceRole) {
     throw new Error('Supabase auth persistence is not configured. Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.');
   }
-  if (serviceRole.startsWith('sb_secret_') && !anon) {
-    throw new Error('SUPABASE_ANON_KEY is required when using sb_secret_* service role keys.');
-  }
 }
 
 function headers(extra?: Record<string, string>): Record<string, string> {
-  const { serviceRole, anon } = getSupabaseConfig();
-  const apiKey = anon || serviceRole;
-  return {
-    apikey: apiKey,
-    Authorization: `Bearer ${serviceRole}`,
+  const { serviceRole } = getSupabaseConfig();
+  const out: Record<string, string> = {
+    apikey: serviceRole,
     'Content-Type': 'application/json',
     ...extra,
   };
+  // Legacy keys are JWT-like and can be used as Bearer tokens.
+  if (serviceRole.split('.').length === 3) {
+    out.Authorization = `Bearer ${serviceRole}`;
+  }
+  return out;
 }
 
 async function rest<T>(path: string, init?: RequestInit): Promise<T> {
