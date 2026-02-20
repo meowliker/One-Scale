@@ -195,6 +195,23 @@ export async function POST(request: NextRequest) {
       await linkStoreToWorkspace(session.workspaceId, store.id);
     }
 
+    // Auto-setup tracking: pixel, webhooks, backfill (fire-and-forget, don't block response)
+    try {
+      const setupBaseUrl = process.env.NEXT_PUBLIC_APP_URL || `https://${request.headers.get('host')}`;
+      fetch(new URL('/api/tracking/auto-setup', setupBaseUrl), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          cookie: request.headers.get('cookie') || '',
+        },
+        body: JSON.stringify({ storeId: storeId, baseUrl: setupBaseUrl }),
+      }).catch(() => {
+        // Best-effort — auto-setup failures don't block store creation
+      });
+    } catch {
+      // Best-effort — auto-setup failures don't block store creation
+    }
+
     return NextResponse.json({
       store: {
         id: store.id,
