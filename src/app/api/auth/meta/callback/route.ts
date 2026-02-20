@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { consumeOAuthState, getAppCredentials } from '@/app/api/lib/db';
+import {
+  isSupabasePersistenceEnabled,
+  getPersistentAppCredentials,
+} from '@/app/api/lib/supabase-persistence';
 import { setMetaToken } from '@/app/api/lib/tokens';
 import { getAppUrl } from '@/app/api/lib/url';
 import type { MetaTokenPayload } from '@/types/auth';
@@ -37,7 +41,9 @@ export async function GET(request: NextRequest) {
     const storeId = oauthState.store_id;
 
     // Read credentials from DB first, fallback to env
-    const dbCreds = getAppCredentials('meta');
+    const dbCreds = isSupabasePersistenceEnabled()
+      ? await getPersistentAppCredentials('meta')
+      : getAppCredentials('meta');
     const appId = dbCreds?.app_id || process.env.META_APP_ID!;
     const appSecret = dbCreds?.app_secret || process.env.META_APP_SECRET!;
     // Build redirect URI dynamically — must match what was sent

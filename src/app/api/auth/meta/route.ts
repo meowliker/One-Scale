@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createOAuthState, getAppCredentials } from '@/app/api/lib/db';
+import {
+  isSupabasePersistenceEnabled,
+  getPersistentAppCredentials,
+} from '@/app/api/lib/supabase-persistence';
 import { getAppUrl } from '@/app/api/lib/url';
 
 const DEFAULT_META_SCOPES = [
@@ -26,7 +30,9 @@ export async function GET(request: NextRequest) {
   const appUrl = getAppUrl(request);
 
   // Read credentials from DB first, fallback to env
-  const dbCreds = getAppCredentials('meta');
+  const dbCreds = isSupabasePersistenceEnabled()
+    ? await getPersistentAppCredentials('meta')
+    : getAppCredentials('meta');
   const appId = dbCreds?.app_id || process.env.META_APP_ID;
 
   if (!appId) {

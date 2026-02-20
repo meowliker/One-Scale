@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createHmac } from 'crypto';
 import { consumeOAuthState, getAppCredentials } from '@/app/api/lib/db';
+import {
+  isSupabasePersistenceEnabled,
+  getPersistentAppCredentials,
+} from '@/app/api/lib/supabase-persistence';
 import { setShopifyToken } from '@/app/api/lib/tokens';
 import { getAppUrl } from '@/app/api/lib/url';
 import type { ShopifyTokenPayload } from '@/types/auth';
@@ -23,7 +27,9 @@ export async function GET(request: NextRequest) {
 
   try {
     // Read credentials from DB first, fallback to env
-    const dbCreds = getAppCredentials('shopify');
+    const dbCreds = isSupabasePersistenceEnabled()
+      ? await getPersistentAppCredentials('shopify')
+      : getAppCredentials('shopify');
     const apiSecret = dbCreds?.app_secret || process.env.SHOPIFY_API_SECRET!;
     const apiKey = dbCreds?.app_id || process.env.SHOPIFY_API_KEY!;
 

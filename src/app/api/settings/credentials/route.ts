@@ -4,10 +4,18 @@ import {
   upsertAppCredentials,
   deleteAppCredentials,
 } from '@/app/api/lib/db';
+import {
+  isSupabasePersistenceEnabled,
+  getAllPersistentAppCredentials,
+  upsertPersistentAppCredentials,
+  deletePersistentAppCredentials,
+} from '@/app/api/lib/supabase-persistence';
 
 // GET — return saved credentials (mask secrets)
 export async function GET() {
-  const creds = getAllAppCredentials();
+  const creds = isSupabasePersistenceEnabled()
+    ? await getAllPersistentAppCredentials()
+    : getAllAppCredentials();
 
   return NextResponse.json({
     meta: creds.meta
@@ -58,7 +66,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    upsertAppCredentials({ platform, appId, appSecret, redirectUri, scopes });
+    if (isSupabasePersistenceEnabled()) {
+      await upsertPersistentAppCredentials({ platform, appId, appSecret, redirectUri, scopes });
+    } else {
+      upsertAppCredentials({ platform, appId, appSecret, redirectUri, scopes });
+    }
 
     return NextResponse.json({ success: true });
   } catch {
@@ -82,7 +94,11 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    deleteAppCredentials(platform);
+    if (isSupabasePersistenceEnabled()) {
+      await deletePersistentAppCredentials(platform);
+    } else {
+      deleteAppCredentials(platform);
+    }
 
     return NextResponse.json({ success: true });
   } catch {

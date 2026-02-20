@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createOAuthState, getAppCredentials } from '@/app/api/lib/db';
+import {
+  isSupabasePersistenceEnabled,
+  getPersistentAppCredentials,
+} from '@/app/api/lib/supabase-persistence';
 import { getAppUrl } from '@/app/api/lib/url';
 
 export async function GET(request: NextRequest) {
@@ -18,7 +22,9 @@ export async function GET(request: NextRequest) {
   const appUrl = getAppUrl(request);
 
   // Read credentials from DB first, fallback to env
-  const dbCreds = getAppCredentials('shopify');
+  const dbCreds = isSupabasePersistenceEnabled()
+    ? await getPersistentAppCredentials('shopify')
+    : getAppCredentials('shopify');
   const apiKey = dbCreds?.app_id || process.env.SHOPIFY_API_KEY;
   const scopes = dbCreds?.scopes || process.env.SHOPIFY_SCOPES || 'read_orders,read_products,read_customers';
 

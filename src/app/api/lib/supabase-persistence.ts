@@ -313,3 +313,69 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
   const stores = await rest<DbStore[]>('/stores?select=id');
   await Promise.all(stores.map((store) => hydrateStoreFromSupabase(store.id)));
 }
+
+// ------ App Credentials (Supabase-backed) ------
+
+export interface PersistentAppCredentials {
+  id: number;
+  platform: 'meta' | 'shopify';
+  app_id: string;
+  app_secret: string;
+  redirect_uri: string;
+  scopes: string | null;
+  updated_at: string;
+}
+
+export async function getPersistentAppCredentials(
+  platform: 'meta' | 'shopify'
+): Promise<PersistentAppCredentials | null> {
+  const rows = await rest<PersistentAppCredentials[]>(
+    `/app_credentials?platform=eq.${encodeURIComponent(platform)}&select=*&limit=1`
+  );
+  return rows[0] || null;
+}
+
+export async function getAllPersistentAppCredentials(): Promise<{
+  meta: PersistentAppCredentials | null;
+  shopify: PersistentAppCredentials | null;
+}> {
+  const rows = await rest<PersistentAppCredentials[]>(
+    '/app_credentials?select=*'
+  );
+  return {
+    meta: rows.find((r) => r.platform === 'meta') || null,
+    shopify: rows.find((r) => r.platform === 'shopify') || null,
+  };
+}
+
+export async function upsertPersistentAppCredentials(data: {
+  platform: 'meta' | 'shopify';
+  appId: string;
+  appSecret: string;
+  redirectUri: string;
+  scopes?: string;
+}): Promise<void> {
+  await rest('/app_credentials', {
+    method: 'POST',
+    headers: headers({
+      Prefer: 'resolution=merge-duplicates,return=minimal',
+    }),
+    body: JSON.stringify([{
+      platform: data.platform,
+      app_id: data.appId,
+      app_secret: data.appSecret,
+      redirect_uri: data.redirectUri,
+      scopes: data.scopes ?? null,
+      updated_at: new Date().toISOString(),
+    }]),
+  });
+}
+
+export async function deletePersistentAppCredentials(
+  platform: 'meta' | 'shopify'
+): Promise<void> {
+  await rest(
+    `/app_credentials?platform=eq.${encodeURIComponent(platform)}`,
+    { method: 'DELETE' }
+  );
+}
