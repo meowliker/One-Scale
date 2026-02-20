@@ -56,7 +56,7 @@ async function getCampaignNameLookup(storeId: string): Promise<Map<string, strin
   }
 
   const lookup = new Map<string, string>();
-  const token = getMetaToken(storeId);
+  const token = await getMetaToken(storeId);
   if (!token?.accessToken) {
     campaignLookupCache.set(storeId, { at: Date.now(), map: lookup });
     return lookup;

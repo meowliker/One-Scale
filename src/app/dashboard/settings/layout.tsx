@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Settings,
   Calculator,
+  Users,
 } from 'lucide-react';
 
 const settingsTabs = [
@@ -37,6 +38,12 @@ const settingsTabs = [
     href: '/dashboard/settings/pnl',
     icon: Calculator,
     description: 'Cost of goods, shipping & fees',
+  },
+  {
+    label: 'Team Users',
+    href: '/dashboard/settings/team',
+    icon: Users,
+    description: 'Manage team access and roles',
   },
   {
     label: 'Post-Purchase Survey',

@@ -6,6 +6,13 @@ import {
   toggleStoreAdAccount,
   getStore,
 } from '@/app/api/lib/db';
+import {
+  deletePersistentStoreAdAccount,
+  isSupabasePersistenceEnabled,
+  listPersistentStoreAdAccounts,
+  togglePersistentStoreAdAccount,
+  upsertPersistentStoreAdAccount,
+} from '@/app/api/lib/supabase-persistence';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -16,7 +23,9 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const accounts = getStoreAdAccounts(storeId);
+    const accounts = isSupabasePersistenceEnabled()
+      ? await listPersistentStoreAdAccounts(storeId)
+      : getStoreAdAccounts(storeId);
     return NextResponse.json({
       accounts: accounts.map((a) => ({
         id: a.ad_account_id,
@@ -69,6 +78,17 @@ export async function POST(request: NextRequest) {
       timezone,
     });
 
+    if (isSupabasePersistenceEnabled()) {
+      await upsertPersistentStoreAdAccount({
+        storeId,
+        adAccountId,
+        adAccountName,
+        platform: platform || 'meta',
+        currency,
+        timezone,
+      });
+    }
+
     return NextResponse.json({
       account: {
         id: account.ad_account_id,
@@ -102,6 +122,9 @@ export async function DELETE(request: NextRequest) {
     }
 
     removeStoreAdAccount(storeId, adAccountId);
+    if (isSupabasePersistenceEnabled()) {
+      await deletePersistentStoreAdAccount(storeId, adAccountId);
+    }
     return NextResponse.json({ success: true });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -126,6 +149,9 @@ export async function PATCH(request: NextRequest) {
     }
 
     toggleStoreAdAccount(storeId, adAccountId, isActive);
+    if (isSupabasePersistenceEnabled()) {
+      await togglePersistentStoreAdAccount(storeId, adAccountId, isActive);
+    }
     return NextResponse.json({ success: true });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';

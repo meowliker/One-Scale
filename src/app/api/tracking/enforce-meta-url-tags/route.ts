@@ -138,7 +138,7 @@ async function handle(request: NextRequest, explicitApply?: boolean) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
 
-  const token = getMetaToken(storeId);
+  const token = await getMetaToken(storeId);
   if (!token?.accessToken) {
     return NextResponse.json({ error: 'Not authenticated with Meta' }, { status: 401 });
   }

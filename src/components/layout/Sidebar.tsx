@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { usePathname } from 'next/navigation';
+import Image from 'next/image';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { sidebarConfig } from '@/data/navigation';
@@ -27,8 +28,8 @@ export function Sidebar() {
         'flex items-center gap-3 border-b border-border px-4 py-4',
         isCollapsed && 'justify-center px-2'
       )}>
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary-light text-sm font-bold text-white shadow-lg shadow-primary-glow">
-          T
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[#0c1738] shadow-lg shadow-primary-glow">
+          <Image src="/onescale-logo.svg" alt="OneScale" width={24} height={24} />
         </div>
         {!isCollapsed && (
           <div className="min-w-0">

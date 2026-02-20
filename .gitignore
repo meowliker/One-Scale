@@ -43,3 +43,7 @@ next-env.d.ts
 # database
 /data/
 *.db
+
+
+# large seed exports
+seed.sql

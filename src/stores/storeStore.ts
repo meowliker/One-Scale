@@ -2,6 +2,16 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Store } from '@/types/store';
 
+async function readJsonSafe<T>(res: Response): Promise<T> {
+  const text = await res.text();
+  if (!text) return {} as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return {} as T;
+  }
+}
+
 interface StoreState {
   stores: Store[];
   activeStoreId: string;
@@ -38,7 +48,7 @@ export const useStoreStore = create<StoreState>()(
         try {
           const res = await fetch('/api/settings/stores');
           if (!res.ok) throw new Error('Failed to fetch stores');
-          const data = await res.json();
+          const data = await readJsonSafe<{ stores?: Store[] }>(res);
           const stores: Store[] = data.stores || [];
           const { activeStoreId } = get();
 
@@ -66,10 +76,13 @@ export const useStoreStore = create<StoreState>()(
           body: JSON.stringify(data),
         });
         if (!res.ok) {
-          const errData = await res.json().catch(() => ({ error: 'Failed to create store' }));
+          const errData = await readJsonSafe<{ error?: string }>(res);
           throw new Error(errData.error || 'Failed to create store');
         }
-        const { store } = await res.json();
+        const { store } = await readJsonSafe<{ store?: Store }>(res);
+        if (!store) {
+          throw new Error('Store created but server returned an empty response. Please retry once.');
+        }
 
         // Refresh stores from server
         await get().fetchStores();

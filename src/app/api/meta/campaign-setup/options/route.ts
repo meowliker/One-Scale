@@ -104,7 +104,7 @@ export async function GET(request: NextRequest) {
       accountId: account.ad_account_id.replace(/^act_/, ''),
     } satisfies CampaignSetupAccountOption));
 
-  const token = getMetaToken(storeId);
+  const token = await getMetaToken(storeId);
   const defaultAccountId = normalizeAccountNode(
     selectedAccountId ||
       linkedAccounts.find((account) => account.id)?.id ||

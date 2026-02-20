@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    clearToken(platform, storeId);
+    await clearToken(platform, storeId);
 
     return NextResponse.json({ success: true });
   } catch {

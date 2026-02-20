@@ -370,7 +370,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
 
-  const token = getMetaToken(storeId);
+  const token = await getMetaToken(storeId);
   if (!token) {
     return NextResponse.json({ error: 'Not authenticated with Meta' }, { status: 401 });
   }
@@ -510,13 +510,14 @@ export async function POST(request: NextRequest) {
     });
   } catch (err) {
     const rawMessage = err instanceof Error ? err.message : 'Failed to publish campaign';
-    const message = rawMessage.includes('subcode=1885183')
-      ? 'Meta app is in Development mode. Switch the Meta app to Live/Public before creating ads.'
+    const isDevModeRestriction = rawMessage.includes('subcode=1885183');
+    const message = isDevModeRestriction
+      ? 'Meta blocked this in Development mode for the connected token. Reconnect Meta with an Admin/Developer/Tester account for this app, then retry.'
       : rawMessage;
     // Roll back partial entities so retries do not leave orphan test records.
     if (partial.adId) await deleteEntity(token.accessToken, partial.adId);
     if (partial.adSetId) await deleteEntity(token.accessToken, partial.adSetId);
     if (partial.campaignId) await deleteEntity(token.accessToken, partial.campaignId);
-    return NextResponse.json({ error: message, partial }, { status: 500 });
+    return NextResponse.json({ error: message, partial, devModeRestricted: isDevModeRestriction }, { status: 500 });
   }
 }

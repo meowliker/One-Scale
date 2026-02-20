@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'storeId required' }, { status: 400 });
   }
 
-  const token = getMetaToken(storeId);
+  const token = await getMetaToken(storeId);
   if (!token) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }

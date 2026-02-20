@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const token = getMetaToken(storeId);
+  const token = await getMetaToken(storeId);
   if (!token) {
     const allStores = getAllStores();
     return NextResponse.json({

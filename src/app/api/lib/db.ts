@@ -1,8 +1,22 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import { decryptSecret, encryptSecret } from '@/app/api/lib/crypto';
 
-const DB_PATH = path.join(process.cwd(), 'data', 'app.db');
+function resolveDbPath(): string {
+  if (process.env.SQLITE_DB_PATH && process.env.SQLITE_DB_PATH.trim()) {
+    return process.env.SQLITE_DB_PATH.trim();
+  }
+
+  // Vercel serverless runtime has a read-only app directory; use /tmp.
+  if (process.env.VERCEL) {
+    return '/tmp/one-scale/app.db';
+  }
+
+  return path.join(process.cwd(), 'data', 'app.db');
+}
+
+const DB_PATH = resolveDbPath();
 
 // Store db on globalThis so it survives Next.js HMR (hot module replacement).
 // Without this, each HMR reload creates a new native SQLite handle while the
@@ -397,7 +411,12 @@ export function getConnection(storeId: string, platform: 'meta' | 'shopify'): Db
   const row = db.prepare(
     'SELECT * FROM connections WHERE store_id = ? AND platform = ?'
   ).get(storeId, platform) as DbConnection | undefined;
-  return row ?? null;
+  if (!row) return null;
+  return {
+    ...row,
+    access_token: decryptSecret(row.access_token),
+    refresh_token: row.refresh_token ? decryptSecret(row.refresh_token) : null,
+  };
 }
 
 export function upsertConnection(data: {
@@ -413,6 +432,8 @@ export function upsertConnection(data: {
   scopes?: string;
 }): void {
   const db = getDb();
+  const encryptedAccessToken = encryptSecret(data.accessToken);
+  const encryptedRefreshToken = data.refreshToken ? encryptSecret(data.refreshToken) : null;
   db.prepare(`
     INSERT INTO connections (store_id, platform, access_token, refresh_token, expires_at, account_id, account_name, shop_domain, shop_name, scopes, last_synced)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
@@ -429,8 +450,8 @@ export function upsertConnection(data: {
   `).run(
     data.storeId,
     data.platform,
-    data.accessToken,
-    data.refreshToken ?? null,
+    encryptedAccessToken,
+    encryptedRefreshToken,
     data.expiresAt ?? null,
     data.accountId ?? null,
     data.accountName ?? null,
