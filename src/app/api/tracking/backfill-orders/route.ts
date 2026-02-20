@@ -370,6 +370,8 @@ async function handleFastModeBatch(
     utm_campaign: string | null;
     utm_medium: string | null;
     utm_content: string | null;
+    referring_site: string | null;
+    landing_site: string | null;
     payload_json_data: Record<string, unknown>;
   }
   const parsedEvents: ParsedEvent[] = [];
@@ -410,6 +412,8 @@ async function handleFastModeBatch(
       utm_campaign: utmCampaign,
       utm_medium: utmMedium,
       utm_content: utmContent,
+      referring_site: order.referring_site || null,
+      landing_site: order.landing_site || null,
       payload_json_data: {
         source: `backfill_${days}d_order`,
         landingSite: order.landing_site || null,
@@ -456,6 +460,8 @@ async function handleFastModeBatch(
         utm_campaign: utmCampaign,
         utm_medium: utmMedium,
         utm_content: utmContent,
+        referring_site: order.referring_site || null,
+        landing_site: order.landing_site || null,
         payload_json_data: {
           source: `backfill_${days}d_refund`,
           orderId,
@@ -505,77 +511,87 @@ async function handleFastModeBatch(
     }
   }
 
+  // Build daily campaign distribution from already-mapped Purchase events
+  // Used by both Phase 2c (fbclid modeled) and Phase 2d (referrer modeled)
+  const dailyCampaignSpend = new Map<string, Map<string, number>>();
+  for (const pe of parsedEvents) {
+    if (pe.event_name !== 'Purchase' || !pe.campaign_id) continue;
+    const day = pe.occurred_at.slice(0, 10);
+    if (!dailyCampaignSpend.has(day)) dailyCampaignSpend.set(day, new Map());
+    const dayMap = dailyCampaignSpend.get(day)!;
+    dayMap.set(pe.campaign_id, (dayMap.get(pe.campaign_id) || 0) + pe.value);
+  }
+
+  // Build overall top campaign as fallback (across all days)
+  const overallCampaignValue = new Map<string, number>();
+  for (const pe of parsedEvents) {
+    if (pe.event_name !== 'Purchase' || !pe.campaign_id) continue;
+    overallCampaignValue.set(pe.campaign_id, (overallCampaignValue.get(pe.campaign_id) || 0) + pe.value);
+  }
+  let overallTopCampaignId: string | null = null;
+  let overallTopValue = 0;
+  for (const [cid, val] of overallCampaignValue) {
+    if (val > overallTopValue) { overallTopValue = val; overallTopCampaignId = cid; }
+  }
+
+  // Helper: find top campaign for a given day
+  function getTopCampaignForDay(day: string): string | null {
+    const dayMap = dailyCampaignSpend.get(day);
+    if (!dayMap) return overallTopCampaignId;
+    let topCid: string | null = null;
+    let topVal = 0;
+    for (const [cid, val] of dayMap) {
+      if (val > topVal) { topVal = val; topCid = cid; }
+    }
+    return topCid || overallTopCampaignId;
+  }
+
   // Phase 2c: Modeled attribution for orders with fbclid/fbc but no UTM params.
   // These orders came from Meta ad clicks but the advertiser didn't set UTM tracking.
-  // Use in-memory campaign distribution from Phase 2b results to attribute.
   let modeledAttributed = 0;
   const stillUnmapped = parsedEvents.filter(
     (pe) => pe.event_name === 'Purchase' && !pe.campaign_id && !pe.adset_id && !pe.ad_id && (pe.click_id || pe.fbc)
   );
-  if (stillUnmapped.length > 0) {
-    // Build daily campaign distribution from already-mapped Purchase events
-    const dailyCampaignSpend = new Map<string, Map<string, number>>();
-    for (const pe of parsedEvents) {
-      if (pe.event_name !== 'Purchase' || !pe.campaign_id) continue;
-      const day = pe.occurred_at.slice(0, 10);
-      if (!dailyCampaignSpend.has(day)) dailyCampaignSpend.set(day, new Map());
-      const dayMap = dailyCampaignSpend.get(day)!;
-      dayMap.set(pe.campaign_id, (dayMap.get(pe.campaign_id) || 0) + pe.value);
+  for (const pe of stillUnmapped) {
+    const attributed = getTopCampaignForDay(pe.occurred_at.slice(0, 10));
+    if (attributed) {
+      pe.campaign_id = attributed;
+      pe.payload_json_data.attributionMethod = 'modeled';
+      pe.payload_json_data.fallbackAttribution = {
+        confidence: 0.55,
+        matchedSignals: pe.click_id ? ['click_id'] : ['fbc'],
+        source: 'shopify',
+        strategy: 'spend_weighted',
+      };
+      modeledAttributed++;
     }
+  }
 
-    // Also build overall top campaign as fallback (across all days)
-    const overallCampaignSpend = new Map<string, { value: number; adsetId: string | null; adId: string | null }>();
-    for (const pe of parsedEvents) {
-      if (pe.event_name !== 'Purchase' || !pe.campaign_id) continue;
-      const existing = overallCampaignSpend.get(pe.campaign_id);
-      if (!existing || pe.value > existing.value) {
-        overallCampaignSpend.set(pe.campaign_id, {
-          value: (existing?.value || 0) + pe.value,
-          adsetId: pe.adset_id,
-          adId: pe.ad_id,
-        });
-      }
-    }
-
-    // Find the overall top campaign
-    let overallTopCampaignId: string | null = null;
-    let overallTopValue = 0;
-    for (const [cid, data] of overallCampaignSpend) {
-      if (data.value > overallTopValue) {
-        overallTopValue = data.value;
-        overallTopCampaignId = cid;
-      }
-    }
-
-    // Attribute each unmapped fbclid order to the top-spending campaign for that day
-    for (const pe of stillUnmapped) {
-      const day = pe.occurred_at.slice(0, 10);
-      const dayMap = dailyCampaignSpend.get(day);
-
-      let topCampaignId: string | null = null;
-      let topValue = 0;
-      if (dayMap) {
-        for (const [cid, val] of dayMap) {
-          if (val > topValue) {
-            topValue = val;
-            topCampaignId = cid;
-          }
-        }
-      }
-
-      // Use day-specific top campaign, or fallback to overall top campaign
-      const attributedCampaignId = topCampaignId || overallTopCampaignId;
-      if (attributedCampaignId) {
-        pe.campaign_id = attributedCampaignId;
-        pe.payload_json_data.attributionMethod = 'modeled';
-        pe.payload_json_data.fallbackAttribution = {
-          confidence: 0.55,
-          matchedSignals: pe.click_id ? ['click_id'] : ['fbc'],
-          source: 'shopify',
-          strategy: 'spend_weighted',
-        };
-        modeledAttributed++;
-      }
+  // Phase 2d: Referrer-based attribution for orders from Meta domains without fbclid/UTM.
+  // Meta in-app browsers sometimes strip fbclid but leave referring_site or landing_site.
+  const META_REFERRER_PATTERNS = /facebook\.com|instagram\.com|fb\.com|fb\.me|fbcdn\.net/i;
+  let referrerAttributed = 0;
+  const referrerCandidates = parsedEvents.filter(
+    (pe) =>
+      pe.event_name === 'Purchase' &&
+      !pe.campaign_id &&
+      !pe.adset_id &&
+      !pe.ad_id &&
+      ((pe.referring_site && META_REFERRER_PATTERNS.test(pe.referring_site)) ||
+        (pe.landing_site && META_REFERRER_PATTERNS.test(pe.landing_site)))
+  );
+  for (const pe of referrerCandidates) {
+    const attributed = getTopCampaignForDay(pe.occurred_at.slice(0, 10));
+    if (attributed) {
+      pe.campaign_id = attributed;
+      pe.payload_json_data.attributionMethod = 'referrer_modeled';
+      pe.payload_json_data.fallbackAttribution = {
+        confidence: 0.40,
+        matchedSignals: ['referrer'],
+        source: 'shopify',
+        strategy: 'referrer_domain',
+      };
+      referrerAttributed++;
     }
   }
 
@@ -646,6 +662,8 @@ async function handleFastModeBatch(
       utmCandidates: eventsNeedingUtmResolution.length,
       modeledAttributed,
       modeledCandidates: stillUnmapped.length,
+      referrerAttributed,
+      referrerCandidates: referrerCandidates.length,
       effectiveMappedPurchases: totalMapped,
       attributionPercent: purchaseCount > 0
         ? Math.round((totalMapped / purchaseCount) * 10000) / 100
