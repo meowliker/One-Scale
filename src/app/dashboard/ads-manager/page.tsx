@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Loader2 } from 'lucide-react';
 import type { Campaign } from '@/types/campaign';
 import type { DateRangePreset } from '@/types/analytics';
@@ -14,25 +14,47 @@ import { useStoreStore } from '@/stores/storeStore';
 import { NotConnectedError } from '@/services/withMockFallback';
 import { ConnectionEmptyState } from '@/components/ui/ConnectionEmptyState';
 
+/**
+ * Store date range as Date objects (for DateRangePicker) together with pre-computed
+ * YYYY-MM-DD strings (for API calls and AdsManagerClient). Computing the strings
+ * at the same time the Date objects are created ensures the store timezone is
+ * consistent — avoids the double-timezone bug where Date objects are created
+ * with one timezone and formatted later with a different one.
+ */
+interface DateRangeState {
+  start: Date;
+  end: Date;
+  preset?: DateRangePreset;
+  since: string;
+  until: string;
+}
+
+function buildDateRangeState(range: { start: Date; end: Date; preset?: DateRangePreset }): DateRangeState {
+  return {
+    ...range,
+    since: formatDateInTimezone(range.start),
+    until: formatDateInTimezone(range.end),
+  };
+}
+
 export default function AdsManagerPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [emptyReason, setEmptyReason] = useState<'not_connected' | 'no_accounts' | 'error' | null>(null);
-  const [dateRange, setDateRange] = useState(() => getDateRange('today'));
+  // Don't initialize with getDateRange() here — wait for connectionReady
+  // so the store timezone is loaded before computing dates.
+  const [dateRange, setDateRange] = useState<DateRangeState | null>(null);
 
   const connectionLoading = useConnectionStore((s) => s.loading);
   const connectionStatus = useConnectionStore((s) => s.status);
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
   const connectionReady = !connectionLoading && connectionStatus !== null;
 
-  const fetchData = useCallback(async (range: { start: Date; end: Date }) => {
+  const fetchData = useCallback(async (since: string, until: string) => {
     setLoading(true);
     setEmptyReason(null);
     try {
-      const data = await getCampaigns({
-        since: formatDateInTimezone(range.start),
-        until: formatDateInTimezone(range.end),
-      });
+      const data = await getCampaigns({ since, until });
       setCampaigns(data);
     } catch (err) {
       if (err instanceof NotConnectedError) {
@@ -46,21 +68,29 @@ export default function AdsManagerPage() {
   }, []);
 
   // Wait for connection status to be fully loaded before fetching data.
-  // Recompute "today" after store/account context is ready so timezone is correct.
+  // Compute date range here (not in useState) so store timezone is correct.
   useEffect(() => {
     if (connectionReady) {
-      const todayRange = getDateRange('today');
-      setDateRange(todayRange);
-      fetchData(todayRange);
+      const range = getDateRange('today');
+      const state = buildDateRangeState(range);
+      setDateRange(state);
+      fetchData(state.since, state.until);
     }
   }, [connectionReady, activeStoreId, fetchData]);
 
   const handleDateRangeChange = (range: { start: Date; end: Date; preset?: DateRangePreset }) => {
-    setDateRange(range);
-    fetchData(range);
+    const state = buildDateRangeState(range);
+    setDateRange(state);
+    fetchData(state.since, state.until);
   };
 
-  if ((!connectionReady || loading) && campaigns.length === 0 && !emptyReason) {
+  // Memoize the dateRange prop for AdsManagerClient to avoid unnecessary re-renders
+  const clientDateRange = useMemo(
+    () => dateRange ? { since: dateRange.since, until: dateRange.until } : undefined,
+    [dateRange?.since, dateRange?.until]
+  );
+
+  if ((!connectionReady || loading || !dateRange) && campaigns.length === 0 && !emptyReason) {
     return (
       <div className="flex items-center justify-center h-64">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -80,11 +110,13 @@ export default function AdsManagerPage() {
           <h1 className="text-2xl font-bold text-text-primary">Ads Manager</h1>
           <p className="text-sm text-text-secondary mt-1">Manage your Meta campaigns, ad sets, and ads</p>
         </div>
-        <DateRangePicker dateRange={dateRange} onRangeChange={handleDateRangeChange} />
+        {dateRange && (
+          <DateRangePicker dateRange={dateRange} onRangeChange={handleDateRangeChange} />
+        )}
       </div>
       <AdsManagerClient
         initialCampaigns={campaigns}
-        dateRange={{ since: formatDateInTimezone(dateRange.start), until: formatDateInTimezone(dateRange.end) }}
+        dateRange={clientDateRange}
       />
     </div>
   );

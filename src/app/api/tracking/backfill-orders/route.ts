@@ -401,61 +401,63 @@ export async function POST(request: NextRequest) {
           }
         | null = null;
 
-      if (!entityIds.campaignId && !entityIds.adSetId && !entityIds.adId) {
-        const occurredDay = String(occurredAt || '').slice(0, 10);
-        const cacheKey = [clickId || '', fbc || '', fbp || '', emailHash || '', occurredDay].join('|');
-        if (!attributionCache.has(cacheKey)) {
-          const lookupInput = { storeId, beforeIso: occurredAt, clickId, fbc, fbp, emailHash };
-          const result = sb
-            ? await getPersistentScoredTrackingAttributionBySignals(lookupInput)
-            : getScoredTrackingAttributionBySignals(lookupInput);
-          attributionCache.set(cacheKey, result);
-        }
-        const fallback = attributionCache.get(cacheKey);
-        if (fallback && shouldAcceptFallbackAttribution(fallback)) {
-          entityIds = {
-            campaignId: fallback.campaignId,
-            adSetId: fallback.adSetId,
-            adId: fallback.adId,
-          };
-          fallbackAttributionMeta = {
-            confidence: fallback.confidence,
-            score: fallback.score,
-            matchedSignals: fallback.matchedSignals,
-            matchedAt: fallback.matchedAt,
-            source: fallback.source,
-            ageHours: fallback.ageHours,
-            strategy: 'signal_match',
-          };
-        } else if (clickId || fbc || fbp || emailHash) {
-          const timeProximity = sb
-            ? await getPersistentTrackingAttributionByTimeProximity({ storeId, occurredAt, windowMinutes: 120 })
-            : getTrackingAttributionByTimeProximity({ storeId, occurredAt, windowMinutes: 120 });
-          if (timeProximity) {
+      // In fast mode, skip ALL external lookups (attribution scoring + UTM resolution)
+      // to guarantee the backfill finishes within Vercel's 60s timeout.
+      // Only direct entity IDs from order URL params and note attributes are used.
+      if (!fastMode) {
+        if (!entityIds.campaignId && !entityIds.adSetId && !entityIds.adId) {
+          const occurredDay = String(occurredAt || '').slice(0, 10);
+          const cacheKey = [clickId || '', fbc || '', fbp || '', emailHash || '', occurredDay].join('|');
+          if (!attributionCache.has(cacheKey)) {
+            const lookupInput = { storeId, beforeIso: occurredAt, clickId, fbc, fbp, emailHash };
+            const result = sb
+              ? await getPersistentScoredTrackingAttributionBySignals(lookupInput)
+              : getScoredTrackingAttributionBySignals(lookupInput);
+            attributionCache.set(cacheKey, result);
+          }
+          const fallback = attributionCache.get(cacheKey);
+          if (fallback && shouldAcceptFallbackAttribution(fallback)) {
             entityIds = {
-              campaignId: timeProximity.campaignId,
-              adSetId: timeProximity.adSetId,
-              adId: timeProximity.adId,
+              campaignId: fallback.campaignId,
+              adSetId: fallback.adSetId,
+              adId: fallback.adId,
             };
-            const matchedSignals: Array<'click_id' | 'fbc' | 'fbp' | 'email_hash'> = [];
-            if (clickId) matchedSignals.push('click_id');
-            if (fbc) matchedSignals.push('fbc');
-            if (fbp) matchedSignals.push('fbp');
-            if (emailHash) matchedSignals.push('email_hash');
             fallbackAttributionMeta = {
-              confidence: timeProximity.confidence,
-              score: timeProximity.score,
-              matchedSignals,
-              matchedAt: timeProximity.matchedAt,
-              source: timeProximity.source,
-              ageHours: timeProximity.ageHours,
-              strategy: 'time_proximity',
+              confidence: fallback.confidence,
+              score: fallback.score,
+              matchedSignals: fallback.matchedSignals,
+              matchedAt: fallback.matchedAt,
+              source: fallback.source,
+              ageHours: fallback.ageHours,
+              strategy: 'signal_match',
             };
+          } else if (clickId || fbc || fbp || emailHash) {
+            const timeProximity = sb
+              ? await getPersistentTrackingAttributionByTimeProximity({ storeId, occurredAt, windowMinutes: 120 })
+              : getTrackingAttributionByTimeProximity({ storeId, occurredAt, windowMinutes: 120 });
+            if (timeProximity) {
+              entityIds = {
+                campaignId: timeProximity.campaignId,
+                adSetId: timeProximity.adSetId,
+                adId: timeProximity.adId,
+              };
+              const matchedSignals: Array<'click_id' | 'fbc' | 'fbp' | 'email_hash'> = [];
+              if (clickId) matchedSignals.push('click_id');
+              if (fbc) matchedSignals.push('fbc');
+              if (fbp) matchedSignals.push('fbp');
+              if (emailHash) matchedSignals.push('email_hash');
+              fallbackAttributionMeta = {
+                confidence: timeProximity.confidence,
+                score: timeProximity.score,
+                matchedSignals,
+                matchedAt: timeProximity.matchedAt,
+                source: timeProximity.source,
+                ageHours: timeProximity.ageHours,
+                strategy: 'time_proximity',
+              };
+            }
           }
         }
-      }
-      // In fast mode, skip expensive Meta API lookups to avoid Vercel timeout
-      if (!fastMode) {
         entityIds = await resolveMetaEntityIdsFromUtms({
           storeId,
           utmCampaign,
