@@ -50,6 +50,10 @@ function b64UrlDecode(value: string): Uint8Array {
   return bytes;
 }
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
 async function importSigningKey(secret: string): Promise<CryptoKey> {
   const keyData = new TextEncoder().encode(secret);
   return crypto.subtle.importKey(
@@ -83,7 +87,7 @@ export async function verifySignedSessionToken(token: string): Promise<AppSessio
     const valid = await crypto.subtle.verify(
       'HMAC',
       key,
-      b64UrlDecode(signature),
+      toArrayBuffer(b64UrlDecode(signature)),
       new TextEncoder().encode(payload)
     );
     if (!valid) return null;
