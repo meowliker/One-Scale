@@ -139,9 +139,11 @@ async function shopifyRequest<T>(
 
 export async function POST(request: NextRequest) {
   let storeId = '';
+  let overrideBaseUrl = '';
   try {
-    const body = (await request.json()) as { storeId?: string };
+    const body = (await request.json()) as { storeId?: string; baseUrl?: string };
     storeId = body.storeId || '';
+    overrideBaseUrl = body.baseUrl || '';
   } catch {
     // no-op, try query fallback
   }
@@ -157,7 +159,9 @@ export async function POST(request: NextRequest) {
   if (!cfg?.pixel_id || !cfg?.domain) {
     return NextResponse.json({ error: 'Tracking config missing pixel/domain' }, { status: 400 });
   }
-  const scriptBaseUrl = resolveTrackingScriptBaseUrl(request);
+  const scriptBaseUrl = overrideBaseUrl
+    ? normalizeBaseUrl(overrideBaseUrl)
+    : resolveTrackingScriptBaseUrl(request);
   if (!scriptBaseUrl) {
     return NextResponse.json(
       { error: 'Tracking script base URL is not configured. Set TRACKING_PIXEL_BASE_URL or NEXT_PUBLIC_APP_URL.' },
