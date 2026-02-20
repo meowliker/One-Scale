@@ -53,7 +53,9 @@ async function rest<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(`Supabase request failed (${res.status}): ${text}`);
   }
   if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+  const body = await res.text();
+  if (!body) return undefined as T;
+  return JSON.parse(body) as T;
 }
 
 export async function listPersistentStores(): Promise<Array<DbStore & { adAccounts: DbStoreAdAccount[]; shopifyConnected: boolean; metaConnected: boolean }>> {
