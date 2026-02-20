@@ -165,3 +165,43 @@ create table if not exists action_execution_log (
 
 create index if not exists idx_action_execution_log_store_time
   on action_execution_log(store_id, created_at desc);
+
+-- Visitor identity graph (Triple Whale-style session stitching)
+-- Links anonymous sessions to known customers for cross-session attribution.
+create table if not exists visitor_identities (
+  id bigserial primary key,
+  store_id text not null references stores(id) on delete cascade,
+  email_hash text not null,
+  -- First-touch attribution (from first ad click)
+  first_click_id text,
+  first_fbc text,
+  first_fbp text,
+  first_campaign_id text,
+  first_adset_id text,
+  first_ad_id text,
+  first_touch_at timestamptz,
+  -- Last-touch attribution (from most recent ad click)
+  last_click_id text,
+  last_fbc text,
+  last_fbp text,
+  last_campaign_id text,
+  last_adset_id text,
+  last_ad_id text,
+  last_touch_at timestamptz,
+  -- Customer identity
+  customer_id text,
+  phone_hash text,
+  -- Aggregates
+  total_orders integer not null default 0,
+  total_revenue numeric(12,2) not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (store_id, email_hash)
+);
+
+create index if not exists idx_visitor_identities_store_email
+  on visitor_identities(store_id, email_hash);
+
+create index if not exists idx_visitor_identities_store_customer
+  on visitor_identities(store_id, customer_id)
+  where customer_id is not null;

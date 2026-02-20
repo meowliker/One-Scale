@@ -541,6 +541,13 @@ export async function POST(request: NextRequest) {
       financialStatus !== 'refunded'
     ) {
       try {
+        // Extract maximum customer data from Shopify order for high EMQ (8.5+)
+        const customer = (payload.customer || {}) as Record<string, unknown>;
+        const billingAddress = (payload.billing_address || payload.shipping_address || {}) as Record<string, unknown>;
+        const customerPhone = String(customer.phone || payload.phone || '').replace(/[^0-9+]/g, '') || null;
+        const customerId = customer.id ? String(customer.id) : null;
+        const lineItems = Array.isArray(payload.line_items) ? payload.line_items as Array<Record<string, unknown>> : [];
+
         await forwardToMetaCapi({
           storeId: store.id,
           pixelId: cfg.pixel_id,
@@ -551,9 +558,25 @@ export async function POST(request: NextRequest) {
           fbc,
           fbp,
           emailHash,
+          phoneHash: customerPhone || undefined,
           value: Number.isFinite(value) ? value : 0,
           currency,
-          externalId: orderId,
+          // Use Shopify customer ID (not order ID) for cross-session matching
+          externalId: customerId || orderId,
+          orderId,
+          // Enhanced identifiers for EMQ boost
+          clientIpAddress: (payload.browser_ip as string) || (payload.client_details as Record<string, unknown>)?.browser_ip as string || undefined,
+          clientUserAgent: (payload.client_details as Record<string, unknown>)?.user_agent as string || undefined,
+          firstName: String(customer.first_name || billingAddress.first_name || '').trim() || undefined,
+          lastName: String(customer.last_name || billingAddress.last_name || '').trim() || undefined,
+          city: String(billingAddress.city || '').trim() || undefined,
+          state: String(billingAddress.province_code || billingAddress.province || '').trim() || undefined,
+          zip: String(billingAddress.zip || '').trim() || undefined,
+          country: String(billingAddress.country_code || billingAddress.country || '').trim() || undefined,
+          // Content data for better optimization
+          contentIds: lineItems.map(li => String(li.product_id || li.variant_id || '')).filter(Boolean).slice(0, 10),
+          contentType: 'product',
+          numItems: lineItems.length || undefined,
         });
         if (sb) {
           await markPersistentTrackingEventMetaDelivery({ storeId: store.id, eventId, forwarded: true });

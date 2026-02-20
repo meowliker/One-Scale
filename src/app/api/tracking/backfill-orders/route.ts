@@ -595,6 +595,44 @@ async function handleFastModeBatch(
     }
   }
 
+  // Phase 2e: Email-based identity attribution (Triple Whale-style session stitching).
+  // If customer A bought with campaign attribution on Day 1, and same customer buys
+  // again on Day 5 with no campaign data, attribute Day 5 to the same campaign.
+  // This is a basic identity graph: email_hash → last known campaign.
+  let emailAttributed = 0;
+  const emailCampaignMap = new Map<string, { campaign_id: string; adset_id: string | null; ad_id: string | null }>();
+  // Build email → campaign lookup from already-mapped events
+  for (const pe of parsedEvents) {
+    if (pe.event_name !== 'Purchase' || !pe.campaign_id || !pe.email_hash) continue;
+    emailCampaignMap.set(pe.email_hash, {
+      campaign_id: pe.campaign_id,
+      adset_id: pe.adset_id,
+      ad_id: pe.ad_id,
+    });
+  }
+  // Apply to remaining unmapped events with matching email_hash
+  if (emailCampaignMap.size > 0) {
+    const finalUnmapped = parsedEvents.filter(
+      (pe) => pe.event_name === 'Purchase' && !pe.campaign_id && !pe.adset_id && !pe.ad_id && pe.email_hash
+    );
+    for (const pe of finalUnmapped) {
+      const match = emailCampaignMap.get(pe.email_hash!);
+      if (match) {
+        pe.campaign_id = match.campaign_id;
+        pe.adset_id = match.adset_id;
+        pe.ad_id = match.ad_id;
+        pe.payload_json_data.attributionMethod = 'identity_match';
+        pe.payload_json_data.fallbackAttribution = {
+          confidence: 0.65,
+          matchedSignals: ['email_hash'],
+          source: 'shopify',
+          strategy: 'email_identity_graph',
+        };
+        emailAttributed++;
+      }
+    }
+  }
+
   // Phase 3: Batch-lookup existing event IDs (1 HTTP call instead of N)
   const existingEventIds = await batchGetPersistentShopifyPurchaseEventIds(storeId, orderIds);
 
@@ -664,6 +702,8 @@ async function handleFastModeBatch(
       modeledCandidates: stillUnmapped.length,
       referrerAttributed,
       referrerCandidates: referrerCandidates.length,
+      emailAttributed,
+      emailIdentityPoolSize: emailCampaignMap.size,
       effectiveMappedPurchases: totalMapped,
       attributionPercent: purchaseCount > 0
         ? Math.round((totalMapped / purchaseCount) * 10000) / 100

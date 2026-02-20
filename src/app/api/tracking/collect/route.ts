@@ -167,7 +167,8 @@ export async function POST(request: NextRequest) {
 
   const eventId = body.eventId || randomUUID();
   const eventTime = body.eventTime || new Date().toISOString();
-  const ipHash = sha256(readIp(request));
+  const rawIp = readIp(request);
+  const ipHash = sha256(rawIp);
   const emailHash = sha256(normalizeEmail(body.user?.email));
   const phoneHash = sha256(normalizePhone(body.user?.phone));
   const entityIds = parseEntityIds(body);
@@ -229,6 +230,9 @@ export async function POST(request: NextRequest) {
         phoneHash,
         value: typeof body.value === 'number' ? body.value : null,
         currency: body.currency || null,
+        // Enhanced: pass raw IP and user agent for better Meta matching (EMQ boost)
+        clientIpAddress: rawIp || null,
+        clientUserAgent: request.headers.get('user-agent') || null,
       });
       if (sb) {
         await markPersistentTrackingEventMetaDelivery({ storeId, eventId, forwarded: true });
