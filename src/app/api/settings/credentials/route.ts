@@ -73,9 +73,11 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ success: true });
-  } catch {
+  } catch (err) {
+    console.error('[credentials POST] Failed to save:', err);
+    const message = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json(
-      { error: 'Failed to save credentials' },
+      { error: `Failed to save credentials: ${message}` },
       { status: 500 }
     );
   }
@@ -101,9 +103,11 @@ export async function DELETE(request: NextRequest) {
     }
 
     return NextResponse.json({ success: true });
-  } catch {
+  } catch (err) {
+    console.error('[credentials DELETE] Failed to delete:', err);
+    const message = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json(
-      { error: 'Failed to delete credentials' },
+      { error: `Failed to delete credentials: ${message}` },
       { status: 500 }
     );
   }

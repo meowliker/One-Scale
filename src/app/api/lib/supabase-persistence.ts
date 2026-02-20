@@ -355,20 +355,36 @@ export async function upsertPersistentAppCredentials(data: {
   redirectUri: string;
   scopes?: string;
 }): Promise<void> {
-  await rest('/app_credentials', {
-    method: 'POST',
-    headers: headers({
-      Prefer: 'resolution=merge-duplicates,return=minimal',
-    }),
-    body: JSON.stringify([{
-      platform: data.platform,
-      app_id: data.appId,
-      app_secret: data.appSecret,
-      redirect_uri: data.redirectUri,
-      scopes: data.scopes ?? null,
-      updated_at: new Date().toISOString(),
-    }]),
-  });
+  const payload = {
+    platform: data.platform,
+    app_id: data.appId,
+    app_secret: data.appSecret,
+    redirect_uri: data.redirectUri,
+    scopes: data.scopes ?? null,
+    updated_at: new Date().toISOString(),
+  };
+
+  // First try to check if a row exists for this platform
+  const existing = await getPersistentAppCredentials(data.platform);
+
+  if (existing) {
+    // PATCH (update) existing row
+    await rest(
+      `/app_credentials?platform=eq.${encodeURIComponent(data.platform)}`,
+      {
+        method: 'PATCH',
+        headers: { Prefer: 'return=minimal' },
+        body: JSON.stringify(payload),
+      }
+    );
+  } else {
+    // INSERT new row
+    await rest('/app_credentials', {
+      method: 'POST',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify(payload),
+    });
+  }
 }
 
 export async function deletePersistentAppCredentials(
