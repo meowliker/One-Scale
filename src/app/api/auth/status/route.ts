@@ -17,7 +17,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
 
-  if (!session.legacy && session.workspaceId && !canWorkspaceAccessStore(session.workspaceId, storeId)) {
+  if (!session.legacy && session.workspaceId && !(await canWorkspaceAccessStore(session.workspaceId, storeId))) {
     return NextResponse.json({ error: 'Store not found' }, { status: 404 });
   }
 

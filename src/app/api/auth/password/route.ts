@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    changeUserPassword({
+    await changeUserPassword({
       userId: session.userId,
       currentPassword,
       newPassword,

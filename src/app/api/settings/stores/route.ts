@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
       }
     }
     const allowedStoreIds = !session.legacy && session.workspaceId
-      ? new Set(listStoreIdsForWorkspace(session.workspaceId))
+      ? new Set(await listStoreIdsForWorkspace(session.workspaceId))
       : null;
     const visibleStores = allowedStoreIds
       ? stores.filter((store) => allowedStoreIds.has(store.id))
@@ -192,7 +192,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (!session.legacy && session.workspaceId) {
-      linkStoreToWorkspace(session.workspaceId, store.id);
+      await linkStoreToWorkspace(session.workspaceId, store.id);
     }
 
     return NextResponse.json({
@@ -244,7 +244,7 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    if (!session.legacy && session.workspaceId && !canWorkspaceAccessStore(session.workspaceId, storeId)) {
+    if (!session.legacy && session.workspaceId && !(await canWorkspaceAccessStore(session.workspaceId, storeId))) {
       return NextResponse.json(
         { error: 'Store not found' },
         { status: 404 }

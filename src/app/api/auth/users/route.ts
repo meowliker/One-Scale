@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   return NextResponse.json({
-    users: listWorkspaceUsers(session.workspaceId),
+    users: await listWorkspaceUsers(session.workspaceId),
   });
 }
 
@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const created = createWorkspaceUser({
+    const created = await createWorkspaceUser({
       workspaceId: session.workspaceId,
       email,
       password,

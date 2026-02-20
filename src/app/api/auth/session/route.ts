@@ -43,9 +43,9 @@ export async function POST(request: NextRequest) {
   const remember = !!body.remember;
   const maxAge = remember ? 60 * 60 * 24 * 14 : 60 * 60 * 8;
   const expiresAt = Date.now() + maxAge * 1000;
-  const userCount = countUsers();
+  const userCount = await countUsers();
 
-  let user: ReturnType<typeof authenticateUser> = null;
+  let user: Awaited<ReturnType<typeof authenticateUser>> = null;
   const loginAccessCode = getLoginAccessCode();
 
   if (userCount > 0 && loginAccessCode && !safeEqualText(accessCode, loginAccessCode)) {
@@ -77,14 +77,14 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      user = createInitialAdmin({
+      user = await createInitialAdmin({
         email,
         password,
         fullName: typeof body.fullName === 'string' ? body.fullName : undefined,
         workspaceName: 'Primary Workspace',
       });
     } else {
-      user = authenticateUser(email, password);
+      user = await authenticateUser(email, password);
     }
   }
 
@@ -154,7 +154,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ authenticated: false });
   }
 
-  const user = getUserContextById(claims.userId);
+  const user = await getUserContextById(claims.userId);
   if (!user) {
     return NextResponse.json({ authenticated: false });
   }
