@@ -56,10 +56,10 @@ import { DraggableColumnHeader } from '@/components/columns/DraggableColumnHeade
 
 // Sort indicator for fixed column headers
 function FixedSortIndicator({ active, direction }: { active: boolean; direction: 'asc' | 'desc' | null }) {
-  if (!active) return <ArrowUpDown className="h-3 w-3 text-text-dimmed opacity-0 group-hover/sort:opacity-50 transition-opacity" />;
+  if (!active) return <ArrowUpDown className="h-3 w-3 text-[#aeaeb2] opacity-0 group-hover/sort:opacity-50 transition-opacity" />;
   return direction === 'asc'
-    ? <ArrowUp className="h-3 w-3 text-primary" />
-    : <ArrowDown className="h-3 w-3 text-primary" />;
+    ? <ArrowUp className="h-3 w-3 text-[#0071e3]" />
+    : <ArrowDown className="h-3 w-3 text-[#0071e3]" />;
 }
 
 // Sortable fixed column header (Name, Status, Budget)
@@ -77,10 +77,10 @@ function SortableFixedHeader({
   onSort: (key: string) => void;
 }) {
   return (
-    <th className="whitespace-nowrap px-4 py-3.5 text-left text-[0.65rem] font-bold uppercase tracking-[0.1em] text-text-muted">
+    <th className="whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.04em] text-[#86868b]">
       <button
         onClick={() => onSort(sortKeyName)}
-        className="group/sort flex items-center gap-1 cursor-pointer hover:text-text transition-colors"
+        className="group/sort flex items-center gap-1 cursor-pointer hover:text-[#1d1d1f] transition-colors duration-150"
         title={`Sort by ${label}`}
       >
         <span>{label}</span>
@@ -1615,37 +1615,37 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         collisionDetection={closestCenter}
         onDragEnd={handleDragEnd}
       >
-        <div className="overflow-x-auto rounded-2xl gradient-border-animated bg-white/90 backdrop-blur-xl shadow-[0_8px_40px_rgba(0,0,0,0.04)] futuristic-scroll">
-          <table className="w-full min-w-[1200px] futuristic-table">
+        <div className="apple-table-container apple-scroll">
+          <table className="w-full min-w-[1200px] apple-table">
             <thead>
-              <tr className="sticky top-0 z-20 border-b border-border/30 bg-gradient-to-r from-[#f8faff] via-[#f4f0ff] to-[#f8faff] backdrop-blur-xl">
-                <th className="w-10 whitespace-nowrap px-4 py-3.5 text-left">
+              <tr className="sticky top-0 z-20 bg-[#fbfbfd]">
+                <th className="w-10 whitespace-nowrap px-3 py-2 text-left">
                   <Checkbox
                     checked={allSelected}
                     onChange={handleSelectAll}
                     indeterminate={someSelected}
                   />
                 </th>
-                <th className="w-12 whitespace-nowrap px-4 py-3.5 text-left text-[0.65rem] font-bold uppercase tracking-[0.1em] text-text-muted">
+                <th className="w-12 whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.04em] text-[#86868b]">
                   On/Off
                 </th>
                 <SortableFixedHeader label="Name" sortKeyName="name" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} />
                 <SortableFixedHeader label="Status" sortKeyName="status" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} />
                 <SortableFixedHeader label="Budget" sortKeyName="budget" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} />
-                <th className="whitespace-nowrap px-4 py-3.5 text-left text-[0.65rem] font-bold uppercase tracking-[0.1em] text-text-muted">
+                <th className="whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.04em] text-[#86868b]">
                   Bid Strategy
                 </th>
-                <th className="whitespace-nowrap px-4 py-3.5 text-center text-[0.65rem] font-bold uppercase tracking-[0.1em] text-text-muted">
+                <th className="whitespace-nowrap px-3 py-2 text-center text-[10px] font-semibold uppercase tracking-[0.04em] text-[#86868b]">
                   Performance
                 </th>
-                <th className="whitespace-nowrap px-4 py-3.5 text-left text-[0.65rem] font-bold uppercase tracking-[0.1em] text-text-muted">
+                <th className="whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.04em] text-[#86868b]">
                   <div className="flex items-center gap-2">
                     <span>Latest Actions</span>
                     {!activitiesFullyLoaded && (
                       <button
                         onClick={loadFullActivityHistory}
                         disabled={activitiesFullLoading}
-                        className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/20 disabled:opacity-50 transition-colors normal-case tracking-normal"
+                        className="inline-flex items-center gap-1 rounded-md bg-[#e8f0fe] px-1.5 py-0.5 text-[10px] font-medium text-[#0071e3] hover:bg-[#d4e4fd] disabled:opacity-50 transition-colors normal-case tracking-normal"
                         title="Load full 90-day activity history (initial load shows last 7 days only)"
                       >
                         {activitiesFullLoading ? (
@@ -1683,7 +1683,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
             <tbody>
               {sortedCampaigns.length === 0 ? (
                 <tr>
-                  <td colSpan={totalColumns} className="px-6 py-16 text-center text-sm text-text-muted/60">
+                  <td colSpan={totalColumns} className="px-6 py-12 text-center text-sm text-[#aeaeb2]">
                     No campaigns found.
                   </td>
                 </tr>
@@ -1745,21 +1745,21 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
             </tbody>
             {sortedCampaigns.length > 0 && (
               <tfoot>
-                <tr className="border-t border-primary/20 bg-gradient-to-r from-primary/[0.03] via-transparent to-primary/[0.03]">
-                  <td className="w-10 whitespace-nowrap px-4 py-3.5" />
-                  <td className="w-12 whitespace-nowrap px-4 py-3.5" />
-                  <td className="whitespace-nowrap px-4 py-3.5 text-sm font-semibold text-text-primary">
+                <tr className="border-t border-[rgba(0,0,0,0.08)] bg-[#fbfbfd]">
+                  <td className="w-10 whitespace-nowrap px-3 py-2" />
+                  <td className="w-12 whitespace-nowrap px-3 py-2" />
+                  <td className="whitespace-nowrap px-3 py-2 text-[12px] font-semibold text-[#1d1d1f]">
                     Totals ({totals.campaignCount} campaigns)
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3.5 text-xs text-text-secondary">
+                  <td className="whitespace-nowrap px-3 py-2 text-[11px] text-[#86868b]">
                     {totals.activeCampaigns} active
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3.5 text-sm font-semibold text-text-primary">
+                  <td className="whitespace-nowrap px-3 py-2 text-[12px] font-semibold text-[#1d1d1f]">
                     &mdash;
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3.5 text-sm text-text-dimmed">&mdash;</td>
-                  <td className="whitespace-nowrap px-4 py-3.5 text-sm text-text-dimmed">&mdash;</td>
-                  <td className="whitespace-nowrap px-4 py-3.5 text-sm text-text-dimmed">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-[12px] text-[#aeaeb2]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-[12px] text-[#aeaeb2]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-[12px] text-[#aeaeb2]">&mdash;</td>
                   {columnOrder.map((key) => (
                     <MetricCell
                       key={`totals-${key}`}

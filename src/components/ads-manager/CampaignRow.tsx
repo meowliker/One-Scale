@@ -1,6 +1,6 @@
 'use client';
 
-import { motion } from 'framer-motion';
+
 import { ChevronRight, ChevronDown, AlertTriangle } from 'lucide-react';
 import type { Campaign, EntityStatus } from '@/types/campaign';
 import type { MetricKey } from '@/types/metrics';
@@ -73,27 +73,22 @@ export function CampaignRow({
   const objective = objectiveLabels[campaign.objective] ?? { label: campaign.objective, variant: 'default' as const };
 
   return (
-    <motion.tr
+    <tr
       id={rowId}
-      layout
-      initial={{ opacity: 0, y: 4 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
       className={cn(
-        'group border-b border-border/30 bg-white/80 backdrop-blur-sm transition-all duration-200',
-        'hover:bg-gradient-to-r hover:from-primary/[0.02] hover:via-transparent hover:to-info/[0.02]',
-        'hover:shadow-[0_2px_16px_rgba(124,92,252,0.05)]',
-        isSelected && 'bg-primary/[0.04] ring-1 ring-inset ring-primary/20',
-        isHighlighted && 'bg-amber-50/80 ring-1 ring-inset ring-amber-300/50'
+        'group border-b border-[rgba(0,0,0,0.04)] bg-white transition-colors duration-150',
+        'hover:bg-[#f5f5f7]',
+        isSelected && 'bg-[#e8f0fe]',
+        isHighlighted && 'bg-[#fff8e1]'
       )}
     >
       {/* Checkbox */}
-      <td className="w-10 whitespace-nowrap px-4 py-3.5">
+      <td className="w-10 whitespace-nowrap px-3 py-2">
         <Checkbox checked={isSelected} onChange={onToggleSelect} />
       </td>
 
       {/* Toggle */}
-      <td className="w-12 whitespace-nowrap px-4 py-3.5">
+      <td className="w-12 whitespace-nowrap px-3 py-2">
         <Toggle
           checked={isActive}
           onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
@@ -102,7 +97,7 @@ export function CampaignRow({
       </td>
 
       {/* Name + Objective + CBO/ABO */}
-      <td className="whitespace-nowrap px-4 py-3.5">
+      <td className="whitespace-nowrap px-3 py-2">
         <div className="flex items-center gap-2">
           <button
             onClick={onToggleExpand}
@@ -116,7 +111,7 @@ export function CampaignRow({
           </button>
           <button
             onClick={onToggleExpand}
-            className="text-sm font-semibold text-text-primary hover:text-primary transition-all duration-200 text-left group-hover:translate-x-0.5 transform"
+            className="text-[13px] font-medium text-[#1d1d1f] hover:text-[#0071e3] transition-colors duration-150 text-left"
           >
             {campaign.name}
           </button>
@@ -128,7 +123,7 @@ export function CampaignRow({
           {issueCount > 0 && (
             <button
               onClick={() => onIssueClick?.()}
-              className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/50 bg-gradient-to-r from-amber-50 to-orange-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700 hover:shadow-md hover:shadow-amber-100/50 transition-all duration-200"
+              className="inline-flex items-center gap-1 rounded-md bg-[#fff4e5] px-2 py-0.5 text-[11px] font-medium text-[#cc7700] hover:bg-[#ffedcc] transition-colors duration-150"
               title="This campaign has issues"
             >
               <AlertTriangle className="h-3 w-3" />
@@ -139,10 +134,10 @@ export function CampaignRow({
       </td>
 
       {/* Status */}
-      <td className="whitespace-nowrap px-4 py-3.5">
+      <td className="whitespace-nowrap px-3 py-2">
         <span className={cn(
-          'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold tracking-wide',
-          isActive ? 'badge-active-futuristic' : 'badge-paused-futuristic'
+          'inline-flex items-center gap-1.5 text-[11px] font-semibold',
+          isActive ? 'apple-status-active' : 'apple-status-paused'
         )}>
           {isActive && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />}
           {campaign.status}
@@ -150,7 +145,7 @@ export function CampaignRow({
       </td>
 
       {/* Budget */}
-      <td className="whitespace-nowrap px-4 py-3.5">
+      <td className="whitespace-nowrap px-3 py-2">
         <InlineEdit
           value={(campaign.dailyBudget ?? 0).toFixed(2)}
           onSave={(val) => {
@@ -160,11 +155,11 @@ export function CampaignRow({
           type="number"
           prefix="$"
         />
-        <span className="text-xs text-text-dimmed ml-1">/day</span>
+        <span className="text-[11px] text-[#aeaeb2] ml-1">/day</span>
       </td>
 
       {/* Bid Strategy */}
-      <td className="whitespace-nowrap px-4 py-3.5 text-sm text-text-secondary">
+      <td className="whitespace-nowrap px-3 py-2 text-sm text-text-secondary">
         {bidStrategyLabels[campaign.bidStrategy] ?? campaign.bidStrategy}
       </td>
 
@@ -182,6 +177,6 @@ export function CampaignRow({
           value={getMetricValue(campaign.metrics as unknown as Record<string, number>, key)}
         />
       ))}
-    </motion.tr>
+    </tr>
   );
 }

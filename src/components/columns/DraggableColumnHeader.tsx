@@ -78,23 +78,23 @@ export function DraggableColumnHeader({ metricKey, sortKey, sortDirection, onSor
       ref={(node) => { setNodeRef(node); thRef.current = node; }}
       style={{ ...style, ...(columnWidth ? { width: columnWidth, minWidth: columnWidth } : {}) }}
       className={cn(
-        'relative whitespace-nowrap px-4 py-3.5 text-right text-[0.65rem] font-bold uppercase tracking-[0.1em] text-text-muted select-none transition-colors hover:text-text-secondary',
-        isDragging && 'z-50 bg-primary/5 opacity-80 shadow-lg rounded-xl ring-1 ring-primary/20'
+        'relative whitespace-nowrap px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-[0.04em] text-[#86868b] select-none transition-colors duration-150 hover:text-[#1d1d1f]',
+        isDragging && 'z-50 bg-[#e8f0fe] opacity-90 shadow-md rounded-lg'
       )}
     >
       <div className="flex items-center justify-end gap-1.5">
         <button
           onClick={() => onSort?.(metricKey)}
-          className="group/sort flex items-center gap-1.5 cursor-pointer hover:text-primary transition-colors duration-200"
+          className="group/sort flex items-center gap-1 cursor-pointer hover:text-[#0071e3] transition-colors duration-150"
           title={`Sort by ${label}`}
         >
-          <span className="text-[0.65rem]">{label}</span>
+          <span className="text-[10px]">{label}</span>
           <SortIndicator active={sortKey === metricKey} direction={sortKey === metricKey ? (sortDirection ?? null) : null} />
         </button>
         <button
           {...attributes}
           {...listeners}
-          className="cursor-grab active:cursor-grabbing text-text-dimmed/40 hover:text-primary/60 transition-colors duration-200"
+          className="cursor-grab active:cursor-grabbing text-[#aeaeb2] hover:text-[#86868b] transition-colors duration-150"
           title={`Drag to reorder ${label}`}
         >
           <GripVertical className="h-2.5 w-2.5" />

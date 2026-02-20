@@ -12,23 +12,23 @@ interface PerformanceSparklineProps {
 }
 
 function getTrendColor(data: SparklineDataPoint[]): string {
-  if (data.length < 2) return '#7c5cfc';
+  if (data.length < 2) return '#0071e3';
 
   const first = data[0].roas;
   const last = data[data.length - 1].roas;
-  const threshold = first * 0.05; // 5% tolerance for "roughly same"
+  const threshold = first * 0.05;
 
-  if (last > first + threshold) return '#34d399'; // emerald-400 (up)
-  if (last < first - threshold) return '#f87171'; // red-400 (down)
-  return '#7c5cfc'; // primary (stable)
+  if (last > first + threshold) return '#34c759'; // Apple green (up)
+  if (last < first - threshold) return '#ff3b30'; // Apple red (down)
+  return '#0071e3'; // Apple blue (stable)
 }
 
 function formatRoasChange(first: number, last: number): { text: string; arrow: string; color: string } {
-  if (first === 0 && last === 0) return { text: '0.00 → 0.00 (0%)', arrow: '', color: '#94a3b8' };
+  if (first === 0 && last === 0) return { text: '0.00 → 0.00 (0%)', arrow: '', color: '#aeaeb2' };
 
   const pctChange = first > 0 ? ((last - first) / first) * 100 : 0;
   const sign = pctChange >= 0 ? '+' : '';
-  const color = pctChange > 0 ? '#34d399' : pctChange < 0 ? '#f87171' : '#94a3b8';
+  const color = pctChange > 0 ? '#34c759' : pctChange < 0 ? '#ff3b30' : '#aeaeb2';
   const arrow = pctChange > 0 ? '\u2191' : pctChange < 0 ? '\u2193' : '\u2192';
 
   return {
@@ -56,7 +56,7 @@ export function PerformanceSparkline({ entityId, data: dataProp }: PerformanceSp
 
   if (!data || data.length === 0) {
     return (
-      <td className="whitespace-nowrap px-4 py-3.5 text-center text-xs text-text-dimmed/40">
+      <td className="whitespace-nowrap px-3 py-2 text-center text-xs text-[#aeaeb2]">
         --
       </td>
     );
@@ -76,15 +76,15 @@ export function PerformanceSparkline({ entityId, data: dataProp }: PerformanceSp
   return (
     <td
       ref={cellRef}
-      className="relative whitespace-nowrap px-4 py-3.5"
+      className="relative whitespace-nowrap px-3 py-2"
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
       {/* Mini inline sparkline */}
-      <div className="flex items-center justify-center" style={{ width: 120, height: 36 }}>
+      <div className="flex items-center justify-center" style={{ width: 100, height: 28 }}>
         <AreaChart
-          width={120}
-          height={36}
+          width={100}
+          height={28}
           data={data}
           margin={{ top: 2, right: 2, bottom: 2, left: 2 }}
         >
@@ -110,13 +110,13 @@ export function PerformanceSparkline({ entityId, data: dataProp }: PerformanceSp
       {/* Hover tooltip (rendered via portal to avoid overflow clipping) */}
       <PortalTooltip anchorRef={cellRef} visible={showTooltip}>
         <div
-          className="rounded-2xl border border-border/30 bg-white/95 backdrop-blur-xl shadow-[0_8px_40px_rgba(0,0,0,0.08)]"
+          className="rounded-xl border border-[rgba(0,0,0,0.08)] bg-white shadow-lg"
           style={{ width: 272, padding: 16 }}
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
         >
           {/* Title */}
-          <p className="mb-2 text-xs font-semibold text-text-primary">
+          <p className="mb-2 text-xs font-semibold text-[#1d1d1f]">
             Performance Trend (7d)
           </p>
 
@@ -139,18 +139,18 @@ export function PerformanceSparkline({ entityId, data: dataProp }: PerformanceSp
               </defs>
               <CartesianGrid
                 strokeDasharray="3 3"
-                stroke="#e8eeff"
+                stroke="rgba(0,0,0,0.04)"
                 horizontal
                 vertical={false}
               />
               <XAxis
                 dataKey="day"
-                tick={{ fill: '#64748b', fontSize: 9 }}
+                tick={{ fill: '#86868b', fontSize: 9 }}
                 axisLine={false}
                 tickLine={false}
               />
               <YAxis
-                tick={{ fill: '#64748b', fontSize: 9 }}
+                tick={{ fill: '#86868b', fontSize: 9 }}
                 axisLine={false}
                 tickLine={false}
                 width={28}
@@ -158,15 +158,14 @@ export function PerformanceSparkline({ entityId, data: dataProp }: PerformanceSp
               />
               <RechartsTooltip
                 contentStyle={{
-                  background: 'rgba(255, 255, 255, 0.95)',
-                  border: '1px solid rgba(226, 232, 244, 0.6)',
-                  borderRadius: 12,
+                  background: '#ffffff',
+                  border: '1px solid rgba(0, 0, 0, 0.08)',
+                  borderRadius: 8,
                   fontSize: 11,
-                  color: '#1a1d2e',
-                  backdropFilter: 'blur(12px)',
-                  boxShadow: '0 4px 20px rgba(0, 0, 0, 0.06)',
+                  color: '#1d1d1f',
+                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.06)',
                 }}
-                labelStyle={{ color: '#5b6178', fontSize: 10 }}
+                labelStyle={{ color: '#86868b', fontSize: 10 }}
                 formatter={(value: number | undefined) => [
                   value != null ? value.toFixed(2) : '--',
                   'ROAS',

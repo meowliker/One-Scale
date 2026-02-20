@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { motion } from 'framer-motion';
+
 import { ChevronRight, ChevronDown, Info } from 'lucide-react';
 import type { AdSet, EntityStatus } from '@/types/campaign';
 import type { MetricKey } from '@/types/metrics';
@@ -91,17 +91,13 @@ export function AdSetRow({
 
   return (
     <>
-    <motion.tr
+    <tr
       id={rowId}
-      layout
-      initial={{ opacity: 0, y: 4 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
       className={cn(
-        'group border-b border-border/20 bg-white/60 backdrop-blur-sm transition-all duration-200',
-        'hover:bg-gradient-to-r hover:from-primary/[0.015] hover:via-transparent hover:to-info/[0.015]',
-        isSelected && 'bg-primary/[0.03] ring-1 ring-inset ring-primary/15',
-        isHighlighted && 'bg-amber-50/80 ring-1 ring-inset ring-amber-300/50'
+        'group border-b border-[rgba(0,0,0,0.03)] bg-white transition-colors duration-150',
+        'hover:bg-[#f5f5f7]',
+        isSelected && 'bg-[#e8f0fe]',
+        isHighlighted && 'bg-[#fff8e1]'
       )}
     >
       {/* Checkbox */}
@@ -110,7 +106,7 @@ export function AdSetRow({
       </td>
 
       {/* Toggle */}
-      <td className="w-12 whitespace-nowrap px-4 py-3">
+      <td className="w-12 whitespace-nowrap px-3 py-2">
         <Toggle
           checked={isActive}
           onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
@@ -119,7 +115,7 @@ export function AdSetRow({
       </td>
 
       {/* Name + Targeting */}
-      <td className="whitespace-nowrap px-4 py-3">
+      <td className="whitespace-nowrap px-3 py-2">
         <div className="flex items-center gap-2 pl-4">
           <button
             onClick={onToggleExpand}
@@ -146,11 +142,11 @@ export function AdSetRow({
       </td>
 
       {/* Status */}
-      <td className="whitespace-nowrap px-4 py-3">
+      <td className="whitespace-nowrap px-3 py-2">
         <div className="flex items-center gap-2">
           <span className={cn(
-            'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold tracking-wide',
-            isActive && !deliveryBlocked ? 'badge-active-futuristic' : 'badge-paused-futuristic'
+            'inline-flex items-center gap-1.5 text-[11px] font-semibold',
+            isActive && !deliveryBlocked ? 'apple-status-active' : 'apple-status-paused'
           )}>
             {isActive && !deliveryBlocked && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />}
             {statusLabel}
@@ -173,7 +169,7 @@ export function AdSetRow({
       </td>
 
       {/* Budget */}
-      <td className="whitespace-nowrap px-4 py-3">
+      <td className="whitespace-nowrap px-3 py-2">
         {isCBO ? (
           <div className="flex items-center gap-1.5">
             <span className="inline-flex items-center gap-1 rounded-md bg-blue-500/10 px-2 py-0.5 text-xs font-semibold text-blue-400 border border-blue-500/20">
@@ -228,7 +224,7 @@ export function AdSetRow({
       </td>
 
       {/* Bid Strategy - empty for ad sets */}
-      <td className="whitespace-nowrap px-4 py-3 text-sm text-text-dimmed">
+      <td className="whitespace-nowrap px-3 py-2 text-sm text-text-dimmed">
         &mdash;
       </td>
 
@@ -246,7 +242,7 @@ export function AdSetRow({
           value={getMetricValue(adSet.metrics as unknown as Record<string, number>, key)}
         />
       ))}
-    </motion.tr>
+    </tr>
     {showIssueDetails && primaryIssue && (
       <tr>
         <td colSpan={8 + columnOrder.length}>
