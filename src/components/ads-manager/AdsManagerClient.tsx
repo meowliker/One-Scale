@@ -505,7 +505,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       try {
         await apiClient('/api/tracking/backfill-orders', {
           method: 'POST',
-          body: JSON.stringify({ days: 2 }),
+          body: JSON.stringify({ days: 2, fast: true }),
           timeoutMs: 25_000,
           maxRetries: 0,
         });

@@ -319,14 +319,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
 
-  let body: { days?: number } = {};
+  let body: { days?: number; fast?: boolean } = {};
   try {
-    body = (await request.json()) as { days?: number };
+    body = (await request.json()) as { days?: number; fast?: boolean };
   } catch {
     // body is optional
   }
 
   const days = clampDays(body.days ?? searchParams.get('days') ?? 7);
+  // Fast mode: skip expensive Meta API UTM resolution — just use direct IDs + signal matching.
+  // This prevents Vercel 503 timeouts when called from auto-sync.
+  const fastMode = body.fast === true || searchParams.get('fast') === '1';
   const createdAtMin = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
   const token = await getShopifyToken(storeId);
@@ -451,15 +454,18 @@ export async function POST(request: NextRequest) {
           }
         }
       }
-      entityIds = await resolveMetaEntityIdsFromUtms({
-        storeId,
-        utmCampaign,
-        utmMedium,
-        utmContent,
-        campaignId: entityIds.campaignId,
-        adSetId: entityIds.adSetId,
-        adId: entityIds.adId,
-      });
+      // In fast mode, skip expensive Meta API lookups to avoid Vercel timeout
+      if (!fastMode) {
+        entityIds = await resolveMetaEntityIdsFromUtms({
+          storeId,
+          utmCampaign,
+          utmMedium,
+          utmContent,
+          campaignId: entityIds.campaignId,
+          adSetId: entityIds.adSetId,
+          adId: entityIds.adId,
+        });
+      }
       const hasDirectMapping = !!(directEntityIds.campaignId || directEntityIds.adSetId || directEntityIds.adId);
       const hasUtmInputs = !!(utmCampaign || utmMedium || utmContent);
       const attributionMethod =
