@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  bulkMapUnmappedPurchases,
   getScoredTrackingAttributionBySignals,
   getTrackingAttributionByTimeProximity,
   getTrackingShopifyPurchaseEventIdByOrderId,
@@ -9,6 +10,7 @@ import {
 import type { DbTrackingAttributionScored } from '@/app/api/lib/db';
 import { isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
 import {
+  bulkMapPersistentUnmappedPurchases,
   getPersistentScoredTrackingAttributionBySignals,
   getPersistentTrackingAttributionByTimeProximity,
   getPersistentTrackingShopifyPurchaseEventIdByOrderId,
@@ -586,10 +588,26 @@ export async function POST(request: NextRequest) {
     if (orders.length < pageLimit) break;
   }
 
+  // Fast mode: run bulk post-insert mapping using signal overlap in a single
+  // query instead of per-order attribution lookups. This maps unmapped purchases
+  // to campaigns by matching click_id/fbc/fbp/email_hash with existing tracked
+  // events that have entity IDs (from browser pixel tracking).
+  let bulkMapped = 0;
+  if (fastMode) {
+    try {
+      bulkMapped = sb
+        ? await bulkMapPersistentUnmappedPurchases(storeId, createdAtMin)
+        : bulkMapUnmappedPurchases(storeId, createdAtMin);
+    } catch {
+      // Best-effort — don't fail the entire backfill for bulk mapping errors
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     data: {
       days,
+      fastMode,
       createdAtMin,
       scannedOrders,
       pagesScanned: pages,
@@ -601,9 +619,10 @@ export async function POST(request: NextRequest) {
       mappedRefundEvents,
       mappedUpdatedPurchases,
       mappedUpdatedRefunds,
+      bulkMapped,
       mappingRatePurchases:
         insertedPurchaseEvents > 0 ? Math.round((mappedPurchaseEvents / insertedPurchaseEvents) * 10000) / 100 : 0,
-      effectiveMappedPurchases: mappedPurchaseEvents + mappedUpdatedPurchases,
+      effectiveMappedPurchases: mappedPurchaseEvents + mappedUpdatedPurchases + bulkMapped,
       shopDomain: token.shopDomain,
     },
   });

@@ -1537,6 +1537,95 @@ export function insertTrackingEvent(data: {
   return { inserted: false, updated: updateResult.changes > 0 };
 }
 
+/**
+ * Bulk-map unmapped Purchase events to campaigns using signal overlap with
+ * existing tracked events that DO have entity IDs. Runs a single SQL UPDATE
+ * instead of N individual lookups — orders of magnitude faster than per-order
+ * attribution scoring. Used after fast-mode backfill to fill in campaign mapping.
+ *
+ * Matching priority: click_id > fbc > fbp > email_hash (first match wins via LIMIT 1).
+ * Only maps to events that occurred within ±24 hours of the purchase.
+ */
+export function bulkMapUnmappedPurchases(storeId: string, sinceIso: string): number {
+  const db = getDb();
+  // Find the best matching tracked event for each unmapped purchase
+  const result = db.prepare(`
+    UPDATE tracking_events
+    SET
+      campaign_id = (
+        SELECT t.campaign_id FROM tracking_events t
+        WHERE t.store_id = tracking_events.store_id
+          AND t.campaign_id IS NOT NULL
+          AND (
+            (tracking_events.click_id IS NOT NULL AND tracking_events.click_id != '' AND t.click_id = tracking_events.click_id)
+            OR (tracking_events.fbc IS NOT NULL AND tracking_events.fbc != '' AND t.fbc = tracking_events.fbc)
+            OR (tracking_events.fbp IS NOT NULL AND tracking_events.fbp != '' AND t.fbp = tracking_events.fbp)
+            OR (tracking_events.email_hash IS NOT NULL AND tracking_events.email_hash != '' AND t.email_hash = tracking_events.email_hash)
+          )
+          AND ABS(julianday(t.occurred_at) - julianday(tracking_events.occurred_at)) < 1
+        ORDER BY
+          CASE
+            WHEN t.click_id = tracking_events.click_id THEN 0
+            WHEN t.fbc = tracking_events.fbc THEN 1
+            WHEN t.fbp = tracking_events.fbp THEN 2
+            ELSE 3
+          END,
+          ABS(julianday(t.occurred_at) - julianday(tracking_events.occurred_at))
+        LIMIT 1
+      ),
+      adset_id = (
+        SELECT t.adset_id FROM tracking_events t
+        WHERE t.store_id = tracking_events.store_id
+          AND t.campaign_id IS NOT NULL
+          AND (
+            (tracking_events.click_id IS NOT NULL AND tracking_events.click_id != '' AND t.click_id = tracking_events.click_id)
+            OR (tracking_events.fbc IS NOT NULL AND tracking_events.fbc != '' AND t.fbc = tracking_events.fbc)
+            OR (tracking_events.fbp IS NOT NULL AND tracking_events.fbp != '' AND t.fbp = tracking_events.fbp)
+            OR (tracking_events.email_hash IS NOT NULL AND tracking_events.email_hash != '' AND t.email_hash = tracking_events.email_hash)
+          )
+          AND ABS(julianday(t.occurred_at) - julianday(tracking_events.occurred_at)) < 1
+        ORDER BY
+          CASE
+            WHEN t.click_id = tracking_events.click_id THEN 0
+            WHEN t.fbc = tracking_events.fbc THEN 1
+            WHEN t.fbp = tracking_events.fbp THEN 2
+            ELSE 3
+          END,
+          ABS(julianday(t.occurred_at) - julianday(tracking_events.occurred_at))
+        LIMIT 1
+      ),
+      ad_id = (
+        SELECT t.ad_id FROM tracking_events t
+        WHERE t.store_id = tracking_events.store_id
+          AND t.campaign_id IS NOT NULL
+          AND (
+            (tracking_events.click_id IS NOT NULL AND tracking_events.click_id != '' AND t.click_id = tracking_events.click_id)
+            OR (tracking_events.fbc IS NOT NULL AND tracking_events.fbc != '' AND t.fbc = tracking_events.fbc)
+            OR (tracking_events.fbp IS NOT NULL AND tracking_events.fbp != '' AND t.fbp = tracking_events.fbp)
+            OR (tracking_events.email_hash IS NOT NULL AND tracking_events.email_hash != '' AND t.email_hash = tracking_events.email_hash)
+          )
+          AND ABS(julianday(t.occurred_at) - julianday(tracking_events.occurred_at)) < 1
+        ORDER BY
+          CASE
+            WHEN t.click_id = tracking_events.click_id THEN 0
+            WHEN t.fbc = tracking_events.fbc THEN 1
+            WHEN t.fbp = tracking_events.fbp THEN 2
+            ELSE 3
+          END,
+          ABS(julianday(t.occurred_at) - julianday(tracking_events.occurred_at))
+        LIMIT 1
+      )
+    WHERE store_id = ?
+      AND event_name = 'Purchase'
+      AND campaign_id IS NULL
+      AND adset_id IS NULL
+      AND ad_id IS NULL
+      AND datetime(occurred_at) >= datetime(?)
+      AND (click_id IS NOT NULL OR fbc IS NOT NULL OR fbp IS NOT NULL OR email_hash IS NOT NULL)
+  `).run(storeId, sinceIso);
+  return result.changes;
+}
+
 export function getTrackingEntityMetrics(
   storeId: string,
   sinceIso: string,

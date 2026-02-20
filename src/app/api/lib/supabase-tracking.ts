@@ -626,6 +626,84 @@ export async function getPersistentTrackingEntityMetrics(
   return [...buckets.values()];
 }
 
+// ------ Bulk Mapping ------
+
+/**
+ * Bulk-map unmapped Purchase events using signal overlap with existing tracked
+ * events that have entity IDs. Fetches both sets, matches in JS, then batch-PATCHes.
+ * This is the Supabase equivalent of the SQLite bulkMapUnmappedPurchases function.
+ */
+export async function bulkMapPersistentUnmappedPurchases(storeId: string, sinceIso: string): Promise<number> {
+  // 1. Fetch unmapped Purchase events with signals
+  const unmapped = await rest<Array<{
+    event_id: string;
+    click_id: string | null;
+    fbc: string | null;
+    fbp: string | null;
+    email_hash: string | null;
+    occurred_at: string;
+  }>>(
+    `/tracking_events?store_id=eq.${encodeURIComponent(storeId)}&event_name=eq.Purchase&campaign_id=is.null&adset_id=is.null&ad_id=is.null&occurred_at=gte.${encodeURIComponent(sinceIso)}&or=(click_id.not.is.null,fbc.not.is.null,fbp.not.is.null,email_hash.not.is.null)&select=event_id,click_id,fbc,fbp,email_hash,occurred_at&limit=500`
+  );
+  if (unmapped.length === 0) return 0;
+
+  // 2. Fetch tracked events that HAVE entity IDs (these are from pixel tracking)
+  const mapped = await rest<Array<{
+    click_id: string | null;
+    fbc: string | null;
+    fbp: string | null;
+    email_hash: string | null;
+    campaign_id: string | null;
+    adset_id: string | null;
+    ad_id: string | null;
+    occurred_at: string;
+  }>>(
+    `/tracking_events?store_id=eq.${encodeURIComponent(storeId)}&campaign_id=not.is.null&occurred_at=gte.${encodeURIComponent(sinceIso)}&select=click_id,fbc,fbp,email_hash,campaign_id,adset_id,ad_id,occurred_at&limit=5000`
+  );
+  if (mapped.length === 0) return 0;
+
+  // 3. Build signal → entity lookup maps (priority: click_id > fbc > fbp > email_hash)
+  const clickMap = new Map<string, typeof mapped[0]>();
+  const fbcMap = new Map<string, typeof mapped[0]>();
+  const fbpMap = new Map<string, typeof mapped[0]>();
+  const emailMap = new Map<string, typeof mapped[0]>();
+  for (const m of mapped) {
+    if (m.click_id && !clickMap.has(m.click_id)) clickMap.set(m.click_id, m);
+    if (m.fbc && !fbcMap.has(m.fbc)) fbcMap.set(m.fbc, m);
+    if (m.fbp && !fbpMap.has(m.fbp)) fbpMap.set(m.fbp, m);
+    if (m.email_hash && !emailMap.has(m.email_hash)) emailMap.set(m.email_hash, m);
+  }
+
+  // 4. Match and batch-update
+  let updated = 0;
+  for (const p of unmapped) {
+    const match = (p.click_id && clickMap.get(p.click_id))
+      || (p.fbc && fbcMap.get(p.fbc))
+      || (p.fbp && fbpMap.get(p.fbp))
+      || (p.email_hash && emailMap.get(p.email_hash))
+      || null;
+    if (!match) continue;
+    try {
+      await rest(
+        `/tracking_events?store_id=eq.${encodeURIComponent(storeId)}&event_id=eq.${encodeURIComponent(p.event_id)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+          body: JSON.stringify({
+            campaign_id: match.campaign_id,
+            adset_id: match.adset_id,
+            ad_id: match.ad_id,
+          }),
+        }
+      );
+      updated++;
+    } catch {
+      // Best-effort — continue with remaining
+    }
+  }
+  return updated;
+}
+
 // ------ Attribution Coverage ------
 
 export async function getPersistentTrackingAttributionCoverage(
