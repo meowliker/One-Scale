@@ -492,6 +492,44 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     };
   }, [activeStoreId, fetchAppPixelMetrics]);
 
+  // Auto-trigger Shopify order backfill so pixel ROAS data is fresh.
+  // Runs once per store on mount, then every 2 minutes in background.
+  const backfillRanRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeStoreId) return;
+    if (backfillRanRef.current === activeStoreId) return;
+    backfillRanRef.current = activeStoreId;
+    let cancelled = false;
+
+    const runBackfill = async () => {
+      try {
+        await apiClient('/api/tracking/backfill-orders', {
+          method: 'POST',
+          body: JSON.stringify({ days: 2 }),
+          timeoutMs: 25_000,
+          maxRetries: 0,
+        });
+        if (cancelled) return;
+        // Refresh pixel metrics after backfill completes
+        const next = await fetchAppPixelMetrics();
+        if (!cancelled && next) setAppPixelMetrics(next);
+      } catch {
+        // Best-effort — don't block UI
+      }
+    };
+
+    // Delay initial backfill to not compete with campaign fetch
+    const initialTimer = window.setTimeout(runBackfill, 3000);
+    // Re-run every 2 minutes for near-real-time pixel ROAS
+    const intervalId = window.setInterval(runBackfill, 120_000);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(initialTimer);
+      window.clearInterval(intervalId);
+    };
+  }, [activeStoreId, fetchAppPixelMetrics]);
+
   // Background load policy/delivery issues only when Error Center is opened.
   // This prevents heavy issue scans from competing with core ad-set loading.
   useEffect(() => {

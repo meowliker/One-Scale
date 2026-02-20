@@ -263,10 +263,11 @@ function shouldAcceptFallbackAttribution(
   if (!fallback) return false;
   if (!(fallback.campaignId || fallback.adSetId || fallback.adId)) return false;
   const matched = new Set(fallback.matchedSignals);
-  if (matched.has('click_id') && fallback.confidence >= 0.42) return true;
-  if (matched.has('fbc') && fallback.confidence >= 0.48) return true;
-  if ((matched.has('fbp') || matched.has('email_hash')) && fallback.confidence >= 0.62) return true;
-  return fallback.confidence >= 0.55;
+  // Aggressive thresholds for ~90% attribution coverage (Triple Whale-style)
+  if (matched.has('click_id') && fallback.confidence >= 0.20) return true;
+  if (matched.has('fbc') && fallback.confidence >= 0.22) return true;
+  if ((matched.has('fbp') || matched.has('email_hash')) && fallback.confidence >= 0.28) return true;
+  return fallback.confidence >= 0.25;
 }
 
 async function mergeEntityIdsWithFallback(
@@ -290,12 +291,12 @@ async function mergeEntityIdsWithFallback(
       ? await getPersistentTrackingAttributionByTimeProximity({
           storeId,
           occurredAt,
-          windowMinutes: 10,
+          windowMinutes: 120,
         })
       : getTrackingAttributionByTimeProximity({
           storeId,
           occurredAt,
-          windowMinutes: 10,
+          windowMinutes: 120,
         });
     if (!timeProximity) return null;
 

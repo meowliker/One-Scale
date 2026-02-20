@@ -304,11 +304,11 @@ function shouldAcceptFallbackAttribution(
   if (!fallback) return false;
   if (!(fallback.campaignId || fallback.adSetId || fallback.adId)) return false;
   const matched = new Set(fallback.matchedSignals);
-  // Aggressive thresholds matching Triple Whale-style attribution for ~90% coverage
-  if (matched.has('click_id') && fallback.confidence >= 0.25) return true;
-  if (matched.has('fbc') && fallback.confidence >= 0.30) return true;
-  if ((matched.has('fbp') || matched.has('email_hash')) && fallback.confidence >= 0.35) return true;
-  return fallback.confidence >= 0.30;
+  // Aggressive thresholds for 90%+ attribution coverage (Triple Whale-style)
+  if (matched.has('click_id') && fallback.confidence >= 0.20) return true;
+  if (matched.has('fbc') && fallback.confidence >= 0.22) return true;
+  if ((matched.has('fbp') || matched.has('email_hash')) && fallback.confidence >= 0.28) return true;
+  return fallback.confidence >= 0.25;
 }
 
 export async function POST(request: NextRequest) {
@@ -426,8 +426,8 @@ export async function POST(request: NextRequest) {
           };
         } else if (clickId || fbc || fbp || emailHash) {
           const timeProximity = sb
-            ? await getPersistentTrackingAttributionByTimeProximity({ storeId, occurredAt, windowMinutes: 60 })
-            : getTrackingAttributionByTimeProximity({ storeId, occurredAt, windowMinutes: 60 });
+            ? await getPersistentTrackingAttributionByTimeProximity({ storeId, occurredAt, windowMinutes: 120 })
+            : getTrackingAttributionByTimeProximity({ storeId, occurredAt, windowMinutes: 120 });
           if (timeProximity) {
             entityIds = {
               campaignId: timeProximity.campaignId,
