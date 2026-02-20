@@ -2,9 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import {
   createSignedSessionToken,
+  getBootstrapAccessCode,
+  getLoginAccessCode,
   getDashboardPassword,
   getDashboardSessionToken,
   isDashboardAuthEnabled,
+  isLegacyPasswordLoginAllowed,
   ONE_SCALE_SESSION_COOKIE,
   verifySignedSessionToken,
 } from '@/lib/auth/session';
@@ -27,7 +30,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Dashboard password is not configured.' }, { status: 503 });
   }
 
-  let body: { email?: string; fullName?: string; password?: string; remember?: boolean } = {};
+  let body: { email?: string; fullName?: string; password?: string; accessCode?: string; remember?: boolean } = {};
   try {
     body = await request.json();
   } catch {
@@ -36,16 +39,38 @@ export async function POST(request: NextRequest) {
 
   const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
   const password = typeof body.password === 'string' ? body.password : '';
+  const accessCode = typeof body.accessCode === 'string' ? body.accessCode.trim() : '';
   const remember = !!body.remember;
   const maxAge = remember ? 60 * 60 * 24 * 14 : 60 * 60 * 8;
   const expiresAt = Date.now() + maxAge * 1000;
+  const userCount = countUsers();
 
   let user: ReturnType<typeof authenticateUser> = null;
+  const loginAccessCode = getLoginAccessCode();
+
+  if (userCount > 0 && loginAccessCode && !safeEqualText(accessCode, loginAccessCode)) {
+    return NextResponse.json(
+      { error: 'Invalid invite/access code.' },
+      { status: 401 }
+    );
+  }
 
   // Preferred flow: per-user email/password auth.
   if (email) {
-    const userCount = countUsers();
     if (userCount === 0) {
+      const bootstrapCode = getBootstrapAccessCode();
+      if (!bootstrapCode) {
+        return NextResponse.json(
+          { error: 'First admin setup is locked. Configure APP_BOOTSTRAP_CODE to initialize owner access.' },
+          { status: 403 }
+        );
+      }
+      if (!safeEqualText(accessCode, bootstrapCode)) {
+        return NextResponse.json(
+          { error: 'Invalid access code for first admin setup.' },
+          { status: 401 }
+        );
+      }
       if (!password || password.length < 8) {
         return NextResponse.json(
           { error: 'Set a password with at least 8 characters for the first admin account.' },
@@ -63,8 +88,11 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Backward-compatible fallback for legacy shared-password mode.
+  // Optional fallback for legacy shared-password mode.
   if (!user) {
+    if (!isLegacyPasswordLoginAllowed()) {
+      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
+    }
     const expectedPassword = getDashboardPassword();
     if (!safeEqualText(password, expectedPassword)) {
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
@@ -120,7 +148,7 @@ export async function GET(request: NextRequest) {
   if (!claims) {
     // Legacy session token support
     const expectedToken = getDashboardSessionToken();
-    if (expectedToken && token === expectedToken) {
+    if (isLegacyPasswordLoginAllowed() && expectedToken && token === expectedToken) {
       return NextResponse.json({ authenticated: true, legacy: true });
     }
     return NextResponse.json({ authenticated: false });

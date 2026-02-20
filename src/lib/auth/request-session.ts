@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import {
   getDashboardSessionToken,
+  isLegacyPasswordLoginAllowed,
   ONE_SCALE_SESSION_COOKIE,
   verifySignedSessionToken,
 } from '@/lib/auth/session';
@@ -29,7 +30,7 @@ export async function readSessionFromRequest(request: NextRequest): Promise<{
   }
 
   const expected = getDashboardSessionToken();
-  if (expected && token === expected) {
+  if (isLegacyPasswordLoginAllowed() && expected && token === expected) {
     return { authenticated: true, legacy: true };
   }
 

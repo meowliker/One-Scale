@@ -23,8 +23,8 @@ import type { SidebarConfig } from '@/types/navigation';
 
 export const sidebarConfig: SidebarConfig = {
   brand: {
-    name: 'Towards Calm',
-    domain: 'towardscalm.com',
+    name: 'OneScale',
+    domain: 'onescale.app',
   },
   topItems: [
     { label: 'Summary', href: '/dashboard/summary', icon: LayoutDashboard },

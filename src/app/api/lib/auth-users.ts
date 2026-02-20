@@ -135,6 +135,17 @@ function getUserByEmail(email: string): (AppUser & { password_hash: string }) | 
   ) || null;
 }
 
+function ensureWorkspaceExists(workspaceId: string, name = 'Workspace'): void {
+  ensureAuthSchema();
+  if (!workspaceId) return;
+  const db = getDb();
+  const existing = db.prepare('SELECT id FROM workspaces WHERE id = ? LIMIT 1').get(workspaceId) as
+    | { id: string }
+    | undefined;
+  if (existing) return;
+  db.prepare('INSERT INTO workspaces (id, name) VALUES (?, ?)').run(workspaceId, name);
+}
+
 export function countUsers(): number {
   ensureAuthSchema();
   const db = getDb();
@@ -241,6 +252,7 @@ export function listWorkspaceUsers(workspaceId: string): Array<{
   isActive: boolean;
 }> {
   ensureAuthSchema();
+  ensureWorkspaceExists(workspaceId);
   const db = getDb();
   const rows = db.prepare(`
     SELECT u.id, u.email, u.full_name, u.is_active, m.role
@@ -280,6 +292,7 @@ export function createWorkspaceUser(input: {
   role?: AppSessionRole;
 }): { id: string; email: string; fullName: string | null; role: AppSessionRole; temporaryPassword: string | null } {
   ensureAuthSchema();
+  ensureWorkspaceExists(input.workspaceId);
   const db = getDb();
   const email = normalizeEmail(input.email);
   const role = input.role || 'member';
@@ -292,10 +305,18 @@ export function createWorkspaceUser(input: {
     if (membership) {
       throw new Error('User is already in this workspace.');
     }
-    db.prepare(`
-      INSERT INTO workspace_members (workspace_id, user_id, role)
-      VALUES (?, ?, ?)
-    `).run(input.workspaceId, existing.id, role);
+    try {
+      db.prepare(`
+        INSERT INTO workspace_members (workspace_id, user_id, role)
+        VALUES (?, ?, ?)
+      `).run(input.workspaceId, existing.id, role);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to add user to workspace.';
+      if (message.toLowerCase().includes('foreign key')) {
+        throw new Error('Workspace context is missing. Refresh and retry.');
+      }
+      throw error;
+    }
     return {
       id: existing.id,
       email: existing.email,
@@ -308,14 +329,26 @@ export function createWorkspaceUser(input: {
   const generatedTemporary = !input.password;
   const password = input.password || generateTemporaryPassword();
   const userId = randomUUID();
-  db.prepare(`
-    INSERT INTO app_users (id, email, password_hash, full_name, is_active, must_reset_password)
-    VALUES (?, ?, ?, ?, 1, ?)
-  `).run(userId, email, hashPassword(password), input.fullName?.trim() || null, generatedTemporary ? 1 : 0);
-  db.prepare(`
-    INSERT INTO workspace_members (workspace_id, user_id, role)
-    VALUES (?, ?, ?)
-  `).run(input.workspaceId, userId, role);
+  const insertTransaction = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO app_users (id, email, password_hash, full_name, is_active, must_reset_password)
+      VALUES (?, ?, ?, ?, 1, ?)
+    `).run(userId, email, hashPassword(password), input.fullName?.trim() || null, generatedTemporary ? 1 : 0);
+    db.prepare(`
+      INSERT INTO workspace_members (workspace_id, user_id, role)
+      VALUES (?, ?, ?)
+    `).run(input.workspaceId, userId, role);
+  });
+
+  try {
+    insertTransaction();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to create user.';
+    if (message.toLowerCase().includes('foreign key')) {
+      throw new Error('Workspace context is missing. Refresh and retry.');
+    }
+    throw error;
+  }
 
   return {
     id: userId,
@@ -347,6 +380,7 @@ export function changeUserPassword(input: {
 
 export function linkStoreToWorkspace(workspaceId: string, storeId: string): void {
   ensureAuthSchema();
+  ensureWorkspaceExists(workspaceId);
   const db = getDb();
   db.prepare(`
     INSERT INTO workspace_stores (workspace_id, store_id)

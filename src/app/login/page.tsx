@@ -9,6 +9,7 @@ function LoginForm() {
   const [email, setEmail] = useState('');
   const [fullName, setFullName] = useState('');
   const [password, setPassword] = useState('');
+  const [accessCode, setAccessCode] = useState('');
   const [remember, setRemember] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -27,7 +28,7 @@ function LoginForm() {
       const response = await fetch('/api/auth/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, fullName, password, remember }),
+        body: JSON.stringify({ email, fullName, password, accessCode, remember }),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
@@ -71,6 +72,13 @@ function LoginForm() {
             placeholder="Password"
             className="w-full rounded-md border border-white/20 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-slate-400 outline-none focus:border-cyan-300/60"
             required
+          />
+          <input
+            type="text"
+            value={accessCode}
+            onChange={(e) => setAccessCode(e.target.value)}
+            placeholder="Invite / access code (if required)"
+            className="w-full rounded-md border border-white/20 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-slate-400 outline-none focus:border-cyan-300/60"
           />
           <label className="flex items-center gap-2 text-sm text-slate-300">
             <input

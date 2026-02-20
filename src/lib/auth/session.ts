@@ -27,6 +27,18 @@ export function isDashboardAuthEnabled(): boolean {
   return getDashboardPassword().length > 0;
 }
 
+export function isLegacyPasswordLoginAllowed(): boolean {
+  return (process.env.APP_ALLOW_LEGACY_PASSWORD_LOGIN || '').trim().toLowerCase() === 'true';
+}
+
+export function getBootstrapAccessCode(): string {
+  return (process.env.APP_BOOTSTRAP_CODE || '').trim();
+}
+
+export function getLoginAccessCode(): string {
+  return (process.env.APP_LOGIN_ACCESS_CODE || '').trim();
+}
+
 function getSessionSecret(): string {
   return (
     (process.env.APP_SESSION_SECRET || '').trim() ||

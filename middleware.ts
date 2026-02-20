@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   isDashboardAuthEnabled,
+  isLegacyPasswordLoginAllowed,
   ONE_SCALE_SESSION_COOKIE,
   verifySignedSessionToken,
   getDashboardSessionToken,
@@ -44,7 +45,7 @@ export async function middleware(request: NextRequest) {
 
   // Backward-compatible legacy cookie validation.
   const expectedToken = getDashboardSessionToken();
-  if (token && expectedToken && token === expectedToken) {
+  if (isLegacyPasswordLoginAllowed() && token && expectedToken && token === expectedToken) {
     return NextResponse.next();
   }
 
