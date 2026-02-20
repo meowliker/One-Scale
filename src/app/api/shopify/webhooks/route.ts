@@ -413,7 +413,7 @@ function readUtmContent(payload: Record<string, unknown>): string | null {
   return readPayloadUrlParam(payload, ['utm_content']);
 }
 
-const ENABLE_META_CAPI_FORWARDING = process.env.ENABLE_META_CAPI_FORWARDING === '1';
+const ENABLE_META_CAPI_FORWARDING = process.env.ENABLE_META_CAPI_FORWARDING !== '0';
 
 export async function POST(request: NextRequest) {
   const topic = request.headers.get('x-shopify-topic') || '';

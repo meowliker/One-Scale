@@ -125,7 +125,7 @@ function parseEntityIds(body: TrackingCollectBody): {
   return { campaignId, adSetId, adId };
 }
 
-const ENABLE_META_CAPI_FORWARDING = process.env.ENABLE_META_CAPI_FORWARDING === '1';
+const ENABLE_META_CAPI_FORWARDING = process.env.ENABLE_META_CAPI_FORWARDING !== '0';
 
 function withCors(res: NextResponse): NextResponse {
   res.headers.set('Access-Control-Allow-Origin', '*');

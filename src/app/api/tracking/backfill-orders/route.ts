@@ -18,6 +18,9 @@ import { resolveMetaEntityIdsFromUtms } from '@/app/api/lib/meta-attribution-loo
 import { fetchFromShopify } from '@/app/api/lib/shopify-client';
 import { getShopifyToken } from '@/app/api/lib/tokens';
 
+// Allow up to 60 seconds for Shopify order backfill (Vercel default is 30s)
+export const maxDuration = 60;
+
 interface RawNoteAttribute {
   name?: string;
   value?: string | number | null;
@@ -301,10 +304,11 @@ function shouldAcceptFallbackAttribution(
   if (!fallback) return false;
   if (!(fallback.campaignId || fallback.adSetId || fallback.adId)) return false;
   const matched = new Set(fallback.matchedSignals);
-  if (matched.has('click_id') && fallback.confidence >= 0.42) return true;
-  if (matched.has('fbc') && fallback.confidence >= 0.48) return true;
-  if ((matched.has('fbp') || matched.has('email_hash')) && fallback.confidence >= 0.62) return true;
-  return fallback.confidence >= 0.55;
+  // Aggressive thresholds matching Triple Whale-style attribution for ~90% coverage
+  if (matched.has('click_id') && fallback.confidence >= 0.25) return true;
+  if (matched.has('fbc') && fallback.confidence >= 0.30) return true;
+  if ((matched.has('fbp') || matched.has('email_hash')) && fallback.confidence >= 0.35) return true;
+  return fallback.confidence >= 0.30;
 }
 
 export async function POST(request: NextRequest) {
@@ -422,8 +426,8 @@ export async function POST(request: NextRequest) {
           };
         } else if (clickId || fbc || fbp || emailHash) {
           const timeProximity = sb
-            ? await getPersistentTrackingAttributionByTimeProximity({ storeId, occurredAt, windowMinutes: 10 })
-            : getTrackingAttributionByTimeProximity({ storeId, occurredAt, windowMinutes: 10 });
+            ? await getPersistentTrackingAttributionByTimeProximity({ storeId, occurredAt, windowMinutes: 60 })
+            : getTrackingAttributionByTimeProximity({ storeId, occurredAt, windowMinutes: 60 });
           if (timeProximity) {
             entityIds = {
               campaignId: timeProximity.campaignId,

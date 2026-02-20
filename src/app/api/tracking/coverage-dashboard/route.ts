@@ -20,6 +20,7 @@ import { getMetaToken } from '@/app/api/lib/tokens';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+export const maxDuration = 60;
 
 interface CampaignLookupRow {
   id?: string;

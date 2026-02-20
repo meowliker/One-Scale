@@ -37,7 +37,7 @@ async function toConfig(storeId: string): Promise<TrackingConfig> {
       await upsertPersistentTrackingConfig(storeId, {
         pixelId: defaultPixelId(storeId),
         domain,
-        serverSideEnabled: false,
+        serverSideEnabled: true,
         attributionModel: 'last_click',
         attributionWindow: '7day',
       });
@@ -45,7 +45,7 @@ async function toConfig(storeId: string): Promise<TrackingConfig> {
       upsertTrackingConfig(storeId, {
         pixelId: defaultPixelId(storeId),
         domain,
-        serverSideEnabled: false,
+        serverSideEnabled: true,
         attributionModel: 'last_click',
         attributionWindow: '7day',
       });
