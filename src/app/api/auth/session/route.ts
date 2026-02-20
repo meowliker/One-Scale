@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import {
+  createSignedSessionToken,
   getDashboardPassword,
   getDashboardSessionToken,
   isDashboardAuthEnabled,
   ONE_SCALE_SESSION_COOKIE,
+  verifySignedSessionToken,
 } from '@/lib/auth/session';
+import {
+  authenticateUser,
+  countUsers,
+  createInitialAdmin,
+  getUserContextById,
+} from '@/app/api/lib/auth-users';
 
 function safeEqualText(a: string, b: string): boolean {
   const left = Buffer.from(a, 'utf8');
@@ -19,22 +27,80 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Dashboard password is not configured.' }, { status: 503 });
   }
 
-  let body: { password?: string; remember?: boolean } = {};
+  let body: { email?: string; fullName?: string; password?: string; remember?: boolean } = {};
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
+  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
   const password = typeof body.password === 'string' ? body.password : '';
-  const expectedPassword = getDashboardPassword();
-  if (!safeEqualText(password, expectedPassword)) {
-    return NextResponse.json({ error: 'Invalid password' }, { status: 401 });
+  const remember = !!body.remember;
+  const maxAge = remember ? 60 * 60 * 24 * 14 : 60 * 60 * 8;
+  const expiresAt = Date.now() + maxAge * 1000;
+
+  let user: ReturnType<typeof authenticateUser> = null;
+
+  // Preferred flow: per-user email/password auth.
+  if (email) {
+    const userCount = countUsers();
+    if (userCount === 0) {
+      if (!password || password.length < 8) {
+        return NextResponse.json(
+          { error: 'Set a password with at least 8 characters for the first admin account.' },
+          { status: 400 }
+        );
+      }
+      user = createInitialAdmin({
+        email,
+        password,
+        fullName: typeof body.fullName === 'string' ? body.fullName : undefined,
+        workspaceName: 'Primary Workspace',
+      });
+    } else {
+      user = authenticateUser(email, password);
+    }
   }
 
-  const response = NextResponse.json({ success: true });
-  const maxAge = body.remember ? 60 * 60 * 24 * 14 : 60 * 60 * 8;
-  response.cookies.set(ONE_SCALE_SESSION_COOKIE, getDashboardSessionToken(), {
+  // Backward-compatible fallback for legacy shared-password mode.
+  if (!user) {
+    const expectedPassword = getDashboardPassword();
+    if (!safeEqualText(password, expectedPassword)) {
+      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
+    }
+    // Legacy mode does not have a user identity; keep previous behavior.
+    const response = NextResponse.json({ success: true, legacy: true });
+    response.cookies.set(ONE_SCALE_SESSION_COOKIE, getDashboardSessionToken(), {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      path: '/',
+      maxAge,
+    });
+    return response;
+  }
+
+  const token = await createSignedSessionToken({
+    userId: user.userId,
+    email: user.email,
+    role: user.role,
+    workspaceId: user.workspaceId,
+    expiresAt,
+  });
+
+  const response = NextResponse.json({
+    success: true,
+    user: {
+      id: user.userId,
+      email: user.email,
+      fullName: user.fullName,
+      role: user.role,
+      workspaceId: user.workspaceId,
+      mustResetPassword: user.mustResetPassword,
+    },
+  });
+  response.cookies.set(ONE_SCALE_SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
@@ -42,6 +108,40 @@ export async function POST(request: NextRequest) {
     maxAge,
   });
   return response;
+}
+
+export async function GET(request: NextRequest) {
+  const token = request.cookies.get(ONE_SCALE_SESSION_COOKIE)?.value || '';
+  if (!token) {
+    return NextResponse.json({ authenticated: false });
+  }
+
+  const claims = await verifySignedSessionToken(token);
+  if (!claims) {
+    // Legacy session token support
+    const expectedToken = getDashboardSessionToken();
+    if (expectedToken && token === expectedToken) {
+      return NextResponse.json({ authenticated: true, legacy: true });
+    }
+    return NextResponse.json({ authenticated: false });
+  }
+
+  const user = getUserContextById(claims.userId);
+  if (!user) {
+    return NextResponse.json({ authenticated: false });
+  }
+
+  return NextResponse.json({
+    authenticated: true,
+    user: {
+      id: user.userId,
+      email: user.email,
+      fullName: user.fullName,
+      role: user.role,
+      workspaceId: user.workspaceId,
+      mustResetPassword: user.mustResetPassword,
+    },
+  });
 }
 
 export async function DELETE() {

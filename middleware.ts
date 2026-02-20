@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  getDashboardSessionToken,
   isDashboardAuthEnabled,
   ONE_SCALE_SESSION_COOKIE,
+  verifySignedSessionToken,
+  getDashboardSessionToken,
 } from '@/lib/auth/session';
 
 const PUBLIC_API_PREFIXES = [
@@ -19,7 +20,7 @@ function isPublicApiPath(pathname: string): boolean {
   return PUBLIC_API_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   if (!isDashboardAuthEnabled()) {
     return NextResponse.next();
   }
@@ -34,6 +35,14 @@ export function middleware(request: NextRequest) {
   }
 
   const token = request.cookies.get(ONE_SCALE_SESSION_COOKIE)?.value || '';
+  if (token) {
+    const claims = await verifySignedSessionToken(token);
+    if (claims) {
+      return NextResponse.next();
+    }
+  }
+
+  // Backward-compatible legacy cookie validation.
   const expectedToken = getDashboardSessionToken();
   if (token && expectedToken && token === expectedToken) {
     return NextResponse.next();

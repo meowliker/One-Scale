@@ -6,6 +6,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const [email, setEmail] = useState('');
+  const [fullName, setFullName] = useState('');
   const [password, setPassword] = useState('');
   const [remember, setRemember] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -25,7 +27,7 @@ function LoginForm() {
       const response = await fetch('/api/auth/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password, remember }),
+        body: JSON.stringify({ email, fullName, password, remember }),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
@@ -45,13 +47,28 @@ function LoginForm() {
     <div className="min-h-screen bg-[#0a0f1f] text-white flex items-center justify-center p-4">
       <div className="w-full max-w-md rounded-2xl border border-white/15 bg-[#101833]/90 p-6 shadow-2xl">
         <h1 className="text-2xl font-semibold">OneScale</h1>
-        <p className="mt-1 text-sm text-slate-300">Enter your team access password.</p>
+        <p className="mt-1 text-sm text-slate-300">Sign in with your profile credentials.</p>
         <form className="mt-5 space-y-4" onSubmit={onSubmit}>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Email"
+            className="w-full rounded-md border border-white/20 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-slate-400 outline-none focus:border-cyan-300/60"
+            required
+          />
+          <input
+            type="text"
+            value={fullName}
+            onChange={(e) => setFullName(e.target.value)}
+            placeholder="Full name (first admin setup only)"
+            className="w-full rounded-md border border-white/20 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-slate-400 outline-none focus:border-cyan-300/60"
+          />
           <input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="Dashboard password"
+            placeholder="Password"
             className="w-full rounded-md border border-white/20 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-slate-400 outline-none focus:border-cyan-300/60"
             required
           />

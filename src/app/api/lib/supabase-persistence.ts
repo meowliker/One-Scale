@@ -4,7 +4,6 @@ import {
   DbConnection,
   DbStore,
   DbStoreAdAccount,
-  getConnection,
   getDb,
   getStore,
   toggleStoreAdAccount,
@@ -14,17 +13,28 @@ import { decryptSecret, encryptSecret } from '@/app/api/lib/crypto';
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const SUPABASE_ANON_KEY =
+  process.env.SUPABASE_ANON_KEY
+  || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  || '';
 
 const hydrateCache = new Map<string, number>();
 const HYDRATE_TTL_MS = 30_000;
 
 export function isSupabasePersistenceEnabled(): boolean {
-  return !!(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return false;
+  // New Supabase secret keys (sb_secret_*) cannot be used as apikey headers.
+  // For REST calls we also need a publishable/anon key.
+  if (SUPABASE_SERVICE_ROLE_KEY.startsWith('sb_secret_') && !SUPABASE_ANON_KEY) {
+    return false;
+  }
+  return true;
 }
 
 function headers(extra?: Record<string, string>): Record<string, string> {
+  const apiKey = SUPABASE_ANON_KEY || SUPABASE_SERVICE_ROLE_KEY;
   return {
-    apikey: SUPABASE_SERVICE_ROLE_KEY,
+    apikey: apiKey,
     Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
     'Content-Type': 'application/json',
     ...extra,

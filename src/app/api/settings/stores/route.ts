@@ -4,6 +4,12 @@ import { getAllStores, createStore, deleteStore, getStore } from '@/app/api/lib/
 import { upsertConnection } from '@/app/api/lib/db';
 import { fetchFromShopify, getShopifyAccessToken } from '@/app/api/lib/shopify-client';
 import {
+  canWorkspaceAccessStore,
+  linkStoreToWorkspace,
+  listStoreIdsForWorkspace,
+} from '@/app/api/lib/auth-users';
+import { readSessionFromRequest } from '@/lib/auth/request-session';
+import {
   deletePersistentStore,
   isSupabasePersistenceEnabled,
   listPersistentStores,
@@ -11,14 +17,31 @@ import {
   upsertPersistentStore,
 } from '@/app/api/lib/supabase-persistence';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const stores = isSupabasePersistenceEnabled()
-      ? await listPersistentStores()
-      : getAllStores();
+    const session = await readSessionFromRequest(request);
+    if (!session.authenticated) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    let stores = getAllStores();
+    if (isSupabasePersistenceEnabled()) {
+      try {
+        stores = await listPersistentStores();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown Supabase error';
+        console.warn('[Stores][GET] Supabase unavailable, falling back to local store cache:', message);
+      }
+    }
+    const allowedStoreIds = !session.legacy && session.workspaceId
+      ? new Set(listStoreIdsForWorkspace(session.workspaceId))
+      : null;
+    const visibleStores = allowedStoreIds
+      ? stores.filter((store) => allowedStoreIds.has(store.id))
+      : stores;
 
     // Map to frontend-friendly shape
-    const result = stores.map((s) => ({
+    const result = visibleStores.map((s) => ({
       id: s.id,
       name: s.name,
       domain: s.domain,
@@ -46,6 +69,14 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    const session = await readSessionFromRequest(request);
+    if (!session.authenticated) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    if (!session.legacy && !session.workspaceId) {
+      return NextResponse.json({ error: 'Missing workspace context' }, { status: 403 });
+    }
+
     const body = await request.json();
     const { name, domain, platform, shopifyApiKey, shopifyApiSecret } = body as {
       name?: string;
@@ -137,22 +168,31 @@ export async function POST(request: NextRequest) {
     });
 
     if (isSupabasePersistenceEnabled()) {
-      await upsertPersistentStore({
-        id: store.id,
-        name: store.name,
-        domain: store.domain,
-        platform: store.platform,
-        apiKey: shopifyApiKey,
-        apiSecret: shopifyApiSecret,
-      });
-      await upsertPersistentConnection({
-        storeId: store.id,
-        platform: 'shopify',
-        accessToken,
-        expiresAt,
-        shopDomain: cleanDomain,
-        shopName: shopName || name,
-      });
+      try {
+        await upsertPersistentStore({
+          id: store.id,
+          name: store.name,
+          domain: store.domain,
+          platform: store.platform,
+          apiKey: shopifyApiKey,
+          apiSecret: shopifyApiSecret,
+        });
+        await upsertPersistentConnection({
+          storeId: store.id,
+          platform: 'shopify',
+          accessToken,
+          expiresAt,
+          shopDomain: cleanDomain,
+          shopName: shopName || name,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown Supabase error';
+        console.warn('[Stores][POST] Supabase persist failed, continuing with local store only:', message);
+      }
+    }
+
+    if (!session.legacy && session.workspaceId) {
+      linkStoreToWorkspace(session.workspaceId, store.id);
     }
 
     return NextResponse.json({
@@ -181,6 +221,11 @@ export async function POST(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
+    const session = await readSessionFromRequest(request);
+    if (!session.authenticated) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const storeId = searchParams.get('storeId');
 
@@ -199,9 +244,21 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
+    if (!session.legacy && session.workspaceId && !canWorkspaceAccessStore(session.workspaceId, storeId)) {
+      return NextResponse.json(
+        { error: 'Store not found' },
+        { status: 404 }
+      );
+    }
+
     deleteStore(storeId);
     if (isSupabasePersistenceEnabled()) {
-      await deletePersistentStore(storeId);
+      try {
+        await deletePersistentStore(storeId);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown Supabase error';
+        console.warn('[Stores][DELETE] Supabase delete failed, local delete already applied:', message);
+      }
     }
     return NextResponse.json({ success: true });
   } catch (err) {

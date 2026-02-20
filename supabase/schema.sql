@@ -11,6 +11,32 @@ create table if not exists stores (
   created_at timestamptz not null default now()
 );
 
+create table if not exists app_users (
+  id text primary key,
+  email text not null unique,
+  password_hash text not null,
+  full_name text,
+  is_active boolean not null default true,
+  must_reset_password boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists workspaces (
+  id text primary key,
+  name text not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists workspace_members (
+  id bigserial primary key,
+  workspace_id text not null references workspaces(id) on delete cascade,
+  user_id text not null references app_users(id) on delete cascade,
+  role text not null default 'member'
+    check (role in ('owner', 'admin', 'member', 'viewer')),
+  created_at timestamptz not null default now(),
+  unique (workspace_id, user_id)
+);
+
 create table if not exists connections (
   id bigserial primary key,
   store_id text not null references stores(id) on delete cascade,
@@ -41,6 +67,15 @@ create table if not exists store_ad_accounts (
   unique (store_id, ad_account_id)
 );
 
+create table if not exists workspace_stores (
+  id bigserial primary key,
+  workspace_id text not null references workspaces(id) on delete cascade,
+  store_id text not null references stores(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  unique (workspace_id, store_id),
+  unique (store_id)
+);
+
 create table if not exists meta_endpoint_snapshots (
   id bigserial primary key,
   store_id text not null references stores(id) on delete cascade,
@@ -55,6 +90,12 @@ create table if not exists meta_endpoint_snapshots (
 
 create index if not exists idx_store_ad_accounts_store
   on store_ad_accounts(store_id);
+
+create index if not exists idx_workspace_members_user
+  on workspace_members(user_id);
+
+create index if not exists idx_workspace_stores_workspace
+  on workspace_stores(workspace_id);
 
 create index if not exists idx_meta_endpoint_snapshots_lookup
   on meta_endpoint_snapshots(store_id, endpoint, scope_id, updated_at desc);
