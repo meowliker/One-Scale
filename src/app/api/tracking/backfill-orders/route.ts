@@ -367,7 +367,10 @@ async function handleFastModeBatch(
     campaign_id: string | null;
     adset_id: string | null;
     ad_id: string | null;
-    payload_json: string;
+    utm_campaign: string | null;
+    utm_medium: string | null;
+    utm_content: string | null;
+    payload_json_data: Record<string, unknown>;
   }
   const parsedEvents: ParsedEvent[] = [];
 
@@ -404,7 +407,10 @@ async function handleFastModeBatch(
       campaign_id: entityIds.campaignId,
       adset_id: entityIds.adSetId,
       ad_id: entityIds.adId,
-      payload_json: JSON.stringify({
+      utm_campaign: utmCampaign,
+      utm_medium: utmMedium,
+      utm_content: utmContent,
+      payload_json_data: {
         source: `backfill_${days}d_order`,
         landingSite: order.landing_site || null,
         landingSiteRef: order.landing_site_ref || null,
@@ -416,7 +422,7 @@ async function handleFastModeBatch(
         utmContent: utmContent || null,
         attributionMethod: 'deterministic',
         fallbackAttribution: null,
-      }),
+      },
     });
 
     // Collect refund events
@@ -447,7 +453,10 @@ async function handleFastModeBatch(
         campaign_id: entityIds.campaignId,
         adset_id: entityIds.adSetId,
         ad_id: entityIds.adId,
-        payload_json: JSON.stringify({
+        utm_campaign: utmCampaign,
+        utm_medium: utmMedium,
+        utm_content: utmContent,
+        payload_json_data: {
           source: `backfill_${days}d_refund`,
           orderId,
           refundId,
@@ -459,8 +468,40 @@ async function handleFastModeBatch(
           utmMedium: utmMedium || null,
           utmContent: utmContent || null,
           fallbackAttribution: null,
-        }),
+        },
       });
+    }
+  }
+
+  // Phase 2b: Resolve UTM campaign/medium/content names to Meta entity IDs.
+  // This builds the lookup table ONCE (3-5 Meta API calls) then resolves in-memory for all events.
+  let utmResolved = 0;
+  const eventsNeedingUtmResolution = parsedEvents.filter(
+    (pe) => !pe.campaign_id && !pe.adset_id && !pe.ad_id && (pe.utm_campaign || pe.utm_medium || pe.utm_content)
+  );
+  if (eventsNeedingUtmResolution.length > 0) {
+    try {
+      // Build lookup once — resolveMetaEntityIdsFromUtms caches internally for 30 min
+      for (const pe of eventsNeedingUtmResolution) {
+        const resolved = await resolveMetaEntityIdsFromUtms({
+          storeId,
+          utmCampaign: pe.utm_campaign,
+          utmMedium: pe.utm_medium,
+          utmContent: pe.utm_content,
+          campaignId: pe.campaign_id,
+          adSetId: pe.adset_id,
+          adId: pe.ad_id,
+        });
+        if (resolved.campaignId || resolved.adSetId || resolved.adId) {
+          pe.campaign_id = resolved.campaignId;
+          pe.adset_id = resolved.adSetId;
+          pe.ad_id = resolved.adId;
+          pe.payload_json_data.attributionMethod = 'utm_resolved';
+          utmResolved++;
+        }
+      }
+    } catch {
+      // Best-effort UTM resolution; don't fail the whole batch
     }
   }
 
@@ -486,7 +527,7 @@ async function handleFastModeBatch(
       campaign_id: pe.campaign_id,
       adset_id: pe.adset_id,
       ad_id: pe.ad_id,
-      payload_json: pe.payload_json,
+      payload_json: JSON.stringify(pe.payload_json_data),
     };
   });
 
@@ -503,6 +544,10 @@ async function handleFastModeBatch(
     // Best-effort
   }
 
+  const directMapped = parsedEvents.filter(
+    (pe) => pe.event_name === 'Purchase' && (pe.campaign_id || pe.adset_id || pe.ad_id)
+  ).length;
+
   return NextResponse.json({
     ok: true,
     data: {
@@ -516,13 +561,18 @@ async function handleFastModeBatch(
       insertedRefundEvents: refundCount,
       updatedPurchaseEvents: 0,
       updatedRefundEvents: 0,
-      mappedPurchaseEvents: 0,
+      mappedPurchaseEvents: directMapped,
       mappedRefundEvents: 0,
       mappedUpdatedPurchases: 0,
       mappedUpdatedRefunds: 0,
       bulkMapped,
       upserted,
-      effectiveMappedPurchases: bulkMapped,
+      utmResolved,
+      utmCandidates: eventsNeedingUtmResolution.length,
+      effectiveMappedPurchases: directMapped + bulkMapped,
+      attributionPercent: purchaseCount > 0
+        ? Math.round(((directMapped + bulkMapped) / purchaseCount) * 10000) / 100
+        : 0,
       shopDomain: token.shopDomain,
     },
   });
