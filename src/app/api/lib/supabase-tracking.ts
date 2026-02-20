@@ -626,6 +626,92 @@ export async function getPersistentTrackingEntityMetrics(
   return [...buckets.values()];
 }
 
+// ------ Batch Operations ------
+
+/**
+ * Batch-fetch existing Shopify Purchase event IDs for multiple order IDs in a single query.
+ * Replaces N individual `getPersistentTrackingShopifyPurchaseEventIdByOrderId` calls.
+ */
+export async function batchGetPersistentShopifyPurchaseEventIds(
+  storeId: string,
+  orderIds: string[]
+): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  if (orderIds.length === 0) return result;
+
+  // PostgREST `in` operator — chunk to avoid URL length limits
+  const CHUNK_SIZE = 200;
+  for (let i = 0; i < orderIds.length; i += CHUNK_SIZE) {
+    const chunk = orderIds.slice(i, i + CHUNK_SIZE);
+    const inList = chunk.map((id) => encodeURIComponent(id)).join(',');
+    const rows = await rest<Array<{ order_id: string; event_id: string }>>(
+      `/tracking_events?store_id=eq.${encodeURIComponent(storeId)}&source=eq.shopify&event_name=eq.Purchase&order_id=in.(${inList})&select=order_id,event_id&order=occurred_at.desc`
+    );
+    for (const row of rows) {
+      // Keep first (most recent) per order_id
+      if (!result.has(row.order_id)) {
+        result.set(row.order_id, row.event_id);
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Batch-upsert tracking events in a single Supabase POST using merge-duplicates.
+ * Replaces N individual `insertPersistentTrackingEvent` calls.
+ * Returns count of rows affected.
+ */
+export async function batchUpsertPersistentTrackingEvents(
+  payloads: Array<{
+    store_id: string;
+    event_name: string;
+    event_id: string;
+    source: string;
+    occurred_at: string;
+    click_id?: string | null;
+    fbp?: string | null;
+    fbc?: string | null;
+    email_hash?: string | null;
+    value?: number | null;
+    currency?: string | null;
+    order_id?: string | null;
+    campaign_id?: string | null;
+    adset_id?: string | null;
+    ad_id?: string | null;
+    payload_json?: string | null;
+    page_url?: string | null;
+    referrer?: string | null;
+    session_id?: string | null;
+    external_id?: string | null;
+    phone_hash?: string | null;
+    ip_hash?: string | null;
+    user_agent?: string | null;
+  }>
+): Promise<number> {
+  if (payloads.length === 0) return 0;
+
+  // Chunk to stay within Supabase body size limits
+  const CHUNK_SIZE = 200;
+  let total = 0;
+  for (let i = 0; i < payloads.length; i += CHUNK_SIZE) {
+    const chunk = payloads.slice(i, i + CHUNK_SIZE);
+    try {
+      await rest('/tracking_events?on_conflict=store_id,event_id', {
+        method: 'POST',
+        headers: headers({
+          Prefer: 'resolution=merge-duplicates,return=minimal',
+        }),
+        body: JSON.stringify(chunk),
+      });
+      total += chunk.length;
+    } catch {
+      // If batch fails, fall through — counts won't be exact but won't crash
+    }
+  }
+  return total;
+}
+
 // ------ Bulk Mapping ------
 
 /**
@@ -662,7 +748,7 @@ export async function bulkMapPersistentUnmappedPurchases(storeId: string, sinceI
   );
   if (mapped.length === 0) return 0;
 
-  // 3. Build signal → entity lookup maps (priority: click_id > fbc > fbp > email_hash)
+  // 3. Build signal lookup maps
   const clickMap = new Map<string, typeof mapped[0]>();
   const fbcMap = new Map<string, typeof mapped[0]>();
   const fbpMap = new Map<string, typeof mapped[0]>();
@@ -674,8 +760,8 @@ export async function bulkMapPersistentUnmappedPurchases(storeId: string, sinceI
     if (m.email_hash && !emailMap.has(m.email_hash)) emailMap.set(m.email_hash, m);
   }
 
-  // 4. Match and batch-update
-  let updated = 0;
+  // 4. Group unmapped events by their matched entity IDs for batch PATCHes
+  const entityGroups = new Map<string, { campaign_id: string | null; adset_id: string | null; ad_id: string | null; eventIds: string[] }>();
   for (const p of unmapped) {
     const match = (p.click_id && clickMap.get(p.click_id))
       || (p.fbc && fbcMap.get(p.fbc))
@@ -683,22 +769,33 @@ export async function bulkMapPersistentUnmappedPurchases(storeId: string, sinceI
       || (p.email_hash && emailMap.get(p.email_hash))
       || null;
     if (!match) continue;
+    const groupKey = `${match.campaign_id || ''}|${match.adset_id || ''}|${match.ad_id || ''}`;
+    if (!entityGroups.has(groupKey)) {
+      entityGroups.set(groupKey, { campaign_id: match.campaign_id, adset_id: match.adset_id, ad_id: match.ad_id, eventIds: [] });
+    }
+    entityGroups.get(groupKey)!.eventIds.push(p.event_id);
+  }
+
+  // 5. Batch PATCH per entity group (1 HTTP call per unique campaign combo instead of per event)
+  let updated = 0;
+  for (const group of entityGroups.values()) {
     try {
+      const inList = group.eventIds.map((id) => encodeURIComponent(id)).join(',');
       await rest(
-        `/tracking_events?store_id=eq.${encodeURIComponent(storeId)}&event_id=eq.${encodeURIComponent(p.event_id)}`,
+        `/tracking_events?store_id=eq.${encodeURIComponent(storeId)}&event_id=in.(${inList})`,
         {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+          headers: headers({ Prefer: 'return=minimal' }),
           body: JSON.stringify({
-            campaign_id: match.campaign_id,
-            adset_id: match.adset_id,
-            ad_id: match.ad_id,
+            campaign_id: group.campaign_id,
+            adset_id: group.adset_id,
+            ad_id: group.ad_id,
           }),
         }
       );
-      updated++;
+      updated += group.eventIds.length;
     } catch {
-      // Best-effort — continue with remaining
+      // Best-effort
     }
   }
   return updated;

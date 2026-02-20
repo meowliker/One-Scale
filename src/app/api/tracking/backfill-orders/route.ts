@@ -10,6 +10,8 @@ import {
 import type { DbTrackingAttributionScored } from '@/app/api/lib/db';
 import { isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
 import {
+  batchGetPersistentShopifyPurchaseEventIds,
+  batchUpsertPersistentTrackingEvents,
   bulkMapPersistentUnmappedPurchases,
   getPersistentScoredTrackingAttributionBySignals,
   getPersistentTrackingAttributionByTimeProximity,
@@ -313,6 +315,219 @@ function shouldAcceptFallbackAttribution(
   return fallback.confidence >= 0.25;
 }
 
+/**
+ * Fast mode + Supabase: Batch all DB operations to avoid Vercel 504 timeout.
+ * Instead of 374+ individual HTTP calls (2-3 per order × 187 orders),
+ * this does ~4-5 total: 1 Shopify fetch + 1 batch lookup + 1 batch upsert + 2-3 bulk mapping.
+ */
+async function handleFastModeBatch(
+  storeId: string,
+  days: number,
+  createdAtMin: string,
+  token: { accessToken: string; shopDomain: string }
+): Promise<NextResponse> {
+  // Phase 1: Fetch ALL Shopify orders into memory
+  const allOrders: RawShopifyOrder[] = [];
+  let sinceId = '0';
+  let pages = 0;
+  const maxPages = 20;
+  const pageLimit = 250;
+
+  while (pages < maxPages) {
+    const response = await fetchFromShopify<{ orders: RawShopifyOrder[] }>(
+      token.accessToken,
+      token.shopDomain,
+      '/orders.json',
+      { status: 'any', limit: String(pageLimit), since_id: sinceId, created_at_min: createdAtMin }
+    );
+    const orders = response.orders || [];
+    if (orders.length === 0) break;
+    pages += 1;
+    allOrders.push(...orders);
+    const lastOrderId = orders[orders.length - 1]?.id;
+    if (lastOrderId === undefined || lastOrderId === null) break;
+    sinceId = String(lastOrderId);
+    if (orders.length < pageLimit) break;
+  }
+
+  // Phase 2: Parse all orders in memory (zero HTTP calls)
+  const orderIds: string[] = [];
+  interface ParsedEvent {
+    order_id: string;
+    event_name: string;
+    default_event_id: string;
+    source: 'shopify';
+    occurred_at: string;
+    click_id: string | null;
+    fbp: string | null;
+    fbc: string | null;
+    email_hash: string | null;
+    value: number;
+    currency: string;
+    campaign_id: string | null;
+    adset_id: string | null;
+    ad_id: string | null;
+    payload_json: string;
+  }
+  const parsedEvents: ParsedEvent[] = [];
+
+  for (const order of allOrders) {
+    const orderId = String(order.id || '').trim();
+    if (!orderId) continue;
+    orderIds.push(orderId);
+
+    const financialStatus = String(order.financial_status || '').toLowerCase();
+    const occurredAt = order.created_at || order.updated_at || new Date().toISOString();
+    const currency = String(order.currency || 'USD');
+    const value = parseNumber(order.total_price);
+    const clickId = readFbclid(order);
+    const fbc = readFbc(order, clickId);
+    const fbp = readFbp(order);
+    const emailHash = readEmailHash(order);
+    const utmCampaign = readUtmCampaign(order);
+    const utmMedium = readUtmMedium(order);
+    const utmContent = readUtmContent(order);
+    const entityIds = readEntityIds(order);
+
+    parsedEvents.push({
+      order_id: orderId,
+      event_name: 'Purchase',
+      default_event_id: `shopify-order-${orderId}`,
+      source: 'shopify',
+      occurred_at: occurredAt,
+      click_id: clickId,
+      fbp,
+      fbc,
+      email_hash: emailHash,
+      value,
+      currency,
+      campaign_id: entityIds.campaignId,
+      adset_id: entityIds.adSetId,
+      ad_id: entityIds.adId,
+      payload_json: JSON.stringify({
+        source: `backfill_${days}d_order`,
+        landingSite: order.landing_site || null,
+        landingSiteRef: order.landing_site_ref || null,
+        referringSite: order.referring_site || null,
+        orderStatusUrl: order.order_status_url || null,
+        financialStatus: financialStatus || null,
+        utmCampaign: utmCampaign || null,
+        utmMedium: utmMedium || null,
+        utmContent: utmContent || null,
+        attributionMethod: 'deterministic',
+        fallbackAttribution: null,
+      }),
+    });
+
+    // Collect refund events
+    const orderRefunds = Array.isArray(order.refunds) ? order.refunds : [];
+    const refunds =
+      orderRefunds.length > 0
+        ? orderRefunds
+        : financialStatus === 'refunded'
+          ? [{ id: `${orderId}-status`, created_at: order.updated_at || occurredAt, transactions: [{ kind: 'refund', amount: value }] } as RawRefund]
+          : [];
+    for (let idx = 0; idx < refunds.length; idx++) {
+      const refund = refunds[idx];
+      const refundId = String(refund.id || `${orderId}-${idx + 1}`);
+      const refundAmount = getRefundAmount(refund);
+      if (refundAmount <= 0) continue;
+      parsedEvents.push({
+        order_id: orderId,
+        event_name: 'Refund',
+        default_event_id: `shopify-refund-${refundId}`,
+        source: 'shopify',
+        occurred_at: refund.created_at || order.updated_at || occurredAt,
+        click_id: clickId,
+        fbp,
+        fbc,
+        email_hash: emailHash,
+        value: refundAmount,
+        currency,
+        campaign_id: entityIds.campaignId,
+        adset_id: entityIds.adSetId,
+        ad_id: entityIds.adId,
+        payload_json: JSON.stringify({
+          source: `backfill_${days}d_refund`,
+          orderId,
+          refundId,
+          landingSite: order.landing_site || null,
+          landingSiteRef: order.landing_site_ref || null,
+          referringSite: order.referring_site || null,
+          orderStatusUrl: order.order_status_url || null,
+          utmCampaign: utmCampaign || null,
+          utmMedium: utmMedium || null,
+          utmContent: utmContent || null,
+          fallbackAttribution: null,
+        }),
+      });
+    }
+  }
+
+  // Phase 3: Batch-lookup existing event IDs (1 HTTP call instead of N)
+  const existingEventIds = await batchGetPersistentShopifyPurchaseEventIds(storeId, orderIds);
+
+  // Phase 4: Build batch payloads with correct event IDs
+  const batchPayloads = parsedEvents.map((pe) => {
+    const existingId = pe.event_name === 'Purchase' ? existingEventIds.get(pe.order_id) : null;
+    return {
+      store_id: storeId,
+      event_name: pe.event_name,
+      event_id: existingId || pe.default_event_id,
+      source: pe.source,
+      occurred_at: pe.occurred_at,
+      click_id: pe.click_id,
+      fbp: pe.fbp,
+      fbc: pe.fbc,
+      email_hash: pe.email_hash,
+      value: pe.value,
+      currency: pe.currency,
+      order_id: pe.order_id,
+      campaign_id: pe.campaign_id,
+      adset_id: pe.adset_id,
+      ad_id: pe.ad_id,
+      payload_json: pe.payload_json,
+    };
+  });
+
+  // Phase 5: Batch-upsert all events (1 HTTP call instead of N)
+  const upserted = await batchUpsertPersistentTrackingEvents(batchPayloads);
+  const purchaseCount = parsedEvents.filter((e) => e.event_name === 'Purchase').length;
+  const refundCount = parsedEvents.filter((e) => e.event_name === 'Refund').length;
+
+  // Phase 6: Bulk signal mapping (2-3 HTTP calls)
+  let bulkMapped = 0;
+  try {
+    bulkMapped = await bulkMapPersistentUnmappedPurchases(storeId, createdAtMin);
+  } catch {
+    // Best-effort
+  }
+
+  return NextResponse.json({
+    ok: true,
+    data: {
+      days,
+      fastMode: true,
+      batchMode: true,
+      createdAtMin,
+      scannedOrders: allOrders.length,
+      pagesScanned: pages,
+      insertedPurchaseEvents: purchaseCount,
+      insertedRefundEvents: refundCount,
+      updatedPurchaseEvents: 0,
+      updatedRefundEvents: 0,
+      mappedPurchaseEvents: 0,
+      mappedRefundEvents: 0,
+      mappedUpdatedPurchases: 0,
+      mappedUpdatedRefunds: 0,
+      bulkMapped,
+      upserted,
+      effectiveMappedPurchases: bulkMapped,
+      shopDomain: token.shopDomain,
+    },
+  });
+}
+
 export async function POST(request: NextRequest) {
   const sb = isSupabasePersistenceEnabled();
   const { searchParams } = new URL(request.url);
@@ -337,6 +552,11 @@ export async function POST(request: NextRequest) {
   const token = await getShopifyToken(storeId);
   if (!token || !token.shopDomain) {
     return NextResponse.json({ error: 'Not authenticated with Shopify' }, { status: 401 });
+  }
+
+  // Fast mode + Supabase: use batched operations (4-5 HTTP calls instead of 374+)
+  if (fastMode && sb) {
+    return handleFastModeBatch(storeId, days, createdAtMin, { accessToken: token.accessToken, shopDomain: token.shopDomain! });
   }
 
   let sinceId = '0';
@@ -403,9 +623,7 @@ export async function POST(request: NextRequest) {
           }
         | null = null;
 
-      // In fast mode, skip ALL external lookups (attribution scoring + UTM resolution)
-      // to guarantee the backfill finishes within Vercel's 60s timeout.
-      // Only direct entity IDs from order URL params and note attributes are used.
+      // In non-fast mode, do full attribution scoring and UTM resolution
       if (!fastMode) {
         if (!entityIds.campaignId && !entityIds.adSetId && !entityIds.adId) {
           const occurredDay = String(occurredAt || '').slice(0, 10);
@@ -588,18 +806,14 @@ export async function POST(request: NextRequest) {
     if (orders.length < pageLimit) break;
   }
 
-  // Fast mode: run bulk post-insert mapping using signal overlap in a single
-  // query instead of per-order attribution lookups. This maps unmapped purchases
-  // to campaigns by matching click_id/fbc/fbp/email_hash with existing tracked
-  // events that have entity IDs (from browser pixel tracking).
+  // Fast mode (SQLite only — Supabase fast mode uses handleFastModeBatch above):
+  // Run bulk post-insert mapping using signal overlap.
   let bulkMapped = 0;
   if (fastMode) {
     try {
-      bulkMapped = sb
-        ? await bulkMapPersistentUnmappedPurchases(storeId, createdAtMin)
-        : bulkMapUnmappedPurchases(storeId, createdAtMin);
+      bulkMapped = bulkMapUnmappedPurchases(storeId, createdAtMin);
     } catch {
-      // Best-effort — don't fail the entire backfill for bulk mapping errors
+      // Best-effort
     }
   }
 
