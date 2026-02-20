@@ -1543,7 +1543,31 @@ export function getTrackingEntityMetrics(
   untilIso: string
 ): DbTrackingEntityMetricRow[] {
   const db = getDb();
+  // Deduplicate by order_id to prevent double-counting when both browser pixel
+  // and Shopify webhook/backfill create Purchase events for the same order.
+  // ROW_NUMBER partitions by COALESCE(order_id, event_id) so events without
+  // order_id fall back to event_id (always unique). Shopify source is preferred
+  // over browser/server because it has the authoritative order value.
   return db.prepare(`
+    WITH deduped AS (
+      SELECT
+        event_name,
+        campaign_id,
+        adset_id,
+        ad_id,
+        value,
+        ROW_NUMBER() OVER (
+          PARTITION BY COALESCE(order_id, event_id)
+          ORDER BY
+            CASE WHEN source = 'shopify' THEN 0 WHEN source = 'server' THEN 1 ELSE 2 END,
+            datetime(occurred_at) DESC
+        ) AS rn
+      FROM tracking_events
+      WHERE store_id = ?
+        AND datetime(occurred_at) >= datetime(?)
+        AND datetime(occurred_at) <= datetime(?)
+        AND (campaign_id IS NOT NULL OR adset_id IS NOT NULL OR ad_id IS NOT NULL)
+    )
     SELECT
       campaign_id,
       adset_id,
@@ -1564,11 +1588,8 @@ export function getTrackingEntityMetrics(
       ) AS results,
       SUM(CASE WHEN event_name = 'Purchase' THEN 1 ELSE 0 END) AS purchases,
       SUM(CASE WHEN event_name = 'Purchase' THEN COALESCE(value, 0) ELSE 0 END) AS purchase_value
-    FROM tracking_events
-    WHERE store_id = ?
-      AND datetime(occurred_at) >= datetime(?)
-      AND datetime(occurred_at) <= datetime(?)
-      AND (campaign_id IS NOT NULL OR adset_id IS NOT NULL OR ad_id IS NOT NULL)
+    FROM deduped
+    WHERE rn = 1
     GROUP BY campaign_id, adset_id, ad_id
   `).all(storeId, sinceIso, untilIso) as DbTrackingEntityMetricRow[];
 }
@@ -1579,24 +1600,41 @@ export function getTrackingAttributionCoverage(
   untilIso: string
 ): DbTrackingCoverageRow {
   const db = getDb();
+  // Deduplicate Purchase events by order_id to avoid inflated counts from
+  // both browser pixel and Shopify creating events for the same order.
   const row = db.prepare(`
+    WITH deduped AS (
+      SELECT
+        event_name,
+        campaign_id,
+        adset_id,
+        ad_id,
+        ROW_NUMBER() OVER (
+          PARTITION BY COALESCE(order_id, event_id)
+          ORDER BY
+            CASE WHEN source = 'shopify' THEN 0 WHEN source = 'server' THEN 1 ELSE 2 END,
+            datetime(occurred_at) DESC
+        ) AS rn
+      FROM tracking_events
+      WHERE store_id = ?
+        AND event_name = 'Purchase'
+        AND datetime(occurred_at) >= datetime(?)
+        AND datetime(occurred_at) <= datetime(?)
+    )
     SELECT
-      SUM(CASE WHEN event_name = 'Purchase' THEN 1 ELSE 0 END) AS total_purchases,
+      COUNT(*) AS total_purchases,
       SUM(
         CASE
-          WHEN event_name = 'Purchase'
-            AND (campaign_id IS NOT NULL OR adset_id IS NOT NULL OR ad_id IS NOT NULL)
+          WHEN (campaign_id IS NOT NULL OR adset_id IS NOT NULL OR ad_id IS NOT NULL)
           THEN 1
           ELSE 0
         END
       ) AS mapped_purchases,
-      SUM(CASE WHEN event_name = 'Purchase' AND campaign_id IS NOT NULL THEN 1 ELSE 0 END) AS mapped_campaign,
-      SUM(CASE WHEN event_name = 'Purchase' AND adset_id IS NOT NULL THEN 1 ELSE 0 END) AS mapped_adset,
-      SUM(CASE WHEN event_name = 'Purchase' AND ad_id IS NOT NULL THEN 1 ELSE 0 END) AS mapped_ad
-    FROM tracking_events
-    WHERE store_id = ?
-      AND datetime(occurred_at) >= datetime(?)
-      AND datetime(occurred_at) <= datetime(?)
+      SUM(CASE WHEN campaign_id IS NOT NULL THEN 1 ELSE 0 END) AS mapped_campaign,
+      SUM(CASE WHEN adset_id IS NOT NULL THEN 1 ELSE 0 END) AS mapped_adset,
+      SUM(CASE WHEN ad_id IS NOT NULL THEN 1 ELSE 0 END) AS mapped_ad
+    FROM deduped
+    WHERE rn = 1
   `).get(storeId, sinceIso, untilIso) as DbTrackingCoverageRow | undefined;
 
   return {

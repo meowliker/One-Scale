@@ -562,15 +562,40 @@ export async function getPersistentTrackingEntityMetrics(
   sinceIso: string,
   untilIso: string
 ): Promise<DbTrackingEntityMetricRow[]> {
+  // Fetch order_id, event_id, and source so we can deduplicate in JS
   const rows = await rest<Array<{
     campaign_id: string | null;
     adset_id: string | null;
     ad_id: string | null;
     event_name: string;
     value: number | null;
+    order_id: string | null;
+    event_id: string | null;
+    source: string | null;
+    occurred_at: string | null;
   }>>(
-    `/tracking_events?store_id=eq.${encodeURIComponent(storeId)}&occurred_at=gte.${encodeURIComponent(sinceIso)}&occurred_at=lte.${encodeURIComponent(untilIso)}&or=(campaign_id.not.is.null,adset_id.not.is.null,ad_id.not.is.null)&select=campaign_id,adset_id,ad_id,event_name,value`
+    `/tracking_events?store_id=eq.${encodeURIComponent(storeId)}&occurred_at=gte.${encodeURIComponent(sinceIso)}&occurred_at=lte.${encodeURIComponent(untilIso)}&or=(campaign_id.not.is.null,adset_id.not.is.null,ad_id.not.is.null)&select=campaign_id,adset_id,ad_id,event_name,value,order_id,event_id,source,occurred_at`
   );
+
+  // Deduplicate by order_id to prevent double-counting when both browser pixel
+  // and Shopify webhook/backfill create Purchase events for the same order.
+  // Group by COALESCE(order_id, event_id), keep shopify-source preferred.
+  const dedupMap = new Map<string, typeof rows[number]>();
+  const sourceRank = (s: string | null) => s === 'shopify' ? 0 : s === 'server' ? 1 : 2;
+  for (const row of rows) {
+    const dedupKey = row.order_id || row.event_id || '';
+    const existing = dedupMap.get(dedupKey);
+    if (!existing) {
+      dedupMap.set(dedupKey, row);
+    } else {
+      // Prefer shopify source, then more recent
+      const existingRank = sourceRank(existing.source);
+      const newRank = sourceRank(row.source);
+      if (newRank < existingRank || (newRank === existingRank && (row.occurred_at || '') > (existing.occurred_at || ''))) {
+        dedupMap.set(dedupKey, row);
+      }
+    }
+  }
 
   const resultEvents = new Set([
     'Purchase', 'Lead', 'CompleteRegistration', 'Contact',
@@ -579,7 +604,7 @@ export async function getPersistentTrackingEntityMetrics(
   ]);
 
   const buckets = new Map<string, DbTrackingEntityMetricRow>();
-  for (const row of rows) {
+  for (const row of dedupMap.values()) {
     const key = `${row.campaign_id || ''}|${row.adset_id || ''}|${row.ad_id || ''}`;
     if (!buckets.has(key)) {
       buckets.set(key, {
@@ -608,13 +633,35 @@ export async function getPersistentTrackingAttributionCoverage(
   sinceIso: string,
   untilIso: string
 ): Promise<DbTrackingCoverageRow> {
+  // Fetch order_id, event_id, source for deduplication
   const rows = await rest<Array<{
     campaign_id: string | null;
     adset_id: string | null;
     ad_id: string | null;
+    order_id: string | null;
+    event_id: string | null;
+    source: string | null;
+    occurred_at: string | null;
   }>>(
-    `/tracking_events?store_id=eq.${encodeURIComponent(storeId)}&event_name=eq.Purchase&occurred_at=gte.${encodeURIComponent(sinceIso)}&occurred_at=lte.${encodeURIComponent(untilIso)}&select=campaign_id,adset_id,ad_id`
+    `/tracking_events?store_id=eq.${encodeURIComponent(storeId)}&event_name=eq.Purchase&occurred_at=gte.${encodeURIComponent(sinceIso)}&occurred_at=lte.${encodeURIComponent(untilIso)}&select=campaign_id,adset_id,ad_id,order_id,event_id,source,occurred_at`
   );
+
+  // Deduplicate by order_id — same logic as entity-metrics
+  const dedupMap = new Map<string, typeof rows[number]>();
+  const sourceRank = (s: string | null) => s === 'shopify' ? 0 : s === 'server' ? 1 : 2;
+  for (const row of rows) {
+    const dedupKey = row.order_id || row.event_id || '';
+    const existing = dedupMap.get(dedupKey);
+    if (!existing) {
+      dedupMap.set(dedupKey, row);
+    } else {
+      const existingRank = sourceRank(existing.source);
+      const newRank = sourceRank(row.source);
+      if (newRank < existingRank || (newRank === existingRank && (row.occurred_at || '') > (existing.occurred_at || ''))) {
+        dedupMap.set(dedupKey, row);
+      }
+    }
+  }
 
   let totalPurchases = 0;
   let mappedPurchases = 0;
@@ -622,7 +669,7 @@ export async function getPersistentTrackingAttributionCoverage(
   let mappedAdset = 0;
   let mappedAd = 0;
 
-  for (const row of rows) {
+  for (const row of dedupMap.values()) {
     totalPurchases += 1;
     const isMapped = !!(row.campaign_id || row.adset_id || row.ad_id);
     if (isMapped) mappedPurchases += 1;

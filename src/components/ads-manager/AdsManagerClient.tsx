@@ -493,20 +493,32 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   }, [activeStoreId, fetchAppPixelMetrics]);
 
   // Auto-trigger Shopify order backfill so pixel ROAS data is fresh.
-  // Runs once per store on mount, then every 2 minutes in background.
-  const backfillRanRef = useRef<string | null>(null);
+  // Backfill days match the selected date range so all pixel data is available.
+  // Re-triggers when date range changes (e.g., switching from "Today" to "Last 7 Days").
+  const backfillKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (!activeStoreId) return;
-    if (backfillRanRef.current === activeStoreId) return;
-    backfillRanRef.current = activeStoreId;
+    // Compute days from date range (default 7, capped 1-30 to match API)
+    let backfillDays = 7;
+    if (dateRange?.since && dateRange?.until) {
+      const sinceMs = new Date(dateRange.since + 'T00:00:00Z').getTime();
+      const untilMs = new Date(dateRange.until + 'T23:59:59Z').getTime();
+      if (sinceMs && untilMs && untilMs >= sinceMs) {
+        backfillDays = Math.max(1, Math.min(30, Math.ceil((untilMs - sinceMs) / 86_400_000) + 1));
+      }
+    }
+    // Only re-run if store or backfill days actually changed
+    const backfillKey = `${activeStoreId}|${backfillDays}`;
+    if (backfillKeyRef.current === backfillKey) return;
+    backfillKeyRef.current = backfillKey;
     let cancelled = false;
 
     const runBackfill = async () => {
       try {
         await apiClient('/api/tracking/backfill-orders', {
           method: 'POST',
-          body: JSON.stringify({ days: 2, fast: true }),
-          timeoutMs: 25_000,
+          body: JSON.stringify({ days: backfillDays, fast: true }),
+          timeoutMs: 55_000,
           maxRetries: 0,
         });
         if (cancelled) return;
@@ -528,7 +540,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       window.clearTimeout(initialTimer);
       window.clearInterval(intervalId);
     };
-  }, [activeStoreId, fetchAppPixelMetrics]);
+  }, [activeStoreId, dateRange?.since, dateRange?.until, fetchAppPixelMetrics]);
 
   // Background load policy/delivery issues only when Error Center is opened.
   // This prevents heavy issue scans from competing with core ad-set loading.

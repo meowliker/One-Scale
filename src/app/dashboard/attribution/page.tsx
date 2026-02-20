@@ -314,8 +314,8 @@ export default function AttributionPage() {
           data?: { scannedOrders?: number; insertedPurchaseEvents?: number; updatedPurchaseEvents?: number };
         }>('/api/tracking/backfill-orders', {
           method: 'POST',
-          body: JSON.stringify({ days: syncDays }),
-          timeoutMs: 30_000,
+          body: JSON.stringify({ days: syncDays, fast: true }),
+          timeoutMs: 55_000,
           maxRetries: 0,
         });
         const scanned = Number(response?.data?.scannedOrders || 0);
