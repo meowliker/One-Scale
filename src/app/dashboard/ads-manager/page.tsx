@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { Loader2 } from 'lucide-react';
 import type { Campaign } from '@/types/campaign';
 import type { DateRangePreset } from '@/types/analytics';
@@ -41,16 +41,47 @@ export default function AdsManagerPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [emptyReason, setEmptyReason] = useState<'not_connected' | 'no_accounts' | 'error' | null>(null);
-  // Don't initialize with getDateRange() here — wait for connectionReady
-  // so the store timezone is loaded before computing dates.
   const [dateRange, setDateRange] = useState<DateRangeState | null>(null);
+  const didInitialFetchRef = useRef(false);
 
   const connectionLoading = useConnectionStore((s) => s.loading);
   const connectionStatus = useConnectionStore((s) => s.status);
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
   const connectionReady = !connectionLoading && connectionStatus !== null;
 
-  const fetchData = useCallback(async (since: string, until: string) => {
+  /**
+   * Two-phase campaign loading:
+   * Phase 1: Load instantly from server-side snapshot cache (preferCache=1).
+   *          This returns cached data from meta_endpoint_snapshots in <200ms.
+   * Phase 2: Background refresh with live Meta API data.
+   *          Updates campaigns silently without showing a loading spinner.
+   */
+  const fetchData = useCallback(async (since: string, until: string, opts?: { isInitial?: boolean }) => {
+    const isInitial = opts?.isInitial ?? false;
+
+    if (isInitial) {
+      // Phase 1: Try cached data first for instant load
+      setLoading(true);
+      setEmptyReason(null);
+      try {
+        const cached = await getCampaigns({ since, until }, { preferCache: true });
+        if (cached.length > 0) {
+          setCampaigns(cached);
+          setLoading(false);
+          // Phase 2: Background refresh with live data (no loading spinner)
+          getCampaigns({ since, until }).then((live) => {
+            setCampaigns(live);
+          }).catch(() => {
+            // Keep cached data on background refresh failure
+          });
+          return;
+        }
+      } catch {
+        // Cache miss — fall through to live fetch
+      }
+    }
+
+    // Direct live fetch (used when no cache, date range change, or manual refresh)
     setLoading(true);
     setEmptyReason(null);
     try {
@@ -70,17 +101,28 @@ export default function AdsManagerPage() {
   // Wait for connection status to be fully loaded before fetching data.
   // Compute date range here (not in useState) so store timezone is correct.
   useEffect(() => {
-    if (connectionReady) {
+    if (connectionReady && !didInitialFetchRef.current) {
+      didInitialFetchRef.current = true;
       const range = getDateRange('today');
       const state = buildDateRangeState(range);
       setDateRange(state);
-      fetchData(state.since, state.until);
+      fetchData(state.since, state.until, { isInitial: true });
     }
   }, [connectionReady, activeStoreId, fetchData]);
+
+  // Re-fetch when store changes
+  useEffect(() => {
+    if (connectionReady && dateRange && didInitialFetchRef.current) {
+      // Reset for re-fetch on store change
+      didInitialFetchRef.current = false;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeStoreId]);
 
   const handleDateRangeChange = (range: { start: Date; end: Date; preset?: DateRangePreset }) => {
     const state = buildDateRangeState(range);
     setDateRange(state);
+    // Date range change = live fetch (no cache for new ranges)
     fetchData(state.since, state.until);
   };
 

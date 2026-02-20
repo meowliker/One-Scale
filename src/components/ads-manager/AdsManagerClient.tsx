@@ -812,10 +812,12 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   }, [dateRange]);
 
   // Management-first preload:
-  // 1) only active campaigns
-  // 2) in safe mode, fetch in basic mode with strict sequencing + spacing
-  // 3) populate local ad/adset policy issues without requiring manual expansion
-  // 4) mark core preload complete so latest-actions can start afterwards
+  // Core preload: loads ad sets + ads for active campaigns.
+  // OPTIMIZATION: If localStorage hierarchy cache is fresh (<30 min), skip the
+  // expensive sequential Meta API calls. The cached ad sets/ads from the last
+  // sync are already hydrated into the campaign state. A full refresh runs in
+  // the background every 30 min via the page-level cache-then-refresh pattern.
+  const HIERARCHY_CACHE_MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes
   useEffect(() => {
     if (!activeStoreId) return;
     if (showErrorCenter) return;
@@ -833,6 +835,27 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       setSyncStatus((prev) => ({ ...prev, core: 'done' }));
       return;
     }
+
+    // Check if hierarchy cache is fresh enough to skip the full preload
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = window.localStorage.getItem(hierarchyCacheKey);
+        if (raw) {
+          const parsed = JSON.parse(raw) as { cachedAt?: number; campaigns?: Record<string, unknown> };
+          const cacheAge = Date.now() - (parsed.cachedAt || 0);
+          const hasCachedData = parsed.campaigns && Object.keys(parsed.campaigns).length > 0;
+          if (hasCachedData && cacheAge < HIERARCHY_CACHE_MAX_AGE_MS) {
+            // Cache is fresh — skip expensive sequential API calls
+            setCorePreloadDone(true);
+            setSyncStatus((prev) => ({ ...prev, core: 'done' }));
+            return;
+          }
+        }
+      } catch {
+        // Ignore cache read errors — proceed with normal preload
+      }
+    }
+
     let cancelled = false;
     preloadingCoreRef.current = true;
     setCorePreloadDone(false);
@@ -876,12 +899,15 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     return () => {
       cancelled = true;
     };
-  }, [activeStoreId, campaigns, corePreloadDone, loadAdSetsForCampaign, loadAdsForAdSet, showErrorCenter]);
+  }, [activeStoreId, campaigns, corePreloadDone, hierarchyCacheKey, loadAdSetsForCampaign, loadAdsForAdSet, showErrorCenter]);
 
-  // Persist active campaign hierarchy cache for fast reload.
+  // Persist active campaign hierarchy cache with timestamp for fast reload.
   useEffect(() => {
     if (typeof window === 'undefined' || !activeStoreId) return;
-    const payload: { campaigns: Record<string, { adSets: AdSet[] }> } = { campaigns: {} };
+    const payload: { campaigns: Record<string, { adSets: AdSet[] }>; cachedAt: number } = {
+      campaigns: {},
+      cachedAt: Date.now(),
+    };
     for (const campaign of campaigns) {
       if (campaign.status !== 'ACTIVE') continue;
       if (!campaign.adSets || campaign.adSets.length === 0) continue;
