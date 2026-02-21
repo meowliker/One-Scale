@@ -305,14 +305,18 @@ async function fetchAccountActivities(
     // Filter: old and new values are identical (no real change)
     if (oldValue && newValue && oldValue === newValue) continue;
 
-    // Filter: status changes FROM a Meta system/internal state
+    // Filter: status changes FROM or TO a Meta system/internal state
+    // e.g. "Active → Pending Process" (Meta internal transition) or "Pending Process → Active" (auto-resume)
     if (activity.event_type.includes('run_status')) {
       try {
         const extra = typeof activity.extra_data === 'string'
           ? JSON.parse(activity.extra_data)
           : (activity.extra_data as Record<string, unknown> | null) || {};
         const rawOld = String(extra.old_value || '');
-        if (META_SYSTEM_STATUS_VALUES.has(rawOld) || META_SYSTEM_STATUS_VALUES.has(formatStatusValue(rawOld))) {
+        const rawNew = String(extra.new_value || '');
+        const oldIsSystem = META_SYSTEM_STATUS_VALUES.has(rawOld) || META_SYSTEM_STATUS_VALUES.has(formatStatusValue(rawOld));
+        const newIsSystem = META_SYSTEM_STATUS_VALUES.has(rawNew) || META_SYSTEM_STATUS_VALUES.has(formatStatusValue(rawNew));
+        if (oldIsSystem || newIsSystem) {
           continue;
         }
       } catch {
