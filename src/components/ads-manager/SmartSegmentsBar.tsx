@@ -28,7 +28,13 @@ const DIGITAL_SEGMENTS: SegmentDef[] = [
     color: 'bg-red-100 border-red-200',
     textColor: 'text-red-700',
     presetId: 'kill-list-view',
-    test: (c) => c.status === 'ACTIVE' && c.metrics.roas < 1.0 && c.metrics.spend > 20,
+    // kill-list: (spend > 30 AND conversions = 0) OR (roas < 0.8 AND spend > 20)
+    test: (c) =>
+      c.status === 'ACTIVE' &&
+      (
+        (c.metrics.spend > 30 && c.metrics.conversions === 0) ||
+        (c.metrics.roas < 0.8 && c.metrics.spend > 20)
+      ),
     actionLabel: 'Turn Off',
   },
   {
@@ -38,7 +44,8 @@ const DIGITAL_SEGMENTS: SegmentDef[] = [
     color: 'bg-amber-100 border-amber-200',
     textColor: 'text-amber-700',
     presetId: 'performance',
-    test: (c) => c.status === 'ACTIVE' && c.metrics.roas >= 1.0 && c.metrics.roas < 2.5 && c.metrics.spend > 10,
+    // needs-review: roas < 1.0 AND roas >= 0.8 AND spend > 15
+    test: (c) => c.status === 'ACTIVE' && c.metrics.roas >= 0.8 && c.metrics.roas < 1.0 && c.metrics.spend > 15,
   },
   {
     id: 'scale-now',
@@ -47,7 +54,8 @@ const DIGITAL_SEGMENTS: SegmentDef[] = [
     color: 'bg-green-100 border-green-200',
     textColor: 'text-green-700',
     presetId: 'scale-view',
-    test: (c, trend7d) => c.status === 'ACTIVE' && c.metrics.roas >= 2.5 && (trend7d === null || trend7d >= -0.1),
+    // scale-now: roas >= 1.4 AND 7d trend >= -5%
+    test: (c, trend7d) => c.status === 'ACTIVE' && c.metrics.roas >= 1.4 && (trend7d === null || trend7d >= -0.05),
     actionLabel: 'Scale Budget',
   },
   {
@@ -57,7 +65,8 @@ const DIGITAL_SEGMENTS: SegmentDef[] = [
     color: 'bg-blue-100 border-blue-200',
     textColor: 'text-blue-700',
     presetId: 'performance',
-    test: (c, trend7d) => c.status === 'ACTIVE' && c.metrics.roas > 1.5 && (trend7d === null || trend7d > 0),
+    // top-7d: roas >= 1.2 AND trend >= 0
+    test: (c, trend7d) => c.status === 'ACTIVE' && c.metrics.roas >= 1.2 && (trend7d === null || trend7d >= 0),
   },
   {
     id: 'learning',
@@ -66,7 +75,8 @@ const DIGITAL_SEGMENTS: SegmentDef[] = [
     color: 'bg-purple-100 border-purple-200',
     textColor: 'text-purple-700',
     presetId: 'performance',
-    test: (c) => c.status === 'ACTIVE' && c.metrics.spend < 50 && c.metrics.conversions < 7,
+    // learning: conversions < 5 AND spend < 50
+    test: (c) => c.status === 'ACTIVE' && c.metrics.conversions < 5 && c.metrics.spend < 50,
   },
   {
     id: 'fatigue',
@@ -75,7 +85,8 @@ const DIGITAL_SEGMENTS: SegmentDef[] = [
     color: 'bg-orange-100 border-orange-200',
     textColor: 'text-orange-700',
     presetId: 'creative-health',
-    test: (c) => c.status === 'ACTIVE' && c.metrics.frequency > 3.5,
+    // fatigue: frequency > 3.5 AND roas < 1.3
+    test: (c) => c.status === 'ACTIVE' && c.metrics.frequency > 3.5 && c.metrics.roas < 1.3,
     actionLabel: 'Pause',
   },
 ];

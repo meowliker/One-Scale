@@ -9,16 +9,17 @@ interface PerformanceTrendProps {
 
 /**
  * Returns a hex color based on the absolute ROAS value using product-defined thresholds:
- *   0        → grey  (no data / no spend)
- *   < 1.0    → red   (bad)
+ *   0        → grey   (no data / no spend)
+ *   < 1.0    → red    (bad)
  *   1.0–1.3  → orange (ok)
- *   1.3–1.6  → green (good)
- *   >= 1.6   → green (very good)
+ *   1.3–1.6  → amber  (good)
+ *   >= 1.6   → green  (very good)
  */
 function getRoasColor(roas: number): string {
   if (roas === 0) return '#aeaeb2'; // grey
   if (roas < 1.0) return '#ff3b30'; // red
   if (roas < 1.3) return '#ff9500'; // orange
+  if (roas < 1.6) return '#ffcc00'; // amber/yellow
   return '#34c759'; // green
 }
 
