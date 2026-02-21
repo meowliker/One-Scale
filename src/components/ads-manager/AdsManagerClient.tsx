@@ -1762,14 +1762,14 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
           <table className="w-full min-w-[1200px] apple-table">
             <thead>
               <tr className="sticky top-0 z-20 bg-[#fbfbfd]">
-                <th className="w-10 whitespace-nowrap px-3 py-2 text-left">
+                <th className="w-10 whitespace-nowrap px-3 py-2 text-left sticky left-0 z-20 bg-[#f5f5f7]">
                   <Checkbox
                     checked={allSelected}
                     onChange={handleSelectAll}
                     indeterminate={someSelected}
                   />
                 </th>
-                <th className="w-12 whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.04em] text-[#86868b]">
+                <th className="w-12 whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.04em] text-[#86868b] sticky left-[40px] z-20 bg-[#f5f5f7]">
                   On/Off
                 </th>
                 <th
@@ -1906,7 +1906,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
             {sortedCampaigns.length > 0 && (
               <tfoot>
                 <tr className="border-t-2 border-[#0071e3]/20 bg-[#f0f4ff]">
-                  <td colSpan={3} className="whitespace-nowrap px-3 py-2.5 text-[12px] font-bold text-[#1d1d1f]">
+                  <td colSpan={3} className="whitespace-nowrap px-3 py-2.5 text-[12px] font-bold text-[#1d1d1f] sticky left-0 z-10 bg-[#f0f4ff]">
                     Total — {totals.activeCampaigns} active
                   </td>
                   <td className="whitespace-nowrap px-3 py-2 text-[12px] text-[#aeaeb2]">&mdash;</td>

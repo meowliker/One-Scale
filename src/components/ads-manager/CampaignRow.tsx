@@ -85,12 +85,12 @@ export function CampaignRow({
       )}
     >
       {/* Checkbox */}
-      <td className="w-10 whitespace-nowrap px-3 py-2">
+      <td className="w-10 whitespace-nowrap px-3 py-2 sticky left-0 z-10 bg-white group-hover:bg-[#f5f5f7] transition-colors duration-150">
         <Checkbox checked={isSelected} onChange={onToggleSelect} />
       </td>
 
       {/* Toggle */}
-      <td className="w-12 whitespace-nowrap px-3 py-2">
+      <td className="w-12 whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 bg-white group-hover:bg-[#f5f5f7] transition-colors duration-150">
         <Toggle
           checked={isActive}
           onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
