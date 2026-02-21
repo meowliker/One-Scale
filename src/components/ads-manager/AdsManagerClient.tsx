@@ -1162,12 +1162,60 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
 
   // Filter campaigns by search and status
   const filteredCampaigns = useMemo(() => {
-    return campaignsWithAppPixel.filter((c) => {
+    let filteredList = campaignsWithAppPixel.filter((c) => {
       const matchesSearch = c.name.toLowerCase().includes(search.toLowerCase());
       const matchesStatus = statusFilter === 'all' || c.status === statusFilter;
       return matchesSearch && matchesStatus;
     });
-  }, [campaignsWithAppPixel, search, statusFilter]);
+
+    // Smart segment filtering
+    if (activeSegment) {
+      filteredList = filteredList.filter(campaign => {
+        const metrics = campaign.metrics;
+        const spend = metrics.spend ?? 0;
+        const roas = metrics.roas ?? 0;
+        const conversions = metrics.conversions ?? 0;
+        const sparkline = sparklineData[campaign.id] ?? [];
+
+        // Compute 7-day ROAS trend from sparkline
+        const roasPoints = sparkline.map(p => p.roas).filter((v): v is number => v !== undefined && v !== null);
+        const trend7d = roasPoints.length >= 2
+          ? ((roasPoints[roasPoints.length - 1] - roasPoints[0]) / Math.max(roasPoints[0], 0.01)) * 100
+          : 0;
+
+        switch (activeSegment) {
+          case 'kill-list':
+            return (spend > 30 && conversions === 0) || (roas < 0.8 && spend > 20);
+          case 'needs-review':
+            return roas < 1.0 && roas >= 0.8 && spend > 15;
+          case 'scale-now':
+            return roas >= 1.4 && trend7d >= -5;
+          case 'top-7d':
+            return roas >= 1.2 && trend7d >= 0;
+          case 'learning':
+            return campaign.status === 'ACTIVE' && conversions < 5 && spend < 50;
+          case 'fatigue':
+            return (metrics.frequency ?? 0) > 3.5 && roas < 1.3;
+          default:
+            return true;
+        }
+      });
+    }
+
+    // Column value filters
+    if (columnFilters.length > 0) {
+      filteredList = filteredList.filter(campaign => {
+        return columnFilters.every(filter => {
+          const value = (campaign.metrics as unknown as Record<string, number>)[filter.metricKey] ?? 0;
+          if (filter.min !== null && value < filter.min) return false;
+          if (filter.max !== null && value > filter.max) return false;
+          return true;
+        });
+      });
+    }
+
+    return filteredList;
+  }, [campaignsWithAppPixel, search, statusFilter, activeSegment, columnFilters, sparklineData]);
 
   // Sort handler: cycles null -> asc -> desc -> null
   const handleSort = useCallback((key: string) => {
@@ -1523,6 +1571,25 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     }
   }, [allSelected, allEntityIds, clearSelection, selectAll]);
 
+  const handleBulkToggleStatus = useCallback(async (campaignIds: string[], newStatus: 'ACTIVE' | 'PAUSED') => {
+    // Optimistically update UI
+    setCampaigns(prev => prev.map(c =>
+      campaignIds.includes(c.id) ? { ...c, status: newStatus } : c
+    ));
+    // TODO: wire to real API when backend is ready
+    console.log(`Bulk ${newStatus} for campaigns:`, campaignIds);
+  }, []);
+
+  const handleBulkChangeBudget = useCallback(async (campaignIds: string[], changePercent: number) => {
+    setCampaigns(prev => prev.map(c => {
+      if (!campaignIds.includes(c.id)) return c;
+      const currentBudget = c.dailyBudget ?? 0;
+      const newBudget = Math.round(currentBudget * (1 + changePercent / 100));
+      return { ...c, dailyBudget: newBudget };
+    }));
+    console.log(`Bulk budget change ${changePercent}% for campaigns:`, campaignIds);
+  }, []);
+
   const mergedIssues = useMemo(() => {
     const localIssues = extractLocalPolicyIssues(campaigns);
     const merged = [...prefetchedIssues, ...localIssues];
@@ -1656,6 +1723,20 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         syncPercent={syncPercent}
         attributionCoverage={attributionCoverage}
       />
+
+      <SmartSegmentsBar
+        campaigns={campaigns}
+        sparklineData={sparklineData}
+      />
+
+      {activeSegment && (
+        <BulkActionPanel
+          segment={activeSegment}
+          filteredCampaigns={filteredCampaigns}
+          onToggleStatus={handleBulkToggleStatus}
+          onChangeBudget={handleBulkChangeBudget}
+        />
+      )}
 
       {showErrorCenter && (
         <AdsIssuesPanel
