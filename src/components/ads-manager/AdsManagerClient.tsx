@@ -32,6 +32,7 @@ import { getBlendedMetricsForRange, getTimeSeriesForRange, getTopCampaignsForRan
 import { getPnLSummary, getDailyPnL, getProducts } from '@/services/pnl';
 import { getProductPnL } from '@/services/productPnL';
 import {
+  getCampaigns,
   updateCampaignStatus,
   updateAdSetStatus,
   updateAdStatus,
@@ -53,6 +54,9 @@ import { AIRecommendations } from './AIRecommendations';
 import { AdsIssuesPanel, type AdIssue } from './AdsIssuesPanel';
 import { Checkbox } from '@/components/ui/Checkbox';
 import { DraggableColumnHeader } from '@/components/columns/DraggableColumnHeader';
+import { useSmartFilterStore, type SmartSegmentId } from '@/stores/smartFilterStore';
+import { SmartSegmentsBar } from './SmartSegmentsBar';
+import { BulkActionPanel } from './BulkActionPanel';
 
 // Sort indicator for fixed column headers
 function FixedSortIndicator({ active, direction }: { active: boolean; direction: 'asc' | 'desc' | null }) {
@@ -334,6 +338,11 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   // Sparkline data fetched from the real Meta API (keyed by entity ID)
   const [sparklineData, setSparklineData] = useState<Record<string, SparklineDataPoint[]>>({});
 
+  // Separate 7-day campaign data exclusively for AI Recommendations.
+  // AI Recommendations always use the last 7 days regardless of the user's date filter,
+  // because today's partial data is noisy and 7 days gives enough signal to detect patterns.
+  const [last7CampaignsForRecs, setLast7CampaignsForRecs] = useState<Campaign[]>(initialCampaigns);
+
   // Activity data fetched from Meta Activities API (keyed by entity ID)
   const [activityData, setActivityData] = useState<Record<string, EntityAction[]>>({});
   // Track whether full activity history (90 days) has been loaded
@@ -514,6 +523,33 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     };
   }, [activeStoreId, fetchAppPixelMetrics]);
 
+  // Fetch a dedicated last-7-days campaign dataset for AI Recommendations.
+  // This runs independently of the user's selected date filter so that recommendations
+  // are always based on 7 days of data — today's partial data is too noisy for signal detection.
+  useEffect(() => {
+    if (!activeStoreId) return;
+    let cancelled = false;
+
+    const fetch7DayCampaigns = async () => {
+      try {
+        const since = daysAgoInTimezone(7);
+        const until = daysAgoInTimezone(1); // yesterday (7 complete days)
+        const data = await getCampaigns({ since, until }, { preferCache: true });
+        if (!cancelled && data.length > 0) {
+          setLast7CampaignsForRecs(data);
+        }
+      } catch {
+        // Silently fall back to the currently loaded campaigns (initialCampaigns)
+      }
+    };
+
+    void fetch7DayCampaigns();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeStoreId]);
+
   // Auto-trigger Shopify order backfill so pixel ROAS data is fresh.
   // Backfill days match the selected date range so all pixel data is available.
   // Re-triggers when date range changes (e.g., switching from "Today" to "Last 7 Days").
@@ -659,6 +695,8 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   } = useCampaignStore();
 
   const { columnOrder, reorderColumns } = useColumnPresetStore();
+
+  const { activeSegment, columnFilters } = useSmartFilterStore();
 
   // DnD sensors
   const sensors = useSensors(
@@ -1194,11 +1232,13 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     return ids;
   }, [filteredCampaigns]);
 
-  // Generate mock hourly data from campaign metrics for dayparting analysis
+  // Generate mock hourly data from 7-day campaign metrics for dayparting analysis.
+  // Uses last7CampaignsForRecs (not the current date-filtered campaigns) so dayparting
+  // recommendations always reflect a full week of patterns, not just today's partial data.
   const hourlyPnLData = useMemo(() => {
-    const totalSpend = campaigns.reduce((s, c) => s + c.metrics.spend, 0);
-    const totalRevenue = campaigns.reduce((s, c) => s + c.metrics.revenue, 0);
-    const totalConversions = campaigns.reduce((s, c) => s + c.metrics.conversions, 0);
+    const totalSpend = last7CampaignsForRecs.reduce((s, c) => s + c.metrics.spend, 0);
+    const totalRevenue = last7CampaignsForRecs.reduce((s, c) => s + c.metrics.revenue, 0);
+    const totalConversions = last7CampaignsForRecs.reduce((s, c) => s + c.metrics.conversions, 0);
     if (totalSpend === 0) return [];
 
     // Generate 7 days of hourly data
@@ -1816,9 +1856,9 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         onClearSelection={clearSelection}
       />}
 
-      {/* AI Recommendations */}
+      {/* AI Recommendations — always uses last 7 days of data for reliable signal detection */}
       {!showErrorCenter && <AIRecommendations
-        campaigns={campaigns}
+        campaigns={last7CampaignsForRecs}
         hourlyData={hourlyPnLData}
         onCampaignStatusChange={handleCampaignStatusChange}
         onAdSetStatusChange={handleAdSetStatusChange}

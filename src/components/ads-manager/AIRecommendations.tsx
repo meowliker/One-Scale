@@ -250,9 +250,14 @@ export function AIRecommendations({
             )}
           </div>
           <div className="text-left">
-            <h3 className="text-base font-semibold text-text-primary">AI Recommendations</h3>
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-semibold text-text-primary">AI Recommendations</h3>
+              <span className="inline-flex items-center rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700">
+                Last 7 Days
+              </span>
+            </div>
             <p className="text-xs text-text-muted">
-              {stats.total} actionable {stats.total === 1 ? 'insight' : 'insights'} for your account
+              {stats.total} actionable {stats.total === 1 ? 'insight' : 'insights'} · analyzed from 7-day performance window
             </p>
           </div>
         </div>

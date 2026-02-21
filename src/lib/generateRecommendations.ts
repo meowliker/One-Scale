@@ -91,8 +91,56 @@ function collectActiveAdSets(campaigns: Campaign[]): { adSet: AdSet; campaign: C
 
 // ---- recommendation generators ----
 
+// ---- Digital product thresholds ----
+// For digital products (high margin ~70-85%, no shipping cost):
+// ROAS >= 1.2x = profitable minimum
+// ROAS >= 2.0x = good
+// ROAS >= 1.4x + growing trend = scale candidate
+// Underperforming = ROAS < 1.2x AND spend > $30 over 7 days
+// Kill signal = spend > $30 AND conversions === 0 over 7 days
+// Scale signal = ROAS > 1.4x AND growing
+// Fatigue signal = ROAS declined >15% over 7 days AND frequency > 3
+
+const DIGITAL_ROAS_MIN = 1.2;       // minimum profitable ROAS for digital products
+const DIGITAL_ROAS_GOOD = 2.0;      // good ROAS for digital products
+const DIGITAL_ROAS_SCALE = 1.4;     // scale threshold (with growth trend)
+const DIGITAL_SPEND_THRESHOLD = 30; // minimum spend to trigger kill/underperform recs
+
 /**
- * Critical - Pause underperforming ad sets: ROAS < 1.0 AND spend > $200
+ * Critical - Zero conversions over 7 days with meaningful spend: kill recommendation
+ */
+function checkZeroConversionKill(campaigns: Campaign[]): AIRecommendation[] {
+  const recs: AIRecommendation[] = [];
+  const activeAdSets = collectActiveAdSets(campaigns);
+
+  for (const { adSet, campaign } of activeAdSets) {
+    const { spend, conversions } = adSet.metrics;
+    if (spend > DIGITAL_SPEND_THRESHOLD && conversions === 0) {
+      recs.push(
+        makeRec(
+          'critical',
+          'status',
+          'Zero Conversions — Kill This Ad Set',
+          `Ad set "${adSet.name}" in "${campaign.name}" has spent ${fmt$(spend)} over the last 7 days with 0 conversions. For a digital product, this spend produces zero revenue.`,
+          'Pause this ad set immediately. The targeting or creative is not reaching buyers.',
+          `Stop the bleed: save ~${fmt$(adSet.dailyBudget)}/day`,
+          {
+            type: 'pause_entity',
+            entityType: 'adset',
+            entityId: adSet.id,
+            entityName: adSet.name,
+            payload: { newStatus: 'PAUSED' },
+          },
+          5
+        )
+      );
+    }
+  }
+  return recs;
+}
+
+/**
+ * Critical - Pause underperforming ad sets: ROAS < 1.2 (digital min) AND spend > $30
  */
 function checkUnderperformingAdSets(
   campaigns: Campaign[]
@@ -102,13 +150,15 @@ function checkUnderperformingAdSets(
 
   for (const { adSet, campaign } of activeAdSets) {
     const { roas, spend, cpa, conversions } = adSet.metrics;
-    if (roas < 1.0 && spend > 200) {
+    // Skip zero-conversion case — handled by checkZeroConversionKill
+    if (conversions === 0) continue;
+    if (roas < DIGITAL_ROAS_MIN && spend > DIGITAL_SPEND_THRESHOLD) {
       recs.push(
         makeRec(
           'critical',
           'status',
           'Pause Underperforming Ad Set',
-          `Ad set "${adSet.name}" in "${campaign.name}" has a ROAS of ${fmtX(roas)} with ${fmt$(spend)} in spend and only ${conversions} conversions (CPA: ${fmt$(cpa)}). This ad set is losing money.`,
+          `Ad set "${adSet.name}" in "${campaign.name}" has a ROAS of ${fmtX(roas)} over the last 7 days with ${fmt$(spend)} in spend and only ${conversions} conversions (CPA: ${fmt$(cpa)}). For a digital product, minimum profitable ROAS is 1.2x — this ad set is losing money.`,
           'Pause this ad set immediately and reallocate budget to top-performing ad sets.',
           `Expected savings: ~${fmt$(adSet.dailyBudget)}/day`,
           {
@@ -213,7 +263,8 @@ function checkQualityScore(campaigns: Campaign[]): AIRecommendation[] {
 }
 
 /**
- * Warning - Creative Fatigue: frequency > 1.8 AND CTR < 1.5%
+ * Warning - Creative Fatigue: frequency > 3 AND CTR < 1.5% (7-day signal for digital products)
+ * For digital products, audience saturation is the primary creative killer.
  */
 function checkCreativeFatigue(campaigns: Campaign[]): AIRecommendation[] {
   const recs: AIRecommendation[] = [];
@@ -221,14 +272,14 @@ function checkCreativeFatigue(campaigns: Campaign[]): AIRecommendation[] {
 
   for (const { ad, adSet } of activeAds) {
     const { frequency, ctr } = ad.metrics;
-    if (frequency > 1.8 && ctr < 1.5) {
+    if (frequency > 3 && ctr < 1.5) {
       recs.push(
         makeRec(
           'warning',
           'creative',
           'Creative Fatigue Detected',
-          `Ad "${ad.name}" in "${adSet.name}" has a frequency of ${frequency.toFixed(2)} and CTR has dropped to ${fmtPct(ctr)}. The creative is losing effectiveness as the audience sees it repeatedly.`,
-          'Pause this ad and launch fresh creative variants with updated messaging.',
+          `Ad "${ad.name}" in "${adSet.name}" has a 7-day frequency of ${frequency.toFixed(2)}x and CTR has dropped to ${fmtPct(ctr)}. Over-saturation is killing engagement — your audience is tuning out this creative.`,
+          'Pause this ad and launch fresh creative variants with updated messaging, new angles, or a different format.',
           'Could improve CTR by 30-50% with fresh creative',
           {
             type: 'refresh_creative',
@@ -325,7 +376,8 @@ function checkDiminishingReturns(campaigns: Campaign[]): AIRecommendation[] {
 }
 
 /**
- * Opportunity - Scale Winner: ad set ROAS > 3.0 AND spend > $500
+ * Opportunity - Scale Winner: ad set ROAS > 1.4 (digital scale threshold) AND spend > $30
+ * For digital products with ~75% margins, 1.4x ROAS is profitable and scale-ready.
  */
 function checkScaleWinners(campaigns: Campaign[]): AIRecommendation[] {
   const recs: AIRecommendation[] = [];
@@ -333,17 +385,17 @@ function checkScaleWinners(campaigns: Campaign[]): AIRecommendation[] {
 
   for (const { adSet, campaign } of activeAdSets) {
     const { roas, spend, cpa } = adSet.metrics;
-    if (roas > 3.0 && spend > 500 && campaign.dailyBudget < 10000) {
-      const increasePercent = roas > 4.0 ? 50 : 30;
+    if (roas > DIGITAL_ROAS_SCALE && spend > DIGITAL_SPEND_THRESHOLD && campaign.dailyBudget < 10000) {
+      const increasePercent = roas > DIGITAL_ROAS_GOOD ? 50 : roas > 1.7 ? 30 : 20;
       const newBudget = Math.round(adSet.dailyBudget * (1 + increasePercent / 100));
       recs.push(
         makeRec(
           'opportunity',
           'budget',
           'Scale Top Performer',
-          `Ad set "${adSet.name}" in "${campaign.name}" has maintained ${fmtX(roas)} ROAS with consistent CPA (${fmt$(cpa)}) on ${fmt$(spend)} total spend. There's room to scale without risking performance.`,
-          `Increase daily budget from ${fmt$(adSet.dailyBudget)} to ${fmt$(newBudget)} (${increasePercent}% increase) to capture more conversions.`,
-          `Projected +${Math.round(((newBudget - adSet.dailyBudget) / cpa) * 7)} conversions/week at similar ROAS`,
+          `Ad set "${adSet.name}" in "${campaign.name}" has maintained ${fmtX(roas)} ROAS over the last 7 days with consistent CPA (${fmt$(cpa)}) on ${fmt$(spend)} total spend. At this ROAS, digital product margins are healthy — there's room to scale.`,
+          `Increase daily budget from ${fmt$(adSet.dailyBudget)} to ${fmt$(newBudget)} (${increasePercent}% increase) to capture more conversions at profitable CPA.`,
+          cpa > 0 ? `Projected +${Math.round(((newBudget - adSet.dailyBudget) / cpa) * 7)} conversions/week at similar ROAS` : `Projected ${increasePercent}% more revenue at current ROAS`,
           {
             type: 'increase_budget',
             entityType: 'adset',
@@ -484,15 +536,15 @@ function checkAccountSpendEfficiency(campaigns: Campaign[]): AIRecommendation[] 
 
   const accountRoas = totalRevenue / totalSpend;
 
-  if (accountRoas < 2.0) {
+  if (accountRoas < DIGITAL_ROAS_MIN) {
     recs.push(
       makeRec(
         'warning',
         'budget',
         'Account-Level ROAS Below Profitability Threshold',
-        `Your account-level ROAS is ${fmtX(accountRoas)}. For profitability after margins, you need at least 2.0x. Focus budget on your top 3 campaigns.`,
-        'Audit all campaigns: pause anything below 1.5x ROAS and shift budget to top performers.',
-        `Improving account ROAS to 2.0x would generate ~${fmt$(totalSpend * 2.0 - totalRevenue)} more revenue on current spend`,
+        `Your account-level ROAS is ${fmtX(accountRoas)} over the last 7 days. For a digital product with ~75% margins, you need at least ${fmtX(DIGITAL_ROAS_MIN)} to break even on ad spend. Focus budget on campaigns that are actually converting.`,
+        `Audit all campaigns: pause anything below ${fmtX(DIGITAL_ROAS_MIN)} ROAS and shift budget to top performers above ${fmtX(DIGITAL_ROAS_SCALE)}.`,
+        `Improving account ROAS to ${fmtX(DIGITAL_ROAS_GOOD)} would generate ~${fmt$(totalSpend * DIGITAL_ROAS_GOOD - totalRevenue)} more revenue on current spend`,
         {
           type: 'decrease_budget',
           entityType: 'campaign',
@@ -503,13 +555,13 @@ function checkAccountSpendEfficiency(campaigns: Campaign[]): AIRecommendation[] 
         10
       )
     );
-  } else if (accountRoas > 4.0) {
+  } else if (accountRoas > DIGITAL_ROAS_GOOD) {
     recs.push(
       makeRec(
         'opportunity',
         'budget',
         'Account ROAS Supports Scaling',
-        `Your account ROAS is ${fmtX(accountRoas)}, which is excellent. You have room to increase spend by 20-30% while maintaining profitability.`,
+        `Your account ROAS is ${fmtX(accountRoas)} over the last 7 days — excellent for a digital product. You have room to increase spend by 20-30% while maintaining healthy profitability.`,
         'Increase overall account budget by 25% across top-performing campaigns.',
         `Projected additional revenue: ~${fmt$(totalSpend * 0.25 * accountRoas)}/week at current ROAS`,
         {
@@ -596,17 +648,17 @@ function checkScalingReadiness(campaigns: Campaign[]): AIRecommendation[] {
 
     const { roas, spend, conversions, cpa } = campaign.metrics;
 
-    // Scaling criteria: ROAS > 2.5, spend > $1000, stable CPA (>20 conversions)
-    if (roas > 2.5 && spend > 1000 && conversions > 20) {
+    // Scaling criteria for digital products: ROAS > 1.4, spend > $30, stable CPA (>10 conversions)
+    if (roas > DIGITAL_ROAS_SCALE && spend > DIGITAL_SPEND_THRESHOLD && conversions > 10) {
       const newBudget = Math.round(campaign.dailyBudget * 1.2);
       recs.push(
         makeRec(
           'opportunity',
           'budget',
           'Campaign Ready to Scale',
-          `Campaign "${campaign.name}" is scaling-ready: ${fmtX(roas)} ROAS, ${conversions} conversions, stable CPA at ${fmt$(cpa)}. Recommend 20% budget increase.`,
+          `Campaign "${campaign.name}" is scaling-ready over the last 7 days: ${fmtX(roas)} ROAS, ${conversions} conversions, stable CPA at ${fmt$(cpa)}. For a digital product, this ROAS is above the profitable threshold — recommend 20% budget increase.`,
           `Increase daily budget from ${fmt$(campaign.dailyBudget)} to ${fmt$(newBudget)} to capture more conversions at profitable CPA.`,
-          `Projected +${Math.round(((newBudget - campaign.dailyBudget) / cpa) * 7)} conversions/week at current CPA`,
+          cpa > 0 ? `Projected +${Math.round(((newBudget - campaign.dailyBudget) / cpa) * 7)} conversions/week at current CPA` : `Projected 20% more revenue at current ROAS`,
           {
             type: 'increase_budget',
             entityType: 'campaign',
@@ -913,7 +965,7 @@ function checkMinRoasOpportunity(campaigns: Campaign[]): AIRecommendation[] {
     if (campaign.status !== 'ACTIVE') continue;
     if (campaign.objective !== 'CONVERSIONS') continue;
     if (campaign.bidStrategy === 'MINIMUM_ROAS') continue;
-    if (campaign.metrics.roas <= 2.0 || campaign.metrics.spend === 0) continue;
+    if (campaign.metrics.roas <= DIGITAL_ROAS_MIN || campaign.metrics.spend === 0) continue;
 
     // Conservative target: current ROAS * 0.7
     const targetRoas = Math.round(campaign.metrics.roas * 0.7 * 100) / 100;
@@ -1252,6 +1304,90 @@ function checkTopPerformerScaling(campaigns: Campaign[]): AIRecommendation[] {
   return recs;
 }
 
+/**
+ * Warning - Budget Cap Detection: daily spend consistently hitting daily budget limit (>90%)
+ * For digital products this means leaving money on the table during profitable hours.
+ */
+function checkBudgetCapped(campaigns: Campaign[]): AIRecommendation[] {
+  const recs: AIRecommendation[] = [];
+
+  for (const campaign of campaigns) {
+    if (campaign.status !== 'ACTIVE') continue;
+    if (campaign.dailyBudget === 0) continue;
+
+    // Estimate average daily spend from 7-day total
+    const estimatedDailySpend = campaign.metrics.spend / 7;
+    const spendRatio = estimatedDailySpend / campaign.dailyBudget;
+
+    // Trigger if consistently spending >90% of daily budget AND campaign is profitable
+    if (spendRatio > 0.9 && campaign.metrics.roas >= DIGITAL_ROAS_MIN) {
+      const suggestedBudget = Math.round(campaign.dailyBudget * 1.3);
+      recs.push(
+        makeRec(
+          'warning',
+          'budget',
+          'Budget Capped — Increase Budget to Capture More Sales',
+          `Campaign "${campaign.name}" is spending ${Math.round(spendRatio * 100)}% of its ${fmt$(campaign.dailyBudget)}/day budget on average over the last 7 days (${fmtX(campaign.metrics.roas)} ROAS). The budget cap is limiting delivery during profitable hours.`,
+          `Increase daily budget from ${fmt$(campaign.dailyBudget)} to ${fmt$(suggestedBudget)} (+30%) to remove the delivery constraint. Since this campaign is profitable, more spend means more revenue.`,
+          `Unlocking ~${fmt$(campaign.dailyBudget * 0.3)}/day in additional budget could generate ~${fmt$(campaign.dailyBudget * 0.3 * campaign.metrics.roas)}/day more revenue`,
+          {
+            type: 'increase_budget',
+            entityType: 'campaign',
+            entityId: campaign.id,
+            entityName: campaign.name,
+            payload: {
+              newBudget: suggestedBudget,
+              currentBudget: campaign.dailyBudget,
+            },
+          },
+          20
+        )
+      );
+    }
+  }
+  return recs;
+}
+
+/**
+ * Warning - High CPA vs AOV: CPA > 50% of AOV signals poor unit economics for digital products.
+ * For digital products, CPA should be well below AOV to leave room for margin.
+ */
+function checkCPAvsAOV(campaigns: Campaign[]): AIRecommendation[] {
+  const recs: AIRecommendation[] = [];
+
+  const activeCampaigns = campaigns.filter(
+    (c) => c.status === 'ACTIVE' && c.metrics.conversions > 0 && c.metrics.aov > 0
+  );
+
+  for (const campaign of activeCampaigns) {
+    const { cpa, aov, conversions, spend } = campaign.metrics;
+    const cpaAovRatio = cpa / aov;
+
+    // Flag if CPA > 50% of AOV with meaningful data (>$30 spend, >5 conversions)
+    if (cpaAovRatio > 0.5 && spend > DIGITAL_SPEND_THRESHOLD && conversions > 5) {
+      recs.push(
+        makeRec(
+          'warning',
+          'budget',
+          'CPA Too High Relative to Order Value',
+          `Campaign "${campaign.name}" has a CPA of ${fmt$(cpa)} against an AOV of ${fmt$(aov)} (${Math.round(cpaAovRatio * 100)}% CPA-to-AOV ratio). For a digital product with ~75% margins, CPA should be below 50% of AOV to remain profitable.`,
+          'Tighten targeting (use 1-3% lookalikes or retargeting), refresh creative to improve CVR, or test a lower-funnel event to reduce CPA.',
+          `Reducing CPA to 40% of AOV (${fmt$(aov * 0.4)}) would save ~${fmt$((cpa - aov * 0.4) * conversions / 7)}/day at current conversion volume`,
+          {
+            type: 'adjust_targeting',
+            entityType: 'campaign',
+            entityId: campaign.id,
+            entityName: campaign.name,
+            payload: {},
+          },
+          55
+        )
+      );
+    }
+  }
+  return recs;
+}
+
 // ---- dayparting analyzers ----
 
 const HOUR_LABELS = [
@@ -1546,6 +1682,11 @@ function checkPeakHourOpportunity(hourlyData: HourlyPnLEntry[]): AIRecommendatio
 
 // ---- main export ----
 
+/**
+ * generateRecommendations always expects campaigns with 7-day metrics for reliable signal.
+ * Callers are responsible for ensuring the campaigns data covers a 7-day window,
+ * regardless of what the user has selected as their main table date filter.
+ */
 export function generateRecommendations(
   campaigns: Campaign[],
   hourlyData?: HourlyPnLEntry[]
@@ -1553,15 +1694,19 @@ export function generateRecommendations(
   resetIdCounter();
 
   const allRecs: AIRecommendation[] = [
-    // Critical
+    // Critical — kill signals (zero conversions with meaningful spend)
+    ...checkZeroConversionKill(campaigns),
+    // Critical — underperforming (ROAS below digital minimum)
     ...checkUnderperformingAdSets(campaigns),
     ...checkHighCPAAds(campaigns),
     ...checkQualityScore(campaigns),
-    // Warning
+    // Warning — efficiency signals
     ...checkCreativeFatigue(campaigns),
     ...checkHighFrequency(campaigns),
     ...checkDiminishingReturns(campaigns),
-    // Opportunity
+    ...checkBudgetCapped(campaigns),
+    ...checkCPAvsAOV(campaigns),
+    // Opportunity — scale signals (digital ROAS thresholds)
     ...checkScaleWinners(campaigns),
     ...checkReallocateBudget(campaigns),
     ...checkDuplicateWinningCreative(campaigns),
