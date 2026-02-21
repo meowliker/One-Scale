@@ -16,6 +16,7 @@ import { COGSManager } from '@/components/pnl/COGSManager';
 import { LiveProfitTicker } from '@/components/pnl/LiveProfitTicker';
 import { PnLDayPartChart } from '@/components/pnl/PnLDayPartChart';
 import { ProductPnLSection } from '@/components/pnl/ProductPnLSection';
+import { formatCurrency } from '@/lib/utils';
 
 interface PnLDashboardClientProps {
   summary: PnLSummary;
@@ -81,10 +82,6 @@ export function PnLDashboardClient({
 
   const isDigital = productType === 'digital';
 
-  // Always compute date range fresh from the preset (uses current store timezone).
-  // This avoids stale Date objects from initial mount when timezone wasn't loaded yet.
-  // For custom ranges, use the stored custom range directly.
-  // Depends on dailyPnL to re-compute when data loads (timezone is then available).
   const dateRange = useMemo(() => {
     if (datePreset === 'custom' && customRange) return customRange;
     return getDateRange(datePreset);
@@ -115,7 +112,7 @@ export function PnLDashboardClient({
 
   return (
     <div className="space-y-6">
-      {/* Live ticker */}
+      {/* Live ticker hero */}
       <LiveProfitTicker netProfit={summary.today.netProfit} />
 
       {/* Date range selector */}
@@ -123,27 +120,57 @@ export function PnLDashboardClient({
         <DateRangePicker dateRange={dateRange} onRangeChange={handleDateRangeChange} />
       </div>
 
-      {/* Summary cards */}
+      {/* Summary KPI cards */}
       <PnLSummaryCards entry={activeEntry} isDigital={isDigital} />
 
       {/* Waterfall chart + Margin indicator */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
-          <PnLWaterfallChart entry={activeEntry} isDigital={isDigital} />
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+            <h3 className="text-base font-semibold text-gray-800 mb-4">Profit Waterfall</h3>
+            <PnLWaterfallChart entry={activeEntry} isDigital={isDigital} />
+          </div>
         </div>
-        <div className="lg:col-span-1">
-          <MarginIndicator
-            margin={activeEntry.margin}
-            netProfit={activeEntry.netProfit}
-          />
+        <div className="lg:col-span-1 space-y-4">
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+            <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">Margin</h3>
+            <MarginIndicator
+              margin={activeEntry.margin}
+              netProfit={activeEntry.netProfit}
+            />
+          </div>
+
+          {/* Quick stats */}
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+            <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">Quick Stats</h3>
+            <div className="space-y-3">
+              {[
+                { label: 'Revenue', value: activeEntry.revenue, color: 'text-emerald-600' },
+                { label: 'Total Costs', value: activeEntry.cogs + activeEntry.adSpend + activeEntry.shipping + activeEntry.fees + activeEntry.refunds, color: 'text-red-500' },
+                { label: 'Net Profit', value: activeEntry.netProfit, color: activeEntry.netProfit >= 0 ? 'text-emerald-600' : 'text-red-600' },
+              ].map((stat) => (
+                <div key={stat.label} className="flex items-center justify-between">
+                  <span className="text-xs text-gray-500">{stat.label}</span>
+                  <span className={`text-sm font-semibold tabular-nums ${stat.color}`}>
+                    {formatCurrency(stat.value)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Trend chart */}
-      <PnLTrendChart dailyPnL={dailyPnL} />
+      {/* Net Profit Trend chart */}
+      <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+        <h3 className="text-base font-semibold text-gray-800 mb-4">Net Profit Trend</h3>
+        <PnLTrendChart dailyPnL={dailyPnL} />
+      </div>
 
       {/* Daily P&L breakdown chart */}
-      <PnLDayPartChart dailyPnL={dailyPnL} />
+      <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+        <PnLDayPartChart dailyPnL={dailyPnL} />
+      </div>
 
       {/* Product-wise P&L */}
       {productPnL.length > 0 && (
@@ -160,8 +187,8 @@ export function PnLDashboardClient({
       {bottomTab === 'cogs' && <COGSManager products={products} />}
 
       {bottomTab === 'breakdown' && (
-        <div className="rounded-lg border border-border bg-surface-elevated p-6 shadow-sm">
-          <h3 className="mb-4 text-sm font-semibold text-text-primary">
+        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+          <h3 className="mb-4 text-sm font-semibold text-gray-800">
             Cost Breakdown
           </h3>
           <div className="space-y-3">
@@ -170,7 +197,7 @@ export function PnLDashboardClient({
               { label: 'Ad Spend', value: activeEntry.adSpend, color: 'bg-orange-500' },
               ...(!isDigital ? [{ label: 'Shipping', value: activeEntry.shipping, color: 'bg-amber-500' }] : []),
               { label: 'Transaction Fees', value: activeEntry.fees, color: 'bg-yellow-500' },
-              { label: 'Refunds', value: activeEntry.refunds, color: 'bg-rose-500' },
+              { label: 'Refunds', value: activeEntry.refunds, color: 'bg-violet-500' },
             ].map((item) => {
               const pct =
                 activeEntry.revenue > 0
@@ -179,15 +206,15 @@ export function PnLDashboardClient({
               return (
                 <div key={item.label}>
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-text-secondary">{item.label}</span>
-                    <span className="font-medium text-text-primary">
+                    <span className="text-gray-500">{item.label}</span>
+                    <span className="font-medium text-gray-800">
                       ${item.value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      <span className="ml-2 text-xs text-text-muted">
+                      <span className="ml-2 text-xs text-gray-400">
                         ({pct.toFixed(1)}%)
                       </span>
                     </span>
                   </div>
-                  <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-surface-hover">
+                  <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-gray-100">
                     <div
                       className={`h-full rounded-full ${item.color}`}
                       style={{ width: `${Math.min(pct, 100)}%` }}

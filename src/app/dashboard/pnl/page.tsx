@@ -254,12 +254,12 @@ export default function PnLPage() {
     <div className="space-y-6">
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-text-primary">P&L Tracking</h1>
-          <p className="text-sm text-text-secondary">
+          <h1 className="text-3xl font-bold text-gray-900">P&amp;L Tracking</h1>
+          <p className="text-gray-500 mt-1">
             Track your live profit and loss across all channels
           </p>
           {lastRefreshedLabel && (
-            <p className="text-xs text-text-muted mt-1">
+            <p className="text-xs text-gray-400 mt-1">
               Last refreshed: {lastRefreshedLabel}
             </p>
           )}
@@ -267,7 +267,7 @@ export default function PnLPage() {
         <button
           onClick={handleRefresh}
           disabled={isRefreshing}
-          className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg border border-border bg-surface-elevated text-text-secondary hover:text-text-primary hover:bg-surface-elevated/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-xl border border-gray-200 bg-white text-gray-600 hover:text-gray-900 hover:bg-gray-50 shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
           {isRefreshing ? 'Refreshing...' : 'Refresh'}

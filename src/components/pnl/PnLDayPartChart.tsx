@@ -146,49 +146,49 @@ export function PnLDayPartChart({ dailyPnL }: PnLDayPartChartProps) {
     if (!active || !payload || !payload.length) return null;
     const item = payload[0].payload;
     return (
-      <div className="rounded-lg border border-border bg-surface-elevated px-4 py-3 shadow-md">
-        <p className="mb-2 text-xs font-medium text-text-muted">{item.label}</p>
+      <div className="rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-lg">
+        <p className="mb-2 text-xs font-medium text-gray-400">{item.label}</p>
         <div className="space-y-1">
           <div className="flex items-center justify-between gap-6">
             <div className="flex items-center gap-2">
               <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: '#10b981' }} />
-              <span className="text-xs text-text-secondary">Revenue</span>
+              <span className="text-xs text-gray-500">Revenue</span>
             </div>
-            <span className="text-xs font-semibold text-text-primary">{formatCurrency(item.revenue)}</span>
+            <span className="text-xs font-semibold text-gray-800">{formatCurrency(item.revenue)}</span>
           </div>
           <div className="flex items-center justify-between gap-6">
             <div className="flex items-center gap-2">
               <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: '#f97316' }} />
-              <span className="text-xs text-text-secondary">Ad Spend</span>
+              <span className="text-xs text-gray-500">Ad Spend</span>
             </div>
-            <span className="text-xs font-semibold text-text-primary">{formatCurrency(item.adSpend)}</span>
+            <span className="text-xs font-semibold text-gray-800">{formatCurrency(item.adSpend)}</span>
           </div>
           <div className="flex items-center justify-between gap-6">
             <div className="flex items-center gap-2">
               <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: '#ef4444' }} />
-              <span className="text-xs text-text-secondary">COGS</span>
+              <span className="text-xs text-gray-500">COGS</span>
             </div>
-            <span className="text-xs font-semibold text-text-primary">{formatCurrency(item.cogs)}</span>
+            <span className="text-xs font-semibold text-gray-800">{formatCurrency(item.cogs)}</span>
           </div>
           {item.refunds > 0 && (
             <div className="flex items-center justify-between gap-6">
               <div className="flex items-center gap-2">
-                <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: '#f43f5e' }} />
-                <span className="text-xs text-text-secondary">Refunds</span>
+                <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: '#8b5cf6' }} />
+                <span className="text-xs text-gray-500">Refunds</span>
               </div>
-              <span className="text-xs font-semibold text-text-primary">{formatCurrency(item.refunds)}</span>
+              <span className="text-xs font-semibold text-gray-800">{formatCurrency(item.refunds)}</span>
             </div>
           )}
-          <div className="my-1 border-t border-border" />
+          <div className="my-1 border-t border-gray-100" />
           <div className="flex items-center justify-between gap-6">
             <div className="flex items-center gap-2">
-              <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#3b82f6' }} />
-              <span className="text-xs text-text-secondary">Net Profit</span>
+              <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#6366f1' }} />
+              <span className="text-xs text-gray-500">Net Profit</span>
             </div>
             <span
               className={cn(
                 'text-xs font-semibold',
-                item.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'
+                item.netProfit >= 0 ? 'text-emerald-600' : 'text-red-600'
               )}
             >
               {formatCurrency(item.netProfit)}
@@ -205,7 +205,7 @@ export function PnLDayPartChart({ dailyPnL }: PnLDayPartChartProps) {
         { label: 'Revenue', color: '#10b981', shape: 'square' },
         { label: 'Ad Spend', color: '#f97316', shape: 'square' },
         { label: 'COGS', color: '#ef4444', shape: 'square' },
-        { label: 'Net Profit', color: '#3b82f6', shape: 'line' },
+        { label: 'Net Profit', color: '#6366f1', shape: 'line' },
       ].map((item) => (
         <div key={item.label} className="flex items-center gap-1.5">
           {item.shape === 'square' ? (
@@ -219,7 +219,7 @@ export function PnLDayPartChart({ dailyPnL }: PnLDayPartChartProps) {
               style={{ backgroundColor: item.color }}
             />
           )}
-          <span className="text-xs text-text-muted">{item.label}</span>
+          <span className="text-xs text-gray-400">{item.label}</span>
         </div>
       ))}
     </div>
@@ -228,7 +228,7 @@ export function PnLDayPartChart({ dailyPnL }: PnLDayPartChartProps) {
   const renderGroupedBarChart = () => (
     <ResponsiveContainer width="100%" height={350}>
       <ComposedChart data={filteredData} margin={{ top: 8, right: 16, left: 16, bottom: 8 }}>
-        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1e2235" />
+        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
         <XAxis
           dataKey="label"
           tick={{ fontSize: 11, fill: '#94a3b8' }}
@@ -272,10 +272,10 @@ export function PnLDayPartChart({ dailyPnL }: PnLDayPartChartProps) {
           type="monotone"
           dataKey="netProfit"
           name="Net Profit"
-          stroke="#3b82f6"
+          stroke="#6366f1"
           strokeWidth={2.5}
-          dot={{ r: 4, fill: '#3b82f6', strokeWidth: 0 }}
-          activeDot={{ r: 6, fill: '#3b82f6', strokeWidth: 2, stroke: '#fff' }}
+          dot={{ r: 4, fill: '#6366f1', strokeWidth: 0 }}
+          activeDot={{ r: 6, fill: '#6366f1', strokeWidth: 2, stroke: '#fff' }}
         />
       </ComposedChart>
     </ResponsiveContainer>
@@ -284,7 +284,7 @@ export function PnLDayPartChart({ dailyPnL }: PnLDayPartChartProps) {
   const renderStackedBarChart = () => (
     <ResponsiveContainer width="100%" height={350}>
       <ComposedChart data={filteredData} margin={{ top: 8, right: 16, left: 16, bottom: 8 }}>
-        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1e2235" />
+        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
         <XAxis
           dataKey="label"
           tick={{ fontSize: 11, fill: '#94a3b8' }}
@@ -330,10 +330,10 @@ export function PnLDayPartChart({ dailyPnL }: PnLDayPartChartProps) {
           type="monotone"
           dataKey="netProfit"
           name="Net Profit"
-          stroke="#3b82f6"
+          stroke="#6366f1"
           strokeWidth={2.5}
-          dot={{ r: 4, fill: '#3b82f6', strokeWidth: 0 }}
-          activeDot={{ r: 6, fill: '#3b82f6', strokeWidth: 2, stroke: '#fff' }}
+          dot={{ r: 4, fill: '#6366f1', strokeWidth: 0 }}
+          activeDot={{ r: 6, fill: '#6366f1', strokeWidth: 2, stroke: '#fff' }}
         />
       </ComposedChart>
     </ResponsiveContainer>
@@ -356,11 +356,11 @@ export function PnLDayPartChart({ dailyPnL }: PnLDayPartChartProps) {
             <stop offset="95%" stopColor="#ef4444" stopOpacity={0.02} />
           </linearGradient>
           <linearGradient id="gradNetProfit" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
-            <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.02} />
+            <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
+            <stop offset="95%" stopColor="#6366f1" stopOpacity={0.02} />
           </linearGradient>
         </defs>
-        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1e2235" />
+        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
         <XAxis
           dataKey="label"
           tick={{ fontSize: 11, fill: '#94a3b8' }}
@@ -404,7 +404,7 @@ export function PnLDayPartChart({ dailyPnL }: PnLDayPartChartProps) {
           type="monotone"
           dataKey="netProfit"
           name="Net Profit"
-          stroke="#3b82f6"
+          stroke="#6366f1"
           strokeWidth={2.5}
           fill="url(#gradNetProfit)"
         />
@@ -413,9 +413,9 @@ export function PnLDayPartChart({ dailyPnL }: PnLDayPartChartProps) {
   );
 
   const SortIcon = ({ field }: { field: SortField }) => {
-    if (sortField !== field) return <span className="ml-1 text-text-muted/40">&#8597;</span>;
+    if (sortField !== field) return <span className="ml-1 text-gray-300">&#8597;</span>;
     return (
-      <span className="ml-1 text-brand">
+      <span className="ml-1 text-indigo-500">
         {sortDirection === 'asc' ? '\u2191' : '\u2193'}
       </span>
     );
@@ -425,7 +425,7 @@ export function PnLDayPartChart({ dailyPnL }: PnLDayPartChartProps) {
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-border">
+          <tr className="border-b border-gray-100">
             {([
               { field: 'date' as SortField, label: 'Date' },
               { field: 'revenue' as SortField, label: 'Revenue' },
@@ -441,7 +441,7 @@ export function PnLDayPartChart({ dailyPnL }: PnLDayPartChartProps) {
                 key={col.field}
                 onClick={() => handleSort(col.field)}
                 className={cn(
-                  'cursor-pointer select-none whitespace-nowrap px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wider text-text-muted hover:text-text-secondary transition-colors',
+                  'cursor-pointer select-none whitespace-nowrap px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wider text-gray-400 hover:text-gray-600 transition-colors',
                   col.field !== 'date' && 'text-right'
                 )}
               >
@@ -455,33 +455,33 @@ export function PnLDayPartChart({ dailyPnL }: PnLDayPartChartProps) {
           {sortedTableData.map((row) => (
             <tr
               key={row.date}
-              className="border-b border-border/50 transition-colors hover:bg-surface-hover/50"
+              className="border-b border-gray-50 transition-colors hover:bg-gray-50"
             >
-              <td className="whitespace-nowrap px-3 py-2 text-xs text-text-secondary">
+              <td className="whitespace-nowrap px-3 py-2 text-xs text-gray-500">
                 {row.label}
               </td>
-              <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-medium text-emerald-400">
+              <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-medium text-emerald-600">
                 {formatCurrency(row.revenue)}
               </td>
-              <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-medium text-orange-400">
+              <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-medium text-orange-500">
                 {formatCurrency(row.adSpend)}
               </td>
-              <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-medium text-red-400">
+              <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-medium text-red-500">
                 {formatCurrency(row.cogs)}
               </td>
-              <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-medium text-text-secondary">
+              <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-medium text-gray-500">
                 {formatCurrency(row.shipping)}
               </td>
-              <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-medium text-text-secondary">
+              <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-medium text-gray-500">
                 {formatCurrency(row.fees)}
               </td>
-              <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-medium text-rose-400">
+              <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-medium text-violet-600">
                 {formatCurrency(row.refunds)}
               </td>
               <td
                 className={cn(
                   'whitespace-nowrap px-3 py-2 text-right text-xs font-semibold',
-                  row.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'
+                  row.netProfit >= 0 ? 'text-emerald-600' : 'text-red-600'
                 )}
               >
                 {formatCurrency(row.netProfit)}
@@ -489,7 +489,7 @@ export function PnLDayPartChart({ dailyPnL }: PnLDayPartChartProps) {
               <td
                 className={cn(
                   'whitespace-nowrap px-3 py-2 text-right text-xs font-medium',
-                  row.margin >= 0 ? 'text-emerald-400' : 'text-red-400'
+                  row.margin >= 0 ? 'text-emerald-600' : 'text-red-600'
                 )}
               >
                 {formatPercentage(row.margin)}
@@ -499,7 +499,7 @@ export function PnLDayPartChart({ dailyPnL }: PnLDayPartChartProps) {
         </tbody>
       </table>
       {sortedTableData.length === 0 && (
-        <div className="py-12 text-center text-sm text-text-muted">
+        <div className="py-12 text-center text-sm text-gray-400">
           No data available for the selected date range.
         </div>
       )}
@@ -520,15 +520,15 @@ export function PnLDayPartChart({ dailyPnL }: PnLDayPartChartProps) {
   };
 
   return (
-    <div className="rounded-lg border border-border bg-surface-elevated p-6 shadow-sm">
+    <div>
       {/* Header with title + view toggle + date range picker */}
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h3 className="text-sm font-semibold text-text-primary">
-          Daily P&L Breakdown
+        <h3 className="text-base font-semibold text-gray-800">
+          Daily P&amp;L Breakdown
         </h3>
         <div className="flex items-center gap-3">
           {/* View toggle icons */}
-          <div className="flex items-center gap-0.5 rounded-lg border border-border bg-surface p-0.5">
+          <div className="flex items-center gap-0.5 rounded-lg border border-gray-200 bg-gray-50 p-0.5">
             {viewOptions.map((opt) => (
               <button
                 key={opt.id}
@@ -537,8 +537,8 @@ export function PnLDayPartChart({ dailyPnL }: PnLDayPartChartProps) {
                 className={cn(
                   'rounded-md p-1.5 transition-colors',
                   chartView === opt.id
-                    ? 'bg-brand/15 text-brand'
-                    : 'text-text-muted hover:bg-surface-hover hover:text-text-secondary'
+                    ? 'bg-white text-indigo-600 shadow-sm'
+                    : 'text-gray-400 hover:bg-white/50 hover:text-gray-600'
                 )}
               >
                 <opt.Icon className="h-4 w-4" />
@@ -553,20 +553,20 @@ export function PnLDayPartChart({ dailyPnL }: PnLDayPartChartProps) {
       {/* Summary stats row */}
       <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
-          { label: 'Revenue', value: summary.totalRevenue, color: 'text-emerald-400' },
-          { label: 'Ad Spend', value: summary.totalAdSpend, color: 'text-orange-400' },
-          { label: 'COGS', value: summary.totalCogs, color: 'text-red-400' },
+          { label: 'Revenue', value: summary.totalRevenue, color: 'text-emerald-600' },
+          { label: 'Ad Spend', value: summary.totalAdSpend, color: 'text-orange-500' },
+          { label: 'COGS', value: summary.totalCogs, color: 'text-red-500' },
           {
             label: 'Net Profit',
             value: summary.totalNetProfit,
-            color: summary.totalNetProfit >= 0 ? 'text-emerald-400' : 'text-red-400',
+            color: summary.totalNetProfit >= 0 ? 'text-emerald-600' : 'text-red-600',
           },
         ].map((stat) => (
           <div
             key={stat.label}
-            className="rounded-md border border-border bg-surface px-3 py-2"
+            className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2.5"
           >
-            <p className="text-xs text-text-muted">{stat.label}</p>
+            <p className="text-xs text-gray-400">{stat.label}</p>
             <p className={cn('text-sm font-semibold', stat.color)}>
               {formatCurrency(stat.value)}
             </p>

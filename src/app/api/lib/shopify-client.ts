@@ -180,19 +180,44 @@ function mapRefund(raw: Record<string, any>): ShopifyRefund {
   }));
 
   // Calculate total refund amount from multiple sources (in priority order):
-  // 1. refund transactions (most reliable — actual money refunded)
-  // 2. refund_line_items subtotals (may be empty in /orders.json default response)
+  // 1. order_adjustments with kind 'refund_discrepancy' or total_amount (most reliable for the actual money)
+  // 2. refund transactions (actual money refunded to customer)
+  // 3. refund_line_items subtotals (may be empty in /orders.json default response)
+  // 4. raw.total_amount or raw.total_refunded — Shopify includes this on the refund object
+  //
+  // BUG FIX: The standard /orders.json endpoint does NOT include transactions inside refund
+  // objects unless explicitly requested. The refund object itself has `total_amount` (Shopify
+  // REST) or we can sum `refund_line_items[].subtotal` + `refund_line_items[].total_tax`.
+  // We must also check `order_adjustments` for adjustments-based refunds.
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const transactions = (raw.transactions || []).filter((t: any) => t.kind === 'refund');
+
+  // Order adjustments can represent the actual cash refunded (negative amounts = refund to customer)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const orderAdjustments = (raw.order_adjustments || []).filter((a: any) => a.kind === 'refund_discrepancy' || parseFloat(a.amount || '0') < 0);
+
   let totalAmount = 0;
+
   if (transactions.length > 0) {
-    // Sum up refund transaction amounts
+    // Sum up refund transaction amounts — most reliable source
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     totalAmount = transactions.reduce((sum: number, t: any) => sum + parseFloat(t.amount || '0'), 0);
   } else if (refundLineItems.length > 0) {
-    // Fallback to refund line item subtotals
+    // Sum refund line item subtotals + their taxes
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    totalAmount = refundLineItems.reduce((sum: number, rli: any) => sum + parseFloat(rli.subtotal || '0'), 0);
+    totalAmount = refundLineItems.reduce((sum: number, rli: any) => {
+      const subtotal = parseFloat(rli.subtotal || '0');
+      const totalTax = parseFloat(rli.total_tax || '0');
+      return sum + subtotal + totalTax;
+    }, 0);
+  } else if (orderAdjustments.length > 0) {
+    // Use order adjustments — negative amounts = money back to customer
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    totalAmount = orderAdjustments.reduce((sum: number, a: any) => sum + Math.abs(parseFloat(a.amount || '0')), 0);
+  } else if (raw.total_amount != null) {
+    // Shopify REST includes total_amount on each refund object (absolute value)
+    totalAmount = Math.abs(parseFloat(raw.total_amount || '0'));
   }
 
   return {
