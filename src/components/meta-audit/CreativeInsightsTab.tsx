@@ -119,13 +119,13 @@ function RefreshMetricCard({
       onClick={onClick}
       className={cn(
         'group relative rounded-lg border border-border p-4 text-center transition-all',
-        onClick ? 'cursor-pointer hover:border-cyan-300/40 hover:bg-cyan-500/5 hover:shadow-[0_0_22px_rgba(56,189,248,0.16)]' : 'cursor-default'
+        onClick ? 'cursor-pointer hover:border-primary/40 hover:bg-primary/5 hover:shadow-md' : 'cursor-default'
       )}
     >
       <div className="pointer-events-none absolute left-1/2 top-0 z-20 w-60 -translate-x-1/2 -translate-y-2 opacity-0 transition-all duration-300 group-hover:-translate-y-[105%] group-hover:opacity-100">
-        <div className="rounded-lg border border-cyan-300/40 bg-[#060b1f]/95 p-2 text-left shadow-[0_0_20px_rgba(34,211,238,0.18)]">
-          <p className="text-[10px] uppercase tracking-[0.18em] text-cyan-200 mb-1">Jarvis Note</p>
-          <p className="text-[11px] leading-relaxed text-cyan-100/90">{hint}</p>
+        <div className="rounded-lg border border-border bg-surface p-2 text-left shadow-md">
+          <p className="text-[10px] uppercase tracking-[0.18em] text-primary mb-1">Jarvis Note</p>
+          <p className="text-[11px] leading-relaxed text-text-secondary">{hint}</p>
         </div>
       </div>
       <Icon className="h-5 w-5 text-primary-light mx-auto mb-2" />
@@ -1222,7 +1222,7 @@ export function CreativeInsightsTab({ data, filterPreset }: CreativeInsightsTabP
                             sourceLabel: 'Creative Library',
                             adName: creative.adName,
                           })}
-                          className="inline-flex items-center gap-1 rounded-md border border-cyan-300/30 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-400/10"
+                          className="inline-flex items-center gap-1 rounded-md border border-primary/30 px-2 py-1 text-[11px] text-primary hover:bg-primary/10"
                         >
                           <LayoutGrid className="h-3 w-3" />
                           Review Set
@@ -1417,15 +1417,15 @@ export function CreativeInsightsTab({ data, filterPreset }: CreativeInsightsTabP
         </div>
 
         {refreshFocus && (
-          <div className="mt-4 rounded-xl border border-cyan-400/30 bg-gradient-to-br from-cyan-500/10 via-blue-500/5 to-transparent p-4">
+          <div className="mt-4 rounded-xl border border-primary/20 bg-primary/5 p-4">
             <div className="flex items-center justify-between gap-2 mb-3">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-200">{refreshFocusMeta?.title}</p>
-                <p className="text-xs text-cyan-100/80 mt-1">{refreshFocusMeta?.subtitle}</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">{refreshFocusMeta?.title}</p>
+                <p className="text-xs text-text-secondary mt-1">{refreshFocusMeta?.subtitle}</p>
               </div>
               <button
                 onClick={() => setRefreshFocus(null)}
-                className="rounded-md border border-cyan-300/30 px-2 py-1 text-[11px] text-cyan-100 hover:bg-cyan-300/10"
+                className="rounded-md border border-border px-2 py-1 text-[11px] text-text-secondary hover:bg-surface-hover"
               >
                 Close
               </button>
@@ -1860,12 +1860,12 @@ export function CreativeInsightsTab({ data, filterPreset }: CreativeInsightsTabP
         {!selectedCreative ? null : (
           <div className="grid grid-cols-1 lg:grid-cols-[340px_minmax(0,1fr)] gap-4 max-h-[74vh] overflow-hidden">
             <div className="w-full lg:w-[340px]">
-              <div className="relative rounded-xl border border-cyan-300/30 bg-black shadow-[0_0_22px_rgba(34,211,238,0.14)] overflow-hidden">
-                <div className="relative aspect-[9/16] w-full max-h-[68vh] min-h-[420px] bg-black">
+              <div className="relative rounded-xl border border-border bg-surface shadow-sm overflow-hidden">
+                <div className="relative aspect-[9/16] w-full max-h-[68vh] min-h-[420px] bg-[#1d1d1f]">
                   {previewLoading ? (
-                    <div className="flex h-full flex-col items-center justify-center gap-2 bg-black">
-                      <div className="h-8 w-8 rounded-full border-2 border-cyan-300 border-t-transparent animate-spin" />
-                      <p className="text-[11px] text-cyan-200">Loading preview...</p>
+                    <div className="flex h-full flex-col items-center justify-center gap-2 bg-[#1d1d1f]">
+                      <div className="h-8 w-8 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+                      <p className="text-[11px] text-[#f5f5f7]">Loading preview...</p>
                     </div>
                   ) : previewIframeSrc ? (
                     <iframe
@@ -1963,21 +1963,21 @@ export function CreativeInsightsTab({ data, filterPreset }: CreativeInsightsTabP
         size="lg"
       >
         {!selectedAdSetReview ? null : (
-          <div className="space-y-4 max-h-[76vh] overflow-y-auto rounded-xl border border-white/10 bg-gradient-to-b from-[#1f2848] via-[#1c2340] to-[#171d34] p-4 pr-2">
+          <div className="space-y-4 max-h-[76vh] overflow-y-auto rounded-xl border border-border bg-surface p-4 pr-2">
             <div className="flex flex-wrap items-center gap-2 text-xs">
               {selectedAdSetReview.sourceLabel && (
-                <span className="rounded-md border border-cyan-200/50 bg-cyan-300/20 px-2 py-1 text-cyan-100">
+                <span className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-primary">
                   {selectedAdSetReview.sourceLabel}
                 </span>
               )}
-              <span className="rounded-md border border-white/20 bg-white/5 px-2 py-1 text-slate-200">
-                Campaign: <span className="text-white">{selectedAdSetReview.campaignName || '-'}</span>
+              <span className="rounded-md border border-border bg-surface-hover px-2 py-1 text-text-secondary">
+                Campaign: <span className="text-text-primary">{selectedAdSetReview.campaignName || '-'}</span>
               </span>
-              <span className="rounded-md border border-white/20 bg-white/5 px-2 py-1 text-slate-200">
-                Ad Set ID: <span className="font-mono text-white">{selectedAdSetReview.adSetId}</span>
+              <span className="rounded-md border border-border bg-surface-hover px-2 py-1 text-text-secondary">
+                Ad Set ID: <span className="font-mono text-text-primary">{selectedAdSetReview.adSetId}</span>
               </span>
-              <div className="ml-auto inline-flex items-center gap-2 rounded-md border border-white/20 bg-white/5 px-2 py-1">
-                <span className="text-[11px] text-slate-300">Ad set status</span>
+              <div className="ml-auto inline-flex items-center gap-2 rounded-md border border-border bg-surface-hover px-2 py-1">
+                <span className="text-[11px] text-text-muted">Ad set status</span>
                 {renderStatusActionButton({
                   adId: `adset_${selectedAdSetReview.adSetId}`,
                   adName: selectedAdSetReview.adSetName,
@@ -1991,19 +1991,19 @@ export function CreativeInsightsTab({ data, filterPreset }: CreativeInsightsTabP
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-2 text-xs">
-              <div className="rounded border border-white/15 bg-white/5 p-2"><p className="text-slate-300">Ads</p><p className="text-white font-semibold">{adSetReviewRows.length}</p></div>
-              <div className="rounded border border-white/15 bg-white/5 p-2"><p className="text-slate-300">Active Ads</p><p className="text-white font-semibold">{adSetReviewSummary.activeAds}</p></div>
-              <div className="rounded border border-white/15 bg-white/5 p-2"><p className="text-slate-300">Total Spend</p><p className="text-white font-semibold">{formatCurrency(adSetReviewSummary.totalSpend)}</p></div>
-              <div className="rounded border border-white/15 bg-white/5 p-2"><p className="text-slate-300">Blended ROAS</p><p className={cn('font-semibold', roasClass(adSetReviewSummary.blendedRoas))}>{formatRoas(adSetReviewSummary.blendedRoas)}</p></div>
-              <div className="rounded border border-white/15 bg-white/5 p-2"><p className="text-slate-300">Blended CPA</p><p className="text-white font-semibold">{formatCurrency(adSetReviewSummary.blendedCpa)}</p></div>
+              <div className="rounded border border-border bg-surface-hover p-2"><p className="text-text-muted">Ads</p><p className="text-text-primary font-semibold">{adSetReviewRows.length}</p></div>
+              <div className="rounded border border-border bg-surface-hover p-2"><p className="text-text-muted">Active Ads</p><p className="text-text-primary font-semibold">{adSetReviewSummary.activeAds}</p></div>
+              <div className="rounded border border-border bg-surface-hover p-2"><p className="text-text-muted">Total Spend</p><p className="text-text-primary font-semibold">{formatCurrency(adSetReviewSummary.totalSpend)}</p></div>
+              <div className="rounded border border-border bg-surface-hover p-2"><p className="text-text-muted">Blended ROAS</p><p className={cn('font-semibold', roasClass(adSetReviewSummary.blendedRoas))}>{formatRoas(adSetReviewSummary.blendedRoas)}</p></div>
+              <div className="rounded border border-border bg-surface-hover p-2"><p className="text-text-muted">Blended CPA</p><p className="text-text-primary font-semibold">{formatCurrency(adSetReviewSummary.blendedCpa)}</p></div>
               <div className="rounded border border-danger/40 bg-danger/15 p-2"><p className="text-danger/90">Low ROAS Ads</p><p className="text-danger font-semibold">{adSetReviewSummary.lowRoasAds}</p></div>
               <div className="rounded border border-warning/40 bg-warning/15 p-2"><p className="text-warning/90">No Spend Ads</p><p className="text-warning font-semibold">{adSetReviewSummary.noSpendAds}</p></div>
             </div>
 
             {!adSetReviewLoading && !adSetReviewError && (
-              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-white/15 bg-white/5 px-3 py-2">
-                <p className="text-xs text-slate-300">
-                  Selected: <span className="font-semibold text-white">{selectedAdReviewCount}</span>
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface-hover px-3 py-2">
+                <p className="text-xs text-text-muted">
+                  Selected: <span className="font-semibold text-text-primary">{selectedAdReviewCount}</span>
                 </p>
                 <button
                   type="button"
@@ -2025,12 +2025,12 @@ export function CreativeInsightsTab({ data, filterPreset }: CreativeInsightsTabP
                   type="button"
                   disabled={bulkActionLoading || selectedAdReviewCount === 0}
                   onClick={() => setSelectedAdReviewIds({})}
-                  className="rounded-md border border-white/20 bg-white/5 px-2.5 py-1 text-[11px] text-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-md border border-border bg-surface-hover px-2.5 py-1 text-[11px] text-text-secondary disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Clear
                 </button>
                 {bulkActionLoading && (
-                  <span className="inline-flex items-center gap-1 text-[11px] text-cyan-100">
+                  <span className="inline-flex items-center gap-1 text-[11px] text-primary">
                     <Loader2 className="h-3 w-3 animate-spin" />
                     Updating...
                   </span>
@@ -2039,7 +2039,7 @@ export function CreativeInsightsTab({ data, filterPreset }: CreativeInsightsTabP
             )}
 
             {adSetReviewLoading ? (
-              <div className="rounded-lg border border-white/15 bg-white/5 p-6 text-center text-sm text-slate-200">
+              <div className="rounded-lg border border-border bg-surface-hover p-6 text-center text-sm text-text-secondary">
                 Loading ads in this ad set...
               </div>
             ) : adSetReviewError ? (
@@ -2047,10 +2047,10 @@ export function CreativeInsightsTab({ data, filterPreset }: CreativeInsightsTabP
                 <p className="text-sm text-warning">{adSetReviewError}</p>
               </div>
             ) : (
-              <div className="max-h-[420px] overflow-y-auto rounded-lg border border-white/15 bg-black/10">
+              <div className="max-h-[420px] overflow-y-auto rounded-lg border border-border bg-surface">
                 <table className="w-full text-left text-sm">
-                  <thead className="sticky top-0 z-10 bg-[#202948]/95 backdrop-blur">
-                    <tr className="text-slate-300">
+                  <thead className="sticky top-0 z-10 bg-surface-elevated backdrop-blur">
+                    <tr className="text-text-muted">
                       <th className="px-3 py-2 text-xs">
                         <input
                           type="checkbox"
@@ -2095,21 +2095,21 @@ export function CreativeInsightsTab({ data, filterPreset }: CreativeInsightsTabP
                   </thead>
                   <tbody>
                     {sortedAdSetReviewRows.map((row) => (
-                      <tr key={`${row.adId}_adset_review`} className="border-t border-white/10 hover:bg-white/5">
+                      <tr key={`${row.adId}_adset_review`} className="border-t border-border hover:bg-surface-hover">
                         <td className="px-3 py-2">
                           <input
                             type="checkbox"
                             checked={!!selectedAdReviewIds[row.adId]}
                             onChange={(event) => toggleAdReviewSelection(row.adId, event.target.checked)}
-                            className="h-3.5 w-3.5 accent-cyan-400"
+                            className="h-3.5 w-3.5 accent-primary"
                           />
                         </td>
-                        <td className="px-3 py-2 text-sm text-white max-w-[280px] truncate" title={row.adName}>{row.adName}</td>
-                        <td className="px-3 py-2 text-right text-sm text-slate-100">{formatCurrency(row.spend)}</td>
+                        <td className="px-3 py-2 text-sm text-text-primary max-w-[280px] truncate" title={row.adName}>{row.adName}</td>
+                        <td className="px-3 py-2 text-right text-sm text-text-primary">{formatCurrency(row.spend)}</td>
                         <td className={cn('px-3 py-2 text-right text-sm font-semibold', roasClass(row.roas))}>{formatRoas(row.roas)}</td>
-                        <td className="px-3 py-2 text-right text-sm text-slate-300">{formatCurrency(row.cpa)}</td>
-                        <td className="px-3 py-2 text-right text-sm text-slate-300">{formatPercentage(row.ctr)}</td>
-                        <td className="px-3 py-2 text-right text-sm text-slate-300">{formatNumber(row.conversions)}</td>
+                        <td className="px-3 py-2 text-right text-sm text-text-secondary">{formatCurrency(row.cpa)}</td>
+                        <td className="px-3 py-2 text-right text-sm text-text-secondary">{formatPercentage(row.ctr)}</td>
+                        <td className="px-3 py-2 text-right text-sm text-text-secondary">{formatNumber(row.conversions)}</td>
                         <td className="px-3 py-2 text-xs">
                           {renderStatusPill(row.adId, row.metaDeliveryStatus, row.metaConfiguredStatus)}
                         </td>

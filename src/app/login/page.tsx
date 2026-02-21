@@ -53,23 +53,23 @@ function LoginForm() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0a0f1f] text-white flex items-center justify-center p-4">
-      <div className="w-full max-w-md rounded-2xl border border-white/15 bg-[#101833]/90 p-6 shadow-2xl">
-        <h1 className="text-2xl font-semibold">OneScale</h1>
-        <p className="mt-1 text-sm text-slate-300">
+    <div className="min-h-screen bg-[#f5f5f7] flex items-center justify-center p-4">
+      <div className="w-full max-w-md rounded-2xl border border-black/[0.06] bg-white p-8 shadow-sm">
+        <h1 className="text-2xl font-semibold text-[#1d1d1f]">OneScale</h1>
+        <p className="mt-1 text-sm text-[#86868b]">
           {isFirstSetup === null
             ? 'Loading...'
             : isFirstSetup
               ? 'Create your admin account to get started.'
               : 'Sign in with your credentials.'}
         </p>
-        <form className="mt-5 space-y-4" onSubmit={onSubmit}>
+        <form className="mt-6 space-y-4" onSubmit={onSubmit}>
           <input
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="Email"
-            className="w-full rounded-md border border-white/20 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-slate-400 outline-none focus:border-cyan-300/60"
+            className="w-full rounded-lg border border-black/[0.1] bg-[#f5f5f7] px-3 py-2.5 text-sm text-[#1d1d1f] placeholder:text-[#aeaeb2] outline-none focus:border-[#0071e3] focus:ring-2 focus:ring-[#0071e3]/20 transition-colors"
             required
           />
           {isFirstSetup && (
@@ -78,7 +78,7 @@ function LoginForm() {
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
               placeholder="Full name"
-              className="w-full rounded-md border border-white/20 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-slate-400 outline-none focus:border-cyan-300/60"
+              className="w-full rounded-lg border border-black/[0.1] bg-[#f5f5f7] px-3 py-2.5 text-sm text-[#1d1d1f] placeholder:text-[#aeaeb2] outline-none focus:border-[#0071e3] focus:ring-2 focus:ring-[#0071e3]/20 transition-colors"
             />
           )}
           <input
@@ -86,7 +86,7 @@ function LoginForm() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Password"
-            className="w-full rounded-md border border-white/20 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-slate-400 outline-none focus:border-cyan-300/60"
+            className="w-full rounded-lg border border-black/[0.1] bg-[#f5f5f7] px-3 py-2.5 text-sm text-[#1d1d1f] placeholder:text-[#aeaeb2] outline-none focus:border-[#0071e3] focus:ring-2 focus:ring-[#0071e3]/20 transition-colors"
             required
           />
           <input
@@ -94,24 +94,24 @@ function LoginForm() {
             value={accessCode}
             onChange={(e) => setAccessCode(e.target.value)}
             placeholder={isFirstSetup ? 'Setup code' : 'Invite / access code (if required)'}
-            className="w-full rounded-md border border-white/20 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-slate-400 outline-none focus:border-cyan-300/60"
+            className="w-full rounded-lg border border-black/[0.1] bg-[#f5f5f7] px-3 py-2.5 text-sm text-[#1d1d1f] placeholder:text-[#aeaeb2] outline-none focus:border-[#0071e3] focus:ring-2 focus:ring-[#0071e3]/20 transition-colors"
           />
-          <label className="flex items-center gap-2 text-sm text-slate-300">
+          <label className="flex items-center gap-2 text-sm text-[#86868b]">
             <input
               type="checkbox"
               checked={remember}
               onChange={(e) => setRemember(e.target.checked)}
-              className="accent-cyan-400"
+              className="accent-[#0071e3]"
             />
             Keep me signed in
           </label>
           {error && (
-            <p className="rounded-md border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">{error}</p>
+            <p className="rounded-lg border border-[#ff3b30]/20 bg-[#ff3b30]/8 px-3 py-2 text-sm text-[#ff3b30]">{error}</p>
           )}
           <button
             type="submit"
             disabled={loading || isFirstSetup === null}
-            className="w-full rounded-md bg-cyan-500 px-3 py-2 text-sm font-medium text-slate-950 disabled:opacity-60"
+            className="w-full rounded-lg bg-[#0071e3] px-3 py-2.5 text-sm font-medium text-white hover:bg-[#0077ED] disabled:opacity-60 transition-colors"
           >
             {loading
               ? 'Signing in...'
@@ -128,9 +128,9 @@ function LoginForm() {
 export default function LoginPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen bg-[#0a0f1f] text-white flex items-center justify-center p-4">
-        <div className="w-full max-w-md rounded-2xl border border-white/15 bg-[#101833]/90 p-6 shadow-2xl">
-          <p className="text-sm text-slate-300">Loading...</p>
+      <div className="min-h-screen bg-[#f5f5f7] flex items-center justify-center p-4">
+        <div className="w-full max-w-md rounded-2xl border border-black/[0.06] bg-white p-8 shadow-sm">
+          <p className="text-sm text-[#86868b]">Loading...</p>
         </div>
       </div>
     }>

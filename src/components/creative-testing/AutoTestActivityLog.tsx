@@ -106,8 +106,8 @@ export function AutoTestActivityLog({ log }: AutoTestActivityLogProps) {
           className={cn(
             'rounded-full px-3 py-1 text-xs font-medium transition-colors',
             activeFilter === 'all'
-              ? 'bg-gray-900 text-white'
-              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              ? 'bg-primary text-white'
+              : 'bg-[#f5f5f7] text-[#86868b] hover:bg-[#e8e8ed]'
           )}
         >
           All

@@ -10,7 +10,7 @@ import toast from 'react-hot-toast';
 const platformBadge: Record<AdPlatform, { label: string; className: string }> = {
   meta: { label: 'Meta', className: 'bg-blue-100 text-blue-800' },
   google: { label: 'Google', className: 'bg-red-100 text-red-800' },
-  tiktok: { label: 'TikTok', className: 'bg-gray-900 text-white' },
+  tiktok: { label: 'TikTok', className: 'bg-[#1d1d1f] text-white' },
 };
 
 interface AdAccountMapperProps {

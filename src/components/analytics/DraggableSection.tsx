@@ -77,7 +77,7 @@ export function DraggableSection({
 
       {/* Drag handle */}
       <div className="absolute -left-1 top-1/2 z-10 -translate-y-1/2 opacity-0 transition-opacity group-hover:opacity-100">
-        <div className="flex items-center justify-center rounded-md bg-gray-800 p-1.5 text-gray-300 shadow-lg">
+        <div className="flex items-center justify-center rounded-md bg-surface-elevated border border-border p-1.5 text-text-muted shadow-md">
           <GripVertical className="h-4 w-4" />
         </div>
       </div>
