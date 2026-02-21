@@ -6,6 +6,7 @@ import { Plus, Columns3, AlertTriangle, LayoutDashboard, Loader2 } from 'lucide-
 import { SearchInput } from '@/components/ui/SearchInput';
 import { ColumnPicker } from '@/components/columns/ColumnPicker';
 import { cn } from '@/lib/utils';
+import { ColumnPresetSelector } from '@/components/columns/ColumnPresetSelector';
 
 export type StatusFilter = 'all' | 'ACTIVE' | 'PAUSED';
 
@@ -151,13 +152,13 @@ export function AdsManagerToolbar({
             {showErrorCenter ? 'Back to Ads Manager' : 'Ads Error Center'}
             {!showErrorCenter && errorCounts && (
               <span className="ml-1 inline-flex items-center gap-1">
-                <span className="rounded-full bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold text-red-300">
+                <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-600">
                   {errorCounts.critical} critical
                 </span>
-                <span className="rounded-full bg-blue-500/20 px-2 py-0.5 text-[10px] font-semibold text-blue-300">
+                <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-600">
                   {errorCounts.recent12h} in 12h
                 </span>
-                <span className="rounded-full bg-surface-hover px-2 py-0.5 text-[10px] font-semibold text-text-secondary">
+                <span className="rounded-full bg-[#f5f5f7] px-2 py-0.5 text-[10px] font-semibold text-[#86868b]">
                   {errorCounts.total} total
                 </span>
               </span>
@@ -171,6 +172,11 @@ export function AdsManagerToolbar({
             Create Campaign
           </Link>
         </div>
+      </div>
+
+      <div className="flex items-center gap-2 px-1">
+        <span className="text-[11px] text-[#86868b] font-medium shrink-0">Presets:</span>
+        <ColumnPresetSelector />
       </div>
 
       {syncStatus && (

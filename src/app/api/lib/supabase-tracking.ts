@@ -818,7 +818,7 @@ export async function getPersistentTrackingAttributionCoverage(
     source: string | null;
     occurred_at: string | null;
   }>>(
-    `/tracking_events?store_id=eq.${encodeURIComponent(storeId)}&event_name=eq.Purchase&occurred_at=gte.${encodeURIComponent(sinceIso)}&occurred_at=lte.${encodeURIComponent(untilIso)}&select=campaign_id,adset_id,ad_id,order_id,event_id,source,occurred_at`
+    `/tracking_events?store_id=eq.${encodeURIComponent(storeId)}&event_name=eq.Purchase&occurred_at=gte.${encodeURIComponent(sinceIso)}&occurred_at=lte.${encodeURIComponent(untilIso)}&select=campaign_id,adset_id,ad_id,order_id,event_id,source,occurred_at&limit=10000`
   );
 
   // Deduplicate by order_id — same logic as entity-metrics

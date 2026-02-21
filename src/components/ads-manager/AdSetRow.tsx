@@ -37,6 +37,7 @@ export interface AdSetRowProps {
   activitiesFullyLoaded?: boolean;
   issues?: AdIssue[];
   onIssueClick?: (issue: AdIssue) => void;
+  nameColWidth?: number;
 }
 
 function formatTargetingSummary(adSet: AdSet): string {
@@ -71,6 +72,7 @@ export function AdSetRow({
   activitiesFullyLoaded,
   issues = [],
   onIssueClick,
+  nameColWidth,
 }: AdSetRowProps) {
   const isActive = adSet.status === 'ACTIVE';
   const [showIssueDetails, setShowIssueDetails] = useState(false);
@@ -115,7 +117,10 @@ export function AdSetRow({
       </td>
 
       {/* Name + Targeting */}
-      <td className="whitespace-nowrap px-3 py-2">
+      <td
+        className="whitespace-nowrap px-3 py-2 sticky left-[96px] z-10 bg-white group-hover:bg-[#f5f5f7] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)]"
+        style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth } : undefined}
+      >
         <div className="flex items-center gap-2 pl-4">
           <button
             onClick={onToggleExpand}
@@ -128,12 +133,19 @@ export function AdSetRow({
             )}
           </button>
           <div className="flex flex-col">
-            <button
-              onClick={onToggleExpand}
-              className="text-sm font-medium text-text-primary hover:text-primary-light transition-colors text-left"
-            >
-              {adSet.name}
-            </button>
+            <div className="relative group/tooltip">
+              <button
+                onClick={onToggleExpand}
+                className="truncate max-w-[220px] block text-sm font-medium text-text-primary hover:text-primary-light transition-colors text-left"
+              >
+                {adSet.name}
+              </button>
+              <div className="absolute left-0 top-full mt-1 z-50 pointer-events-none opacity-0 group-hover/tooltip:opacity-100 translate-y-1 group-hover/tooltip:translate-y-0 transition-all duration-150 ease-out">
+                <div className="rounded-lg bg-[#1d1d1f] px-3 py-1.5 text-xs text-white shadow-lg whitespace-nowrap max-w-xs">
+                  {adSet.name}
+                </div>
+              </div>
+            </div>
             <span className="text-xs text-text-dimmed">
               {formatTargetingSummary(adSet)}
             </span>

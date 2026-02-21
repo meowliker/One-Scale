@@ -32,6 +32,7 @@ export interface CampaignRowProps {
   sparklineData?: Record<string, SparklineDataPoint[]>;
   activityData?: Record<string, EntityAction[]>;
   activitiesFullyLoaded?: boolean;
+  nameColWidth?: number;
 }
 
 const objectiveLabels: Record<string, { label: string; variant: 'success' | 'warning' | 'danger' | 'info' | 'default' }> = {
@@ -68,6 +69,7 @@ export function CampaignRow({
   sparklineData,
   activityData,
   activitiesFullyLoaded,
+  nameColWidth,
 }: CampaignRowProps) {
   const isActive = campaign.status === 'ACTIVE';
   const objective = objectiveLabels[campaign.objective] ?? { label: campaign.objective, variant: 'default' as const };
@@ -97,7 +99,10 @@ export function CampaignRow({
       </td>
 
       {/* Name + Objective + CBO/ABO */}
-      <td className="whitespace-nowrap px-3 py-2">
+      <td
+        className="whitespace-nowrap px-3 py-2 sticky left-[96px] z-10 bg-white group-hover:bg-[#f5f5f7] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)]"
+        style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth } : undefined}
+      >
         <div className="flex items-center gap-2">
           <button
             onClick={onToggleExpand}
@@ -109,12 +114,19 @@ export function CampaignRow({
               <ChevronRight className="h-4 w-4 transition-transform duration-200" />
             )}
           </button>
-          <button
-            onClick={onToggleExpand}
-            className="text-[13px] font-medium text-[#1d1d1f] hover:text-[#0071e3] transition-colors duration-150 text-left"
-          >
-            {campaign.name}
-          </button>
+          <div className="relative group/tooltip">
+            <button
+              onClick={onToggleExpand}
+              className="truncate max-w-[220px] block text-[13px] font-medium text-[#1d1d1f] hover:text-[#0071e3] transition-colors duration-150 text-left"
+            >
+              {campaign.name}
+            </button>
+            <div className="absolute left-0 top-full mt-1 z-50 pointer-events-none opacity-0 group-hover/tooltip:opacity-100 translate-y-1 group-hover/tooltip:translate-y-0 transition-all duration-150 ease-out">
+              <div className="rounded-lg bg-[#1d1d1f] px-3 py-1.5 text-xs text-white shadow-lg whitespace-nowrap max-w-xs">
+                {campaign.name}
+              </div>
+            </div>
+          </div>
           <Badge variant={objective.variant}>{objective.label}</Badge>
           {/* CBO = budget at campaign level, ABO = budget at adset level */}
           <Badge variant={campaign.dailyBudget > 0 || (campaign.lifetimeBudget && campaign.lifetimeBudget > 0) ? 'info' : 'warning'}>

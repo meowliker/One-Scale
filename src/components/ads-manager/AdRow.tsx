@@ -45,6 +45,7 @@ export interface AdRowProps {
   activitiesFullyLoaded?: boolean;
   issues?: AdIssue[];
   onIssueClick?: (issue: AdIssue) => void;
+  nameColWidth?: number;
 }
 
 const creativeTypeVariant: Record<string, 'info' | 'warning' | 'default'> = {
@@ -67,6 +68,7 @@ export function AdRow({
   activitiesFullyLoaded,
   issues = [],
   onIssueClick,
+  nameColWidth,
 }: AdRowProps) {
   const isActive = ad.status === 'ACTIVE';
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -118,7 +120,10 @@ export function AdRow({
         </td>
 
         {/* Name + Creative Thumbnail */}
-        <td className="whitespace-nowrap px-3 py-1.5">
+        <td
+          className="whitespace-nowrap px-3 py-1.5 sticky left-[96px] z-10 bg-white group-hover:bg-[#f5f5f7] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)]"
+          style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth } : undefined}
+        >
           <div className="flex items-center gap-3 pl-8">
             {/* Creative thumbnail — clickable to open preview */}
             <button
@@ -166,15 +171,24 @@ export function AdRow({
 
             <div className="group flex flex-col gap-0.5">
               {/* Editable ad name */}
-              {onNameChange ? (
-                <InlineEdit
-                  value={ad.name}
-                  onSave={onNameChange}
-                  type="text"
-                />
-              ) : (
-                <span className="text-sm font-medium text-text-primary">{ad.name}</span>
-              )}
+              <div className="relative group/tooltip">
+                {onNameChange ? (
+                  <div className="truncate max-w-[220px] block">
+                    <InlineEdit
+                      value={ad.name}
+                      onSave={onNameChange}
+                      type="text"
+                    />
+                  </div>
+                ) : (
+                  <span className="truncate max-w-[220px] block text-sm font-medium text-text-primary">{ad.name}</span>
+                )}
+                <div className="absolute left-0 top-full mt-1 z-50 pointer-events-none opacity-0 group-hover/tooltip:opacity-100 translate-y-1 group-hover/tooltip:translate-y-0 transition-all duration-150 ease-out">
+                  <div className="rounded-lg bg-[#1d1d1f] px-3 py-1.5 text-xs text-white shadow-lg whitespace-nowrap max-w-xs">
+                    {ad.name}
+                  </div>
+                </div>
+              </div>
               <div className="flex items-center gap-1.5">
                 <Badge variant={creativeTypeVariant[ad.creative.type] ?? 'default'}>
                   {ad.creative.type}

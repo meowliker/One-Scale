@@ -360,41 +360,63 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     return `ads-manager-hierarchy:${activeStoreId}:${since}:${until}`;
   }, [activeStoreId, dateRange?.since, dateRange?.until]);
 
+  // Resizable Name column
+  const [nameColWidth, setNameColWidth] = useState(280);
+  const nameResizeRef = useRef<{ startX: number; startW: number } | null>(null);
+
+  const handleNameResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    nameResizeRef.current = { startX: e.clientX, startW: nameColWidth };
+    function onMove(ev: MouseEvent) {
+      if (!nameResizeRef.current) return;
+      const delta = ev.clientX - nameResizeRef.current.startX;
+      setNameColWidth(Math.max(160, Math.min(500, nameResizeRef.current.startW + delta)));
+    }
+    function onUp() {
+      nameResizeRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [nameColWidth]);
+
   // Live attribution coverage badge for media buyers.
-  useEffect(() => {
+  const fetchAttributionCoverage = useCallback(async () => {
     if (!activeStoreId) return;
+    setAttributionCoverage((prev) => ({ ...prev, loading: true }));
+    try {
+      const res = await apiClient<{ data: AttributionCoveragePayload }>('/api/tracking/coverage', {
+        params: { storeId: activeStoreId, days: '7' },
+        timeoutMs: 8_000,
+        maxRetries: 1,
+      });
+      const payload = res.data;
+      setAttributionCoverage({
+        percent: Number(payload?.percent || 0),
+        mapped: Number(payload?.mapped_purchases || 0),
+        total: Number(payload?.total_purchases || 0),
+        windowDays: Number(payload?.windowDays || 7),
+        loading: false,
+      });
+    } catch {
+      setAttributionCoverage((prev) => ({ ...prev, loading: false }));
+    }
+  }, [activeStoreId]);
+
+  useEffect(() => {
+    if (activeStoreId) {
+      fetchAttributionCoverage();
+    }
     let cancelled = false;
-
-    const fetchCoverage = async () => {
-      setAttributionCoverage((prev) => ({ ...prev, loading: true }));
-      try {
-        const res = await apiClient<{ data: AttributionCoveragePayload }>('/api/tracking/coverage', {
-          params: { storeId: activeStoreId, days: '7' },
-          timeoutMs: 8_000,
-          maxRetries: 1,
-        });
-        if (cancelled) return;
-        const payload = res.data;
-        setAttributionCoverage({
-          percent: Number(payload?.percent || 0),
-          mapped: Number(payload?.mapped_purchases || 0),
-          total: Number(payload?.total_purchases || 0),
-          windowDays: Number(payload?.windowDays || 7),
-          loading: false,
-        });
-      } catch {
-        if (cancelled) return;
-        setAttributionCoverage((prev) => ({ ...prev, loading: false }));
-      }
-    };
-
-    void fetchCoverage();
-    const intervalId = window.setInterval(fetchCoverage, 60_000);
+    const intervalId = window.setInterval(() => {
+      if (!cancelled) void fetchAttributionCoverage();
+    }, 60_000);
     return () => {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [activeStoreId]);
+  }, [activeStoreId, fetchAttributionCoverage]);
 
   // Sync with new initialCampaigns when they change (e.g. reconnect or date change)
   useEffect(() => {
@@ -1629,7 +1651,23 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                 <th className="w-12 whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.04em] text-[#86868b]">
                   On/Off
                 </th>
-                <SortableFixedHeader label="Name" sortKeyName="name" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} />
+                <th
+                  className="relative whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.04em] text-[#86868b] sticky left-[96px] z-20 bg-[#f5f5f7] border-r border-[rgba(0,0,0,0.06)]"
+                  style={{ width: nameColWidth, minWidth: nameColWidth }}
+                >
+                  <button
+                    onClick={() => handleSort('name')}
+                    className="group/sort flex items-center gap-1 cursor-pointer hover:text-[#1d1d1f] transition-colors duration-150"
+                    title="Sort by Name"
+                  >
+                    <span>Name</span>
+                    <FixedSortIndicator active={sortKey === 'name'} direction={sortKey === 'name' ? sortDirection : null} />
+                  </button>
+                  <div
+                    onMouseDown={handleNameResizeStart}
+                    className="absolute right-0 top-0 h-full w-2 cursor-col-resize hover:bg-[#0071e3]/20 transition-colors"
+                  />
+                </th>
                 <SortableFixedHeader label="Status" sortKeyName="status" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} />
                 <SortableFixedHeader label="Budget" sortKeyName="budget" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} />
                 <th className="whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.04em] text-[#86868b]">
@@ -1738,6 +1776,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                           }, 80);
                         }
                       }}
+                      nameColWidth={nameColWidth}
                     />
                   );
                 })
@@ -1745,17 +1784,9 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
             </tbody>
             {sortedCampaigns.length > 0 && (
               <tfoot>
-                <tr className="border-t border-[rgba(0,0,0,0.08)] bg-[#fbfbfd]">
-                  <td className="w-10 whitespace-nowrap px-3 py-2" />
-                  <td className="w-12 whitespace-nowrap px-3 py-2" />
-                  <td className="whitespace-nowrap px-3 py-2 text-[12px] font-semibold text-[#1d1d1f]">
-                    Totals ({totals.campaignCount} campaigns)
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-[11px] text-[#86868b]">
-                    {totals.activeCampaigns} active
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-[12px] font-semibold text-[#1d1d1f]">
-                    &mdash;
+                <tr className="border-t-2 border-[#0071e3]/20 bg-[#f0f4ff]">
+                  <td colSpan={3} className="whitespace-nowrap px-3 py-2.5 text-[12px] font-bold text-[#1d1d1f]">
+                    Total — {totals.activeCampaigns} active
                   </td>
                   <td className="whitespace-nowrap px-3 py-2 text-[12px] text-[#aeaeb2]">&mdash;</td>
                   <td className="whitespace-nowrap px-3 py-2 text-[12px] text-[#aeaeb2]">&mdash;</td>
@@ -1765,6 +1796,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                       key={`totals-${key}`}
                       metricKey={key}
                       value={getMetricValue(totals.metrics, key)}
+                      isTotals={true}
                     />
                   ))}
                 </tr>
@@ -1835,6 +1867,7 @@ interface CampaignGroupProps {
   adSetIssuesById: Map<string, AdIssue[]>;
   adIssuesById: Map<string, AdIssue[]>;
   onIssueClick: (issue: AdIssue) => void;
+  nameColWidth: number;
 }
 
 function CampaignGroup({
@@ -1874,6 +1907,7 @@ function CampaignGroup({
   adSetIssuesById,
   adIssuesById,
   onIssueClick,
+  nameColWidth,
 }: CampaignGroupProps) {
   // Defensive: always ensure adSets is an array, then sort
   const adSetsRaw = campaign.adSets || [];
@@ -1977,6 +2011,7 @@ function CampaignGroup({
         sparklineData={sparklineData}
         activityData={activityData}
         activitiesFullyLoaded={activitiesFullyLoaded}
+        nameColWidth={nameColWidth}
       />
       {isExpanded && loadingAdSets && (
         <tr className="border-b border-border bg-surface">
@@ -2048,6 +2083,7 @@ function CampaignGroup({
               adSetIssues={adSetIssuesById.get(adSet.id) || []}
               adIssuesById={adIssuesById}
               onIssueClick={onIssueClick}
+              nameColWidth={nameColWidth}
             />
           );
         })}
@@ -2085,6 +2121,7 @@ interface AdSetGroupProps {
   adSetIssues: AdIssue[];
   adIssuesById: Map<string, AdIssue[]>;
   onIssueClick: (issue: AdIssue) => void;
+  nameColWidth: number;
 }
 
 function AdSetGroup({
@@ -2115,6 +2152,7 @@ function AdSetGroup({
   adSetIssues,
   adIssuesById,
   onIssueClick,
+  nameColWidth,
 }: AdSetGroupProps) {
   // Defensive: always ensure ads is an array, then sort
   const adsRaw = adSet.ads || [];
@@ -2144,6 +2182,7 @@ function AdSetGroup({
         activitiesFullyLoaded={activitiesFullyLoaded}
         issues={adSetIssues}
         onIssueClick={onIssueClick}
+        nameColWidth={nameColWidth}
       />
       {isExpanded && loadingAds && (
         <tr className="border-b border-border bg-surface">
@@ -2199,6 +2238,7 @@ function AdSetGroup({
             activitiesFullyLoaded={activitiesFullyLoaded}
             issues={adIssuesById.get(ad.id) || []}
             onIssueClick={onIssueClick}
+            nameColWidth={nameColWidth}
           />
         ))}
     </>
