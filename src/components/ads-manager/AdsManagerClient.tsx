@@ -363,6 +363,8 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   const preloadingCoreRef = useRef(false);
   const actionsLoadedRef = useRef(false);
   const prewarmingPagesRef = useRef(false);
+  // Track which campaign IDs have already had their sparkline fetched to avoid duplicate calls
+  const fetchedSparklineCampaigns = useRef<Set<string>>(new Set());
   const hierarchyCacheKey = useMemo(() => {
     const since = dateRange?.since || 'na';
     const until = dateRange?.until || 'na';
@@ -467,6 +469,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     setErrorAds(new Set());
     // Clear sparkline cache so they re-fetch too
     setSparklineData({});
+    fetchedSparklineCampaigns.current.clear();
     // Clear activity cache so they re-fetch too
     setActivityData({});
     setActivitiesFullyLoaded(false);
@@ -549,6 +552,37 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       cancelled = true;
     };
   }, [activeStoreId]);
+
+  // Fetch real 7-day sparkline data for all campaigns from the Meta API.
+  // Runs whenever the campaign list changes (new store, date range, or initial load).
+  // This replaces the mock fallback in PerformanceSparkline with actual per-campaign ROAS trends.
+  useEffect(() => {
+    if (!activeStoreId || campaigns.length === 0) return;
+
+    const unfetched = campaigns
+      .map((c) => c.id)
+      .filter((id) => !fetchedSparklineCampaigns.current.has(id));
+
+    if (unfetched.length === 0) return;
+
+    unfetched.forEach((id) => fetchedSparklineCampaigns.current.add(id));
+
+    apiClient<{ data: Record<string, SparklineDataPoint[]> }>(
+      '/api/meta/sparkline',
+      {
+        params: { entityIds: unfetched.join(',') },
+        timeoutMs: 25_000,
+        maxRetries: 1,
+      }
+    ).then((res) => {
+      if (res.data && Object.keys(res.data).length > 0) {
+        setSparklineData((prev) => ({ ...prev, ...res.data }));
+      }
+    }).catch(() => {
+      // Allow retry on next render cycle by removing from fetched set
+      unfetched.forEach((id) => fetchedSparklineCampaigns.current.delete(id));
+    });
+  }, [activeStoreId, campaigns]);
 
   // Auto-trigger Shopify order backfill so pixel ROAS data is fresh.
   // Backfill days match the selected date range so all pixel data is available.
