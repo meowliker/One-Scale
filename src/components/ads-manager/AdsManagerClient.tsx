@@ -1791,6 +1791,8 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                   <td className="whitespace-nowrap px-3 py-2 text-[12px] text-[#aeaeb2]">&mdash;</td>
                   <td className="whitespace-nowrap px-3 py-2 text-[12px] text-[#aeaeb2]">&mdash;</td>
                   <td className="whitespace-nowrap px-3 py-2 text-[12px] text-[#aeaeb2]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-[12px] text-[#aeaeb2]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-[12px] text-[#aeaeb2]">&mdash;</td>
                   {columnOrder.map((key) => (
                     <MetricCell
                       key={`totals-${key}`}
