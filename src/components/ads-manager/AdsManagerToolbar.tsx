@@ -6,7 +6,6 @@ import { Plus, Columns3, AlertTriangle, LayoutDashboard, Loader2 } from 'lucide-
 import { SearchInput } from '@/components/ui/SearchInput';
 import { ColumnPicker } from '@/components/columns/ColumnPicker';
 import { cn } from '@/lib/utils';
-import { ColumnPresetSelector } from '@/components/columns/ColumnPresetSelector';
 
 export type StatusFilter = 'all' | 'ACTIVE' | 'PAUSED';
 
@@ -172,11 +171,6 @@ export function AdsManagerToolbar({
             Create Campaign
           </Link>
         </div>
-      </div>
-
-      <div className="flex items-center gap-2 px-1">
-        <span className="text-[11px] text-[#86868b] font-medium shrink-0">Presets:</span>
-        <ColumnPresetSelector />
       </div>
 
       {syncStatus && (

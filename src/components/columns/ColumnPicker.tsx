@@ -31,6 +31,7 @@ export function ColumnPicker({ isOpen, onClose }: ColumnPickerProps) {
   const {
     visibleColumns,
     activePresetId,
+    customPresets,
     addColumn,
     removeColumn,
     setPreset,
@@ -103,7 +104,7 @@ export function ColumnPicker({ isOpen, onClose }: ColumnPickerProps) {
 
         {/* Preset tabs */}
         <div className="flex gap-1 overflow-x-auto px-3 py-2 border-b border-border">
-          {defaultColumnPresets.map((preset) => (
+          {[...defaultColumnPresets, ...customPresets].map((preset) => (
             <button
               key={preset.id}
               onClick={() => setPreset(preset.id)}
