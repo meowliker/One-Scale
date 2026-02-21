@@ -281,7 +281,7 @@ export function AdRow({
         </td>
 
         {/* Performance Sparkline */}
-        <PerformanceSparkline entityId={ad.id} data={sparklineData?.[ad.id]} />
+        <PerformanceSparkline entityId={ad.id} data={sparklineData?.[ad.id]} currentRoas={ad.metrics.roas} />
 
         {/* Latest Actions */}
         <LatestActionsCell entityId={ad.id} actions={activityData?.[ad.id]} activitiesFullyLoaded={activitiesFullyLoaded} />

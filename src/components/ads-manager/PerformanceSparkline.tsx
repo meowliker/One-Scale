@@ -9,6 +9,7 @@ import { PortalTooltip } from '@/components/ui/PortalTooltip';
 interface PerformanceSparklineProps {
   entityId: string;
   data?: SparklineDataPoint[];
+  currentRoas?: number;
 }
 
 /**
@@ -50,7 +51,7 @@ function formatRoasChange(first: number, last: number): { text: string; arrow: s
   };
 }
 
-export function PerformanceSparkline({ entityId, data: dataProp }: PerformanceSparklineProps) {
+export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: PerformanceSparklineProps) {
   const data = (dataProp && dataProp.length >= 2) ? dataProp : getSparklineData(entityId);
   const [showTooltip, setShowTooltip] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -78,8 +79,9 @@ export function PerformanceSparkline({ entityId, data: dataProp }: PerformanceSp
   const gradientId = `sparkGrad-${entityId.replace(/[^a-zA-Z0-9]/g, '')}`;
 
   const firstRoas = data[0].roas;
-  const lastRoas = data[data.length - 1].roas;
-  const roasChange = formatRoasChange(firstRoas, lastRoas);
+  // Use the aggregate currentRoas from the table column if provided; fall back to the last daily point
+  const effectiveCurrentRoas = currentRoas ?? data[data.length - 1].roas;
+  const roasChange = formatRoasChange(firstRoas, effectiveCurrentRoas);
 
   const totalSpend = data.reduce((sum, d) => sum + d.spend, 0);
   const daysWithSpend = data.filter((d) => d.spend > 0).length;
@@ -208,7 +210,7 @@ export function PerformanceSparkline({ entityId, data: dataProp }: PerformanceSp
               </span>
             </div>
             <div className="flex items-center gap-1.5 text-xs">
-              <span className="text-text-muted">Avg Spend:</span>
+              <span className="text-text-muted">7d Avg Spend:</span>
               <span className="text-text-secondary font-mono">
                 ${avgSpend.toFixed(2)}/day
               </span>
