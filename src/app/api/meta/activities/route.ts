@@ -85,6 +85,33 @@ function buildActivityDescription(eventType: string): string {
   return descriptionMap[eventType] || eventType.replace(/_/g, ' ');
 }
 
+// Meta system-internal status values that are NOT meaningful user actions.
+// Transitions FROM these states are automatically filtered out.
+const META_SYSTEM_STATUS_VALUES = new Set([
+  'IN_PROCESS',
+  'PENDING_REVIEW',
+  'WITH_ISSUES',
+  'PENDING_BILLING_INFO',
+  // Canonical human-readable forms (used after formatStatusValue)
+  'Pending Process',
+  'Pending Review',
+  'With Issues',
+  'Pending Billing Info',
+]);
+
+// Actor name patterns that indicate a system/automated actor (not a real user)
+const SYSTEM_ACTOR_PATTERNS = [
+  'system',
+  'automated',
+  'facebook system',
+  'meta system',
+];
+
+function isSystemActor(actorName: string): boolean {
+  const lower = actorName.toLowerCase();
+  return SYSTEM_ACTOR_PATTERNS.some((pattern) => lower === pattern || lower.startsWith(pattern + ' '));
+}
+
 // Map Meta status codes/strings to human-readable labels
 function formatStatusValue(value: string): string {
   const statusMap: Record<string, string> = {
@@ -132,15 +159,24 @@ function buildActivityDetails(
         oldValue = oldLabel;
         newValue = newLabel;
       } else if (eventType.includes('budget') && oldValue && newValue) {
-        // Budget changes: "From $100.00 — to $200.00 Per day"
+        // Budget changes: "Budget: $300 → $400 /day" or "Budget: $2,100 → $2,500 (lifetime)"
         const oldNum = parseFloat(oldValue) / 100;
         const newNum = parseFloat(newValue) / 100;
         if (!isNaN(oldNum) && !isNaN(newNum)) {
-          oldValue = `$${oldNum.toFixed(2)}`;
-          newValue = `$${newNum.toFixed(2)}`;
-          details = `From $${oldNum.toFixed(2)} — to $${newNum.toFixed(2)} Per day`;
+          // Check if it's a lifetime budget via extra_data.budget_type or event_type hint
+          const budgetType =
+            (extra.budget_type && String(extra.budget_type).toLowerCase().includes('lifetime')) ||
+            eventType.toLowerCase().includes('lifetime')
+              ? 'lifetime'
+              : 'daily';
+          const suffix = budgetType === 'lifetime' ? '(lifetime)' : '/day';
+          const fmt = (n: number) =>
+            '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+          oldValue = fmt(oldNum);
+          newValue = fmt(newNum);
+          details = `Budget: ${oldValue} → ${newValue} ${suffix}`;
         } else {
-          details = `From ${oldValue} to ${newValue}`;
+          details = `Budget: ${oldValue} → ${newValue}`;
         }
       } else if (eventType.includes('bid') && oldValue && newValue) {
         // Bid changes
@@ -255,6 +291,36 @@ async function fetchAccountActivities(
     } else if (actorName.toLowerCase().includes('system') || actorName.toLowerCase().includes('facebook')) {
       performedBy = 'ai';
     }
+
+    // --- Bug 1 filter: remove non-meaningful / system-internal activity entries ---
+
+    // Filter: actor is a pure system actor (not a real user)
+    if (isSystemActor(actorName)) continue;
+
+    // Filter: both old and new values are empty/null (no actual change recorded).
+    // Exception: creation events are always meaningful even without old/new values.
+    const isCreateEvent = activity.event_type.startsWith('create_');
+    if (!oldValue && !newValue && !isCreateEvent) continue;
+
+    // Filter: old and new values are identical (no real change)
+    if (oldValue && newValue && oldValue === newValue) continue;
+
+    // Filter: status changes FROM a Meta system/internal state
+    if (activity.event_type.includes('run_status')) {
+      try {
+        const extra = typeof activity.extra_data === 'string'
+          ? JSON.parse(activity.extra_data)
+          : (activity.extra_data as Record<string, unknown> | null) || {};
+        const rawOld = String(extra.old_value || '');
+        if (META_SYSTEM_STATUS_VALUES.has(rawOld) || META_SYSTEM_STATUS_VALUES.has(formatStatusValue(rawOld))) {
+          continue;
+        }
+      } catch {
+        // If parse fails, keep the entry — better to show noise than miss real actions
+      }
+    }
+
+    // --- End Bug 1 filter ---
 
     const entityId = activity.object_id;
     if (!actionsMap[entityId]) actionsMap[entityId] = [];
