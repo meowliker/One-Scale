@@ -11,16 +11,26 @@ interface PerformanceSparklineProps {
   data?: SparklineDataPoint[];
 }
 
+/**
+ * Returns a hex color based on the absolute ROAS value using product-defined thresholds:
+ *   0        → grey  (no data / no spend)
+ *   < 1.0    → red   (bad)
+ *   1.0–1.3  → orange (ok)
+ *   1.3–1.6  → green (good)
+ *   >= 1.6   → green (very good)
+ */
+function getRoasColor(roas: number): string {
+  if (roas === 0) return '#aeaeb2'; // grey
+  if (roas < 1.0) return '#ff3b30'; // red
+  if (roas < 1.3) return '#ff9500'; // orange
+  return '#34c759'; // green (covers both 1.3–1.6 and >= 1.6)
+}
+
 function getTrendColor(data: SparklineDataPoint[]): string {
   if (data.length < 2) return '#0071e3';
-
-  const first = data[0].roas;
+  // Use the current (last) ROAS value to determine color, not direction
   const last = data[data.length - 1].roas;
-  const threshold = first * 0.05;
-
-  if (last > first + threshold) return '#34c759'; // Apple green (up)
-  if (last < first - threshold) return '#ff3b30'; // Apple red (down)
-  return '#0071e3'; // Apple blue (stable)
+  return getRoasColor(last);
 }
 
 function formatRoasChange(first: number, last: number): { text: string; arrow: string; color: string } {
@@ -28,7 +38,8 @@ function formatRoasChange(first: number, last: number): { text: string; arrow: s
 
   const pctChange = first > 0 ? ((last - first) / first) * 100 : 0;
   const sign = pctChange >= 0 ? '+' : '';
-  const color = pctChange > 0 ? '#34c759' : pctChange < 0 ? '#ff3b30' : '#aeaeb2';
+  // Color is based on the current (ending) ROAS level, not the direction of change
+  const color = getRoasColor(last);
   const arrow = pctChange > 0 ? '\u2191' : pctChange < 0 ? '\u2193' : '\u2192';
 
   return {

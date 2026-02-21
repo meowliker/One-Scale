@@ -7,11 +7,27 @@ interface PerformanceTrendProps {
   className?: string;
 }
 
+/**
+ * Returns a hex color based on the absolute ROAS value using product-defined thresholds:
+ *   0        → grey  (no data / no spend)
+ *   < 1.0    → red   (bad)
+ *   1.0–1.3  → orange (ok)
+ *   1.3–1.6  → green (good)
+ *   >= 1.6   → green (very good)
+ */
+function getRoasColor(roas: number): string {
+  if (roas === 0) return '#aeaeb2'; // grey
+  if (roas < 1.0) return '#ff3b30'; // red
+  if (roas < 1.3) return '#ff9500'; // orange
+  return '#34c759'; // green
+}
+
 export function PerformanceTrend({ data, width = 60, height = 20, className }: PerformanceTrendProps) {
   if (!data || data.length < 2) return null;
 
   const isUptrend = data[data.length - 1] > data[0];
-  const strokeColor = isUptrend ? '#16a34a' : '#dc2626'; // green-600 / red-600
+  const currentRoas = data[data.length - 1];
+  const strokeColor = getRoasColor(currentRoas);
 
   const min = Math.min(...data);
   const max = Math.max(...data);
