@@ -72,7 +72,7 @@ export function AdsManagerToolbar({
     : 'Up to date';
 
   return (
-    <div className="flex items-center justify-between gap-4 apple-toolbar px-4 py-2.5">
+    <div className="flex w-full items-center justify-between gap-4 apple-toolbar px-4 py-2.5">
         <div className="flex items-center gap-4">
           <div className="w-64">
             <SearchInput
@@ -136,31 +136,45 @@ export function AdsManagerToolbar({
               onClose={() => setColumnPickerOpen(false)}
             />
           </div>
-          <button
-            onClick={onToggleErrorCenter}
-            className={cn(
-              'inline-flex items-center gap-2 border px-3 py-2 text-sm font-medium transition-all duration-200',
-              showErrorCenter
-                ? 'border-[rgba(255,149,0,0.2)] bg-[#fff4e5] text-[#cc7700] rounded-lg'
-                : 'border-[rgba(0,0,0,0.08)] bg-white text-[#86868b] hover:bg-[#f5f5f7] rounded-lg'
-            )}
-          >
-            {showErrorCenter ? <LayoutDashboard className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
-            {showErrorCenter ? 'Back to Ads Manager' : 'Ads Error Center'}
+          <div className="group/err relative">
+            <button
+              onClick={onToggleErrorCenter}
+              className={cn(
+                'relative inline-flex items-center justify-center border p-2 transition-all duration-200 rounded-lg',
+                showErrorCenter
+                  ? 'border-[rgba(255,149,0,0.2)] bg-[#fff4e5] text-[#cc7700]'
+                  : 'border-[rgba(0,0,0,0.08)] bg-white text-[#86868b] hover:bg-[#f5f5f7]'
+              )}
+            >
+              {showErrorCenter ? <LayoutDashboard className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+              {!showErrorCenter && errorCounts && errorCounts.recent12h > 0 && (
+                <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-blue-500 text-[8px] font-bold text-white">
+                  {errorCounts.recent12h}
+                </span>
+              )}
+            </button>
+            {/* Hover tooltip */}
             {!showErrorCenter && errorCounts && (
-              <span className="ml-1 inline-flex items-center gap-1">
-                <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-600">
-                  {errorCounts.critical} critical
-                </span>
-                <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-600">
-                  {errorCounts.recent12h} in 12h
-                </span>
-                <span className="rounded-full bg-[#f5f5f7] px-2 py-0.5 text-[10px] font-semibold text-[#86868b]">
-                  {errorCounts.total} total
-                </span>
-              </span>
+              <div className="pointer-events-none absolute right-0 top-full z-50 mt-2
+                opacity-0 translate-y-1 group-hover/err:opacity-100 group-hover/err:translate-y-0
+                transition-all duration-150 ease-out">
+                <div className="w-48 rounded-xl bg-[#1d1d1f] px-3 py-2.5 shadow-xl">
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[#86868b]">Last 12 hours</p>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] text-white">Issues</span>
+                    <span className="text-[13px] font-semibold text-blue-400">{errorCounts.recent12h}</span>
+                  </div>
+                  {errorCounts.critical > 0 && (
+                    <div className="mt-1 flex items-center justify-between">
+                      <span className="text-[12px] text-white">Critical</span>
+                      <span className="text-[13px] font-semibold text-red-400">{errorCounts.critical}</span>
+                    </div>
+                  )}
+                  <p className="mt-2 text-[10px] text-[#86868b]">Click to open Error Center</p>
+                </div>
+              </div>
             )}
-          </button>
+          </div>
           {syncStatus && (
             <div className="flex items-center gap-2 border-l border-[rgba(0,0,0,0.08)] pl-3">
               {isRunning && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
