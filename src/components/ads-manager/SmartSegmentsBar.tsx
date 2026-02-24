@@ -135,66 +135,77 @@ export function SmartSegmentsBar({ campaigns, sparklineData = {} }: Props) {
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-2 px-1 py-1">
-      <span className="text-[11px] font-semibold text-[#86868b] shrink-0 uppercase tracking-wide">Segments:</span>
-
+    <div className="flex items-center gap-1.5 px-1">
       {/* Built-in smart segments */}
       {DIGITAL_SEGMENTS.map((seg) => {
         const isActive = activeSegment === seg.id;
         const count = counts[seg.id!] ?? 0;
+        const hasHits = count > 0;
         return (
           <button
             key={seg.id}
             onClick={() => handleSegmentClick(seg)}
             className={cn(
-              'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[12px] font-medium transition-all duration-150',
+              'group inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-medium transition-all duration-150 border',
               isActive
                 ? cn(seg.color, seg.textColor, 'shadow-sm')
-                : 'border-[rgba(0,0,0,0.08)] bg-white text-[#1d1d1f] hover:border-[rgba(0,0,0,0.15)] hover:bg-[#f5f5f7]'
+                : hasHits
+                  ? 'border-[rgba(0,0,0,0.1)] bg-white text-[#1d1d1f] hover:bg-[#f5f5f7]'
+                  : 'border-transparent bg-transparent text-[#aeaeb2] hover:bg-[#f5f5f7] hover:text-[#86868b] hover:border-[rgba(0,0,0,0.06)]'
             )}
           >
-            <span>{seg.emoji}</span>
-            <span>{seg.label}</span>
+            {/* Colored dot indicator */}
             <span className={cn(
-              'rounded-full px-1.5 py-0.5 text-[10px] font-bold',
-              isActive ? 'bg-white/60' : 'bg-[#f5f5f7]'
-            )}>
-              {count}
-            </span>
+              'h-1.5 w-1.5 rounded-full flex-shrink-0',
+              seg.dot,
+              !hasHits && !isActive && 'opacity-30'
+            )} />
+            <span>{seg.shortLabel ?? seg.label}</span>
+            {hasHits && (
+              <span className={cn(
+                'rounded px-1 text-[10px] font-bold tabular-nums',
+                isActive ? 'bg-white/50' : cn(seg.countBg, seg.countText)
+              )}>
+                {count}
+              </span>
+            )}
           </button>
         );
       })}
+
+      {/* Divider */}
+      <span className="mx-1 h-3.5 w-px bg-[rgba(0,0,0,0.08)]" />
 
       {/* Custom saved filter chips */}
       {savedFilters.map((sf) => {
         const isActive = activeSavedFilterId === sf.id;
         return (
           <span key={sf.id} className={cn(
-            'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[12px] font-medium',
+            'inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-all duration-150',
             isActive
-              ? 'border-[#0071e3]/40 bg-[#0071e3]/10 text-[#0071e3]'
-              : 'border-[rgba(0,0,0,0.08)] bg-white text-[#1d1d1f]'
+              ? 'border-[#0071e3]/30 bg-[#e8f0fe] text-[#0071e3]'
+              : 'border-[rgba(0,0,0,0.08)] bg-white text-[#1d1d1f] hover:bg-[#f5f5f7]'
           )}>
-            <button onClick={() => setActiveSavedFilter(isActive ? null : sf.id)}>
-              {sf.emoji} {sf.name}
+            <button onClick={() => setActiveSavedFilter(isActive ? null : sf.id)} className="flex items-center gap-1">
+              <span className="text-[11px]">{sf.emoji}</span>
+              {sf.name}
             </button>
-            <button onClick={() => deleteSavedFilter(sf.id)} className="ml-0.5 opacity-50 hover:opacity-100">
-              <X className="h-3 w-3" />
+            <button onClick={() => deleteSavedFilter(sf.id)} className="ml-0.5 opacity-40 hover:opacity-80">
+              <X className="h-2.5 w-2.5" />
             </button>
           </span>
         );
       })}
 
-      {/* Add custom filter button */}
+      {/* Save Filter */}
       <button
         onClick={() => setShowFilterBuilder(true)}
-        className="inline-flex items-center gap-1 rounded-full border border-dashed border-[rgba(0,0,0,0.15)] bg-transparent px-3 py-1 text-[12px] text-[#86868b] transition-colors hover:border-[#0071e3] hover:text-[#0071e3]"
+        className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[rgba(0,0,0,0.12)] px-2.5 py-1 text-[11px] text-[#aeaeb2] transition-all hover:border-[#0071e3] hover:text-[#0071e3]"
       >
         <Plus className="h-3 w-3" />
-        Save Filter
+        Save
       </button>
 
-      {/* Filter Builder Modal — inline for now */}
       {showFilterBuilder && (
         <CustomFilterModal onClose={() => setShowFilterBuilder(false)} />
       )}

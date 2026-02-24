@@ -75,7 +75,10 @@ export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: 
     );
   }
 
-  const trendColor = getTrendColor(data);
+  // Prefer actual campaign ROAS for color accuracy; fall back to last sparkline point
+  const trendColor = (currentRoas !== undefined && currentRoas !== null)
+    ? getRoasColor(currentRoas)
+    : getTrendColor(data);
   const gradientId = `sparkGrad-${entityId.replace(/[^a-zA-Z0-9]/g, '')}`;
 
   const firstRoas = data[0].roas;
