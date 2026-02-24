@@ -161,7 +161,7 @@ export function SmartSegmentsBar({ campaigns, sparklineData = {} }: Props) {
   };
 
   return (
-    <div className="flex items-center gap-1.5 px-1">
+    <div className="flex items-center gap-1.5 px-1 overflow-x-auto scrollbar-hide flex-nowrap md:flex-wrap">
       {/* Built-in smart segments */}
       {DIGITAL_SEGMENTS.map((seg) => {
         const isActive = activeSegment === seg.id;
@@ -172,7 +172,7 @@ export function SmartSegmentsBar({ campaigns, sparklineData = {} }: Props) {
             key={seg.id}
             onClick={() => handleSegmentClick(seg)}
             className={cn(
-              'group inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-medium transition-all duration-150 border',
+              'group inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-medium transition-all duration-150 border min-h-[36px] md:min-h-0',
               isActive
                 ? cn(seg.color, seg.textColor, 'shadow-sm')
                 : hasHits

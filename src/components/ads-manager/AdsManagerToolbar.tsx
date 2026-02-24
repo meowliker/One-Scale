@@ -72,9 +72,9 @@ export function AdsManagerToolbar({
     : 'Up to date';
 
   return (
-    <div className="flex w-full items-center justify-between gap-4 apple-toolbar px-4 py-2.5">
-        <div className="flex items-center gap-4">
-          <div className="w-64">
+    <div className="flex w-full flex-col gap-2 md:flex-row md:items-center md:justify-between apple-toolbar px-4 py-2.5">
+        <div className="flex flex-wrap items-center gap-2 md:gap-4">
+          <div className="w-full md:w-64">
             <SearchInput
               value={search}
               onChange={onSearchChange}
@@ -101,7 +101,7 @@ export function AdsManagerToolbar({
             {campaignCount} campaign{campaignCount !== 1 ? 's' : ''}
           </span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 md:gap-3">
           {attributionCoverage && (
             <Link
               href="/dashboard/attribution"
@@ -129,7 +129,7 @@ export function AdsManagerToolbar({
               )}
             >
               <Columns3 className="h-4 w-4" />
-              Columns
+              <span className="hidden md:inline">Columns</span>
             </button>
             <ColumnPicker
               isOpen={columnPickerOpen}
@@ -176,7 +176,7 @@ export function AdsManagerToolbar({
             )}
           </div>
           {syncStatus && (
-            <div className="flex items-center gap-2 border-l border-[rgba(0,0,0,0.08)] pl-3">
+            <div className="hidden md:flex items-center gap-2 border-l border-[rgba(0,0,0,0.08)] pl-3">
               {isRunning && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
               <span className="text-[11px] font-medium text-text-secondary">
                 Sync {Math.max(0, Math.min(100, Math.round(syncPercent)))}%
@@ -197,7 +197,7 @@ export function AdsManagerToolbar({
             className="inline-flex items-center gap-2 bg-[#0071e3] hover:bg-[#0077ED] rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors duration-150"
           >
             <Plus className="h-4 w-4" />
-            Create Campaign
+            <span className="hidden md:inline">Create Campaign</span>
           </Link>
         </div>
     </div>

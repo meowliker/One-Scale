@@ -456,3 +456,37 @@ body {
     opacity: 0;
   }
 }
+
+/* ===== Mobile Responsive ===== */
+
+/* Hide scrollbar utility */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Mobile touch-friendly table container */
+@media (max-width: 767px) {
+  .apple-table-container {
+    border-radius: 8px;
+  }
+
+  .apple-toolbar {
+    border-radius: 8px;
+  }
+
+  /* Increase touch targets */
+  .apple-table tbody td {
+    padding: 10px 8px;
+  }
+}
+
+/* Safe area for bottom fixed elements on iOS */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .safe-bottom {
+    padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
+  }
+}
