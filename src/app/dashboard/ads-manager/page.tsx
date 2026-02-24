@@ -147,12 +147,9 @@ export default function AdsManagerPage() {
 
   return (
     <div>
-      <div className="space-y-6">
+      <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold text-[#1d1d1f]">Ads Manager</h1>
-            <p className="text-sm mt-1 text-[#86868b]">Manage your Meta campaigns, ad sets, and ads</p>
-          </div>
+          <h1 className="text-sm font-semibold text-[#1d1d1f]">Ads Manager</h1>
           {dateRange && (
             <DateRangePicker dateRange={dateRange} onRangeChange={handleDateRangeChange} />
           )}

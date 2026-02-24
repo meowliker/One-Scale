@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { Plus, Columns3, AlertTriangle, LayoutDashboard, Loader2 } from 'lucide-react';
+import { Plus, Columns3, AlertTriangle, LayoutDashboard, Loader2, Target } from 'lucide-react';
 import { SearchInput } from '@/components/ui/SearchInput';
 import { ColumnPicker } from '@/components/columns/ColumnPicker';
 import { cn } from '@/lib/utils';
@@ -72,8 +72,7 @@ export function AdsManagerToolbar({
     : 'Up to date';
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between gap-4 apple-toolbar px-4 py-2.5">
+    <div className="flex items-center justify-between gap-4 apple-toolbar px-4 py-2.5">
         <div className="flex items-center gap-4">
           <div className="w-64">
             <SearchInput
@@ -106,16 +105,15 @@ export function AdsManagerToolbar({
           {attributionCoverage && (
             <Link
               href="/dashboard/attribution"
-              className="inline-flex items-center gap-2 rounded-lg border border-[rgba(52,199,89,0.2)] bg-[#e8f7ed] px-3 py-1.5 text-xs transition-colors duration-150"
+              title={`Attribution: ${attributionCoverage.mapped}/${attributionCoverage.total} purchases (${attributionCoverage.windowDays}d)`}
+              className="relative inline-flex items-center gap-1 rounded-lg border border-[rgba(52,199,89,0.2)] bg-[#e8f7ed] px-2 py-1.5 transition-colors duration-150 hover:bg-[#d4f0de]"
             >
-              <span className="font-semibold text-[#1b7d36]">
-                Attribution {Math.max(0, Math.min(100, attributionCoverage.percent)).toFixed(1)}%
-              </span>
-              <span className="text-[#34c759]">
-                {attributionCoverage.mapped}/{attributionCoverage.total} purchases ({attributionCoverage.windowDays}d)
+              <Target className="h-4 w-4 text-[#1b7d36]" />
+              <span className="text-[11px] font-semibold text-[#1b7d36]">
+                {Math.max(0, Math.min(100, attributionCoverage.percent)).toFixed(1)}%
               </span>
               {attributionCoverage.loading && (
-                <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-300" />
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
               )}
             </Link>
           )}
@@ -163,6 +161,23 @@ export function AdsManagerToolbar({
               </span>
             )}
           </button>
+          {syncStatus && (
+            <div className="flex items-center gap-2 border-l border-[rgba(0,0,0,0.08)] pl-3">
+              {isRunning && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
+              <span className="text-[11px] font-medium text-text-secondary">
+                Sync {Math.max(0, Math.min(100, Math.round(syncPercent)))}%
+              </span>
+              <div className="h-1 w-16 overflow-hidden rounded-full bg-[rgba(0,0,0,0.06)]">
+                <div
+                  className={cn(
+                    'h-full rounded-full bg-[#0071e3] transition-all duration-300',
+                    isRunning && 'animate-pulse'
+                  )}
+                  style={{ width: `${Math.max(0, Math.min(100, syncPercent))}%` }}
+                />
+              </div>
+            </div>
+          )}
           <Link
             href="/dashboard/ads-manager/create"
             className="inline-flex items-center gap-2 bg-[#0071e3] hover:bg-[#0077ED] rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors duration-150"
@@ -171,26 +186,6 @@ export function AdsManagerToolbar({
             Create Campaign
           </Link>
         </div>
-      </div>
-
-      {syncStatus && (
-        <div className="flex items-center gap-3 text-xs text-text-muted">
-          <span className="inline-flex items-center gap-1.5 font-medium text-text-secondary">
-            {isRunning && <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />}
-            <span>Sync {Math.max(0, Math.min(100, Math.round(syncPercent)))}%</span>
-          </span>
-          <div className="h-1 w-32 overflow-hidden rounded-full bg-[rgba(0,0,0,0.06)]">
-            <div
-              className={cn(
-                'h-full rounded-full bg-[#0071e3] transition-all duration-300',
-                isRunning && 'animate-pulse'
-              )}
-              style={{ width: `${Math.max(0, Math.min(100, syncPercent))}%` }}
-            />
-          </div>
-          <span className={cn('text-[11px]', isRunning ? 'text-primary' : 'text-text-muted')}>{stageText}</span>
-        </div>
-      )}
     </div>
   );
 }
