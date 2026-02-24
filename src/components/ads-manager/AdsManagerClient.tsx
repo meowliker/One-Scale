@@ -678,7 +678,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     const timer = window.setTimeout(() => {
       apiClient<{ data: Record<string, EntityAction[]> }>(
         '/api/meta/activities',
-        { params: { since: '3', limit: '30' }, timeoutMs: 7000, maxRetries: 0 }
+        { params: { since: '7', limit: '30' }, timeoutMs: 7000, maxRetries: 0 }
       )
         .then((res) => {
           if (cancelled) return;
@@ -1795,7 +1795,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         <div className="apple-table-container apple-scroll">
           <table className="w-full min-w-[1200px] apple-table">
             <thead>
-              <tr className="sticky top-0 z-20 bg-[#fbfbfd]">
+              <tr className="sticky top-0 z-20 bg-[#f5f5f7]">
                 <th className="w-10 whitespace-nowrap px-3 py-2 text-left sticky left-0 z-20 bg-[#f5f5f7]">
                   <Checkbox
                     checked={allSelected}

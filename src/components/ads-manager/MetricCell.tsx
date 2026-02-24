@@ -4,7 +4,7 @@ import type { MetricKey } from '@/types/metrics';
 import { formatMetric } from '@/lib/metrics';
 import { cn } from '@/lib/utils';
 
-const PIXEL_METRIC_KEYS = new Set(['appPixelResults','appPixelPurchases','appPixelPurchaseValue','appPixelRoas','appPixelCpa']);
+const PIXEL_METRIC_KEYS = new Set(['appPixelResults', 'appPixelPurchases', 'appPixelPurchaseValue', 'appPixelRoas', 'appPixelCpa']);
 
 export interface MetricCellProps {
   metricKey: MetricKey;
@@ -53,20 +53,17 @@ export function MetricCell({ metricKey, value, isTotals }: MetricCellProps) {
     <td className={cn(
       "whitespace-nowrap px-3 py-2 text-right text-[12px] tabular-nums",
       colorClass || "text-[#1d1d1f]",
-      PIXEL_METRIC_KEYS.has(metricKey) && "bg-[#f0f7ff]",
+      PIXEL_METRIC_KEYS.has(metricKey) && "bg-[#e8f2ff] border-l border-[#0071e3]/10",
       isTotals && "font-semibold bg-[#f0f4ff]"
     )}>
       {(metricKey === 'roas' || metricKey === 'appPixelRoas') && (
-        <>
-          {metricKey === 'appPixelRoas' && <span className="mr-0.5 text-[9px] font-bold text-[#0071e3] opacity-60">px</span>}
-          <span
-            className={cn(
-              "mr-1 inline-block h-1.5 w-1.5 rounded-full",
-              getRoasDotColor(value)
-            )}
-            aria-hidden="true"
-          />
-        </>
+        <span
+          className={cn(
+            "mr-1 inline-block h-1.5 w-1.5 rounded-full",
+            getRoasDotColor(value)
+          )}
+          aria-hidden="true"
+        />
       )}
       {formatMetric(metricKey, value)}
     </td>

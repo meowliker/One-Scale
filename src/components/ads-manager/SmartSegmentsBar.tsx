@@ -12,9 +12,13 @@ import { Plus, X } from 'lucide-react';
 interface SegmentDef {
   id: SmartSegmentId;
   label: string;
+  shortLabel?: string;    // short label for the chip (falls back to label)
   emoji: string;
   color: string;          // Tailwind bg class for active chip
   textColor: string;
+  dot: string;            // Tailwind bg class for the colored dot
+  countBg: string;        // Tailwind bg class for the count badge (inactive)
+  countText: string;      // Tailwind text class for the count badge (inactive)
   presetId: string;       // column preset to activate
   test: (c: Campaign, trend7d: number | null, trend14d: number | null) => boolean;
   actionLabel?: string;
@@ -24,9 +28,13 @@ const DIGITAL_SEGMENTS: SegmentDef[] = [
   {
     id: 'kill-list',
     label: 'Kill List',
+    shortLabel: 'Kill',
     emoji: '🔴',
     color: 'bg-red-100 border-red-200',
     textColor: 'text-red-700',
+    dot: 'bg-red-500',
+    countBg: 'bg-red-100',
+    countText: 'text-red-700',
     presetId: 'kill-list-view',
     // kill-list: (spend > 30 AND conversions = 0) OR (roas < 0.8 AND spend > 20)
     test: (c) =>
@@ -40,9 +48,13 @@ const DIGITAL_SEGMENTS: SegmentDef[] = [
   {
     id: 'needs-review',
     label: 'Needs Review',
+    shortLabel: 'Review',
     emoji: '🟡',
     color: 'bg-amber-100 border-amber-200',
     textColor: 'text-amber-700',
+    dot: 'bg-amber-500',
+    countBg: 'bg-amber-100',
+    countText: 'text-amber-700',
     presetId: 'performance',
     // needs-review: roas < 1.0 AND roas >= 0.8 AND spend > 15
     test: (c) => c.status === 'ACTIVE' && c.metrics.roas >= 0.8 && c.metrics.roas < 1.0 && c.metrics.spend > 15,
@@ -50,9 +62,13 @@ const DIGITAL_SEGMENTS: SegmentDef[] = [
   {
     id: 'scale-now',
     label: 'Scale Now',
+    shortLabel: 'Scale',
     emoji: '🟢',
     color: 'bg-green-100 border-green-200',
     textColor: 'text-green-700',
+    dot: 'bg-green-500',
+    countBg: 'bg-green-100',
+    countText: 'text-green-700',
     presetId: 'scale-view',
     // scale-now: roas >= 1.4 AND 7d trend >= -5%
     test: (c, trend7d) => c.status === 'ACTIVE' && c.metrics.roas >= 1.4 && (trend7d === null || trend7d >= -0.05),
@@ -64,6 +80,9 @@ const DIGITAL_SEGMENTS: SegmentDef[] = [
     emoji: '⚡',
     color: 'bg-blue-100 border-blue-200',
     textColor: 'text-blue-700',
+    dot: 'bg-blue-500',
+    countBg: 'bg-blue-100',
+    countText: 'text-blue-700',
     presetId: 'performance',
     // top-7d: roas >= 1.2 AND trend >= 0
     test: (c, trend7d) => c.status === 'ACTIVE' && c.metrics.roas >= 1.2 && (trend7d === null || trend7d >= 0),
@@ -74,6 +93,9 @@ const DIGITAL_SEGMENTS: SegmentDef[] = [
     emoji: '🧪',
     color: 'bg-purple-100 border-purple-200',
     textColor: 'text-purple-700',
+    dot: 'bg-purple-500',
+    countBg: 'bg-purple-100',
+    countText: 'text-purple-700',
     presetId: 'performance',
     // learning: conversions < 5 AND spend < 50
     test: (c) => c.status === 'ACTIVE' && c.metrics.conversions < 5 && c.metrics.spend < 50,
@@ -81,9 +103,13 @@ const DIGITAL_SEGMENTS: SegmentDef[] = [
   {
     id: 'fatigue',
     label: 'Creative Fatigue',
+    shortLabel: 'Fatigue',
     emoji: '💀',
     color: 'bg-orange-100 border-orange-200',
     textColor: 'text-orange-700',
+    dot: 'bg-orange-500',
+    countBg: 'bg-orange-100',
+    countText: 'text-orange-700',
     presetId: 'creative-health',
     // fatigue: frequency > 3.5 AND roas < 1.3
     test: (c) => c.status === 'ACTIVE' && c.metrics.frequency > 3.5 && c.metrics.roas < 1.3,
