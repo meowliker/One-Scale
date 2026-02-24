@@ -59,6 +59,7 @@ import { DraggableColumnHeader } from '@/components/columns/DraggableColumnHeade
 import { useSmartFilterStore, type SmartSegmentId } from '@/stores/smartFilterStore';
 import { SmartSegmentsBar } from './SmartSegmentsBar';
 import { BulkActionPanel } from './BulkActionPanel';
+import { MobileAdsManager } from './MobileAdsManager';
 
 // Sort indicator for fixed column headers
 function FixedSortIndicator({ active, direction }: { active: boolean; direction: 'asc' | 'desc' | null }) {
@@ -1788,27 +1789,29 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         />
       )}
 
-      {/* Mobile card list */}
+      {/* Mobile: Triple Whale-style drill-down with landscape table */}
       {!showErrorCenter && (
-        <div className="md:hidden space-y-3">
-          {sortedCampaigns.length === 0 ? (
-            <div className="rounded-xl bg-white border border-[rgba(0,0,0,0.06)] p-8 text-center text-sm text-[#aeaeb2]">
-              No campaigns found.
-            </div>
-          ) : (
-            sortedCampaigns.map((campaign) => (
-              <MobileCampaignCard
-                key={campaign.id}
-                campaign={campaign}
-                isSelected={selectedIds.has(campaign.id)}
-                onToggleSelect={() => toggleSelection(campaign.id)}
-                onStatusChange={(status) => handleCampaignStatusChange(campaign.id, status)}
-                sparklineData={sparklineData}
-                isExpanded={expandedCampaigns.has(campaign.id)}
-                onToggleExpand={() => handleToggleExpandCampaign(campaign.id)}
-              />
-            ))
-          )}
+        <div className="md:hidden">
+          <MobileAdsManager
+            campaigns={sortedCampaigns}
+            selectedIds={selectedIds}
+            expandedCampaigns={expandedCampaigns}
+            sparklineData={sparklineData}
+            loadingAdSets={loadingAdSets}
+            loadingAds={loadingAds}
+            errorAdSets={errorAdSets}
+            errorAds={errorAds}
+            onToggleSelection={toggleSelection}
+            onToggleExpandCampaign={handleToggleExpandCampaign}
+            onToggleExpandAdSet={handleToggleExpandAdSet}
+            onCampaignStatusChange={handleCampaignStatusChange}
+            onAdSetStatusChange={handleAdSetStatusChange}
+            onAdStatusChange={handleAdStatusChange}
+            onCampaignBudgetChange={handleCampaignBudgetChange}
+            onAdSetBudgetChange={handleAdSetBudgetChange}
+            onRetryAdSets={handleRetryAdSets}
+            onRetryAds={handleRetryAds}
+          />
         </div>
       )}
 
@@ -2428,101 +2431,3 @@ function AdSetGroup({
   );
 }
 
-// --- Mobile Campaign Card (app-like card view for small screens) ---
-function MobileCampaignCard({
-  campaign,
-  isSelected,
-  onToggleSelect,
-  onStatusChange,
-  sparklineData,
-  isExpanded,
-  onToggleExpand,
-}: {
-  campaign: Campaign;
-  isSelected: boolean;
-  onToggleSelect: () => void;
-  onStatusChange: (status: EntityStatus) => void;
-  sparklineData: Record<string, SparklineDataPoint[]>;
-  isExpanded: boolean;
-  onToggleExpand: () => void;
-}) {
-  const isActive = campaign.status === 'ACTIVE';
-  const m = campaign.metrics;
-
-  return (
-    <div
-      className={cn(
-        'rounded-xl border bg-white p-4 transition-all duration-150 active:scale-[0.99]',
-        isSelected ? 'border-[#0071e3] bg-[#f0f6ff]' : 'border-[rgba(0,0,0,0.06)]'
-      )}
-    >
-      {/* Top row: toggle + name + checkbox */}
-      <div className="flex items-start gap-3">
-        <Toggle
-          checked={isActive}
-          onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
-          size="sm"
-        />
-        <div className="flex-1 min-w-0" onClick={onToggleExpand}>
-          <p className="text-[14px] font-semibold text-[#1d1d1f] truncate">{campaign.name}</p>
-          <div className="flex items-center gap-2 mt-0.5">
-            <span className={cn(
-              'inline-flex items-center gap-1 text-[11px] font-semibold',
-              isActive ? 'text-emerald-600' : 'text-[#86868b]'
-            )}>
-              {isActive && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />}
-              {campaign.status}
-            </span>
-            <span className="text-[11px] text-[#aeaeb2]">
-              {campaign.dailyBudget > 0 ? `$${campaign.dailyBudget.toFixed(0)}/day` : campaign.lifetimeBudget ? `$${campaign.lifetimeBudget.toFixed(0)} lifetime` : 'ABO'}
-            </span>
-          </div>
-        </div>
-        <Checkbox checked={isSelected} onChange={onToggleSelect} />
-      </div>
-
-      {/* Metrics grid */}
-      <div className="grid grid-cols-4 gap-3 mt-3 pt-3 border-t border-[rgba(0,0,0,0.04)]">
-        <div>
-          <p className="text-[10px] font-medium uppercase text-[#86868b]">Spend</p>
-          <p className="text-[13px] font-bold text-[#1d1d1f] tabular-nums">${m.spend.toFixed(0)}</p>
-        </div>
-        <div>
-          <p className="text-[10px] font-medium uppercase text-[#86868b]">Revenue</p>
-          <p className="text-[13px] font-bold text-emerald-600 tabular-nums">${m.revenue.toFixed(0)}</p>
-        </div>
-        <div>
-          <p className="text-[10px] font-medium uppercase text-[#86868b]">ROAS</p>
-          <p className={cn(
-            'text-[13px] font-bold tabular-nums',
-            m.roas >= 1.5 ? 'text-emerald-600' : m.roas >= 1 ? 'text-amber-600' : 'text-red-500'
-          )}>{m.roas.toFixed(2)}x</p>
-        </div>
-        <div>
-          <p className="text-[10px] font-medium uppercase text-[#86868b]">CPA</p>
-          <p className="text-[13px] font-bold text-[#1d1d1f] tabular-nums">${m.cpa.toFixed(2)}</p>
-        </div>
-      </div>
-
-      {/* Second metrics row */}
-      <div className="grid grid-cols-4 gap-3 mt-2">
-        <div>
-          <p className="text-[10px] font-medium uppercase text-[#86868b]">Clicks</p>
-          <p className="text-[12px] font-semibold text-[#1d1d1f] tabular-nums">{m.clicks.toLocaleString()}</p>
-        </div>
-        <div>
-          <p className="text-[10px] font-medium uppercase text-[#86868b]">CTR</p>
-          <p className="text-[12px] font-semibold text-[#1d1d1f] tabular-nums">{m.ctr.toFixed(2)}%</p>
-        </div>
-        <div>
-          <p className="text-[10px] font-medium uppercase text-[#86868b]">Conv.</p>
-          <p className="text-[12px] font-semibold text-[#1d1d1f] tabular-nums">{m.conversions}</p>
-        </div>
-        <div>
-          <p className="text-[10px] font-medium uppercase text-[#86868b]">Impr.</p>
-          <p className="text-[12px] font-semibold text-[#1d1d1f] tabular-nums">{m.impressions.toLocaleString()}</p>
-        </div>
-      </div>
-    </div>
-  );
-}
