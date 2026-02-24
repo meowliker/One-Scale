@@ -152,10 +152,19 @@ export function getDateRangeInTimezone(
       return { start: startOfDayInTz(todayStr, timezone), end: endOfDayInTz(todayStr, timezone), preset };
     case 'yesterday':
       return { start: startOfDayInTz(yesterdayStr, timezone), end: endOfDayInTz(yesterdayStr, timezone), preset };
+    case 'last3': {
+      const startStr = daysAgoInTimezone(3, timezone);
+      return { start: startOfDayInTz(startStr, timezone), end: endOfDayInTz(yesterdayStr, timezone), preset };
+    }
     case 'last7': {
       // 7 complete days ending yesterday (matches Shopify's "Last 7 days")
       const startStr = daysAgoInTimezone(7, timezone);
       return { start: startOfDayInTz(startStr, timezone), end: endOfDayInTz(yesterdayStr, timezone), preset };
+    }
+    case 'last7today': {
+      // 7 days ago through end of today (8-day window including today)
+      const startStr = daysAgoInTimezone(7, timezone);
+      return { start: startOfDayInTz(startStr, timezone), end: endOfDayInTz(todayStr, timezone), preset };
     }
     case 'last14': {
       const startStr = daysAgoInTimezone(14, timezone);

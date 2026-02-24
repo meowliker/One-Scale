@@ -12,9 +12,13 @@ import { Plus, X } from 'lucide-react';
 interface SegmentDef {
   id: SmartSegmentId;
   label: string;
+  shortLabel?: string;    // short label for the chip (falls back to label)
   emoji: string;
   color: string;          // Tailwind bg class for active chip
   textColor: string;
+  dot: string;            // Tailwind bg class for the colored dot
+  countBg: string;        // Tailwind bg class for the count badge (inactive)
+  countText: string;      // Tailwind text class for the count badge (inactive)
   presetId: string;       // column preset to activate
   test: (c: Campaign, trend7d: number | null, trend14d: number | null) => boolean;
   actionLabel?: string;
@@ -24,9 +28,13 @@ const DIGITAL_SEGMENTS: SegmentDef[] = [
   {
     id: 'kill-list',
     label: 'Kill List',
+    shortLabel: 'Kill',
     emoji: '🔴',
     color: 'bg-red-100 border-red-200',
     textColor: 'text-red-700',
+    dot: 'bg-red-500',
+    countBg: 'bg-red-100',
+    countText: 'text-red-700',
     presetId: 'kill-list-view',
     // kill-list: (spend > 30 AND conversions = 0) OR (roas < 0.8 AND spend > 20)
     test: (c) =>
@@ -40,9 +48,13 @@ const DIGITAL_SEGMENTS: SegmentDef[] = [
   {
     id: 'needs-review',
     label: 'Needs Review',
+    shortLabel: 'Review',
     emoji: '🟡',
     color: 'bg-amber-100 border-amber-200',
     textColor: 'text-amber-700',
+    dot: 'bg-amber-500',
+    countBg: 'bg-amber-100',
+    countText: 'text-amber-700',
     presetId: 'performance',
     // needs-review: roas < 1.0 AND roas >= 0.8 AND spend > 15
     test: (c) => c.status === 'ACTIVE' && c.metrics.roas >= 0.8 && c.metrics.roas < 1.0 && c.metrics.spend > 15,
@@ -50,9 +62,13 @@ const DIGITAL_SEGMENTS: SegmentDef[] = [
   {
     id: 'scale-now',
     label: 'Scale Now',
+    shortLabel: 'Scale',
     emoji: '🟢',
     color: 'bg-green-100 border-green-200',
     textColor: 'text-green-700',
+    dot: 'bg-green-500',
+    countBg: 'bg-green-100',
+    countText: 'text-green-700',
     presetId: 'scale-view',
     // scale-now: roas >= 1.4 AND 7d trend >= -5%
     test: (c, trend7d) => c.status === 'ACTIVE' && c.metrics.roas >= 1.4 && (trend7d === null || trend7d >= -0.05),
@@ -64,6 +80,9 @@ const DIGITAL_SEGMENTS: SegmentDef[] = [
     emoji: '⚡',
     color: 'bg-blue-100 border-blue-200',
     textColor: 'text-blue-700',
+    dot: 'bg-blue-500',
+    countBg: 'bg-blue-100',
+    countText: 'text-blue-700',
     presetId: 'performance',
     // top-7d: roas >= 1.2 AND trend >= 0
     test: (c, trend7d) => c.status === 'ACTIVE' && c.metrics.roas >= 1.2 && (trend7d === null || trend7d >= 0),
@@ -74,6 +93,9 @@ const DIGITAL_SEGMENTS: SegmentDef[] = [
     emoji: '🧪',
     color: 'bg-purple-100 border-purple-200',
     textColor: 'text-purple-700',
+    dot: 'bg-purple-500',
+    countBg: 'bg-purple-100',
+    countText: 'text-purple-700',
     presetId: 'performance',
     // learning: conversions < 5 AND spend < 50
     test: (c) => c.status === 'ACTIVE' && c.metrics.conversions < 5 && c.metrics.spend < 50,
@@ -81,9 +103,13 @@ const DIGITAL_SEGMENTS: SegmentDef[] = [
   {
     id: 'fatigue',
     label: 'Creative Fatigue',
+    shortLabel: 'Fatigue',
     emoji: '💀',
     color: 'bg-orange-100 border-orange-200',
     textColor: 'text-orange-700',
+    dot: 'bg-orange-500',
+    countBg: 'bg-orange-100',
+    countText: 'text-orange-700',
     presetId: 'creative-health',
     // fatigue: frequency > 3.5 AND roas < 1.3
     test: (c) => c.status === 'ACTIVE' && c.metrics.frequency > 3.5 && c.metrics.roas < 1.3,
@@ -135,66 +161,77 @@ export function SmartSegmentsBar({ campaigns, sparklineData = {} }: Props) {
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-2 px-1 py-1">
-      <span className="text-[11px] font-semibold text-[#86868b] shrink-0 uppercase tracking-wide">Segments:</span>
-
+    <div className="flex items-center gap-1.5 px-1">
       {/* Built-in smart segments */}
       {DIGITAL_SEGMENTS.map((seg) => {
         const isActive = activeSegment === seg.id;
         const count = counts[seg.id!] ?? 0;
+        const hasHits = count > 0;
         return (
           <button
             key={seg.id}
             onClick={() => handleSegmentClick(seg)}
             className={cn(
-              'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[12px] font-medium transition-all duration-150',
+              'group inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-medium transition-all duration-150 border',
               isActive
                 ? cn(seg.color, seg.textColor, 'shadow-sm')
-                : 'border-[rgba(0,0,0,0.08)] bg-white text-[#1d1d1f] hover:border-[rgba(0,0,0,0.15)] hover:bg-[#f5f5f7]'
+                : hasHits
+                  ? 'border-[rgba(0,0,0,0.1)] bg-white text-[#1d1d1f] hover:bg-[#f5f5f7]'
+                  : 'border-transparent bg-transparent text-[#aeaeb2] hover:bg-[#f5f5f7] hover:text-[#86868b] hover:border-[rgba(0,0,0,0.06)]'
             )}
           >
-            <span>{seg.emoji}</span>
-            <span>{seg.label}</span>
+            {/* Colored dot indicator */}
             <span className={cn(
-              'rounded-full px-1.5 py-0.5 text-[10px] font-bold',
-              isActive ? 'bg-white/60' : 'bg-[#f5f5f7]'
-            )}>
-              {count}
-            </span>
+              'h-1.5 w-1.5 rounded-full flex-shrink-0',
+              seg.dot,
+              !hasHits && !isActive && 'opacity-30'
+            )} />
+            <span>{seg.shortLabel ?? seg.label}</span>
+            {hasHits && (
+              <span className={cn(
+                'rounded px-1 text-[10px] font-bold tabular-nums',
+                isActive ? 'bg-white/50' : cn(seg.countBg, seg.countText)
+              )}>
+                {count}
+              </span>
+            )}
           </button>
         );
       })}
+
+      {/* Divider */}
+      <span className="mx-1 h-3.5 w-px bg-[rgba(0,0,0,0.08)]" />
 
       {/* Custom saved filter chips */}
       {savedFilters.map((sf) => {
         const isActive = activeSavedFilterId === sf.id;
         return (
           <span key={sf.id} className={cn(
-            'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[12px] font-medium',
+            'inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-all duration-150',
             isActive
-              ? 'border-[#0071e3]/40 bg-[#0071e3]/10 text-[#0071e3]'
-              : 'border-[rgba(0,0,0,0.08)] bg-white text-[#1d1d1f]'
+              ? 'border-[#0071e3]/30 bg-[#e8f0fe] text-[#0071e3]'
+              : 'border-[rgba(0,0,0,0.08)] bg-white text-[#1d1d1f] hover:bg-[#f5f5f7]'
           )}>
-            <button onClick={() => setActiveSavedFilter(isActive ? null : sf.id)}>
-              {sf.emoji} {sf.name}
+            <button onClick={() => setActiveSavedFilter(isActive ? null : sf.id)} className="flex items-center gap-1">
+              <span className="text-[11px]">{sf.emoji}</span>
+              {sf.name}
             </button>
-            <button onClick={() => deleteSavedFilter(sf.id)} className="ml-0.5 opacity-50 hover:opacity-100">
-              <X className="h-3 w-3" />
+            <button onClick={() => deleteSavedFilter(sf.id)} className="ml-0.5 opacity-40 hover:opacity-80">
+              <X className="h-2.5 w-2.5" />
             </button>
           </span>
         );
       })}
 
-      {/* Add custom filter button */}
+      {/* Save Filter */}
       <button
         onClick={() => setShowFilterBuilder(true)}
-        className="inline-flex items-center gap-1 rounded-full border border-dashed border-[rgba(0,0,0,0.15)] bg-transparent px-3 py-1 text-[12px] text-[#86868b] transition-colors hover:border-[#0071e3] hover:text-[#0071e3]"
+        className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[rgba(0,0,0,0.12)] px-2.5 py-1 text-[11px] text-[#aeaeb2] transition-all hover:border-[#0071e3] hover:text-[#0071e3]"
       >
         <Plus className="h-3 w-3" />
-        Save Filter
+        Save
       </button>
 
-      {/* Filter Builder Modal — inline for now */}
       {showFilterBuilder && (
         <CustomFilterModal onClose={() => setShowFilterBuilder(false)} />
       )}

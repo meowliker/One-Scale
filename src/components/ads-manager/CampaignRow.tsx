@@ -72,6 +72,8 @@ export function CampaignRow({
   nameColWidth,
 }: CampaignRowProps) {
   const isActive = campaign.status === 'ACTIVE';
+  const isABO = !(campaign.dailyBudget > 0) && !(campaign.lifetimeBudget && campaign.lifetimeBudget > 0);
+  const isLifetimeBudget = !isABO && campaign.lifetimeBudget && campaign.lifetimeBudget > 0;
   const objective = objectiveLabels[campaign.objective] ?? { label: campaign.objective, variant: 'default' as const };
 
   return (
@@ -156,18 +158,26 @@ export function CampaignRow({
         </span>
       </td>
 
-      {/* Budget */}
+      {/* Budget — ABO has no campaign-level budget (it lives on each ad set) */}
       <td className="whitespace-nowrap px-3 py-2">
-        <InlineEdit
-          value={(campaign.dailyBudget ?? 0).toFixed(2)}
-          onSave={(val) => {
-            const num = parseFloat(val);
-            if (!isNaN(num) && num > 0) onBudgetChange(num);
-          }}
-          type="number"
-          prefix="$"
-        />
-        <span className="text-[11px] text-[#aeaeb2] ml-1">/day</span>
+        {isABO ? (
+          <span className="text-[12px] text-[#aeaeb2] italic">Ad set budgets</span>
+        ) : (
+          <>
+            <InlineEdit
+              value={(isLifetimeBudget ? campaign.lifetimeBudget! : (campaign.dailyBudget ?? 0)).toFixed(2)}
+              onSave={(val) => {
+                const num = parseFloat(val);
+                if (!isNaN(num) && num > 0) onBudgetChange(num);
+              }}
+              type="number"
+              prefix="$"
+            />
+            <span className="text-[11px] text-[#aeaeb2] ml-1">
+              {isLifetimeBudget ? '/lifetime' : '/day'}
+            </span>
+          </>
+        )}
       </td>
 
       {/* Bid Strategy */}

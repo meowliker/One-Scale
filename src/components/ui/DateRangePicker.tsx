@@ -16,18 +16,29 @@ export interface DateRangePickerProps {
 const presets: { label: string; value: DateRangePreset }[] = [
   { label: 'Today', value: 'today' },
   { label: 'Yesterday', value: 'yesterday' },
+  { label: 'Last 3 Days', value: 'last3' },
   { label: 'Last 7 Days', value: 'last7' },
+  { label: '7 Days + Today', value: 'last7today' },
   { label: 'Last 14 Days', value: 'last14' },
   { label: 'Last 30 Days', value: 'last30' },
   { label: 'This Month', value: 'thisMonth' },
   { label: 'Last Month', value: 'lastMonth' },
 ];
 
+/** Quick-access pills shown inline next to the calendar trigger */
+const quickPresets: { label: string; shortLabel: string; value: DateRangePreset }[] = [
+  { label: 'Last 3 Days', shortLabel: '3D', value: 'last3' },
+  { label: '7 Days + Today', shortLabel: '7D+T', value: 'last7today' },
+  { label: 'Last 14 Days', shortLabel: '14D', value: 'last14' },
+];
+
 /** Map preset values to their display labels */
 const presetLabels: Record<string, string> = {
   today: 'Today',
   yesterday: 'Yesterday',
+  last3: 'Last 3 Days',
   last7: 'Last 7 Days',
+  last7today: '7D + Today',
   last14: 'Last 14 Days',
   last30: 'Last 30 Days',
   thisMonth: 'This Month',
@@ -125,16 +136,45 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
   }, [customStart, customEnd, singleDateMode]);
 
   return (
-    <div className="relative inline-block" ref={ref}>
+    <div className="relative inline-flex items-center gap-1.5" ref={ref}>
+      {/* Quick-select pills */}
+      {quickPresets.map((qp) => {
+        const isActive = dateRange.preset === qp.value;
+        return (
+          <button
+            key={qp.value}
+            onClick={() => handlePresetClick(qp.value)}
+            title={qp.label}
+            className={cn(
+              'inline-flex items-center rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition-all duration-150 border',
+              isActive
+                ? 'bg-[#0071e3] text-white border-[#0071e3] shadow-sm'
+                : 'bg-white text-[#86868b] border-[rgba(0,0,0,0.08)] hover:border-[#0071e3]/40 hover:text-[#0071e3] hover:bg-[#f0f6ff]'
+            )}
+          >
+            {qp.shortLabel}
+          </button>
+        );
+      })}
+
+      {/* Divider */}
+      <span className="h-4 w-px bg-[rgba(0,0,0,0.08)]" />
+
+      {/* Calendar trigger — shows current selection label */}
       <button
         onClick={() => setOpen((prev) => !prev)}
-        className="inline-flex items-center gap-2 rounded-lg border border-border-light bg-surface-elevated px-3 py-2 text-sm font-medium text-text-secondary shadow-md shadow-black/20 hover:bg-surface-hover transition-colors"
+        className={cn(
+          'inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-medium transition-colors',
+          open
+            ? 'border-[#0071e3] bg-[#f0f6ff] text-[#0071e3]'
+            : 'border-[rgba(0,0,0,0.08)] bg-white text-[#86868b] hover:bg-[#f5f5f7]'
+        )}
       >
-        <Calendar className="h-4 w-4 text-text-muted" />
+        <Calendar className="h-3.5 w-3.5" />
         {formatTriggerLabel(dateRange.start, dateRange.end, dateRange.preset)}
       </button>
       {open && (
-        <div className="absolute left-0 z-[100] mt-1 rounded-lg border border-border bg-surface-elevated shadow-lg">
+        <div className="absolute right-0 z-[100] mt-1 rounded-lg border border-border bg-surface-elevated shadow-lg">
           <div className="flex">
             {/* Left column: Presets */}
             <div className="w-44 border-r border-border py-2">

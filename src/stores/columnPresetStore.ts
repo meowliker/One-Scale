@@ -67,7 +67,7 @@ export const useColumnPresetStore = create<ColumnPresetState>()(
           isDefault: false,
           isCustom: true,
         };
-        set({ customPresets: [...customPresets, newPreset] });
+        set({ customPresets: [...customPresets, newPreset], activePresetId: newPreset.id });
       },
 
       deletePreset: (presetId) => {
