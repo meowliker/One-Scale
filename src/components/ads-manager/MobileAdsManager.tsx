@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
   ChevronRight,
   ChevronLeft,
@@ -139,6 +139,35 @@ export function MobileAdsManager({
   const [drilldown, setDrilldown] = useState<DrilldownState>({ level: 'campaigns' });
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+  // Resizable name column for landscape table
+  const TOGGLE_COL_W = 32; // compact on/off column
+  const [nameColWidth, setNameColWidth] = useState(120);
+  const nameResizeRef = useRef<{ startX: number; startW: number } | null>(null);
+
+  const handleNameResizeStart = useCallback((e: React.TouchEvent | React.MouseEvent) => {
+    e.preventDefault();
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    nameResizeRef.current = { startX: clientX, startW: nameColWidth };
+
+    function onMove(ev: TouchEvent | MouseEvent) {
+      if (!nameResizeRef.current) return;
+      const cx = 'touches' in ev ? ev.touches[0].clientX : (ev as MouseEvent).clientX;
+      const delta = cx - nameResizeRef.current.startX;
+      setNameColWidth(Math.max(80, Math.min(300, nameResizeRef.current.startW + delta)));
+    }
+    function onEnd() {
+      nameResizeRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onEnd);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onEnd);
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onEnd);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onEnd);
+  }, [nameColWidth]);
 
   // Resolve current data for the active drill level
   const currentCampaign = useMemo(() => {
@@ -295,17 +324,31 @@ export function MobileAdsManager({
 
         {/* Scrollable table */}
         <div className="flex-1 overflow-auto">
-          <table className="w-full min-w-[800px] text-[11px]">
+          <table className="w-full min-w-[700px] text-[11px]">
             <thead className="sticky top-0 z-10">
               <tr className="bg-[#f5f5f7]">
-                <th className="sticky left-0 z-20 bg-[#f5f5f7] whitespace-nowrap px-2 py-1.5 text-left font-semibold text-[#86868b] min-w-[40px]">
-                  On
+                <th
+                  className="sticky left-0 z-20 bg-[#f5f5f7] whitespace-nowrap px-1 py-1.5 text-center font-semibold text-[#86868b]"
+                  style={{ width: TOGGLE_COL_W, minWidth: TOGGLE_COL_W, maxWidth: TOGGLE_COL_W }}
+                >
+                  <span className="text-[9px]">On</span>
                 </th>
-                <th className="sticky left-[40px] z-20 bg-[#f5f5f7] whitespace-nowrap px-2 py-1.5 text-left font-semibold text-[#86868b] min-w-[160px] border-r border-[rgba(0,0,0,0.06)]">
+                <th
+                  className="relative sticky z-20 bg-[#f5f5f7] whitespace-nowrap px-2 py-1.5 text-left font-semibold text-[#86868b] border-r border-[rgba(0,0,0,0.06)]"
+                  style={{ left: TOGGLE_COL_W, width: nameColWidth, minWidth: nameColWidth, maxWidth: nameColWidth }}
+                >
                   <button onClick={() => handleSort('name')} className="flex items-center gap-1">
                     Name
                     <SortIcon active={sortKey === 'name'} dir={sortKey === 'name' ? sortDir : null} />
                   </button>
+                  {/* Drag handle to resize */}
+                  <div
+                    onMouseDown={handleNameResizeStart}
+                    onTouchStart={handleNameResizeStart}
+                    className="absolute right-0 top-0 h-full w-3 cursor-col-resize flex items-center justify-center active:bg-[#0071e3]/20 hover:bg-[#0071e3]/10 transition-colors"
+                  >
+                    <div className="w-[2px] h-3 rounded-full bg-[#aeaeb2]" />
+                  </div>
                 </th>
                 <th className="whitespace-nowrap px-2 py-1.5 text-left font-semibold text-[#86868b]">Status</th>
                 {LANDSCAPE_METRICS.map((m) => (
@@ -337,7 +380,10 @@ export function MobileAdsManager({
                       key={item.id}
                       className="border-b border-[rgba(0,0,0,0.04)] bg-white hover:bg-[#f9f9fb] transition-colors"
                     >
-                      <td className="sticky left-0 z-10 bg-white px-2 py-1.5">
+                      <td
+                        className="sticky left-0 z-10 bg-white px-1 py-1.5"
+                        style={{ width: TOGGLE_COL_W, minWidth: TOGGLE_COL_W, maxWidth: TOGGLE_COL_W }}
+                      >
                         <Toggle
                           checked={isActive}
                           onChange={(checked) => {
@@ -349,8 +395,11 @@ export function MobileAdsManager({
                           size="sm"
                         />
                       </td>
-                      <td className="sticky left-[40px] z-10 bg-white px-2 py-1.5 border-r border-[rgba(0,0,0,0.04)]">
-                        <span className="text-[12px] font-medium text-[#1d1d1f] truncate block max-w-[160px]">
+                      <td
+                        className="sticky z-10 bg-white px-2 py-1.5 border-r border-[rgba(0,0,0,0.04)]"
+                        style={{ left: TOGGLE_COL_W, width: nameColWidth, minWidth: nameColWidth, maxWidth: nameColWidth }}
+                      >
+                        <span className="text-[12px] font-medium text-[#1d1d1f] truncate block" style={{ maxWidth: nameColWidth - 16 }}>
                           {item.name}
                         </span>
                       </td>
