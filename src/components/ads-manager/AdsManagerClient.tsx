@@ -1742,7 +1742,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   }, [campaigns, expandedAdSets, expandedCampaigns, loadAdSetsForCampaign, loadAdsForAdSet, scrollToRow, toggleExpandAdSet, toggleExpandCampaign]);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 min-w-0 overflow-x-hidden">
       <AdsManagerToolbar
         search={search}
         onSearchChange={setSearch}

@@ -459,6 +459,12 @@ body {
 
 /* ===== Mobile Responsive ===== */
 
+/* Prevent horizontal overflow on mobile */
+html, body {
+  overflow-x: hidden;
+  max-width: 100vw;
+}
+
 /* Hide scrollbar utility */
 .scrollbar-hide {
   -ms-overflow-style: none;
@@ -468,10 +474,11 @@ body {
   display: none;
 }
 
-/* Mobile touch-friendly table container */
+/* Mobile touch-friendly styles */
 @media (max-width: 767px) {
   .apple-table-container {
     border-radius: 8px;
+    display: none; /* Force hide desktop table on mobile */
   }
 
   .apple-toolbar {
@@ -482,11 +489,23 @@ body {
   .apple-table tbody td {
     padding: 10px 8px;
   }
+
+  /* Prevent any inner content from causing horizontal scroll */
+  main {
+    overflow-x: hidden;
+  }
 }
 
 /* Safe area for bottom fixed elements on iOS */
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
   .safe-bottom {
     padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* iOS safe area padding for fixed bottom elements */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .fixed.bottom-4 {
+    bottom: calc(1rem + env(safe-area-inset-bottom));
   }
 }

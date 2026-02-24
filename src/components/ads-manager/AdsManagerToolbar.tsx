@@ -102,11 +102,12 @@ export function AdsManagerToolbar({
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-2 md:gap-3">
+          {/* Attribution coverage - desktop only */}
           {attributionCoverage && (
             <Link
               href="/dashboard/attribution"
               title={`Attribution: ${attributionCoverage.mapped}/${attributionCoverage.total} purchases (${attributionCoverage.windowDays}d)`}
-              className="relative inline-flex items-center gap-1 rounded-lg border border-[rgba(52,199,89,0.2)] bg-[#e8f7ed] px-2 py-1.5 transition-colors duration-150 hover:bg-[#d4f0de]"
+              className="relative hidden md:inline-flex items-center gap-1 rounded-lg border border-[rgba(52,199,89,0.2)] bg-[#e8f7ed] px-2 py-1.5 transition-colors duration-150 hover:bg-[#d4f0de]"
             >
               <Target className="h-4 w-4 text-[#1b7d36]" />
               <span className="text-[11px] font-semibold text-[#1b7d36]">
@@ -117,8 +118,8 @@ export function AdsManagerToolbar({
               )}
             </Link>
           )}
-          {/* Columns Button */}
-          <div className="relative">
+          {/* Columns Button - desktop only (no table on mobile) */}
+          <div className="relative hidden md:block">
             <button
               onClick={() => setColumnPickerOpen((prev) => !prev)}
               className={cn(
@@ -129,18 +130,19 @@ export function AdsManagerToolbar({
               )}
             >
               <Columns3 className="h-4 w-4" />
-              <span className="hidden md:inline">Columns</span>
+              <span>Columns</span>
             </button>
             <ColumnPicker
               isOpen={columnPickerOpen}
               onClose={() => setColumnPickerOpen(false)}
             />
           </div>
+          {/* Error center toggle */}
           <div className="group/err relative">
             <button
               onClick={onToggleErrorCenter}
               className={cn(
-                'relative inline-flex items-center justify-center border p-2 transition-all duration-200 rounded-lg',
+                'relative inline-flex items-center justify-center border p-2 transition-all duration-200 rounded-lg min-h-[44px] min-w-[44px]',
                 showErrorCenter
                   ? 'border-[rgba(255,149,0,0.2)] bg-[#fff4e5] text-[#cc7700]'
                   : 'border-[rgba(0,0,0,0.08)] bg-white text-[#86868b] hover:bg-[#f5f5f7]'
@@ -153,9 +155,9 @@ export function AdsManagerToolbar({
                 </span>
               )}
             </button>
-            {/* Hover tooltip */}
+            {/* Hover tooltip - desktop only */}
             {!showErrorCenter && errorCounts && (
-              <div className="pointer-events-none absolute right-0 top-full z-50 mt-2
+              <div className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden md:block
                 opacity-0 translate-y-1 group-hover/err:opacity-100 group-hover/err:translate-y-0
                 transition-all duration-150 ease-out">
                 <div className="w-48 rounded-xl bg-[#1d1d1f] px-3 py-2.5 shadow-xl">
@@ -175,6 +177,7 @@ export function AdsManagerToolbar({
               </div>
             )}
           </div>
+          {/* Sync status - desktop only */}
           {syncStatus && (
             <div className="hidden md:flex items-center gap-2 border-l border-[rgba(0,0,0,0.08)] pl-3">
               {isRunning && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
@@ -192,9 +195,10 @@ export function AdsManagerToolbar({
               </div>
             </div>
           )}
+          {/* Create button - icon only on mobile, full on desktop */}
           <Link
             href="/dashboard/ads-manager/create"
-            className="inline-flex items-center gap-2 bg-[#0071e3] hover:bg-[#0077ED] rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors duration-150"
+            className="inline-flex items-center gap-2 bg-[#0071e3] hover:bg-[#0077ED] rounded-lg px-3 py-2 md:px-4 text-sm font-medium text-white transition-colors duration-150 min-h-[44px]"
           >
             <Plus className="h-4 w-4" />
             <span className="hidden md:inline">Create Campaign</span>
