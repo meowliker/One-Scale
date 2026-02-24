@@ -147,10 +147,12 @@ export function MobileAdsManager({
 
   const handleNameResizeStart = useCallback((e: React.TouchEvent | React.MouseEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     nameResizeRef.current = { startX: clientX, startW: nameColWidth };
 
     function onMove(ev: TouchEvent | MouseEvent) {
+      ev.preventDefault(); // prevent scroll while dragging
       if (!nameResizeRef.current) return;
       const cx = 'touches' in ev ? ev.touches[0].clientX : (ev as MouseEvent).clientX;
       const delta = cx - nameResizeRef.current.startX;
@@ -325,8 +327,8 @@ export function MobileAdsManager({
         {/* Scrollable table */}
         <div className="flex-1 overflow-auto">
           <table className="w-full min-w-[700px] text-[11px]">
-            <thead className="sticky top-0 z-10">
-              <tr className="bg-[#f5f5f7]">
+            <thead className="sticky top-0 z-10" style={{ overflow: 'visible' }}>
+              <tr className="bg-[#f5f5f7]" style={{ overflow: 'visible' }}>
                 <th
                   className="sticky left-0 z-20 bg-[#f5f5f7] whitespace-nowrap px-1 py-1.5 text-center font-semibold text-[#86868b]"
                   style={{ width: TOGGLE_COL_W, minWidth: TOGGLE_COL_W, maxWidth: TOGGLE_COL_W }}
@@ -334,20 +336,25 @@ export function MobileAdsManager({
                   <span className="text-[9px]">On</span>
                 </th>
                 <th
-                  className="relative sticky z-20 bg-[#f5f5f7] whitespace-nowrap px-2 py-1.5 text-left font-semibold text-[#86868b] border-r border-[rgba(0,0,0,0.06)]"
+                  className="relative sticky z-20 bg-[#f5f5f7] whitespace-nowrap px-2 py-1.5 text-left font-semibold text-[#86868b] border-r border-[rgba(0,0,0,0.06)] overflow-visible"
                   style={{ left: TOGGLE_COL_W, width: nameColWidth, minWidth: nameColWidth, maxWidth: nameColWidth }}
                 >
                   <button onClick={() => handleSort('name')} className="flex items-center gap-1">
                     Name
                     <SortIcon active={sortKey === 'name'} dir={sortKey === 'name' ? sortDir : null} />
                   </button>
-                  {/* Drag handle to resize */}
+                  {/* Drag handle to resize — large 44px touch target */}
                   <div
                     onMouseDown={handleNameResizeStart}
                     onTouchStart={handleNameResizeStart}
-                    className="absolute right-0 top-0 h-full w-3 cursor-col-resize flex items-center justify-center active:bg-[#0071e3]/20 hover:bg-[#0071e3]/10 transition-colors"
+                    className="absolute -right-[22px] top-0 h-full w-[44px] cursor-col-resize flex items-center justify-center z-30 select-none"
+                    style={{ touchAction: 'none' }}
                   >
-                    <div className="w-[2px] h-3 rounded-full bg-[#aeaeb2]" />
+                    <div className="flex flex-col items-center gap-[2px] rounded-md bg-[#e0e0e5] px-[3px] py-1">
+                      <div className="w-[3px] h-[3px] rounded-full bg-[#86868b]" />
+                      <div className="w-[3px] h-[3px] rounded-full bg-[#86868b]" />
+                      <div className="w-[3px] h-[3px] rounded-full bg-[#86868b]" />
+                    </div>
                   </div>
                 </th>
                 <th className="whitespace-nowrap px-2 py-1.5 text-left font-semibold text-[#86868b]">Status</th>
