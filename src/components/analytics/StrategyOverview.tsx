@@ -17,7 +17,9 @@ export interface StrategyOverviewProps {
 const presetLabels: Record<DateRangePreset, string> = {
   today: 'Today',
   yesterday: 'Yesterday',
+  last3: 'Last 3 Days',
   last7: 'Last 7 Days',
+  last7today: 'Last 7 Days (incl. Today)',
   last14: 'Last 14 Days',
   last30: 'Last 30 Days',
   thisMonth: 'This Month',
@@ -27,7 +29,9 @@ const presetLabels: Record<DateRangePreset, string> = {
 const selectablePresets: DateRangePreset[] = [
   'today',
   'yesterday',
+  'last3',
   'last7',
+  'last7today',
   'last14',
   'last30',
   'thisMonth',
