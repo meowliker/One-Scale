@@ -34,10 +34,12 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: { mobileOpen?: bo
       <aside
         className={cn(
           // Desktop: always visible sidebar
-          'hidden md:flex h-screen flex-col border-r border-border bg-surface transition-all duration-200',
+          'h-screen flex-col border-r border-border bg-surface transition-all duration-200',
           isCollapsed ? 'md:w-16' : 'md:w-64',
-          // Mobile: slide-in drawer
-          mobileOpen && 'fixed inset-y-0 left-0 z-50 flex w-72 md:relative md:z-auto'
+          // Mobile: hidden by default, slide-in drawer when open
+          mobileOpen
+            ? 'fixed inset-y-0 left-0 z-50 flex w-72 md:relative md:z-auto'
+            : 'hidden md:flex'
         )}
       >
         {/* Mobile close button */}
