@@ -47,8 +47,8 @@ export function StoreSwitcher({ isCollapsed }: { isCollapsed: boolean }) {
 
   const filteredStores = stores.filter(
     (s) =>
-      s.name.toLowerCase().includes(search.toLowerCase()) ||
-      s.domain.toLowerCase().includes(search.toLowerCase())
+      (s.name || '').toLowerCase().includes(search.toLowerCase()) ||
+      (s.domain || '').toLowerCase().includes(search.toLowerCase())
   );
 
   return (
@@ -141,21 +141,21 @@ export function StoreSwitcher({ isCollapsed }: { isCollapsed: boolean }) {
                   )}
                 >
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface-hover text-xs font-semibold text-text-secondary">
-                    {store.name.slice(0, 2).toUpperCase()}
+                    {(store.name || '??').slice(0, 2).toUpperCase()}
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-text-primary">
-                      {store.name}
+                      {store.name || 'Unnamed Store'}
                     </p>
-                    <p className="truncate text-xs text-text-muted">{store.domain}</p>
+                    <p className="truncate text-xs text-text-muted">{store.domain || ''}</p>
                   </div>
                   <span
                     className={cn(
                       'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium capitalize',
-                      platformColors[store.platform]
+                      platformColors[store.platform || 'custom']
                     )}
                   >
-                    {store.platform}
+                    {store.platform || 'custom'}
                   </span>
                 </button>
               ))
