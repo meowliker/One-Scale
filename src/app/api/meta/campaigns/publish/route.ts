@@ -422,7 +422,7 @@ export async function POST(request: NextRequest) {
     partial.campaignId = String(campaignRes.id || '');
 
     if (!partial.campaignId) {
-      throw new Error('Meta campaign creation did not return an ID');
+      throw new Error(`Meta campaign creation did not return an ID. Response: ${JSON.stringify(campaignRes)}`);
     }
 
     const adSetBody: Record<string, string> = {
@@ -464,7 +464,7 @@ export async function POST(request: NextRequest) {
     const adSetRes = await postToMeta(token.accessToken, `/${accountNode}/adsets`, adSetBody);
     partial.adSetId = String(adSetRes.id || '');
     if (!partial.adSetId) {
-      throw new Error('Meta ad set creation did not return an ID');
+      throw new Error(`Meta ad set creation did not return an ID. Response: ${JSON.stringify(adSetRes)}`);
     }
 
     const objectStorySpec = await buildAdCreativeObjectStory(payload, token.accessToken);
@@ -476,7 +476,7 @@ export async function POST(request: NextRequest) {
     partial.creativeId = String(creativeRes.id || '');
 
     if (!partial.creativeId) {
-      throw new Error('Meta ad creative creation did not return an ID');
+      throw new Error(`Meta ad creative creation did not return an ID. Response: ${JSON.stringify(creativeRes)}`);
     }
 
     const adRes = await postToMeta(token.accessToken, `/${accountNode}/ads`, {
@@ -488,7 +488,7 @@ export async function POST(request: NextRequest) {
     partial.adId = String(adRes.id || '');
 
     if (!partial.adId) {
-      throw new Error('Meta ad creation did not return an ID');
+      throw new Error(`Meta ad creation did not return an ID. Response: ${JSON.stringify(adRes)}`);
     }
 
     if (payload.settings.publishNow) {
