@@ -141,35 +141,43 @@ async function postToMeta(
     parsed = { raw: text };
   }
 
+  function parseMetaError(err: {
+    message?: string;
+    type?: string;
+    code?: number;
+    error_subcode?: number;
+    fbtrace_id?: string;
+    error_user_title?: string;
+    error_user_msg?: string;
+    error_data?: { blame_field_specs?: string[][] };
+  }): string {
+    const blame = Array.isArray(err.error_data?.blame_field_specs)
+      ? err.error_data?.blame_field_specs.flat().join(',')
+      : '';
+    return [
+      err.message || 'Meta API error',
+      err.type ? `type=${err.type}` : '',
+      typeof err.code === 'number' ? `code=${err.code}` : '',
+      typeof err.error_subcode === 'number' ? `subcode=${err.error_subcode}` : '',
+      err.error_user_title ? `user_title=${err.error_user_title}` : '',
+      err.error_user_msg ? `user_msg=${err.error_user_msg}` : '',
+      blame ? `blame=${blame}` : '',
+      err.fbtrace_id ? `fbtrace=${err.fbtrace_id}` : '',
+      `endpoint=${endpoint}`,
+    ].filter(Boolean).join(' | ');
+  }
+
   if (!response.ok) {
     if (typeof parsed.error === 'object' && parsed.error) {
-      const err = parsed.error as {
-        message?: string;
-        type?: string;
-        code?: number;
-        error_subcode?: number;
-        fbtrace_id?: string;
-        error_user_title?: string;
-        error_user_msg?: string;
-        error_data?: { blame_field_specs?: string[][] };
-      };
-      const blame = Array.isArray(err.error_data?.blame_field_specs)
-        ? err.error_data?.blame_field_specs.flat().join(',')
-        : '';
-      const detail = [
-        err.message || 'Meta API error',
-        err.type ? `type=${err.type}` : '',
-        typeof err.code === 'number' ? `code=${err.code}` : '',
-        typeof err.error_subcode === 'number' ? `subcode=${err.error_subcode}` : '',
-        err.error_user_title ? `user_title=${err.error_user_title}` : '',
-        err.error_user_msg ? `user_msg=${err.error_user_msg}` : '',
-        blame ? `blame=${blame}` : '',
-        err.fbtrace_id ? `fbtrace=${err.fbtrace_id}` : '',
-        `endpoint=${endpoint}`,
-      ].filter(Boolean).join(' | ');
-      throw new Error(detail);
+      throw new Error(parseMetaError(parsed.error as Parameters<typeof parseMetaError>[0]));
     }
     throw new Error(`${text} | endpoint=${endpoint}`);
+  }
+
+  // Meta Graph API occasionally returns HTTP 200 with an error body (e.g. policy
+  // or validation failures that are detected after the request is accepted).
+  if (typeof parsed.error === 'object' && parsed.error) {
+    throw new Error(parseMetaError(parsed.error as Parameters<typeof parseMetaError>[0]));
   }
 
   return parsed;
