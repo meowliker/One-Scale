@@ -161,7 +161,7 @@ export function SmartSegmentsBar({ campaigns, sparklineData = {} }: Props) {
   };
 
   return (
-    <div className="flex items-center gap-1.5 px-1">
+    <div className="flex items-center gap-1 px-0.5">
       {/* Built-in smart segments */}
       {DIGITAL_SEGMENTS.map((seg) => {
         const isActive = activeSegment === seg.id;
@@ -172,7 +172,7 @@ export function SmartSegmentsBar({ campaigns, sparklineData = {} }: Props) {
             key={seg.id}
             onClick={() => handleSegmentClick(seg)}
             className={cn(
-              'group inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-medium transition-all duration-150 border',
+              'group inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium transition-all duration-150 border',
               isActive
                 ? cn(seg.color, seg.textColor, 'shadow-sm')
                 : hasHits
@@ -207,7 +207,7 @@ export function SmartSegmentsBar({ campaigns, sparklineData = {} }: Props) {
         const isActive = activeSavedFilterId === sf.id;
         return (
           <span key={sf.id} className={cn(
-            'inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-all duration-150',
+            'inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium transition-all duration-150',
             isActive
               ? 'border-[#0071e3]/30 bg-[#e8f0fe] text-[#0071e3]'
               : 'border-[rgba(0,0,0,0.08)] bg-white text-[#1d1d1f] hover:bg-[#f5f5f7]'
@@ -226,7 +226,7 @@ export function SmartSegmentsBar({ campaigns, sparklineData = {} }: Props) {
       {/* Save Filter */}
       <button
         onClick={() => setShowFilterBuilder(true)}
-        className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[rgba(0,0,0,0.12)] px-2.5 py-1 text-[11px] text-[#aeaeb2] transition-all hover:border-[#0071e3] hover:text-[#0071e3]"
+        className="inline-flex items-center gap-1 rounded-md border border-dashed border-[rgba(0,0,0,0.12)] px-2 py-0.5 text-[11px] text-[#aeaeb2] transition-all hover:border-[#0071e3] hover:text-[#0071e3]"
       >
         <Plus className="h-3 w-3" />
         Save
@@ -241,7 +241,7 @@ export function SmartSegmentsBar({ campaigns, sparklineData = {} }: Props) {
 
 // CustomFilterModal — simple modal for creating a named custom filter
 function CustomFilterModal({ onClose }: { onClose: () => void }) {
-  const { saveFiler } = useSmartFilterStore();
+  const { saveFilter } = useSmartFilterStore();
   const [name, setName] = useState('');
   const [emoji, setEmoji] = useState('⭐');
   const [roasMin, setRoasMin] = useState('');
@@ -252,7 +252,7 @@ function CustomFilterModal({ onClose }: { onClose: () => void }) {
 
   const handleSave = () => {
     if (!name.trim()) return;
-    saveFiler({
+    saveFilter({
       name: name.trim(),
       emoji,
       roasMin: roasMin ? Number(roasMin) : null,

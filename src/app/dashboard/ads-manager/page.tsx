@@ -1,26 +1,24 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { Loader2 } from 'lucide-react';
+import { useState, useMemo, useEffect, useRef } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import type { Campaign } from '@/types/campaign';
 import type { DateRangePreset } from '@/types/analytics';
 import { getCampaigns } from '@/services/adsManager';
 import { AdsManagerClient } from '@/components/ads-manager/AdsManagerClient';
 import { DateRangePicker } from '@/components/ui/DateRangePicker';
+import { SkeletonTableRow, SkeletonCard } from '@/components/ui/Skeleton';
 import { getDateRange } from '@/lib/dateUtils';
 import { formatDateInTimezone } from '@/lib/timezone';
 import { useConnectionStore } from '@/stores/connectionStore';
 import { useStoreStore } from '@/stores/storeStore';
 import { NotConnectedError } from '@/services/withMockFallback';
 import { ConnectionEmptyState } from '@/components/ui/ConnectionEmptyState';
+import { RefreshButton } from '@/components/ui/RefreshButton';
 
-/**
- * Store date range as Date objects (for DateRangePicker) together with pre-computed
- * YYYY-MM-DD strings (for API calls and AdsManagerClient). Computing the strings
- * at the same time the Date objects are created ensures the store timezone is
- * consistent — avoids the double-timezone bug where Date objects are created
- * with one timezone and formatted later with a different one.
- */
+const CAMPAIGNS_CACHE_KEY = 'onescale:campaigns-cache';
+const CAMPAIGNS_STALE_TIME = 5 * 60 * 1000; // 5 minutes
+
 interface DateRangeState {
   start: Date;
   end: Date;
@@ -37,106 +35,139 @@ function buildDateRangeState(range: { start: Date; end: Date; preset?: DateRange
   };
 }
 
+/** Read cached campaigns from localStorage for instant hydration */
+function readLocalCache(key: string): Campaign[] | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const { data, ts } = JSON.parse(raw);
+    // Only use cache if less than 10 minutes old
+    if (Date.now() - ts > 10 * 60 * 1000) return null;
+    return data as Campaign[];
+  } catch {
+    return null;
+  }
+}
+
+/** Write campaigns to localStorage */
+function writeLocalCache(key: string, data: Campaign[]) {
+  try {
+    localStorage.setItem(key, JSON.stringify({ data, ts: Date.now() }));
+  } catch {
+    // Quota exceeded — ignore
+  }
+}
+
 export default function AdsManagerPage() {
-  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [emptyReason, setEmptyReason] = useState<'not_connected' | 'no_accounts' | 'error' | null>(null);
   const [dateRange, setDateRange] = useState<DateRangeState | null>(null);
-  const didInitialFetchRef = useRef(false);
+  const didInit = useRef(false);
 
   const connectionLoading = useConnectionStore((s) => s.loading);
   const connectionStatus = useConnectionStore((s) => s.status);
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
   const connectionReady = !connectionLoading && connectionStatus !== null;
 
-  /**
-   * Two-phase campaign loading:
-   * Phase 1: Load instantly from server-side snapshot cache (preferCache=1).
-   *          This returns cached data from meta_endpoint_snapshots in <200ms.
-   * Phase 2: Background refresh with live Meta API data.
-   *          Updates campaigns silently without showing a loading spinner.
-   */
-  const fetchData = useCallback(async (since: string, until: string, opts?: { isInitial?: boolean }) => {
-    const isInitial = opts?.isInitial ?? false;
-
-    if (isInitial) {
-      // Phase 1: Try cached data first for instant load
-      setLoading(true);
-      setEmptyReason(null);
-      try {
-        const cached = await getCampaigns({ since, until }, { preferCache: true });
-        if (cached.length > 0) {
-          setCampaigns(cached);
-          setLoading(false);
-          // Phase 2: Background refresh with live data (no loading spinner)
-          getCampaigns({ since, until }).then((live) => {
-            setCampaigns(live);
-          }).catch(() => {
-            // Keep cached data on background refresh failure
-          });
-          return;
-        }
-      } catch {
-        // Cache miss — fall through to live fetch
-      }
-    }
-
-    // Direct live fetch (used when no cache, date range change, or manual refresh)
-    setLoading(true);
-    setEmptyReason(null);
-    try {
-      const data = await getCampaigns({ since, until });
-      setCampaigns(data);
-    } catch (err) {
-      if (err instanceof NotConnectedError) {
-        setEmptyReason(err.reason);
-      } else {
-        setEmptyReason('error');
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Wait for connection status to be fully loaded before fetching data.
-  // Compute date range here (not in useState) so store timezone is correct.
+  // Initialize date range once connection is ready
   useEffect(() => {
-    if (connectionReady && !didInitialFetchRef.current) {
-      didInitialFetchRef.current = true;
-      const range = getDateRange('today');
-      const state = buildDateRangeState(range);
-      setDateRange(state);
-      fetchData(state.since, state.until, { isInitial: true });
+    if (connectionReady && !didInit.current) {
+      didInit.current = true;
+      setDateRange(buildDateRangeState(getDateRange('today')));
     }
-  }, [connectionReady, activeStoreId, fetchData]);
+  }, [connectionReady]);
 
-  // Re-fetch when store changes
+  // Reset on store change
   useEffect(() => {
-    if (connectionReady && dateRange && didInitialFetchRef.current) {
-      // Reset for re-fetch on store change
-      didInitialFetchRef.current = false;
+    if (didInit.current) {
+      didInit.current = false;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeStoreId]);
 
+  const cacheKey = activeStoreId && dateRange
+    ? `${CAMPAIGNS_CACHE_KEY}:${activeStoreId}:${dateRange.since}:${dateRange.until}`
+    : null;
+
+  const {
+    data: campaigns = [],
+    isLoading,
+    isFetching,
+    error,
+  } = useQuery<Campaign[], Error>({
+    queryKey: ['campaigns', activeStoreId, dateRange?.since, dateRange?.until],
+    queryFn: async () => {
+      if (!dateRange) return [];
+      const { since, until } = dateRange;
+
+      // Phase 1: Try server snapshot cache for instant load
+      try {
+        const cached = await getCampaigns({ since, until }, { preferCache: true });
+        if (cached.length > 0) {
+          // Write to localStorage for next visit
+          if (cacheKey) writeLocalCache(cacheKey, cached);
+          // Phase 2: Background refresh (fire-and-forget, result updates on next query)
+          getCampaigns({ since, until }).then((live) => {
+            if (live.length > 0 && cacheKey) writeLocalCache(cacheKey, live);
+          }).catch(() => {});
+          return cached;
+        }
+      } catch {
+        // Cache miss — fall through
+      }
+
+      // Direct live fetch
+      const data = await getCampaigns({ since, until });
+      if (cacheKey) writeLocalCache(cacheKey, data);
+      return data;
+    },
+    enabled: connectionReady && !!dateRange && !!activeStoreId,
+    staleTime: CAMPAIGNS_STALE_TIME,
+    placeholderData: () => {
+      // Use localStorage as instant placeholder on first mount
+      if (cacheKey) return readLocalCache(cacheKey) ?? undefined;
+      return undefined;
+    },
+  });
+
   const handleDateRangeChange = (range: { start: Date; end: Date; preset?: DateRangePreset }) => {
-    const state = buildDateRangeState(range);
-    setDateRange(state);
-    // Date range change = live fetch (no cache for new ranges)
-    fetchData(state.since, state.until);
+    setDateRange(buildDateRangeState(range));
   };
 
-  // Memoize the dateRange prop for AdsManagerClient to avoid unnecessary re-renders
   const clientDateRange = useMemo(
     () => dateRange ? { since: dateRange.since, until: dateRange.until } : undefined,
     [dateRange?.since, dateRange?.until]
   );
 
-  if ((!connectionReady || loading || !dateRange) && campaigns.length === 0 && !emptyReason) {
+  // Determine empty reason from error
+  const emptyReason = error instanceof NotConnectedError
+    ? error.reason
+    : error
+      ? 'error' as const
+      : null;
+
+  // Show skeleton only on first load when no data at all
+  if ((!connectionReady || (isLoading && campaigns.length === 0)) && !emptyReason) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        <span className="ml-3 text-text-muted">Loading campaigns...</span>
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="h-5 w-32 animate-pulse rounded bg-surface-hover" />
+          <div className="h-8 w-48 animate-pulse rounded-lg bg-surface-hover" />
+        </div>
+        {/* Skeleton metric cards */}
+        <div className="grid grid-cols-6 gap-2">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <SkeletonCard key={i} />
+          ))}
+        </div>
+        {/* Skeleton table */}
+        <div className="apple-card overflow-hidden">
+          <table className="w-full">
+            <tbody>
+              {Array.from({ length: 8 }).map((_, i) => (
+                <SkeletonTableRow key={i} columns={8} />
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     );
   }
@@ -149,10 +180,18 @@ export default function AdsManagerPage() {
     <div>
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <h1 className="text-sm font-semibold text-[#1d1d1f]">Ads Manager</h1>
-          {dateRange && (
-            <DateRangePicker dateRange={dateRange} onRangeChange={handleDateRangeChange} />
-          )}
+          <h1 className="text-sm font-semibold text-[#1d1d1f]">
+            Ads Manager
+            {isFetching && campaigns.length > 0 && (
+              <span className="ml-2 inline-block h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+            )}
+          </h1>
+          <div className="flex items-center gap-2">
+            {dateRange && (
+              <DateRangePicker dateRange={dateRange} onRangeChange={handleDateRangeChange} />
+            )}
+            <RefreshButton />
+          </div>
         </div>
         <AdsManagerClient
           initialCampaigns={campaigns}

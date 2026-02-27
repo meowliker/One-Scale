@@ -174,7 +174,7 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
         {formatTriggerLabel(dateRange.start, dateRange.end, dateRange.preset)}
       </button>
       {open && (
-        <div className="absolute right-0 z-[100] mt-1 rounded-lg border border-border bg-surface-elevated shadow-lg">
+        <div className="absolute right-0 top-full z-[100] mt-1 max-h-[400px] overflow-y-auto rounded-lg border border-border bg-surface-elevated shadow-lg">
           <div className="flex">
             {/* Left column: Presets */}
             <div className="w-44 border-r border-border py-2">

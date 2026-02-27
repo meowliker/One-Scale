@@ -277,10 +277,10 @@ body {
 
 .apple-table thead th {
   color: var(--color-text-muted);
-  font-size: 10px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
   padding: 8px 12px;
   border-bottom: 1px solid var(--color-border);
   position: relative;
@@ -291,9 +291,7 @@ body {
   transition: background-color 0.15s ease;
 }
 
-.apple-table tbody tr:hover {
-  background-color: var(--color-surface-hover);
-}
+/* Row hover handled by Tailwind classes on each row component */
 
 /* Column resize handle - Apple style */
 .col-resize-handle {
@@ -326,23 +324,23 @@ body {
 
 /* Status badges - Apple style */
 .apple-status-active {
-  background: var(--color-success-light, #e8f7ed);
-  color: var(--color-success, #1b7d36);
-  border: none;
+  background: #f0fdf4;
+  color: #16a34a;
+  border: 1px solid #86efac;
   font-size: 11px;
   font-weight: 600;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: 9999px;
 }
 
 .apple-status-paused {
-  background: var(--color-surface-hover);
+  background: transparent;
   color: var(--color-text-muted);
-  border: none;
+  border: 1px solid var(--color-border, rgba(0,0,0,0.08));
   font-size: 11px;
   font-weight: 600;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: 9999px;
 }
 
 .apple-status-error {
@@ -384,12 +382,13 @@ body {
   background: rgba(0, 0, 0, 0.2);
 }
 
-/* Apple table container */
+/* Apple table container — scroll container for both axes.
+   sticky header works because this is the nearest scroll ancestor. */
 .apple-table-container {
   position: relative;
   border-radius: 12px;
-  overflow-x: auto;
-  overflow-y: visible;
+  overflow: auto;
+  max-height: calc(100vh - 260px);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
@@ -455,4 +454,13 @@ body {
     transform: translate(-50%, -50%) scale(2);
     opacity: 0;
   }
+}
+
+/* ===== Active status badge — no heavy glow ===== */
+
+/* ===== Button micro-press ===== */
+button:active:not(:disabled),
+[role="button"]:active:not(:disabled) {
+  transform: scale(0.97);
+  transition: transform 0.1s ease;
 }

@@ -46,16 +46,14 @@ function FacebookIcon() {
 function SourceBadge({ source }: { source: DataSource }) {
   if (source === 'shopify') {
     return (
-      <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-medium text-emerald-400">
+      <span className="inline-flex items-center gap-0.5 rounded-full border border-[rgba(0,0,0,0.06)] px-1 py-px text-[9px] font-medium text-[#86868b]">
         <ShopifyIcon />
-        Shopify
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-0.5 rounded-full bg-blue-500/15 px-1.5 py-0.5 text-[9px] font-medium text-blue-400">
+    <span className="inline-flex items-center gap-0.5 rounded-full border border-[rgba(0,0,0,0.06)] px-1 py-px text-[9px] font-medium text-[#86868b]">
       <FacebookIcon />
-      Meta
     </span>
   );
 }

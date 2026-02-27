@@ -24,8 +24,8 @@ export function InlineEdit({ value, onSave, type = 'text', prefix }: InlineEditP
   }, [isEditing]);
 
   useEffect(() => {
-    setDraft(value);
-  }, [value]);
+    if (!isEditing) setDraft(value);
+  }, [value, isEditing]);
 
   const handleSave = () => {
     const trimmed = draft.trim();

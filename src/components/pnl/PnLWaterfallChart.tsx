@@ -14,6 +14,14 @@ import {
   ReferenceLine,
 } from 'recharts';
 
+/* ================================================================
+   PnL Waterfall Chart — complete rewrite
+   Uses stacked bar pattern: invisible base (spacer) + visible bar.
+   Revenue starts at 0 → goes up (green).
+   Each cost starts at the running total → drops down (red).
+   Net Profit always starts from 0 → goes up/down (green/red).
+   ================================================================ */
+
 interface PnLWaterfallChartProps {
   entry: PnLEntry;
   isDigital?: boolean;
@@ -21,9 +29,9 @@ interface PnLWaterfallChartProps {
 
 interface WaterfallItem {
   name: string;
-  rawValue: number;   // The actual dollar value (positive or negative)
-  spacer: number;     // Invisible base — positions the colored bar at the right height
-  bar: number;        // Height of the visible colored bar (always positive)
+  value: number;       // Actual signed dollar value
+  spacer: number;      // Invisible base positioning the bar
+  bar: number;         // Visible bar height (always >= 0)
   isPositive: boolean;
   isTotal: boolean;
 }
@@ -32,38 +40,36 @@ function buildWaterfallData(entry: PnLEntry, isDigital: boolean): WaterfallItem[
   const items: WaterfallItem[] = [];
   let running = 0;
 
-  // Helper: add a positive (income) step
-  const addPositive = (name: string, amount: number) => {
-    const start = running;
+  // Income step: bar grows UP from current running total
+  const addIncome = (name: string, amount: number) => {
+    const base = running;
     running += amount;
     items.push({
       name,
-      rawValue: amount,
-      spacer: start,       // bar starts at previous running total
-      bar: amount,         // bar height = the income amount
+      value: amount,
+      spacer: base,
+      bar: amount,
       isPositive: true,
       isTotal: false,
     });
   };
 
-  // Helper: add a negative (cost) step
+  // Cost step: bar drops DOWN from current running total
   const addCost = (name: string, amount: number) => {
     if (amount <= 0) return;
-    const start = running;
     running -= amount;
-    const end = running;
     items.push({
       name,
-      rawValue: -amount,
-      spacer: end,         // bar starts at end (lower bound), extends up to start
-      bar: amount,         // bar height = cost magnitude
+      value: -amount,
+      spacer: running,     // bar bottom = new running total
+      bar: amount,         // bar height = cost
       isPositive: false,
       isTotal: false,
     });
   };
 
-  // Build waterfall steps
-  addPositive('Revenue', entry.revenue);
+  // --- Build waterfall steps ---
+  addIncome('Revenue', entry.revenue);
 
   if (!isDigital) {
     addCost('COGS', entry.cogs);
@@ -81,12 +87,12 @@ function buildWaterfallData(entry: PnLEntry, isDigital: boolean): WaterfallItem[
     addCost('Refunds', entry.refunds);
   }
 
-  // Net Profit total bar — always starts from 0 (or the negative value if below zero)
+  // Net Profit: always anchored at 0
   const netProfit = entry.netProfit;
   items.push({
     name: 'Net Profit',
-    rawValue: netProfit,
-    spacer: Math.min(0, netProfit),   // if negative, spacer goes down from 0
+    value: netProfit,
+    spacer: netProfit >= 0 ? 0 : netProfit,
     bar: Math.abs(netProfit),
     isPositive: netProfit >= 0,
     isTotal: true,
@@ -95,92 +101,98 @@ function buildWaterfallData(entry: PnLEntry, isDigital: boolean): WaterfallItem[
   return items;
 }
 
-const CustomTooltipContent = ({
+// --- Tooltip ---
+function WaterfallTooltip({
   active,
   payload,
   entry,
 }: {
   active?: boolean;
-  payload?: Array<{ payload: WaterfallItem }>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  payload?: unknown[];
   entry: PnLEntry;
-}) => {
+}) {
   if (!active || !payload || !payload.length) return null;
-  const item = payload[0].payload;
-  const isRevOrProfit = item.name === 'Revenue' || item.name === 'Net Profit';
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const item = (payload[0] as any)?.payload as WaterfallItem | undefined;
+  if (!item) return null;
+
   return (
-    <div className="rounded-lg border border-border bg-surface-elevated px-3 py-2 shadow-md">
-      <p className="text-sm font-medium text-text-primary">{item.name}</p>
-      <p
-        className={`text-sm font-semibold ${
-          item.isPositive ? 'text-emerald-600' : 'text-red-600'
-        }`}
-      >
-        {item.rawValue >= 0 ? '' : '-'}
-        {formatCurrency(Math.abs(item.rawValue))}
+    <div className="rounded-lg border border-[rgba(0,0,0,0.08)] bg-white px-3 py-2 shadow-lg">
+      <p className="text-[13px] font-semibold text-[#1d1d1f]">{item.name}</p>
+      <p className={`text-[13px] font-bold ${item.isPositive ? 'text-emerald-600' : 'text-red-500'}`}>
+        {item.value >= 0 ? '' : '-'}
+        {formatCurrency(Math.abs(item.value))}
       </p>
-      {!isRevOrProfit && entry.revenue > 0 && (
-        <p className="text-xs text-text-muted">
-          {((Math.abs(item.rawValue) / entry.revenue) * 100).toFixed(1)}% of revenue
+      {item.name !== 'Revenue' && item.name !== 'Net Profit' && entry.revenue > 0 && (
+        <p className="text-[11px] text-[#86868b]">
+          {((Math.abs(item.value) / entry.revenue) * 100).toFixed(1)}% of revenue
         </p>
       )}
     </div>
   );
-};
+}
 
+// --- Value labels above/below bars ---
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const renderLabel = (items: WaterfallItem[]) => (props: any) => {
-  const x = Number(props.x ?? 0);
-  const y = Number(props.y ?? 0);
-  const width = Number(props.width ?? 0);
-  const index = Number(props.index ?? 0);
-  const item = items[index];
-  if (!item) return null;
+function renderBarLabel(items: WaterfallItem[]) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (props: any) => {
+    const x = Number(props.x ?? 0);
+    const y = Number(props.y ?? 0);
+    const width = Number(props.width ?? 0);
+    const index = Number(props.index ?? 0);
+    const item = items[index];
+    if (!item) return null;
 
-  const labelY = y - 8;
-  const prefix = item.rawValue >= 0 ? '' : '-';
-  const display = `${prefix}${formatCurrency(Math.abs(item.rawValue))}`;
+    const label = `${item.value < 0 ? '-' : ''}${formatCurrency(Math.abs(item.value))}`;
 
-  return (
-    <text
-      x={x + width / 2}
-      y={labelY}
-      textAnchor="middle"
-      fill="#94a3b8"
-      fontSize={11}
-      fontWeight={item.isTotal ? 600 : 400}
-    >
-      {display}
-    </text>
-  );
-};
+    return (
+      <text
+        x={x + width / 2}
+        y={y - 6}
+        textAnchor="middle"
+        fill={item.isTotal ? '#1d1d1f' : '#6e6e73'}
+        fontSize={11}
+        fontWeight={item.isTotal ? 700 : 500}
+      >
+        {label}
+      </text>
+    );
+  };
+}
 
 export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChartProps) {
   const items = buildWaterfallData(entry, isDigital);
 
-  // Compute Y-axis domain covering all bar tops and bottoms with padding
-  const allBoundaries = items.flatMap((d) => [d.spacer, d.spacer + d.bar]);
-  const minVal = Math.min(...allBoundaries, 0);
-  const maxVal = Math.max(...allBoundaries, 0);
-  const range = maxVal - minVal || 100;
-  const padding = range * 0.18;
-  const yDomain: [number, number] = [minVal - padding, maxVal + padding];
+  // Y-axis domain: cover all bar edges with 18% padding
+  const edges = items.flatMap((d) => [d.spacer, d.spacer + d.bar]);
+  const minY = Math.min(...edges, 0);
+  const maxY = Math.max(...edges, 0);
+  const span = maxY - minY || 100;
+  const pad = span * 0.18;
+  const yDomain: [number, number] = [minY - pad, maxY + pad];
 
   return (
-    <div className="rounded-lg border border-border bg-surface-elevated p-6 shadow-sm">
-      <h3 className="mb-4 text-sm font-semibold text-text-primary">Profit Waterfall</h3>
+    <div className="w-full">
       <ResponsiveContainer width="100%" height={320}>
         <ComposedChart data={items} margin={{ top: 28, right: 16, left: 16, bottom: 8 }}>
-          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1e2235" />
+          <CartesianGrid
+            strokeDasharray="3 3"
+            vertical={false}
+            stroke="rgba(0,0,0,0.06)"
+          />
           <XAxis
             dataKey="name"
-            tick={{ fontSize: 12, fill: '#94a3b8' }}
+            tick={{ fontSize: 12, fill: '#86868b' }}
             axisLine={false}
             tickLine={false}
           />
           <YAxis
-            tick={{ fontSize: 12, fill: '#94a3b8' }}
+            tick={{ fontSize: 11, fill: '#86868b' }}
             axisLine={false}
             tickLine={false}
+            width={55}
             tickFormatter={(v: number) => {
               const abs = Math.abs(v);
               const sign = v < 0 ? '-' : '';
@@ -190,40 +202,42 @@ export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChar
             domain={yDomain}
           />
           <Tooltip
+            cursor={false}
             content={(props) => (
-              <CustomTooltipContent
+              <WaterfallTooltip
                 active={props.active}
-                payload={props.payload as Array<{ payload: WaterfallItem }>}
+                payload={props.payload as unknown[]}
                 entry={entry}
               />
             )}
           />
 
-          {/* Reference line at zero so the chart axis is always visible */}
-          <ReferenceLine y={0} stroke="#2d3254" strokeWidth={1.5} />
+          {/* Zero reference line */}
+          <ReferenceLine y={0} stroke="rgba(0,0,0,0.10)" strokeWidth={1} />
 
-          {/* Invisible spacer — positions each colored bar at the correct waterfall height */}
-          <Bar dataKey="spacer" stackId="waterfall" fill="transparent" isAnimationActive={false} />
+          {/* Invisible spacer — stacked below the visible bar */}
+          <Bar
+            dataKey="spacer"
+            stackId="waterfall"
+            fill="transparent"
+            isAnimationActive={false}
+          />
 
-          {/* Visible colored bar with value labels */}
+          {/* Visible colored bar — grows on mount */}
           <Bar
             dataKey="bar"
             stackId="waterfall"
             radius={[4, 4, 0, 0]}
-            isAnimationActive={false}
-            label={renderLabel(items)}
+            isAnimationActive={true}
+            animationDuration={600}
+            animationBegin={100}
+            label={renderBarLabel(items)}
           >
             {items.map((item, idx) => (
               <Cell
                 key={idx}
-                fill={
-                  item.isTotal
-                    ? '#6366f1'
-                    : item.isPositive
-                    ? '#10b981'
-                    : '#ef4444'
-                }
-                fillOpacity={item.isTotal ? 0.85 : 1}
+                fill={item.isPositive ? '#10b981' : '#ef4444'}
+                opacity={item.isTotal ? 1 : 0.85}
               />
             ))}
           </Bar>

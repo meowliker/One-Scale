@@ -43,7 +43,7 @@ interface SmartFilterStore {
 
   savedFilters: SavedFilter[];
   activeSavedFilterId: string | null;
-  saveFiler: (f: Omit<SavedFilter, 'id'>) => void;
+  saveFilter: (f: Omit<SavedFilter, 'id'>) => void;
   deleteSavedFilter: (id: string) => void;
   setActiveSavedFilter: (id: string | null) => void;
 }
@@ -68,7 +68,7 @@ export const useSmartFilterStore = create<SmartFilterStore>()(
 
       savedFilters: [],
       activeSavedFilterId: null,
-      saveFiler: (f) => {
+      saveFilter: (f) => {
         const id = `custom-${Date.now()}`;
         set((s) => ({ savedFilters: [...s.savedFilters, { ...f, id }], activeSavedFilterId: id }));
       },

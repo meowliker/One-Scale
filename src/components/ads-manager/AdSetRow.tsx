@@ -38,6 +38,8 @@ export interface AdSetRowProps {
   issues?: AdIssue[];
   onIssueClick?: (issue: AdIssue) => void;
   nameColWidth?: number;
+  isToggling?: boolean;
+  flashType?: 'success' | 'error';
 }
 
 function formatTargetingSummary(adSet: AdSet): string {
@@ -73,6 +75,8 @@ export function AdSetRow({
   issues = [],
   onIssueClick,
   nameColWidth,
+  isToggling = false,
+  flashType,
 }: AdSetRowProps) {
   const isActive = adSet.status === 'ACTIVE';
   const [showIssueDetails, setShowIssueDetails] = useState(false);
@@ -96,32 +100,35 @@ export function AdSetRow({
     <tr
       id={rowId}
       className={cn(
-        'group border-b border-[rgba(0,0,0,0.03)] bg-white transition-colors duration-150',
-        'hover:bg-[#f5f5f7]',
+        'group border-b border-[rgba(0,0,0,0.03)] bg-[#fafbfc] transition-colors duration-150',
+        'hover:!bg-[#f9fafb]',
         isSelected && 'bg-[#e8f0fe]',
-        isHighlighted && 'bg-[#fff8e1]'
+        isHighlighted && 'bg-[#fff8e1]',
+        flashType === 'success' && 'bg-[#f0fdf4]',
+        flashType === 'error' && 'bg-[#fef2f2]'
       )}
     >
       {/* Checkbox */}
-      <td className="w-10 whitespace-nowrap py-3 pl-8 pr-4 sticky left-0 z-10 bg-white group-hover:bg-[#f5f5f7] transition-colors duration-150">
+      <td className="w-10 whitespace-nowrap py-3 pl-10 pr-4 sticky left-0 z-10 bg-[#fafbfc] group-hover:bg-[#f9fafb] transition-colors duration-150">
         <Checkbox checked={isSelected} onChange={onToggleSelect} />
       </td>
 
       {/* Toggle */}
-      <td className="w-12 whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 bg-white group-hover:bg-[#f5f5f7] transition-colors duration-150">
+      <td className="w-14 whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 bg-[#fafbfc] group-hover:bg-[#f9fafb] transition-colors duration-150">
         <Toggle
           checked={isActive}
           onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
           size="sm"
+          loading={isToggling}
         />
       </td>
 
       {/* Name + Targeting */}
       <td
-        className="whitespace-nowrap px-3 py-2 sticky left-[96px] z-10 bg-white group-hover:bg-[#f5f5f7] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)]"
+        className="whitespace-nowrap px-3 py-2 sticky left-[96px] z-10 bg-[#fafbfc] group-hover:bg-[#f9fafb] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)]"
         style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth } : undefined}
       >
-        <div className="flex items-center gap-2 pl-4">
+        <div className="flex items-center gap-2 pl-8">
           <button
             onClick={onToggleExpand}
             className="flex items-center gap-1 text-text-dimmed hover:text-text-secondary transition-colors"
@@ -141,7 +148,7 @@ export function AdSetRow({
                 {adSet.name}
               </button>
               <div className="absolute left-0 top-full mt-1 z-50 pointer-events-none opacity-0 group-hover/tooltip:opacity-100 translate-y-1 group-hover/tooltip:translate-y-0 transition-all duration-150 ease-out">
-                <div className="rounded-lg bg-[#1d1d1f] px-3 py-1.5 text-xs text-white shadow-lg whitespace-nowrap max-w-xs">
+                <div className="rounded-lg border border-[rgba(0,0,0,0.08)] bg-[#1d1d1f] px-3 py-1.5 text-xs text-white shadow-md whitespace-nowrap max-w-xs">
                   {adSet.name}
                 </div>
               </div>
@@ -160,8 +167,11 @@ export function AdSetRow({
             'inline-flex items-center gap-1.5 text-[11px] font-semibold',
             isActive && !deliveryBlocked ? 'apple-status-active' : 'apple-status-paused'
           )}>
-            {isActive && !deliveryBlocked && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />}
-            {statusLabel}
+            <span className={cn(
+              'h-1.5 w-1.5 rounded-full',
+              isActive && !deliveryBlocked ? 'bg-emerald-500' : 'bg-[#aeaeb2]'
+            )} />
+            {isActive && !deliveryBlocked ? 'Active' : deliveryBlocked ? 'Not Delivering' : 'Paused'}
           </span>
           {issues.length > 0 && (
             <button
@@ -194,7 +204,7 @@ export function AdSetRow({
                 <p className="text-text-muted text-xs mt-1">Budget is managed at the campaign level.</p>
                 {campaignBudget !== undefined && (
                   <p className="text-text-secondary text-xs mt-1">
-                    Campaign budget: ${campaignBudget.toFixed(2)}/day
+                    Campaign budget: ${campaignBudget.toFixed(2)}
                   </p>
                 )}
                 <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-px">
@@ -215,7 +225,7 @@ export function AdSetRow({
                 type="number"
                 prefix="$"
               />
-              <span className="text-xs text-text-dimmed ml-1">/day</span>
+              <span className="text-xs text-text-dimmed ml-1">daily</span>
             </div>
             {adSet.bidAmount !== null && onBidChange && (
               <div>

@@ -1,7 +1,7 @@
 'use client';
 
 
-import { ChevronRight, ChevronDown, AlertTriangle } from 'lucide-react';
+import { ChevronRight, ChevronDown, AlertTriangle, Lock } from 'lucide-react';
 import type { Campaign, EntityStatus } from '@/types/campaign';
 import type { MetricKey } from '@/types/metrics';
 import type { SparklineDataPoint } from '@/data/mockSparklineData';
@@ -33,6 +33,8 @@ export interface CampaignRowProps {
   activityData?: Record<string, EntityAction[]>;
   activitiesFullyLoaded?: boolean;
   nameColWidth?: number;
+  isToggling?: boolean;
+  flashType?: 'success' | 'error';
 }
 
 const objectiveLabels: Record<string, { label: string; variant: 'success' | 'warning' | 'danger' | 'info' | 'default' }> = {
@@ -70,6 +72,8 @@ export function CampaignRow({
   activityData,
   activitiesFullyLoaded,
   nameColWidth,
+  isToggling = false,
+  flashType,
 }: CampaignRowProps) {
   const isActive = campaign.status === 'ACTIVE';
   const isABO = !(campaign.dailyBudget > 0) && !(campaign.lifetimeBudget && campaign.lifetimeBudget > 0);
@@ -81,28 +85,31 @@ export function CampaignRow({
       id={rowId}
       className={cn(
         'group border-b border-[rgba(0,0,0,0.04)] bg-white transition-colors duration-150',
-        'hover:bg-[#f5f5f7]',
+        'hover:!bg-[#f9fafb]',
         isSelected && 'bg-[#e8f0fe]',
-        isHighlighted && 'bg-[#fff8e1]'
+        isHighlighted && 'bg-[#fff8e1]',
+        flashType === 'success' && 'bg-[#f0fdf4]',
+        flashType === 'error' && 'bg-[#fef2f2]'
       )}
     >
       {/* Checkbox */}
-      <td className="w-10 whitespace-nowrap px-3 py-2 sticky left-0 z-10 bg-white group-hover:bg-[#f5f5f7] transition-colors duration-150">
+      <td className="w-10 whitespace-nowrap px-3 py-2 sticky left-0 z-10 bg-white group-hover:bg-[#f9fafb] transition-colors duration-150">
         <Checkbox checked={isSelected} onChange={onToggleSelect} />
       </td>
 
       {/* Toggle */}
-      <td className="w-12 whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 bg-white group-hover:bg-[#f5f5f7] transition-colors duration-150">
+      <td className="w-14 whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 bg-white group-hover:bg-[#f9fafb] transition-colors duration-150">
         <Toggle
           checked={isActive}
           onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
           size="sm"
+          loading={isToggling}
         />
       </td>
 
       {/* Name + Objective + CBO/ABO */}
       <td
-        className="whitespace-nowrap px-3 py-2 sticky left-[96px] z-10 bg-white group-hover:bg-[#f5f5f7] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)]"
+        className="whitespace-nowrap px-3 py-2 sticky left-[96px] z-10 bg-white group-hover:bg-[#f9fafb] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)]"
         style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth } : undefined}
       >
         <div className="flex items-center gap-2">
@@ -124,16 +131,17 @@ export function CampaignRow({
               {campaign.name}
             </button>
             <div className="absolute left-0 top-full mt-1 z-50 pointer-events-none opacity-0 group-hover/tooltip:opacity-100 translate-y-1 group-hover/tooltip:translate-y-0 transition-all duration-150 ease-out">
-              <div className="rounded-lg bg-[#1d1d1f] px-3 py-1.5 text-xs text-white shadow-lg whitespace-nowrap max-w-xs">
+              <div className="rounded-lg border border-[rgba(0,0,0,0.08)] bg-[#1d1d1f] px-3 py-1.5 text-xs text-white shadow-md whitespace-nowrap max-w-xs">
                 {campaign.name}
               </div>
             </div>
           </div>
-          <Badge variant={objective.variant}>{objective.label}</Badge>
-          {/* CBO = budget at campaign level, ABO = budget at adset level */}
-          <Badge variant={campaign.dailyBudget > 0 || (campaign.lifetimeBudget && campaign.lifetimeBudget > 0) ? 'info' : 'warning'}>
+          {/* CBO/ABO — small outlined pill */}
+          <Badge variant={campaign.dailyBudget > 0 || (campaign.lifetimeBudget && campaign.lifetimeBudget > 0) ? 'info' : 'warning'} size="sm">
             {campaign.dailyBudget > 0 || (campaign.lifetimeBudget && campaign.lifetimeBudget > 0) ? 'CBO' : 'ABO'}
           </Badge>
+          {/* Objective as subtle muted text */}
+          <span className="text-[9px] font-medium text-text-dimmed uppercase tracking-wide">{objective.label}</span>
           {issueCount > 0 && (
             <button
               onClick={() => onIssueClick?.()}
@@ -153,36 +161,45 @@ export function CampaignRow({
           'inline-flex items-center gap-1.5 text-[11px] font-semibold',
           isActive ? 'apple-status-active' : 'apple-status-paused'
         )}>
-          {isActive && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />}
-          {campaign.status}
+          <span className={cn(
+            'h-1.5 w-1.5 rounded-full',
+            isActive ? 'bg-emerald-500' : 'bg-[#aeaeb2]'
+          )} />
+          {isActive ? 'Active' : 'Paused'}
         </span>
       </td>
 
       {/* Budget — ABO has no campaign-level budget (it lives on each ad set) */}
       <td className="whitespace-nowrap px-3 py-2">
         {isABO ? (
-          <span className="text-[12px] text-[#aeaeb2] italic">Ad set budgets</span>
+          <span className="inline-flex items-center gap-1 text-[12px] text-text-dimmed">
+            <Lock className="h-3 w-3" />
+            <span className="italic">Ad set budgets</span>
+          </span>
         ) : (
-          <>
-            <InlineEdit
-              value={(isLifetimeBudget ? campaign.lifetimeBudget! : (campaign.dailyBudget ?? 0)).toFixed(2)}
-              onSave={(val) => {
-                const num = parseFloat(val);
-                if (!isNaN(num) && num > 0) onBudgetChange(num);
-              }}
-              type="number"
-              prefix="$"
-            />
-            <span className="text-[11px] text-[#aeaeb2] ml-1">
-              {isLifetimeBudget ? '/lifetime' : '/day'}
-            </span>
-          </>
+          <InlineEdit
+            value={(isLifetimeBudget ? campaign.lifetimeBudget! : (campaign.dailyBudget ?? 0)).toFixed(2)}
+            onSave={(val) => {
+              const num = parseFloat(val);
+              if (!isNaN(num) && num > 0) onBudgetChange(num);
+            }}
+            type="number"
+            prefix="$"
+          />
         )}
       </td>
 
-      {/* Bid Strategy */}
+      {/* Bid Strategy + Cap Value */}
       <td className="whitespace-nowrap px-3 py-2 text-sm text-text-secondary">
-        {bidStrategyLabels[campaign.bidStrategy] ?? campaign.bidStrategy}
+        <div className="flex flex-col">
+          <span>{bidStrategyLabels[campaign.bidStrategy] ?? campaign.bidStrategy}</span>
+          {(campaign.bidStrategy === 'BID_CAP' || campaign.bidStrategy === 'COST_CAP') && (() => {
+            const capValue = campaign.adSets?.find((as) => as.bidAmount != null)?.bidAmount;
+            return capValue != null ? (
+              <span className="text-[10px] text-text-dimmed">${capValue.toFixed(2)} cap</span>
+            ) : null;
+          })()}
+        </div>
       </td>
 
       {/* Performance Sparkline */}

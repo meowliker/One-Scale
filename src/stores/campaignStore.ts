@@ -9,6 +9,8 @@ interface CampaignStoreState {
   selectAll: (ids: string[]) => void;
   clearSelection: () => void;
   toggleExpandCampaign: (id: string) => void;
+  setExpandedCampaigns: (ids: Set<string>) => void;
+  collapseAllCampaigns: () => void;
   toggleExpandAdSet: (id: string) => void;
   setEditing: (entityId: string, field: string) => void;
   clearEditing: () => void;
@@ -48,6 +50,14 @@ export const useCampaignStore = create<CampaignStoreState>()((set, get) => ({
       next.add(id);
     }
     set({ expandedCampaigns: next });
+  },
+
+  setExpandedCampaigns: (ids) => {
+    set({ expandedCampaigns: ids });
+  },
+
+  collapseAllCampaigns: () => {
+    set({ expandedCampaigns: new Set(), expandedAdSets: new Set() });
   },
 
   toggleExpandAdSet: (id) => {

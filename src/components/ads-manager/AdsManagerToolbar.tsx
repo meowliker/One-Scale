@@ -72,8 +72,8 @@ export function AdsManagerToolbar({
     : 'Up to date';
 
   return (
-    <div className="flex w-full items-center justify-between gap-4 apple-toolbar px-4 py-2.5">
-        <div className="flex items-center gap-4">
+    <div className="flex w-full items-center justify-between gap-3 apple-toolbar px-4 py-2.5 flex-nowrap overflow-visible">
+        <div className="flex items-center gap-4 min-w-0 overflow-hidden">
           <div className="w-64">
             <SearchInput
               value={search}
@@ -89,8 +89,8 @@ export function AdsManagerToolbar({
                 className={cn(
                   'px-3 py-1.5 text-sm font-medium transition-all duration-200',
                   statusFilter === btn.value
-                    ? 'bg-white text-[#1d1d1f] shadow-sm rounded-md'
-                    : 'text-[#86868b] hover:text-[#1d1d1f] rounded-md'
+                    ? 'bg-[#1d1d1f] text-white shadow-sm rounded-md'
+                    : 'text-[#6e6e73] hover:text-[#1d1d1f] rounded-md'
                 )}
               >
                 {btn.label}
@@ -101,7 +101,7 @@ export function AdsManagerToolbar({
             {campaignCount} campaign{campaignCount !== 1 ? 's' : ''}
           </span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-nowrap shrink-0">
           {attributionCoverage && (
             <Link
               href="/dashboard/attribution"
@@ -118,24 +118,22 @@ export function AdsManagerToolbar({
             </Link>
           )}
           {/* Columns Button */}
-          <div className="relative">
-            <button
-              onClick={() => setColumnPickerOpen((prev) => !prev)}
-              className={cn(
-                'inline-flex items-center gap-2 border px-4 py-2 text-sm font-medium transition-all duration-200',
-                columnPickerOpen
-                  ? 'border-[#0071e3] bg-[#e8f0fe] text-[#0071e3] rounded-lg'
-                  : 'border-[rgba(0,0,0,0.08)] bg-white text-[#86868b] hover:bg-[#f5f5f7] rounded-lg'
-              )}
-            >
-              <Columns3 className="h-4 w-4" />
-              Columns
-            </button>
-            <ColumnPicker
-              isOpen={columnPickerOpen}
-              onClose={() => setColumnPickerOpen(false)}
-            />
-          </div>
+          <button
+            onClick={() => setColumnPickerOpen((prev) => !prev)}
+            className={cn(
+              'inline-flex items-center gap-2 border px-4 py-2 text-sm font-medium transition-all duration-200',
+              columnPickerOpen
+                ? 'border-[#0071e3] bg-[#e8f0fe] text-[#0071e3] rounded-lg'
+                : 'border-[rgba(0,0,0,0.08)] bg-white text-[#86868b] hover:bg-[#f5f5f7] rounded-lg'
+            )}
+          >
+            <Columns3 className="h-4 w-4" />
+            Columns
+          </button>
+          <ColumnPicker
+            isOpen={columnPickerOpen}
+            onClose={() => setColumnPickerOpen(false)}
+          />
           <div className="group/err relative">
             <button
               onClick={onToggleErrorCenter}
@@ -194,7 +192,7 @@ export function AdsManagerToolbar({
           )}
           <Link
             href="/dashboard/ads-manager/create"
-            className="inline-flex items-center gap-2 bg-[#0071e3] hover:bg-[#0077ED] rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors duration-150"
+            className="inline-flex items-center gap-2 bg-[#0071e3] hover:bg-[#0077ED] rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors duration-150 border-0 whitespace-nowrap shrink-0"
           >
             <Plus className="h-4 w-4" />
             Create Campaign
