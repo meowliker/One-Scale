@@ -329,16 +329,24 @@ export function CampaignCreateWizard() {
         <div className="rounded-2xl border border-red-200 bg-red-50 p-5 shadow-sm">
           <div className="flex items-start justify-between gap-3">
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-red-800 mb-2">Meta App — Development Mode Restriction</p>
+              <p className="text-sm font-semibold text-red-800 mb-1">Meta App is in Development Mode</p>
               <p className="text-sm text-red-700 mb-3">
-                Your Meta app is in <strong>Development mode</strong>, which blocks publishing to real ad accounts unless your account is added as an Admin, Developer, or Tester.
+                The quickest fix: go to <strong>developers.facebook.com</strong>, open your app, and flip the <strong>&quot;In development&quot; toggle to Live</strong>. No App Review needed for your own ad accounts.
               </p>
-              <ol className="list-decimal list-inside space-y-1.5 text-sm text-red-700">
-                <li>Go to <strong>developers.facebook.com</strong> → Your App → <strong>Roles</strong></li>
-                <li>Add your Facebook account as <strong>Administrator</strong> or <strong>Tester</strong></li>
-                <li>Or switch the app to <strong>Live mode</strong> (App Review → Go Live)</li>
-                <li>Reconnect Meta in <strong>Settings → Connections</strong>, then retry</li>
+              <p className="text-xs font-medium text-red-800 mb-1.5">Steps to go Live:</p>
+              <ol className="list-decimal list-inside space-y-1 text-sm text-red-700 mb-3">
+                <li>Open <strong>developers.facebook.com</strong> → select your app</li>
+                <li>Click the <strong>&quot;In development&quot;</strong> toggle at the top → switch to <strong>Live</strong></li>
+                <li>Confirm the prompt — no App Review required for your own accounts</li>
+                <li>Return here and retry — no need to reconnect</li>
               </ol>
+              <p className="text-xs text-red-600">
+                Already Live? Your saved token may be stale —{' '}
+                <a href="/dashboard/settings/integrations" className="underline font-medium">
+                  reconnect Meta in Settings
+                </a>{' '}
+                to refresh it, then retry.
+              </p>
             </div>
             <button
               onClick={() => setDevModeError(null)}
