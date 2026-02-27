@@ -180,6 +180,11 @@ async function postToMeta(
     throw new Error(parseMetaError(parsed.error as Parameters<typeof parseMetaError>[0]));
   }
 
+  // Some Graph API mutations return {"success": false} without an error object.
+  if (parsed.success === false) {
+    throw new Error(`Meta API returned success=false | endpoint=${endpoint}`);
+  }
+
   return parsed;
 }
 
