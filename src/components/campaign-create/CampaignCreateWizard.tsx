@@ -9,7 +9,7 @@ import { useConnectionStore } from '@/stores/connectionStore';
 import { cn } from '@/lib/utils';
 import { todayInTimezone } from '@/lib/timezone';
 import { getCampaignCreateAnalysis } from '@/services/campaignCreateInsights';
-import { getCampaignSetupOptions, publishCampaign } from '@/services/campaignPublish';
+import { getCampaignSetupOptions, publishCampaign, MetaPublishError } from '@/services/campaignPublish';
 import type { CampaignObjective } from '@/types/campaign';
 import { WizardStepIndicator } from './WizardStepIndicator';
 import { ObjectiveStep } from './ObjectiveStep';
@@ -77,6 +77,7 @@ export function CampaignCreateWizard() {
   } = useCampaignCreateStore();
   const loadedStoreRef = useRef<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [devModeError, setDevModeError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -303,8 +304,12 @@ export function CampaignCreateWizard() {
       reset();
       router.push('/dashboard/ads-manager');
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to publish campaign';
-      toast.error(message);
+      if (err instanceof MetaPublishError && err.devModeRestricted) {
+        setDevModeError(err.message);
+      } else {
+        const message = err instanceof Error ? err.message : 'Failed to publish campaign';
+        toast.error(message);
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -320,6 +325,31 @@ export function CampaignCreateWizard() {
 
   return (
     <div className="space-y-8">
+      {devModeError && (
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-red-800 mb-2">Meta App — Development Mode Restriction</p>
+              <p className="text-sm text-red-700 mb-3">
+                Your Meta app is in <strong>Development mode</strong>, which blocks publishing to real ad accounts unless your account is added as an Admin, Developer, or Tester.
+              </p>
+              <ol className="list-decimal list-inside space-y-1.5 text-sm text-red-700">
+                <li>Go to <strong>developers.facebook.com</strong> → Your App → <strong>Roles</strong></li>
+                <li>Add your Facebook account as <strong>Administrator</strong> or <strong>Tester</strong></li>
+                <li>Or switch the app to <strong>Live mode</strong> (App Review → Go Live)</li>
+                <li>Reconnect Meta in <strong>Settings → Connections</strong>, then retry</li>
+              </ol>
+            </div>
+            <button
+              onClick={() => setDevModeError(null)}
+              className="flex-shrink-0 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 transition-colors"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
       {(analysisLoading || analysisError) && (
         <div
           className={cn(

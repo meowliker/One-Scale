@@ -90,6 +90,15 @@ export async function uploadCampaignAsset(params: {
   return response.json() as Promise<CampaignUploadedAsset>;
 }
 
+export class MetaPublishError extends Error {
+  devModeRestricted: boolean;
+  constructor(message: string, devModeRestricted = false) {
+    super(message);
+    this.name = 'MetaPublishError';
+    this.devModeRestricted = devModeRestricted;
+  }
+}
+
 export async function publishCampaign(payload: PublishCampaignRequest): Promise<PublishCampaignResponse> {
   const storeId = useStoreStore.getState().activeStoreId;
   if (!storeId) throw new Error('No active store selected');
@@ -102,7 +111,10 @@ export async function publishCampaign(payload: PublishCampaignRequest): Promise<
 
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(body.error || 'Failed to publish campaign');
+    throw new MetaPublishError(
+      body.error || 'Failed to publish campaign',
+      body.devModeRestricted === true
+    );
   }
 
   return body as PublishCampaignResponse;
