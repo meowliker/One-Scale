@@ -1485,49 +1485,20 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   const prevFilterRef = useRef<StatusFilter>(statusFilter);
   const isInitialMountRef = useRef(true);
 
+  // Collapse all campaigns when filter changes — manual chevron click only for expansion
   useEffect(() => {
     const filterChanged = prevFilterRef.current !== statusFilter;
     prevFilterRef.current = statusFilter;
 
-    // On initial mount, don't auto-expand — let sessionStorage restored state stay.
     if (isInitialMountRef.current) {
       isInitialMountRef.current = false;
-      autoExpandDoneRef.current = true; // Prevent auto-expand until next explicit change
       return;
     }
 
-    if (statusFilter !== 'ACTIVE') {
-      if (filterChanged) {
-        collapseAllCampaigns();
-      }
-      autoExpandDoneRef.current = false;
-      return;
-    }
-
-    // For ACTIVE filter: auto-expand once when user explicitly changes filter
     if (filterChanged) {
-      autoExpandDoneRef.current = false;
+      collapseAllCampaigns();
     }
-
-    if (autoExpandDoneRef.current) return;
-
-    const activeCampaignIds = campaigns
-      .filter((c) => c.status === 'ACTIVE')
-      .map((c) => c.id);
-
-    if (activeCampaignIds.length === 0) return; // Campaigns not loaded yet
-
-    setExpandedCampaigns(new Set(activeCampaignIds));
-    // Batch-fetch adsets for all active campaigns that haven't been fetched yet
-    const unfetchedIds = activeCampaignIds.filter((id) => {
-      const campaign = campaigns.find((c) => c.id === id);
-      return !campaign || !campaign.adSets || campaign.adSets.length === 0;
-    });
-    if (unfetchedIds.length > 0) {
-      batchLoadAdSets(unfetchedIds);
-    }
-    autoExpandDoneRef.current = true;
-  }, [statusFilter, campaigns, setExpandedCampaigns, collapseAllCampaigns, batchLoadAdSets]);
+  }, [statusFilter, collapseAllCampaigns]);
 
   // Reset visible campaign count when search or filters change
   useEffect(() => {

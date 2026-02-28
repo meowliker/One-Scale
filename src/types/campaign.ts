@@ -137,6 +137,7 @@ export interface AdSet {
   targeting: TargetingSpec;
   startDate: string;
   endDate: string | null;
+  updatedTime?: string;
   ads: Ad[];
   metrics: PerformanceMetrics;
 }

@@ -612,11 +612,11 @@ export async function fetchMetaAdSets(
 ): Promise<AdSet[]> {
   const fields = options?.basicOnly
     ? [
-        'id', 'name', 'status', 'daily_budget', 'bid_amount',
+        'id', 'name', 'status', 'daily_budget', 'bid_amount', 'updated_time',
         'effective_status', 'configured_status', 'issues_info', 'ad_review_feedback',
       ].join(',')
     : [
-        'id', 'name', 'status', 'daily_budget', 'bid_amount',
+        'id', 'name', 'status', 'daily_budget', 'bid_amount', 'updated_time',
         'targeting', 'start_time', 'end_time', 'effective_status', 'configured_status', 'issues_info', 'ad_review_feedback',
       ].join(',');
 
@@ -725,6 +725,7 @@ export async function fetchMetaAdSets(
       },
       startDate: raw.start_time || new Date().toISOString(),
       endDate: raw.end_time || null,
+      updatedTime: raw.updated_time || undefined,
       ads: [],
       metrics,
     };
