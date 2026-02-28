@@ -40,62 +40,62 @@ interface ActionConfig {
 const actionConfigMap: Record<ActionType, ActionConfig> = {
   status_enable: {
     icon: Play,
-    color: 'text-emerald-600 dark:text-emerald-400',
-    bg: 'bg-emerald-50 dark:bg-emerald-900/20',
+    color: 'text-emerald-600 dark:text-emerald-300',
+    bg: 'bg-emerald-50 dark:bg-emerald-950/60',
     label: 'Activated',
   },
   status_pause: {
     icon: Pause,
-    color: 'text-orange-500 dark:text-orange-400',
-    bg: 'bg-orange-50 dark:bg-orange-900/20',
+    color: 'text-orange-500 dark:text-orange-300',
+    bg: 'bg-orange-50 dark:bg-orange-950/60',
     label: 'Paused',
   },
   budget_increase: {
     icon: TrendingUp,
-    color: 'text-blue-600 dark:text-blue-400',
-    bg: 'bg-blue-50 dark:bg-blue-900/20',
+    color: 'text-blue-600 dark:text-blue-300',
+    bg: 'bg-blue-50 dark:bg-blue-950/60',
     label: 'Budget increased',
   },
   budget_decrease: {
     icon: TrendingDown,
-    color: 'text-red-500 dark:text-red-400',
-    bg: 'bg-red-50 dark:bg-red-900/20',
+    color: 'text-red-500 dark:text-red-300',
+    bg: 'bg-red-50 dark:bg-red-950/60',
     label: 'Budget decreased',
   },
   bid_change: {
     icon: DollarSign,
-    color: 'text-purple-600 dark:text-purple-400',
-    bg: 'bg-purple-50 dark:bg-purple-900/20',
+    color: 'text-purple-600 dark:text-purple-300',
+    bg: 'bg-purple-50 dark:bg-purple-950/60',
     label: 'Bid updated',
   },
   creative_update: {
     icon: Palette,
-    color: 'text-pink-600 dark:text-pink-400',
-    bg: 'bg-pink-50 dark:bg-pink-900/20',
+    color: 'text-pink-600 dark:text-pink-300',
+    bg: 'bg-pink-50 dark:bg-pink-950/60',
     label: 'Creative changed',
   },
   duplicate: {
     icon: Copy,
-    color: 'text-cyan-600 dark:text-cyan-400',
-    bg: 'bg-cyan-50 dark:bg-cyan-900/20',
+    color: 'text-cyan-600 dark:text-cyan-300',
+    bg: 'bg-cyan-50 dark:bg-cyan-950/60',
     label: 'Duplicated',
   },
   ai_optimization: {
     icon: Sparkles,
-    color: 'text-indigo-600 dark:text-indigo-400',
-    bg: 'bg-indigo-50 dark:bg-indigo-900/20',
+    color: 'text-indigo-600 dark:text-indigo-300',
+    bg: 'bg-indigo-50 dark:bg-indigo-950/60',
     label: 'AI Optimization',
   },
   audience_change: {
     icon: Users,
-    color: 'text-orange-600 dark:text-orange-400',
-    bg: 'bg-orange-50 dark:bg-orange-900/20',
+    color: 'text-orange-600 dark:text-orange-300',
+    bg: 'bg-orange-50 dark:bg-orange-950/60',
     label: 'Audience changed',
   },
   schedule_change: {
     icon: Clock,
-    color: 'text-slate-600 dark:text-slate-400',
-    bg: 'bg-slate-50 dark:bg-slate-700/40',
+    color: 'text-slate-600 dark:text-slate-300',
+    bg: 'bg-slate-50 dark:bg-slate-800/60',
     label: 'Schedule changed',
   },
 };
@@ -295,10 +295,10 @@ export function LatestActionsCell({ entityId, actions: actionsProp, activitiesFu
     return (
       <td className="px-3 py-2 min-w-[180px]">
         {updatedTime ? (
-          <div className={cn('flex items-center gap-1.5 rounded-md px-2 py-1', 'bg-slate-50 dark:bg-slate-700/40')}>
-            <Pencil className="h-3 w-3 shrink-0 text-slate-400" />
+          <div className={cn('flex items-center gap-1.5 rounded-md px-2 py-1', 'bg-slate-50 dark:bg-slate-800/60')}>
+            <Pencil className="h-3 w-3 shrink-0 text-slate-400 dark:text-slate-400" />
             <div className="flex flex-col min-w-0">
-              <span className="text-[11px] font-semibold leading-tight text-slate-500 dark:text-slate-400">Modified</span>
+              <span className="text-[11px] font-semibold leading-tight text-slate-500 dark:text-slate-300">Modified</span>
               <span className="text-[10px] leading-tight text-text-dimmed">{formatTimeAgo(updatedTime)}</span>
             </div>
           </div>
