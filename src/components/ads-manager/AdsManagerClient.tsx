@@ -60,10 +60,10 @@ import { BulkActionPanel } from './BulkActionPanel';
 
 // Sort indicator for fixed column headers
 function FixedSortIndicator({ active, direction }: { active: boolean; direction: 'asc' | 'desc' | null }) {
-  if (!active) return <ArrowUpDown className="h-3 w-3 text-[#aeaeb2] opacity-0 group-hover/sort:opacity-50 transition-opacity" />;
+  if (!active) return <ArrowUpDown className="h-3 w-3 text-text-dimmed opacity-0 group-hover/sort:opacity-50 transition-opacity" />;
   return direction === 'asc'
-    ? <ArrowUp className="h-3 w-3 text-[#0071e3]" />
-    : <ArrowDown className="h-3 w-3 text-[#0071e3]" />;
+    ? <ArrowUp className="h-3 w-3 text-primary" />
+    : <ArrowDown className="h-3 w-3 text-primary" />;
 }
 
 // Sortable fixed column header (Name, Status, Budget)
@@ -84,7 +84,7 @@ function SortableFixedHeader({
     <th className="whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary">
       <button
         onClick={() => onSort(sortKeyName)}
-        className="group/sort flex items-center gap-1 cursor-pointer hover:text-[#1d1d1f] transition-colors duration-150"
+        className="group/sort flex items-center gap-1 cursor-pointer hover:text-text-primary transition-colors duration-150"
         title={`Sort by ${label}`}
       >
         <span>{label}</span>
@@ -360,6 +360,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   const [showErrorCenter, setShowErrorCenter] = useState(false);
   const [focusedIssueId, setFocusedIssueId] = useState<string | null>(null);
   const [corePreloadDone, setCorePreloadDone] = useState(false);
+  const [coreProgress, setCoreProgress] = useState<{ loaded: number; total: number }>({ loaded: 0, total: 0 });
   const [syncStatus, setSyncStatus] = useState<{ core: SyncStageState; actions: SyncStageState; errors: SyncStageState }>({
     core: 'idle',
     actions: 'idle',
@@ -757,12 +758,119 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     }
   }
 
+  // --- localStorage adset cache (10 min TTL) ---
+  const ADSET_CACHE_TTL_MS = 10 * 60 * 1000;
+  const getAdSetCacheKey = useCallback((campaignId: string) => {
+    return `onescale:adsets-cache:${activeStoreId}:${campaignId}`;
+  }, [activeStoreId]);
+
+  const readAdSetCache = useCallback((campaignId: string): AdSet[] | null => {
+    try {
+      const raw = window.localStorage.getItem(getAdSetCacheKey(campaignId));
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { at: number; data: AdSet[] };
+      if (Date.now() - parsed.at > ADSET_CACHE_TTL_MS) return null;
+      return parsed.data;
+    } catch { return null; }
+  }, [getAdSetCacheKey]);
+
+  const writeAdSetCache = useCallback((campaignId: string, data: AdSet[]) => {
+    try {
+      window.localStorage.setItem(
+        getAdSetCacheKey(campaignId),
+        JSON.stringify({ at: Date.now(), data })
+      );
+    } catch { /* ignore */ }
+  }, [getAdSetCacheKey]);
+
+  // --- Batch load adsets for multiple campaigns ---
+  const batchLoadAdSets = useCallback(async (campaignIdsToLoad: string[]) => {
+    if (campaignIdsToLoad.length === 0) return;
+
+    // Mark all as loading
+    setLoadingAdSets((prev) => {
+      const next = new Set(prev);
+      for (const id of campaignIdsToLoad) next.add(id);
+      return next;
+    });
+    setErrorAdSets((prev) => {
+      const next = new Set(prev);
+      for (const id of campaignIdsToLoad) next.delete(id);
+      return next;
+    });
+
+    try {
+      const params: Record<string, string> = {
+        campaignIds: campaignIdsToLoad.join(','),
+      };
+      if (dateRange) {
+        params.since = dateRange.since;
+        params.until = dateRange.until;
+        params.strictDate = '1';
+      }
+      params.mode = 'fast';
+      const response = await apiClient<{ data: Record<string, AdSet[]> }>('/api/meta/adsets', {
+        params,
+        timeoutMs: 25000,
+        maxRetries: 3,
+      });
+
+      const resultMap = response.data || {};
+      setCampaigns((prev) =>
+        prev.map((c) => {
+          const adSets = resultMap[c.id];
+          if (!adSets) return c;
+          const normalized = adSets.map((as) => ({ ...as, ads: as.ads ?? [] }));
+          writeAdSetCache(c.id, normalized);
+          fetchedAdSets.current.add(c.id);
+          return { ...c, adSets: normalized };
+        })
+      );
+
+      // Mark unfetched campaigns as errors
+      for (const id of campaignIdsToLoad) {
+        if (!resultMap[id]) {
+          setErrorAdSets((prev) => new Set(prev).add(id));
+        }
+      }
+    } catch (err) {
+      console.error('Batch adset load failed', err);
+      if (err instanceof RateLimitError) {
+        rateLimitUntilRef.current = Date.now() + 60_000;
+        toast.error('Meta API rate limited — syncing will resume shortly', { duration: 5000, icon: '⏳' });
+        lastRateLimitToastAtRef.current = Date.now();
+      }
+      for (const id of campaignIdsToLoad) {
+        if (!fetchedAdSets.current.has(id)) {
+          setErrorAdSets((prev) => new Set(prev).add(id));
+        }
+      }
+    } finally {
+      setLoadingAdSets((prev) => {
+        const next = new Set(prev);
+        for (const id of campaignIdsToLoad) next.delete(id);
+        return next;
+      });
+    }
+  }, [dateRange, writeAdSetCache]);
+
   // --- Lazy load adsets when campaign is expanded ---
   const loadAdSetsForCampaign = useCallback(async (campaignId: string, force = false, mode?: 'fast' | 'basic') => {
     if (fetchedAdSets.current.has(campaignId)) return;
     if (!force && Date.now() < rateLimitUntilRef.current) {
       setErrorAdSets((prev) => new Set(prev).add(campaignId));
       return;
+    }
+
+    // Check localStorage cache first — show cached data immediately
+    const cached = readAdSetCache(campaignId);
+    if (cached && cached.length > 0 && !force) {
+      const adSets = cached.map((as) => ({ ...as, ads: as.ads ?? [] }));
+      setCampaigns((prev) =>
+        prev.map((c) => c.id === campaignId ? { ...c, adSets } : c)
+      );
+      fetchedAdSets.current.add(campaignId);
+      return adSets;
     }
 
     setLoadingAdSets((prev) => new Set(prev).add(campaignId));
@@ -781,8 +889,8 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       params.mode = mode || 'fast';
       const response = await apiClient<{ data: AdSet[] }>('/api/meta/adsets', {
         params,
-        timeoutMs: 12000,
-        maxRetries: 0,
+        timeoutMs: 25000,
+        maxRetries: 3,
       });
       // Ensure each adSet has an ads array (defensive)
       const adSets = (response.data || []).map((as) => ({
@@ -794,6 +902,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
           c.id === campaignId ? { ...c, adSets } : c
         )
       );
+      writeAdSetCache(campaignId, adSets);
       fetchedAdSets.current.add(campaignId); // Mark as fetched only on success
       return adSets;
     } catch (err) {
@@ -807,14 +916,15 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         }
         const fallback = await apiClient<{ data: AdSet[] }>('/api/meta/adsets', {
           params: fallbackParams,
-          timeoutMs: 10000,
-          maxRetries: 0,
+          timeoutMs: 25000,
+          maxRetries: 3,
         });
         const adSets = (fallback.data || []).map((as) => ({
           ...as,
           ads: as.ads ?? [],
         }));
         setCampaigns((prev) => prev.map((c) => (c.id === campaignId ? { ...c, adSets } : c)));
+        writeAdSetCache(campaignId, adSets);
         fetchedAdSets.current.add(campaignId);
         setErrorAdSets((prev) => {
           const next = new Set(prev);
@@ -824,6 +934,17 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         return adSets;
       } catch {
         // fall through to existing error handling
+      }
+
+      // If we have stale cache, use it instead of showing error
+      const staleCache = readAdSetCache(campaignId);
+      if (staleCache && staleCache.length > 0) {
+        const adSets = staleCache.map((as) => ({ ...as, ads: as.ads ?? [] }));
+        setCampaigns((prev) =>
+          prev.map((c) => c.id === campaignId ? { ...c, adSets } : c)
+        );
+        fetchedAdSets.current.add(campaignId);
+        return adSets;
       }
 
       console.error('Failed to load adsets for campaign', campaignId, err);
@@ -848,7 +969,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         return next;
       });
     }
-  }, [dateRange]);
+  }, [dateRange, readAdSetCache, writeAdSetCache]);
 
   // --- Lazy load ads when adset is expanded ---
   const loadAdsForAdSet = useCallback(async (adSetId: string, force = false, mode?: 'fast' | 'basic') => {
@@ -966,11 +1087,14 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       // keep bounded even for accounts with many campaigns
       const MAX_ACTIVE_PRELOAD = 8;
       const selectedCampaigns = activeCampaigns.slice(0, MAX_ACTIVE_PRELOAD);
+      setCoreProgress({ loaded: 0, total: selectedCampaigns.length });
 
-      for (const campaign of selectedCampaigns) {
+      for (let i = 0; i < selectedCampaigns.length; i++) {
         if (cancelled) break;
+        const campaign = selectedCampaigns[i];
 
         const adSets = await loadAdSetsForCampaign(campaign.id, false, 'fast');
+        setCoreProgress({ loaded: i + 1, total: selectedCampaigns.length });
         if (!adSets || adSets.length === 0) {
           await new Promise((resolve) => window.setTimeout(resolve, 320));
           continue;
@@ -1162,10 +1286,18 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   // Retry handler for failed adset loads
   const handleRetryAdSets = useCallback(
     (campaignId: string) => {
-      fetchedAdSets.current.delete(campaignId);
-      loadAdSetsForCampaign(campaignId, true);
+      // Collect ALL failed campaign IDs and batch-retry them
+      const allFailedIds = Array.from(errorAdSets);
+      if (!allFailedIds.includes(campaignId)) allFailedIds.push(campaignId);
+      for (const id of allFailedIds) fetchedAdSets.current.delete(id);
+
+      if (allFailedIds.length > 1) {
+        batchLoadAdSets(allFailedIds);
+      } else {
+        loadAdSetsForCampaign(campaignId, true);
+      }
     },
-    [loadAdSetsForCampaign]
+    [loadAdSetsForCampaign, batchLoadAdSets, errorAdSets]
   );
 
   // Retry handler for failed ad loads
@@ -1835,10 +1967,15 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   const syncPercent = useMemo(() => {
     const coreWeight = 70;
     const actionsWeight = 30;
-    const corePart = syncStatus.core === 'done' ? coreWeight : syncStatus.core === 'loading' ? 40 : 0;
+    let corePart = 0;
+    if (syncStatus.core === 'done') {
+      corePart = coreWeight;
+    } else if (syncStatus.core === 'loading' && coreProgress.total > 0) {
+      corePart = Math.round((coreProgress.loaded / coreProgress.total) * coreWeight);
+    }
     const actionsPart = syncStatus.actions === 'done' ? actionsWeight : syncStatus.actions === 'loading' ? 15 : 0;
     return Math.min(100, corePart + actionsPart);
-  }, [syncStatus.actions, syncStatus.core]);
+  }, [syncStatus.actions, syncStatus.core, coreProgress]);
 
   const scrollToRow = useCallback((rowId: string) => {
     const node = document.getElementById(rowId);
@@ -1966,7 +2103,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                 >
                   <button
                     onClick={() => handleSort('name')}
-                    className="group/sort flex items-center gap-1 cursor-pointer hover:text-[#1d1d1f] transition-colors duration-150"
+                    className="group/sort flex items-center gap-1 cursor-pointer hover:text-text-primary transition-colors duration-150"
                     title="Sort by Name"
                   >
                     <span>Name</span>

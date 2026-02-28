@@ -80,7 +80,7 @@ export function CampaignRow({
   const isLifetimeBudget = !isABO && campaign.lifetimeBudget && campaign.lifetimeBudget > 0;
   const objective = objectiveLabels[campaign.objective] ?? { label: campaign.objective, variant: 'default' as const };
   const stickyBg = cn(
-    'bg-white',
+    'bg-white dark:bg-surface',
     isSelected && 'bg-[#e8f0fe]',
     isHighlighted && 'bg-[#fff8e1]',
     flashType === 'success' && 'bg-[#f0fdf4]',
@@ -91,8 +91,8 @@ export function CampaignRow({
     <tr
       id={rowId}
       className={cn(
-        'group border-b border-[rgba(0,0,0,0.04)] bg-white transition-colors duration-150',
-        'hover:!bg-[#f9fafb]',
+        'group border-b border-[rgba(0,0,0,0.04)] dark:border-border bg-white dark:bg-surface transition-colors duration-150',
+        'hover:!bg-[#f9fafb] dark:hover:!bg-[#273449]',
         isSelected && 'bg-[#e8f0fe]',
         isHighlighted && 'bg-[#fff8e1]',
         flashType === 'success' && 'bg-[#f0fdf4]',
@@ -100,12 +100,12 @@ export function CampaignRow({
       )}
     >
       {/* Checkbox */}
-      <td className={cn("w-10 whitespace-nowrap px-3 py-2 sticky left-0 z-10 group-hover:!bg-[#f9fafb] transition-colors duration-150", stickyBg)}>
+      <td className={cn("w-10 whitespace-nowrap px-3 py-2 sticky left-0 z-10 group-hover:!bg-[#f9fafb] dark:group-hover:!bg-[#273449] transition-colors duration-150", stickyBg)}>
         <Checkbox checked={isSelected} onChange={onToggleSelect} />
       </td>
 
       {/* Toggle */}
-      <td className={cn("w-14 whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 group-hover:!bg-[#f9fafb] transition-colors duration-150", stickyBg)}>
+      <td className={cn("w-14 whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 group-hover:!bg-[#f9fafb] dark:group-hover:!bg-[#273449] transition-colors duration-150", stickyBg)}>
         <Toggle
           checked={isActive}
           onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
@@ -116,7 +116,7 @@ export function CampaignRow({
 
       {/* Name + Objective + CBO/ABO */}
       <td
-        className={cn("whitespace-nowrap px-3 py-2 sticky left-[96px] z-10 group-hover:!bg-[#f9fafb] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)]", stickyBg)}
+        className={cn("whitespace-nowrap px-3 py-2 sticky left-[96px] z-10 group-hover:!bg-[#f9fafb] dark:group-hover:!bg-[#273449] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
         style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth } : undefined}
       >
         <div className="flex items-center gap-2">
@@ -133,7 +133,7 @@ export function CampaignRow({
           <div className="relative group/tooltip">
             <button
               onClick={onToggleExpand}
-              className="truncate max-w-[220px] block text-[13px] font-medium text-[#1d1d1f] hover:text-[#0071e3] transition-colors duration-150 text-left"
+              className="truncate max-w-[220px] block text-[13px] font-medium text-text-primary hover:text-primary transition-colors duration-150 text-left"
             >
               {campaign.name}
             </button>

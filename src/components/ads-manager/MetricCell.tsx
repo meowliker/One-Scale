@@ -51,9 +51,9 @@ export function MetricCell({ metricKey, value, isTotals }: MetricCellProps) {
   return (
     <td className={cn(
       "whitespace-nowrap px-3 py-2 text-right text-[12px] tabular-nums",
-      colorClass || "text-[#1d1d1f]",
-      PIXEL_METRIC_KEYS.has(metricKey) && "bg-[#e8f2ff] border-l border-[#0071e3]/10",
-      isTotals && "!font-bold !text-[13.5px] bg-[#f0f4ff]"
+      colorClass || "text-text-primary",
+      PIXEL_METRIC_KEYS.has(metricKey) && "bg-[#e8f2ff] dark:bg-[#1e3a5f] border-l border-[#0071e3]/10",
+      isTotals && "!font-bold !text-[13.5px] bg-[#f0f4ff] dark:bg-[#172554]"
     )}>
       {(metricKey === 'roas' || metricKey === 'appPixelRoas') && (
         <span

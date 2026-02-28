@@ -111,19 +111,16 @@ body {
 }
 
 /* ===== Dark Mode Transition System ===== */
-/* Smooth 400ms transitions when toggling themes */
+/* Smooth transitions when toggling themes */
 *,
 *::before,
 *::after {
-  transition: background-color 400ms ease,
-              color 400ms ease,
-              border-color 400ms ease,
-              box-shadow 400ms ease,
-              fill 400ms ease,
-              stroke 400ms ease;
+  transition: background-color 350ms ease,
+              color 300ms ease,
+              border-color 300ms ease;
 }
 
-/* Exclude charts and sparklines from theme transitions to prevent jank */
+/* Exclude charts, sparklines, and toggle switches from theme transitions */
 .no-transition,
 .no-transition *,
 .no-transition *::before,
@@ -131,32 +128,29 @@ body {
   transition: none !important;
 }
 
-/* ===== View Transition API — dark mode ripple ===== */
+/* ===== View Transition API — dark mode fade ===== */
 ::view-transition-old(root),
 ::view-transition-new(root) {
-  animation: none;
-  mix-blend-mode: normal;
+  animation-duration: 400ms;
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 ::view-transition-old(root) {
-  z-index: 1;
-}
-::view-transition-new(root) {
-  z-index: 9999;
+  animation-name: vt-fade-out;
 }
 
-/* Circular ripple reveal for the new theme */
 ::view-transition-new(root) {
-  animation: theme-ripple-reveal 400ms ease-out;
+  animation-name: vt-fade-in;
 }
 
-@keyframes theme-ripple-reveal {
-  from {
-    clip-path: circle(0% at var(--toggle-x, 50%) var(--toggle-y, 50%));
-  }
-  to {
-    clip-path: circle(150% at var(--toggle-x, 50%) var(--toggle-y, 50%));
-  }
+@keyframes vt-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes vt-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* ===== Theme toggle icon animation ===== */
@@ -392,6 +386,12 @@ body {
   border-radius: 9999px;
 }
 
+.dark .apple-status-active {
+  background: #052e16;
+  color: #4ade80;
+  border-color: #166534;
+}
+
 .apple-status-paused {
   background: transparent;
   color: var(--color-text-muted);
@@ -400,6 +400,10 @@ body {
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 9999px;
+}
+
+.dark .apple-status-paused {
+  border-color: var(--color-border);
 }
 
 .apple-status-error {

@@ -14,15 +14,17 @@ export function ThemeToggle({ className }: ThemeToggleProps) {
   const isDark = theme === 'dark';
   const buttonRef = useRef<HTMLButtonElement>(null);
 
-  const handleToggle = useCallback(() => {
-    // Set CSS custom properties for the ripple origin
-    if (buttonRef.current) {
-      const rect = buttonRef.current.getBoundingClientRect();
-      const x = ((rect.left + rect.width / 2) / window.innerWidth) * 100;
-      const y = ((rect.top + rect.height / 2) / window.innerHeight) * 100;
-      document.documentElement.style.setProperty('--toggle-x', `${x}%`);
-      document.documentElement.style.setProperty('--toggle-y', `${y}%`);
-    }
+  const handleToggle = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    // Use click coordinates directly for more accurate ripple origin
+    const x = e.clientX;
+    const y = e.clientY;
+    const endRadius = Math.hypot(
+      Math.max(x, window.innerWidth - x),
+      Math.max(y, window.innerHeight - y)
+    );
+    document.documentElement.style.setProperty('--toggle-x', `${x}px`);
+    document.documentElement.style.setProperty('--toggle-y', `${y}px`);
+    document.documentElement.style.setProperty('--toggle-end-radius', `${endRadius}px`);
 
     // Use View Transition API if supported for ripple effect
     if (typeof document !== 'undefined' && 'startViewTransition' in document) {

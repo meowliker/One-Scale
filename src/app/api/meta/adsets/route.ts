@@ -38,6 +38,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const storeId = searchParams.get('storeId');
   const campaignId = searchParams.get('campaignId');
+  const campaignIds = searchParams.get('campaignIds'); // comma-separated batch
   const since = searchParams.get('since');
   const until = searchParams.get('until');
   const strictDate = searchParams.get('strictDate') === '1';
@@ -46,6 +47,66 @@ export async function GET(request: NextRequest) {
 
   if (!storeId) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
+  }
+
+  // Batch mode: fetch adsets for multiple campaigns in one request
+  if (campaignIds) {
+    const ids = campaignIds.split(',').filter(Boolean);
+    if (ids.length === 0) {
+      return NextResponse.json({ error: 'campaignIds must contain at least one ID' }, { status: 400 });
+    }
+
+    const token = await getMetaToken(storeId);
+    if (!token) {
+      return NextResponse.json({ error: 'Not authenticated with Meta' }, { status: 401 });
+    }
+
+    const dateRange = since && until ? { since, until } : undefined;
+    const results: Record<string, AdSet[]> = {};
+
+    try {
+      // Fetch adsets for each campaign sequentially with small delays to avoid rate limits
+      for (const id of ids) {
+        try {
+          const adSets = await fetchMetaAdSets(token.accessToken, id, dateRange, {
+            disableDateFallback: strictDate,
+            preferLightweight: mode === 'basic' || mode === 'audit',
+            basicOnly: mode === 'basic',
+          });
+          results[id] = adSets;
+
+          // Cache each campaign's result
+          const batchCacheKey = [storeId, id, since || '', until || '', strictDate ? 'strict' : 'flex', mode].join('|');
+          adSetCache.set(batchCacheKey, { at: Date.now(), data: adSets });
+        } catch (err) {
+          if (err instanceof MetaRateLimitError) {
+            // Return what we have so far with a 429 status
+            return NextResponse.json(
+              { data: results, partial: true, rateLimited: true, error: 'Rate limited by Meta' },
+              { status: 429, headers: { 'Retry-After': '60' } }
+            );
+          }
+          // For other errors, store empty array and continue
+          results[id] = [];
+        }
+
+        // Small delay between campaigns to avoid rate limits
+        if (ids.indexOf(id) < ids.length - 1) {
+          await sleep(300);
+        }
+      }
+
+      return NextResponse.json({ data: results });
+    } catch (err) {
+      if (err instanceof MetaRateLimitError) {
+        return NextResponse.json(
+          { error: 'Rate limited by Meta. Please wait a minute and try again.', rateLimited: true, data: results },
+          { status: 429, headers: { 'Retry-After': '60' } }
+        );
+      }
+      const message = err instanceof Error ? err.message : 'Failed to fetch ad sets';
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
   }
 
   if (!campaignId) {
