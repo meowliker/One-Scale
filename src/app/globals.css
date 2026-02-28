@@ -325,7 +325,11 @@ body {
 }
 
 .apple-table thead tr {
-  background: var(--color-surface-hover);
+  background: #f5f5f7;
+}
+
+.dark .apple-table thead tr {
+  background: #0f172a;
 }
 
 .apple-table thead th {
@@ -337,6 +341,10 @@ body {
   padding: 8px 12px;
   border-bottom: 1px solid var(--color-border);
   position: relative;
+}
+
+.dark .apple-table thead th {
+  border-bottom-color: #1e293b;
 }
 
 .apple-table tbody tr {

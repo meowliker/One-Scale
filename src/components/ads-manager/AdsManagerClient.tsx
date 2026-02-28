@@ -1084,24 +1084,22 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     setSyncStatus((prev) => ({ ...prev, core: 'loading', actions: 'idle' }));
 
     (async () => {
-      // keep bounded even for accounts with many campaigns
       const MAX_ACTIVE_PRELOAD = 8;
       const selectedCampaigns = activeCampaigns.slice(0, MAX_ACTIVE_PRELOAD);
-      const total = selectedCampaigns.length;
-      setCoreProgress({ loaded: 0, total });
+      setCoreProgress({ loaded: 0, total: 3 });
 
-      // Phase 1: Load adsets for all campaigns (batch where possible)
-      let loaded = 0;
-      for (const campaign of selectedCampaigns) {
-        if (cancelled) break;
-        await loadAdSetsForCampaign(campaign.id, false, 'fast');
-        loaded++;
-        setCoreProgress({ loaded, total });
-        // Small delay to avoid rate limits
-        if (loaded < total) {
-          await new Promise((resolve) => window.setTimeout(resolve, 200));
-        }
+      // Step 1/3: campaigns already loaded from initialCampaigns
+      setCoreProgress({ loaded: 1, total: 3 });
+
+      // Step 2/3: batch load all adsets in one request
+      const ids = selectedCampaigns.map((c) => c.id);
+      if (!cancelled && ids.length > 0) {
+        await batchLoadAdSets(ids);
       }
+      setCoreProgress({ loaded: 2, total: 3 });
+
+      // Step 3/3: done — insights come with adsets already
+      setCoreProgress({ loaded: 3, total: 3 });
     })()
       .catch(() => {
         // keep UI usable; individual loaders already set row-level errors.
