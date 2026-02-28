@@ -947,18 +947,6 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     }
   }, [loadAdSetsForCampaign]);
 
-  // Auto-expand: load adsets for campaigns restored from sessionStorage
-  useEffect(() => {
-    if (isInitialMountRef.current) {
-      isInitialMountRef.current = false;
-      return;
-    }
-    if (expandedCampaigns.size === 0) return;
-    const needsLoad = [...expandedCampaigns].filter((id) => !fetchedAdSets.current.has(id));
-    if (needsLoad.length === 0) return;
-    batchLoadAdSets(needsLoad);
-  }, [expandedCampaigns, batchLoadAdSets]);
-
   // Management-first preload:
   // Core preload: loads ad sets + ads for active campaigns.
   // OPTIMIZATION: If localStorage hierarchy cache is fresh (<30 min), skip the

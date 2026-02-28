@@ -38,20 +38,10 @@ interface CampaignStoreState {
   clearEditing: () => void;
 }
 
-function initExpandedCampaigns(): Set<string> {
-  if (typeof window === 'undefined') return new Set();
-  return readSessionSet(EXPANDED_CAMPAIGNS_KEY);
-}
-
-function initExpandedAdSets(): Set<string> {
-  if (typeof window === 'undefined') return new Set();
-  return readSessionSet(EXPANDED_ADSETS_KEY);
-}
-
 export const useCampaignStore = create<CampaignStoreState>()((set, get) => ({
   selectedIds: new Set(),
-  expandedCampaigns: initExpandedCampaigns(),
-  expandedAdSets: initExpandedAdSets(),
+  expandedCampaigns: new Set(),
+  expandedAdSets: new Set(),
   editingCell: null,
 
   toggleSelection: (id) => {

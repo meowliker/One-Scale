@@ -459,15 +459,47 @@ body {
 
 /* ===== Totals Row ===== */
 tr.totals-row,
-tr.totals-row td {
-  background: #f8fafc !important;
-  color: #1d1d1f !important;
+tr.totals-row td,
+tr.totals-row th {
+  background-color: #f8fafc !important;
+  color: #111827 !important;
   font-weight: 700 !important;
+  border-top: 2px solid #e5e7eb !important;
 }
 
 .dark tr.totals-row,
-.dark tr.totals-row td {
-  background: #1e293b !important;
+.dark tr.totals-row td,
+.dark tr.totals-row th {
+  background-color: #1e293b !important;
   color: #f1f5f9 !important;
   font-weight: 700 !important;
+  border-top-color: #334155 !important;
+}
+
+/* ===== Tooltip Overrides ===== */
+.onescale-tooltip,
+[role="tooltip"] {
+  background: white !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.10) !important;
+  color: #111827 !important;
+  font-size: 12px !important;
+  padding: 8px 12px !important;
+  z-index: 50 !important;
+}
+
+.dark .onescale-tooltip,
+.dark [role="tooltip"] {
+  background: #1e293b !important;
+  border-color: #334155 !important;
+  color: #f1f5f9 !important;
+}
+
+/* ===== Table Header ===== */
+thead th {
+  background-color: #f8fafc !important;
+}
+.dark thead th {
+  background-color: #0f172a !important;
 }
