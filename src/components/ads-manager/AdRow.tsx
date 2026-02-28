@@ -137,10 +137,10 @@ export function AdRow({
 
         {/* Name + Creative Thumbnail */}
         <td
-          className={cn("whitespace-nowrap px-3 py-1.5 sticky left-[110px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
-          style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth } : undefined}
+          className={cn("whitespace-nowrap overflow-hidden px-3 py-1.5 sticky left-[110px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
+          style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth, maxWidth: nameColWidth } : undefined}
         >
-          <div className="flex items-center gap-3 pl-8">
+          <div className="flex items-center gap-3 pl-8 min-w-0 overflow-hidden">
             {/* Creative thumbnail — clickable to open preview */}
             <button
               onClick={() => setPreviewOpen(true)}
@@ -189,11 +189,11 @@ export function AdRow({
               )}
             </button>
 
-            <div className="group flex flex-col gap-0.5">
+            <div className="group flex flex-col gap-0.5 min-w-0 flex-1">
               {/* Editable ad name */}
-              <div className="relative group/tooltip">
+              <div className="relative group/tooltip min-w-0">
                 {onNameChange ? (
-                  <div className="truncate max-w-[220px] block">
+                  <div className="truncate block">
                     <InlineEdit
                       value={ad.name}
                       onSave={onNameChange}
@@ -201,7 +201,7 @@ export function AdRow({
                     />
                   </div>
                 ) : (
-                  <span className="truncate max-w-[220px] block text-sm font-medium text-text-primary">{ad.name}</span>
+                  <span className="block w-full truncate text-sm font-medium text-text-primary" title={ad.name}>{ad.name}</span>
                 )}
                 <div className="absolute left-0 top-full mt-1 z-50 pointer-events-none opacity-0 group-hover/tooltip:opacity-100 translate-y-1 group-hover/tooltip:translate-y-0 transition-all duration-150 ease-out">
                   <div className="onescale-tooltip whitespace-nowrap max-w-xs">

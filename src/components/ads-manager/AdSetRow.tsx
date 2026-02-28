@@ -132,13 +132,13 @@ export function AdSetRow({
 
       {/* Name + Targeting */}
       <td
-        className={cn("whitespace-nowrap px-3 py-2 sticky left-[110px] z-10 group-hover:!bg-[var(--apple-table-row-alt-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
-        style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth } : undefined}
+        className={cn("whitespace-nowrap overflow-hidden px-3 py-2 sticky left-[110px] z-10 group-hover:!bg-[var(--apple-table-row-alt-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
+        style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth, maxWidth: nameColWidth } : undefined}
       >
-        <div className="flex items-center gap-2 pl-8">
+        <div className="flex items-center gap-2 pl-8 min-w-0 overflow-hidden">
           <button
             onClick={onToggleExpand}
-            className="flex items-center gap-1 text-text-dimmed hover:text-text-secondary transition-colors"
+            className="shrink-0 flex items-center gap-1 text-text-dimmed hover:text-text-secondary transition-colors"
           >
             {isExpanded ? (
               <ChevronDown className="h-3.5 w-3.5" />
@@ -146,11 +146,12 @@ export function AdSetRow({
               <ChevronRight className="h-3.5 w-3.5" />
             )}
           </button>
-          <div className="flex flex-col">
-            <div className="relative group/tooltip">
+          <div className="flex flex-col min-w-0 flex-1">
+            <div className="relative group/tooltip min-w-0">
               <button
                 onClick={onToggleExpand}
-                className="truncate max-w-[220px] block text-sm font-medium text-text-primary hover:text-primary-light transition-colors text-left"
+                className="block w-full truncate text-sm font-medium text-text-primary hover:text-primary-light transition-colors text-left"
+                title={adSet.name || `Ad Set ${adSet.id}`}
               >
                 {adSet.name || `Ad Set ${adSet.id}`}
               </button>
@@ -160,7 +161,7 @@ export function AdSetRow({
                 </div>
               </div>
             </div>
-            <span className="text-[11px] text-text-dimmed">
+            <span className="text-[11px] text-text-dimmed truncate">
               {formatTargetingSummary(adSet)}
             </span>
           </div>

@@ -121,13 +121,13 @@ export function CampaignRow({
 
       {/* Name + Objective + CBO/ABO */}
       <td
-        className={cn("whitespace-nowrap px-3 py-2 sticky left-[110px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
-        style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth } : undefined}
+        className={cn("whitespace-nowrap overflow-hidden px-3 py-2 sticky left-[110px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
+        style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth, maxWidth: nameColWidth } : undefined}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 min-w-0 overflow-hidden">
           <button
             onClick={onToggleExpand}
-            className="flex items-center gap-1 text-text-muted hover:text-text-secondary transition-colors"
+            className="shrink-0 flex items-center gap-1 text-text-muted hover:text-text-secondary transition-colors"
           >
             {isExpanded ? (
               <ChevronDown className="h-4 w-4 transition-transform duration-200" />
@@ -135,10 +135,11 @@ export function CampaignRow({
               <ChevronRight className="h-4 w-4 transition-transform duration-200" />
             )}
           </button>
-          <div className="relative group/tooltip">
+          <div className="relative group/tooltip min-w-0 flex-1">
             <button
               onClick={onToggleExpand}
-              className="truncate max-w-[220px] block text-[13px] font-medium text-text-primary hover:text-primary transition-colors duration-150 text-left"
+              className="block w-full truncate text-[13px] font-medium text-text-primary hover:text-primary transition-colors duration-150 text-left"
+              title={campaign.name}
             >
               {campaign.name}
             </button>
@@ -153,11 +154,11 @@ export function CampaignRow({
             {campaign.dailyBudget > 0 || (campaign.lifetimeBudget && campaign.lifetimeBudget > 0) ? 'CBO' : 'ABO'}
           </Badge>
           {/* Objective as subtle muted text */}
-          <span className="text-[9px] font-medium text-text-dimmed uppercase tracking-wide">{objective.label}</span>
+          <span className="shrink-0 text-[9px] font-medium text-text-dimmed uppercase tracking-wide">{objective.label}</span>
           {issueCount > 0 && (
             <button
               onClick={() => onIssueClick?.()}
-              className="inline-flex items-center gap-1 rounded-md bg-[#fff4e5] px-2 py-0.5 text-[11px] font-medium text-[#cc7700] hover:bg-[#ffedcc] transition-colors duration-150"
+              className="shrink-0 inline-flex items-center gap-1 rounded-md bg-[#fff4e5] px-2 py-0.5 text-[11px] font-medium text-[#cc7700] hover:bg-[#ffedcc] transition-colors duration-150"
               title="This campaign has issues"
             >
               <AlertTriangle className="h-3 w-3" />
