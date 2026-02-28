@@ -675,6 +675,8 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
   // Fetch EVERYTHING in parallel — single range for all 8 days of orders,
   // Meta insights, P&L settings, refund orders, and transaction fees all at once.
   // Server-side retry on fetchFromShopify handles 429/503 rate limits.
+  // Shopify-specific calls use .catch([]) so a Shopify API failure does not
+  // abort the whole function — Meta-only data can still be returned.
   const [
     historicalRes, recentRes, todayRes, pnlSettings,
     allShopifyOrders, refundedOrders, realFees,
@@ -684,9 +686,18 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
     fetchInsightsDirectly('today'),
     fetchPnLSettings(),
     // ONE range call for all 8 days instead of 8 separate day calls
-    fetchOrdersForDateRange(earliestShopifyDate, todayStr, tz),
-    fetchAllRefundedOrders(displayStartDate, todayStr, earliestShopifyDate, tz),
-    fetchRealTransactionFees(tz),
+    fetchOrdersForDateRange(earliestShopifyDate, todayStr, tz).catch((err) => {
+      console.warn('[P&L] Shopify orders fetch failed, using empty orders:', err instanceof Error ? err.message : err);
+      return [] as ShopifyOrder[];
+    }),
+    fetchAllRefundedOrders(displayStartDate, todayStr, earliestShopifyDate, tz).catch((err) => {
+      console.warn('[P&L] Shopify refunded orders fetch failed, using empty:', err instanceof Error ? err.message : err);
+      return [] as ShopifyOrder[];
+    }),
+    fetchRealTransactionFees(tz).catch((err) => {
+      console.warn('[P&L] Shopify Payments fees fetch failed, using empty fees:', err instanceof Error ? err.message : err);
+      return { feesByOrderId: new Map<number, number>(), feesByDate: new Map<string, number>() } as FeeData;
+    }),
   ]);
 
   // Merge with priority: today > last_7d > last_30d (more recent data wins)

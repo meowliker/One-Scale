@@ -45,7 +45,7 @@ async function fetchSummaryData(preset: DateRangePreset) {
     getBlendedMetricsForRange(preset)(),
     getTimeSeriesForRange(preset)(),
     getTopCampaignsForRange(preset)(),
-    getDailyPnL(),
+    getDailyPnL().catch(() => [] as PnLEntry[]),
   ]);
 
   const shopifyMetrics = computeShopifyMetricsFromPnL(dailyPnL, preset);
