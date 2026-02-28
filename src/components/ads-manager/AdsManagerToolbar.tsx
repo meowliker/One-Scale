@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Plus, Columns3, AlertTriangle, LayoutDashboard, Loader2, Check } from 'lucide-react';
 import { SearchInput } from '@/components/ui/SearchInput';
 import { ColumnPicker } from '@/components/columns/ColumnPicker';
+import { ColumnPresetSelector } from '@/components/columns/ColumnPresetSelector';
 import { cn } from '@/lib/utils';
 
 export type StatusFilter = 'all' | 'ACTIVE' | 'PAUSED';
@@ -217,6 +218,9 @@ export function AdsManagerToolbar({
 
       {/* ── Divider ── */}
       <div className="h-6 w-px bg-[#e5e7eb] dark:bg-[var(--color-border)] shrink-0" />
+
+      {/* ── Column Presets ── */}
+      <ColumnPresetSelector />
 
       {/* ── Columns Button ── */}
       <button
