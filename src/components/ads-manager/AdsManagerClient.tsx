@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo, useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   DndContext,
   closestCenter,
@@ -323,7 +324,8 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ACTIVE');
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc' | null>(null);
-  const [showAll, setShowAll] = useState(false);
+  // Scroll container ref for virtual scrolling
+  const tableContainerRef = useRef<HTMLDivElement>(null);
   // Track which campaigns/adsets are currently loading children
   const [loadingAdSets, setLoadingAdSets] = useState<Set<string>>(new Set());
   const [loadingAds, setLoadingAds] = useState<Set<string>>(new Set());
@@ -331,6 +333,10 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   const [togglingEntities, setTogglingEntities] = useState<Set<string>>(new Set());
   // Track row flash: 'success' = green flash, 'error' = red flash
   const [rowFlash, setRowFlash] = useState<Record<string, 'success' | 'error'>>({});
+  // Shopify-attributed revenue per campaign (for Real ROAS)
+  const [shopifyRevMap, setShopifyRevMap] = useState<Record<string, { shopifyRevenue: number; orderCount: number }>>({});
+  // Last synced timestamp for background refresh indicator
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   // Track which campaigns/adsets failed to load (for retry UI)
   const [errorAdSets, setErrorAdSets] = useState<Set<string>>(new Set());
   const [errorAds, setErrorAds] = useState<Set<string>>(new Set());
@@ -639,6 +645,94 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       window.clearInterval(intervalId);
     };
   }, [activeStoreId, dateRange?.since, dateRange?.until, fetchAppPixelMetrics]);
+
+  // Fetch Shopify-attributed revenue per campaign for Real ROAS
+  const shopifyRevKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeStoreId || !dateRange?.since || !dateRange?.until || campaigns.length === 0) return;
+    const key = `${activeStoreId}|${dateRange.since}|${dateRange.until}|${campaigns.length}`;
+    if (shopifyRevKeyRef.current === key) return;
+    shopifyRevKeyRef.current = key;
+    let cancelled = false;
+    const campaignIds = campaigns.map((c) => c.id);
+    apiClient<{ data: Record<string, { shopifyRevenue: number; orderCount: number }> }>(
+      '/api/attribution/campaign-revenue',
+      {
+        method: 'POST',
+        body: JSON.stringify({ storeId: activeStoreId, dateRange, campaignIds }),
+        timeoutMs: 30_000,
+        maxRetries: 1,
+      }
+    ).then((res) => {
+      if (!cancelled && res.data) setShopifyRevMap(res.data);
+    }).catch(() => { /* best-effort */ });
+    return () => { cancelled = true; };
+  }, [activeStoreId, dateRange?.since, dateRange?.until, campaigns]);
+
+  // Background sync polling — refresh today's metrics every 60s
+  useEffect(() => {
+    if (!activeStoreId) return;
+    // Only poll when the selected date range includes today
+    const today = new Date().toISOString().slice(0, 10);
+    if (dateRange && dateRange.until < today) return;
+
+    let cancelled = false;
+
+    const runSync = async () => {
+      try {
+        const res = await apiClient<{
+          data: Record<string, Partial<{ spend: number; impressions: number; clicks: number; conversions: number; revenue: number; roas: number }>>;
+          lastSyncedAt: string;
+        }>('/api/sync/refresh', {
+          method: 'POST',
+          body: JSON.stringify({ storeId: activeStoreId }),
+          timeoutMs: 15_000,
+          maxRetries: 0,
+        });
+        if (cancelled) return;
+        setLastSyncedAt(res.lastSyncedAt);
+
+        // Diff returned metrics against current campaigns and flash changed rows
+        if (res.data) {
+          setCampaigns((prev) =>
+            prev.map((campaign) => {
+              const update = res.data[campaign.id];
+              if (!update || !update.spend) return campaign;
+              const oldSpend = campaign.metrics.spend ?? 0;
+              const newSpend = update.spend ?? 0;
+              if (Math.abs(newSpend - oldSpend) > 0.01) {
+                const type = newSpend > oldSpend ? 'success' : 'error';
+                setRowFlash((prev) => ({ ...prev, [campaign.id]: type }));
+                setTimeout(() => {
+                  setRowFlash((prev) => {
+                    const next = { ...prev };
+                    delete next[campaign.id];
+                    return next;
+                  });
+                }, 800);
+              }
+              return {
+                ...campaign,
+                metrics: { ...campaign.metrics, ...update },
+              };
+            })
+          );
+        }
+      } catch {
+        // Best-effort — don't block UI on sync failures
+      }
+    };
+
+    // Initial sync after 5s delay to avoid competing with page load
+    const initialTimer = window.setTimeout(runSync, 5_000);
+    const intervalId = window.setInterval(runSync, 60_000);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(initialTimer);
+      window.clearInterval(intervalId);
+    };
+  }, [activeStoreId, dateRange?.since, dateRange?.until]);
 
   // Background load policy/delivery issues only when Error Center is opened.
   // This prevents heavy issue scans from competing with core ad-set loading.
@@ -1482,11 +1576,24 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     return sorted;
   }, [filteredCampaigns, sortKey, sortDirection, compareEntities]);
 
-  // Visible campaigns — show 15 initially, expand on "Show more"
-  const visibleCampaigns = useMemo(() => {
-    if (showAll || search || activeSegment) return sortedCampaigns;
-    return sortedCampaigns.slice(0, 15);
-  }, [sortedCampaigns, showAll, search, activeSegment]);
+  // Virtual scrolling — render only visible campaign groups in the DOM
+  const rowVirtualizer = useVirtualizer({
+    count: sortedCampaigns.length,
+    getScrollElement: () => tableContainerRef.current,
+    estimateSize: (index) => {
+      // Estimate: collapsed campaign ~48px, expanded varies
+      const c = sortedCampaigns[index];
+      if (!c || !expandedCampaigns.has(c.id)) return 48;
+      const adSets = c.adSets || [];
+      const adSetCount = adSets.length || 1; // at least 1 for loading/empty row
+      let adCount = 0;
+      for (const as of adSets) {
+        if (expandedAdSets.has(as.id)) adCount += (as.ads || []).length || 1;
+      }
+      return 48 + adSetCount * 44 + adCount * 40;
+    },
+    overscan: 5,
+  });
 
   // Collect all entity ids for "select all"
   const allEntityIds = useMemo(() => {
@@ -2038,6 +2145,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         syncStatus={syncStatus}
         syncPercent={syncPercent}
         attributionCoverage={attributionCoverage}
+        lastSyncedAt={lastSyncedAt}
       />
 
       <SmartSegmentsBar
@@ -2074,22 +2182,22 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         collisionDetection={closestCenter}
         onDragEnd={handleDragEnd}
       >
-        <div className="apple-table-container apple-scroll">
+        <div ref={tableContainerRef} className="apple-table-container apple-scroll">
           <table className="w-full min-w-[1200px] apple-table">
             <thead>
-              <tr className="sticky top-0 z-20 bg-[#f5f5f7] dark:bg-[#0f172a] border-b border-[rgba(0,0,0,0.08)] dark:border-[#1e293b]">
-                <th className="w-10 whitespace-nowrap px-3 py-2 text-left sticky left-0 z-20 bg-[#f5f5f7] dark:bg-[#0f172a]">
+              <tr className="sticky top-0 z-20 border-b border-[var(--apple-table-header-border)]">
+                <th className="w-10 whitespace-nowrap px-3 py-2 text-left sticky left-0 z-20 bg-[var(--apple-table-header-bg)]">
                   <Checkbox
                     checked={allSelected}
                     onChange={handleSelectAll}
                     indeterminate={someSelected}
                   />
                 </th>
-                <th className="w-14 whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary sticky left-[40px] z-20 bg-[#f5f5f7] dark:bg-[#0f172a]">
+                <th className="w-14 whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary sticky left-[40px] z-20 bg-[var(--apple-table-header-bg)]">
                   On/Off
                 </th>
                 <th
-                  className="relative whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary sticky left-[96px] z-20 bg-[#f5f5f7] dark:bg-[#0f172a] border-r border-[rgba(0,0,0,0.06)] dark:border-r-[#1e293b]"
+                  className="relative whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary sticky left-[96px] z-20 bg-[var(--apple-table-header-bg)] border-r border-[var(--apple-table-header-border)]"
                   style={{ width: nameColWidth, minWidth: nameColWidth }}
                 >
                   <button
@@ -2155,88 +2263,112 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                 </SortableContext>
               </tr>
             </thead>
-            <tbody>
-              {visibleCampaigns.length === 0 ? (
+            {sortedCampaigns.length === 0 ? (
+              <tbody>
                 <tr>
                   <td colSpan={totalColumns} className="px-6 py-12 text-center text-sm text-[#aeaeb2]">
                     No campaigns found.
                   </td>
                 </tr>
-              ) : (
-                visibleCampaigns.map((campaign) => {
+              </tbody>
+            ) : (
+              <>
+                {/* Top spacer — pushes visible rows to correct scroll position */}
+                {rowVirtualizer.getVirtualItems().length > 0 && (
+                  <tbody>
+                    <tr>
+                      <td
+                        style={{ height: rowVirtualizer.getVirtualItems()[0]?.start ?? 0, padding: 0, border: 'none' }}
+                      />
+                    </tr>
+                  </tbody>
+                )}
+                {/* Virtualized campaign groups — only visible groups are in the DOM */}
+                {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                  const campaign = sortedCampaigns[virtualRow.index];
                   const campaignExpanded = expandedCampaigns.has(campaign.id);
                   return (
-                    <CampaignGroup
+                    <tbody
                       key={campaign.id}
-                      campaign={campaign}
-                      isExpanded={campaignExpanded}
-                      expandedAdSets={expandedAdSets}
-                      selectedIds={selectedIds}
-                      columnOrder={columnOrder}
-                      loadingAdSets={loadingAdSets.has(campaign.id)}
-                      loadingAds={loadingAds}
-                      errorAdSets={errorAdSets.has(campaign.id)}
-                      errorAds={errorAds}
-                      totalColumns={totalColumns}
-                      sparklineData={sparklineData}
-                      setSparklineData={setSparklineData}
-                      activityData={activityData}
-                      setActivityData={setActivityData}
-                      activitiesFullyLoaded={activitiesFullyLoaded}
-                      sortKey={sortKey}
-                      sortDirection={sortDirection}
-                      compareEntities={compareEntities}
-                      onToggleExpandCampaign={() => handleToggleExpandCampaign(campaign.id)}
-                      onToggleExpandAdSet={(id) => handleToggleExpandAdSet(id)}
-                      onToggleSelection={toggleSelection}
-                      onCampaignStatusChange={handleCampaignStatusChange}
-                      onAdSetStatusChange={handleAdSetStatusChange}
-                      onAdStatusChange={handleAdStatusChange}
-                      onAdNameChange={handleAdNameChange}
-                      onCampaignBudgetChange={handleCampaignBudgetChange}
-                      onAdSetBudgetChange={handleAdSetBudgetChange}
-                      onAdSetBidChange={handleAdSetBidChange}
-                      onRetryAdSets={() => handleRetryAdSets(campaign.id)}
-                      onRetryAds={(adSetId) => handleRetryAds(adSetId)}
-                      issueCount={campaignIssueCounts.get(campaign.id) || 0}
-                      highlightedRowId={highlightedRowId}
-                      campaignIssues={campaignIssuesById.get(campaign.id) || []}
-                      adSetIssuesById={adSetIssuesById}
-                      adIssuesById={adIssuesById}
-                      onIssueClick={(issue) => {
-                        setFocusedIssueId(issue.id);
-                        setShowErrorCenter(true);
-                        const section = document.getElementById('ads-errors-center');
-                        if (section) {
-                          window.setTimeout(() => {
-                            section.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                          }, 80);
-                        }
-                      }}
-                      nameColWidth={nameColWidth}
-                      togglingEntities={togglingEntities}
-                      rowFlash={rowFlash}
-                    />
-                  );
-                })
-              )}
-              {!showAll && sortedCampaigns.length > 15 && !search && !activeSegment && (
-                <tr>
-                  <td colSpan={totalColumns} className="px-3 py-2 text-center">
-                    <button
-                      onClick={() => setShowAll(true)}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-[rgba(0,0,0,0.1)] bg-white px-4 py-1.5 text-[12px] font-medium text-[#0071e3] transition-all hover:bg-[#f0f4ff] hover:border-[#0071e3]/30"
+                      ref={rowVirtualizer.measureElement}
+                      data-index={virtualRow.index}
                     >
-                      Show {sortedCampaigns.length - 15} more campaigns
-                    </button>
-                  </td>
-                </tr>
-              )}
-            </tbody>
+                      <CampaignGroup
+                        campaign={campaign}
+                        isExpanded={campaignExpanded}
+                        expandedAdSets={expandedAdSets}
+                        selectedIds={selectedIds}
+                        columnOrder={columnOrder}
+                        loadingAdSets={loadingAdSets.has(campaign.id)}
+                        loadingAds={loadingAds}
+                        errorAdSets={errorAdSets.has(campaign.id)}
+                        errorAds={errorAds}
+                        totalColumns={totalColumns}
+                        sparklineData={sparklineData}
+                        setSparklineData={setSparklineData}
+                        activityData={activityData}
+                        setActivityData={setActivityData}
+                        activitiesFullyLoaded={activitiesFullyLoaded}
+                        sortKey={sortKey}
+                        sortDirection={sortDirection}
+                        compareEntities={compareEntities}
+                        onToggleExpandCampaign={() => handleToggleExpandCampaign(campaign.id)}
+                        onToggleExpandAdSet={(id) => handleToggleExpandAdSet(id)}
+                        onToggleSelection={toggleSelection}
+                        onCampaignStatusChange={handleCampaignStatusChange}
+                        onAdSetStatusChange={handleAdSetStatusChange}
+                        onAdStatusChange={handleAdStatusChange}
+                        onAdNameChange={handleAdNameChange}
+                        onCampaignBudgetChange={handleCampaignBudgetChange}
+                        onAdSetBudgetChange={handleAdSetBudgetChange}
+                        onAdSetBidChange={handleAdSetBidChange}
+                        onRetryAdSets={() => handleRetryAdSets(campaign.id)}
+                        onRetryAds={(adSetId) => handleRetryAds(adSetId)}
+                        issueCount={campaignIssueCounts.get(campaign.id) || 0}
+                        highlightedRowId={highlightedRowId}
+                        campaignIssues={campaignIssuesById.get(campaign.id) || []}
+                        adSetIssuesById={adSetIssuesById}
+                        adIssuesById={adIssuesById}
+                        onIssueClick={(issue) => {
+                          setFocusedIssueId(issue.id);
+                          setShowErrorCenter(true);
+                          const section = document.getElementById('ads-errors-center');
+                          if (section) {
+                            window.setTimeout(() => {
+                              section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            }, 80);
+                          }
+                        }}
+                        nameColWidth={nameColWidth}
+                        togglingEntities={togglingEntities}
+                        rowFlash={rowFlash}
+                        shopifyRoas={shopifyRevMap[campaign.id] && campaign.metrics.spend > 0
+                          ? Math.round((shopifyRevMap[campaign.id].shopifyRevenue / campaign.metrics.spend) * 100) / 100
+                          : undefined}
+                      />
+                    </tbody>
+                  );
+                })}
+                {/* Bottom spacer — fills remaining virtual space */}
+                {rowVirtualizer.getVirtualItems().length > 0 && (
+                  <tbody>
+                    <tr>
+                      <td
+                        style={{
+                          height: rowVirtualizer.getTotalSize() - (rowVirtualizer.getVirtualItems()[rowVirtualizer.getVirtualItems().length - 1]?.end ?? 0),
+                          padding: 0,
+                          border: 'none',
+                        }}
+                      />
+                    </tr>
+                  </tbody>
+                )}
+              </>
+            )}
             {sortedCampaigns.length > 0 && (
               <tfoot>
-                <tr className="border-t border-[#e5e7eb] bg-[#f0f4ff]">
-                  <td colSpan={3} className="whitespace-nowrap px-3 py-2.5 text-[13.5px] font-bold text-[#1d1d1f] sticky left-0 z-10 bg-[#f0f4ff]">
+                <tr className="border-t border-[#e5e7eb] bg-[var(--apple-table-footer-bg)]">
+                  <td colSpan={3} className="whitespace-nowrap px-3 py-2.5 text-[13.5px] font-bold text-[var(--apple-table-footer-text)] sticky left-0 z-10 bg-[var(--apple-table-footer-bg)]">
                     Total — {totals.activeCampaigns} active
                   </td>
                   <td className="whitespace-nowrap px-3 py-2 text-[12px] text-[#aeaeb2]">&mdash;</td>
@@ -2323,6 +2455,7 @@ interface CampaignGroupProps {
   nameColWidth: number;
   togglingEntities: Set<string>;
   rowFlash: Record<string, 'success' | 'error'>;
+  shopifyRoas?: number;
 }
 
 function CampaignGroup({
@@ -2365,6 +2498,7 @@ function CampaignGroup({
   nameColWidth,
   togglingEntities,
   rowFlash,
+  shopifyRoas,
 }: CampaignGroupProps) {
   // Defensive: always ensure adSets is an array, then sort
   const adSetsRaw = campaign.adSets || [];
@@ -2382,7 +2516,6 @@ function CampaignGroup({
 
   // Determine if this campaign uses Campaign Budget Optimization (CBO)
   const isCBO = campaign.dailyBudget > 0 || (campaign.lifetimeBudget != null && campaign.lifetimeBudget > 0);
-  const campaignBudget = campaign.dailyBudget > 0 ? campaign.dailyBudget : undefined;
 
   // Track which adset/ad groups have already had sparkline fetched
   const fetchedSparklineAdSets = useRef<Set<string>>(new Set());
@@ -2478,6 +2611,7 @@ function CampaignGroup({
         nameColWidth={nameColWidth}
         isToggling={togglingEntities.has(campaign.id)}
         flashType={rowFlash[campaign.id]}
+        shopifyRoas={shopifyRoas}
       />
       {isExpanded && loadingAdSets && (
         <tr className="border-b border-border bg-surface">
@@ -2530,7 +2664,6 @@ function CampaignGroup({
               errorAds={errorAds.has(adSet.id)}
               totalColumns={totalColumns}
               isCBO={isCBO}
-              campaignBudget={campaignBudget}
               sparklineData={sparklineData}
               activityData={activityData}
               activitiesFullyLoaded={activitiesFullyLoaded}
@@ -2569,7 +2702,6 @@ interface AdSetGroupProps {
   errorAds: boolean;
   totalColumns: number;
   isCBO: boolean;
-  campaignBudget?: number;
   sparklineData: Record<string, SparklineDataPoint[]>;
   activityData: Record<string, EntityAction[]>;
   activitiesFullyLoaded: boolean;
@@ -2603,7 +2735,6 @@ function AdSetGroup({
   errorAds,
   totalColumns,
   isCBO,
-  campaignBudget,
   sparklineData,
   activityData,
   activitiesFullyLoaded,
@@ -2648,7 +2779,6 @@ function AdSetGroup({
         onBidChange={(bid) => onAdSetBidChange(adSet.id, bid)}
         columnOrder={columnOrder}
         isCBO={isCBO}
-        campaignBudget={campaignBudget}
         sparklineData={sparklineData}
         activityData={activityData}
         activitiesFullyLoaded={activitiesFullyLoaded}

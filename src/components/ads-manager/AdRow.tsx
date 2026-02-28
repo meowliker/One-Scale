@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 
 import {
   Play,
@@ -97,12 +97,14 @@ export function AdRow({
     effectiveStatus.includes('PENDING');
   const statusLabel = !isActive ? ad.status : deliveryBlocked ? 'NOT DELIVERING' : 'ACTIVE';
   const statusVariant: 'success' | 'default' | 'danger' = !isActive ? 'default' : deliveryBlocked ? 'danger' : 'success';
+  const [showStatusTooltip, setShowStatusTooltip] = useState(false);
+  const creativeTypeLabel = ad.creative.type === 'video' ? 'Video' : ad.creative.type === 'image' ? 'Image' : ad.creative.type === 'carousel' ? 'Carousel' : ad.creative.type;
   const stickyBg = cn(
-    'bg-white dark:bg-surface',
-    isSelected && 'bg-[#e8f0fe]',
-    isHighlighted && 'bg-[#fff8e1]',
-    flashType === 'success' && 'bg-[#f0fdf4]',
-    flashType === 'error' && 'bg-[#fef2f2]'
+    'bg-[var(--apple-table-row-bg)]',
+    isSelected && 'bg-[var(--apple-table-row-selected)]',
+    isHighlighted && 'bg-[var(--apple-table-row-highlighted)]',
+    flashType === 'success' && 'bg-[var(--apple-table-row-flash-success)]',
+    flashType === 'error' && 'bg-[var(--apple-table-row-flash-error)]'
   );
 
   return (
@@ -110,21 +112,21 @@ export function AdRow({
       <tr
         id={rowId}
         className={cn(
-          'group border-b border-[rgba(0,0,0,0.03)] dark:border-border bg-white dark:bg-surface transition-colors duration-150',
-          'hover:!bg-[#f9fafb] dark:hover:!bg-[#273449]',
-          isSelected && 'bg-[#e8f0fe]',
-          isHighlighted && 'bg-[#fff8e1]',
-          flashType === 'success' && 'bg-[#f0fdf4]',
-          flashType === 'error' && 'bg-[#fef2f2]'
+          'group border-b border-[rgba(0,0,0,0.03)] dark:border-border bg-[var(--apple-table-row-bg)] transition-colors duration-150',
+          'hover:!bg-[var(--apple-table-row-hover)]',
+          isSelected && 'bg-[var(--apple-table-row-selected)]',
+          isHighlighted && 'bg-[var(--apple-table-row-highlighted)]',
+          flashType === 'success' && 'bg-[var(--apple-table-row-flash-success)]',
+          flashType === 'error' && 'bg-[var(--apple-table-row-flash-error)]'
         )}
       >
         {/* Checkbox */}
-        <td className={cn("w-10 whitespace-nowrap py-2.5 pl-16 pr-4 sticky left-0 z-10 group-hover:!bg-[#f9fafb] dark:group-hover:!bg-[#273449] transition-colors duration-150", stickyBg)}>
+        <td className={cn("w-10 whitespace-nowrap py-2.5 pl-16 pr-4 sticky left-0 z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)}>
           <Checkbox checked={isSelected} onChange={onToggleSelect} />
         </td>
 
         {/* Toggle */}
-        <td className={cn("w-14 whitespace-nowrap px-3 py-1.5 sticky left-[40px] z-10 group-hover:!bg-[#f9fafb] dark:group-hover:!bg-[#273449] transition-colors duration-150", stickyBg)}>
+        <td className={cn("w-14 whitespace-nowrap px-3 py-1.5 sticky left-[40px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)}>
           <Toggle
             checked={isActive}
             onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
@@ -135,7 +137,7 @@ export function AdRow({
 
         {/* Name + Creative Thumbnail */}
         <td
-          className={cn("whitespace-nowrap px-3 py-1.5 sticky left-[96px] z-10 group-hover:!bg-[#f9fafb] dark:group-hover:!bg-[#273449] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
+          className={cn("whitespace-nowrap px-3 py-1.5 sticky left-[96px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
           style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth } : undefined}
         >
           <div className="flex items-center gap-3 pl-8">
@@ -153,6 +155,10 @@ export function AdRow({
                   <img
                     src={ad.creative.thumbnailUrl || ad.creative.mediaUrl}
                     alt={ad.name}
+                    width={48}
+                    height={48}
+                    loading="lazy"
+                    decoding="async"
                     className="h-full w-full object-cover"
                     onError={(e) => {
                       (e.target as HTMLImageElement).style.display = 'none';
@@ -260,17 +266,50 @@ export function AdRow({
 
         {/* Status */}
         <td className="whitespace-nowrap px-3 py-1.5">
-          <div className="flex items-center gap-2">
-            <span className={cn(
-              'inline-flex items-center gap-1.5 text-[11px] font-semibold',
-              isActive && !deliveryBlocked ? 'apple-status-active' : 'apple-status-paused'
-            )}>
-              <span className={cn(
-                'h-1.5 w-1.5 rounded-full',
-                isActive && !deliveryBlocked ? 'bg-emerald-500' : 'bg-[#aeaeb2]'
-              )} />
-              {isActive && !deliveryBlocked ? 'Active' : deliveryBlocked ? 'Not Delivering' : 'Paused'}
-            </span>
+          <div className="relative flex items-center gap-2">
+            {isActive && !deliveryBlocked ? (
+              <button
+                type="button"
+                onMouseEnter={() => setShowStatusTooltip(true)}
+                onMouseLeave={() => setShowStatusTooltip(false)}
+                className={cn(
+                  'inline-flex items-center gap-1.5 text-[11px] font-semibold apple-status-active cursor-pointer',
+                  'hover:bg-[#bbf7d0] dark:hover:bg-emerald-900/60 transition-all duration-150 hover:scale-[1.02]'
+                )}
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                Active
+              </button>
+            ) : (
+              <span
+                className={cn(
+                  'inline-flex items-center gap-1.5 text-[11px] font-semibold apple-status-paused',
+                  deliveryBlocked ? 'cursor-default' : 'cursor-not-allowed'
+                )}
+                title={deliveryBlocked ? 'Delivery is blocked' : 'Ad is paused'}
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-[#aeaeb2]" />
+                {deliveryBlocked ? 'Not Delivering' : 'Paused'}
+              </span>
+            )}
+            {showStatusTooltip && isActive && !deliveryBlocked && (
+              <div className="absolute left-0 top-full mt-1.5 z-50 min-w-[200px] rounded-[10px] border border-[#e5e7eb] dark:border-[#334155] bg-white dark:bg-[#1e293b] p-3 px-4 shadow-[0_8px_24px_rgba(0,0,0,0.12)] animate-tooltip-in">
+                <div className="space-y-2 text-[12px]">
+                  <div className="flex justify-between gap-6">
+                    <span className="text-[11px] text-text-muted">Status</span>
+                    <span className="font-bold text-emerald-600 dark:text-emerald-400">Active</span>
+                  </div>
+                  <div className="flex justify-between gap-6">
+                    <span className="text-[11px] text-text-muted">Creative</span>
+                    <span className="font-medium text-text-primary">{creativeTypeLabel}</span>
+                  </div>
+                  <div className="flex justify-between gap-6">
+                    <span className="text-[11px] text-text-muted">Spend</span>
+                    <span className="font-bold text-text-primary">${ad.metrics.spend.toFixed(2)}</span>
+                  </div>
+                </div>
+              </div>
+            )}
             {issues.length > 0 && (
               <button
                 onClick={() => setShowIssueDetails(true)}
@@ -400,15 +439,17 @@ function CreativePreviewModal({
   const [videoLoading, setVideoLoading] = useState(isVideo);
   const [iframePreviewSrc, setIframePreviewSrc] = useState<string | null>(null);
   const [iframeLoading, setIframeLoading] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
 
-  // Handle video events
+  // Handle video events + abort on unmount (modal close)
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
     const handleCanPlay = () => setVideoLoading(false);
     const handleError = () => {
+      console.warn('[video-preview] Video failed to load:', videoProxyUrl);
       setVideoError(true);
       setVideoLoading(false);
     };
@@ -419,24 +460,42 @@ function CreativePreviewModal({
     return () => {
       video.removeEventListener('canplay', handleCanPlay);
       video.removeEventListener('error', handleError);
+      // Abort any in-flight video download on modal close
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
     };
+  }, [videoProxyUrl]);
+
+  // Retry video playback
+  const handleRetryVideo = useCallback(() => {
+    setVideoError(false);
+    setVideoLoading(true);
+    setIframePreviewSrc(null);
+    setRetryCount((c) => c + 1);
   }, []);
 
   // When video proxy fails, fetch an iframe preview from Meta
   useEffect(() => {
     if (videoError && isVideo && !iframePreviewSrc && !iframeLoading) {
       setIframeLoading(true);
-      fetch(`/api/meta/ad-preview?storeId=${encodeURIComponent(activeStoreId)}&adId=${encodeURIComponent(ad.id)}`)
+      const controller = new AbortController();
+      fetch(`/api/meta/ad-preview?storeId=${encodeURIComponent(activeStoreId)}&adId=${encodeURIComponent(ad.id)}`, {
+        signal: controller.signal,
+      })
         .then((r) => r.json())
         .then((data) => {
           if (data.iframeSrc) {
             setIframePreviewSrc(data.iframeSrc);
           }
         })
-        .catch(() => {
-          // Iframe preview also failed
+        .catch((err) => {
+          if (err.name !== 'AbortError') {
+            // Iframe preview also failed — silent
+          }
         })
         .finally(() => setIframeLoading(false));
+      return () => controller.abort();
     }
   }, [videoError, isVideo, iframePreviewSrc, iframeLoading, activeStoreId, ad.id]);
 
@@ -497,6 +556,7 @@ function CreativePreviewModal({
                     </div>
                   )}
                   <video
+                    key={retryCount}
                     ref={videoRef}
                     src={videoProxyUrl}
                     poster={ad.creative.thumbnailUrl || undefined}
@@ -505,7 +565,7 @@ function CreativePreviewModal({
                     muted
                     loop
                     playsInline
-                    preload="auto"
+                    preload="none"
                     crossOrigin="anonymous"
                     className="w-full h-full object-contain"
                   >
@@ -533,6 +593,12 @@ function CreativePreviewModal({
                     <span className="text-xs text-text-dimmed text-center max-w-[240px]">
                       The video source could not be loaded. This can happen with older or restricted creatives.
                     </span>
+                    <button
+                      onClick={handleRetryVideo}
+                      className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface-hover px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
+                    >
+                      Retry
+                    </button>
                     {ad.creative.thumbnailUrl && (
                       <div className="mt-2 rounded-lg overflow-hidden border border-border">
                         {/* eslint-disable-next-line @next/next/no-img-element */}

@@ -9,6 +9,9 @@ import {
   getTimeSeriesForRange,
   getTopCampaignsForRange,
 } from '@/services/analytics';
+import { getCampaigns } from '@/services/adsManager';
+import { formatDateInTimezone } from '@/lib/timezone';
+import { getDateRange } from '@/lib/dateUtils';
 
 /**
  * Prefetch React Query data for a given route on sidebar hover.
@@ -59,6 +62,18 @@ export function prefetchRouteData(href: string, activeStoreId: string | null) {
         staleTime: 5 * 60 * 1000,
       });
       break;
+
+    case '/dashboard/ads-manager': {
+      const todayRange = getDateRange('today');
+      const since = formatDateInTimezone(todayRange.start);
+      const until = formatDateInTimezone(todayRange.end);
+      qc.prefetchQuery({
+        queryKey: ['campaigns', activeStoreId, since, until],
+        queryFn: () => getCampaigns({ since, until }, { preferCache: true }),
+        staleTime: 5 * 60 * 1000,
+      });
+      break;
+    }
 
     // Other pages that don't use React Query yet don't need prefetching
     default:

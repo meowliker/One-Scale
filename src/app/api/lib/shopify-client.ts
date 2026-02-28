@@ -250,6 +250,7 @@ function mapOrder(raw: Record<string, any>): ShopifyOrder {
     financialStatus: raw.financial_status,
     fulfillmentStatus: raw.fulfillment_status,
     createdAt: raw.created_at,
+    landingSite: raw.landing_site || null,
     lineItems: (raw.line_items || []).map(mapLineItem),
     customer: mapCustomerRef(raw.customer),
     paymentGatewayNames: raw.payment_gateway_names || [],

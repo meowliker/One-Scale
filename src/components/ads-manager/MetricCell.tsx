@@ -2,6 +2,7 @@
 
 import type { MetricKey } from '@/types/metrics';
 import { formatMetric } from '@/lib/metrics';
+import { formatRoas } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 
 const PIXEL_METRIC_KEYS = new Set(['appPixelResults', 'appPixelPurchases', 'appPixelPurchaseValue', 'appPixelRoas', 'appPixelCpa']);
@@ -10,6 +11,8 @@ export interface MetricCellProps {
   metricKey: MetricKey;
   value: number;
   isTotals?: boolean;
+  /** Shopify-attributed ROAS — shown as "Real" ROAS when metricKey is 'roas' */
+  shopifyRoas?: number;
 }
 
 function getMetricColorClass(metricKey: MetricKey, value: number): string {
@@ -45,8 +48,16 @@ function getRoasDotColor(value: number): string {
   return 'bg-[#34c759]';
 }
 
-export function MetricCell({ metricKey, value, isTotals }: MetricCellProps) {
-  const colorClass = getMetricColorClass(metricKey, value);
+function getRoasTextColor(value: number): string {
+  if (value === 0) return 'text-[#aeaeb2]';
+  if (value < 1.0) return 'text-[#ff3b30]';
+  if (value < 1.5) return 'text-[#ff9500]';
+  return 'text-[#34c759]';
+}
+
+export function MetricCell({ metricKey, value, isTotals, shopifyRoas }: MetricCellProps) {
+  const hasDualRoas = metricKey === 'roas' && shopifyRoas != null;
+  const colorClass = hasDualRoas ? '' : getMetricColorClass(metricKey, value);
 
   return (
     <td className={cn(
@@ -55,16 +66,36 @@ export function MetricCell({ metricKey, value, isTotals }: MetricCellProps) {
       PIXEL_METRIC_KEYS.has(metricKey) && "bg-[#e8f2ff] dark:bg-[#1e3a5f] border-l border-[#0071e3]/10",
       isTotals && "!font-bold !text-[13.5px] bg-[#f0f4ff] dark:bg-[#172554]"
     )}>
-      {(metricKey === 'roas' || metricKey === 'appPixelRoas') && (
-        <span
-          className={cn(
-            "mr-1 inline-block h-1.5 w-1.5 rounded-full",
-            getRoasDotColor(value)
+      {hasDualRoas ? (
+        /* Dual ROAS: Shopify "Real" (prominent) + Meta (muted) */
+        <div className="flex flex-col items-end gap-0.5">
+          <span className={cn("text-[12px] font-bold tabular-nums", getRoasTextColor(shopifyRoas))}>
+            <span
+              className={cn("mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle", getRoasDotColor(shopifyRoas))}
+              aria-hidden="true"
+            />
+            {formatRoas(shopifyRoas)}
+            <span className="ml-1 text-[9px] font-medium text-text-dimmed align-middle">Real</span>
+          </span>
+          <span className="text-[10px] text-text-dimmed tabular-nums">
+            {formatRoas(value)}
+            <span className="ml-1 text-[9px]">Meta</span>
+          </span>
+        </div>
+      ) : (
+        <>
+          {(metricKey === 'roas' || metricKey === 'appPixelRoas') && (
+            <span
+              className={cn(
+                "mr-1 inline-block h-1.5 w-1.5 rounded-full",
+                getRoasDotColor(value)
+              )}
+              aria-hidden="true"
+            />
           )}
-          aria-hidden="true"
-        />
+          {formatMetric(metricKey, value)}
+        </>
       )}
-      {formatMetric(metricKey, value)}
     </td>
   );
 }

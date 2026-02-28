@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 
-import { ChevronRight, ChevronDown, Info } from 'lucide-react';
+import { ChevronRight, ChevronDown } from 'lucide-react';
 import type { AdSet, EntityStatus } from '@/types/campaign';
 import type { MetricKey } from '@/types/metrics';
 import type { SparklineDataPoint } from '@/data/mockSparklineData';
@@ -31,7 +31,6 @@ export interface AdSetRowProps {
   onBidChange?: (newBid: number) => void;
   columnOrder: MetricKey[];
   isCBO?: boolean;
-  campaignBudget?: number;
   sparklineData?: Record<string, SparklineDataPoint[]>;
   activityData?: Record<string, EntityAction[]>;
   activitiesFullyLoaded?: boolean;
@@ -68,7 +67,6 @@ export function AdSetRow({
   onBidChange,
   columnOrder,
   isCBO = false,
-  campaignBudget,
   sparklineData,
   activityData,
   activitiesFullyLoaded,
@@ -80,6 +78,8 @@ export function AdSetRow({
 }: AdSetRowProps) {
   const isActive = adSet.status === 'ACTIVE';
   const [showIssueDetails, setShowIssueDetails] = useState(false);
+  const [showStatusTooltip, setShowStatusTooltip] = useState(false);
+  const activeAdsCount = adSet.ads.filter((a) => a.status === 'ACTIVE').length;
   const primaryIssue = useMemo(() => {
     if (issues.length === 0) return null;
     return [...issues].sort((a, b) => (a.severity === b.severity ? 0 : a.severity === 'critical' ? -1 : 1))[0];
@@ -95,11 +95,11 @@ export function AdSetRow({
   const statusLabel = !isActive ? adSet.status : deliveryBlocked ? 'NOT DELIVERING' : 'ACTIVE';
   const statusVariant: 'success' | 'default' | 'danger' = !isActive ? 'default' : deliveryBlocked ? 'danger' : 'success';
   const stickyBg = cn(
-    'bg-[#f8fafc] dark:bg-[#1a2332]',
-    isSelected && 'bg-[#e8f0fe]',
-    isHighlighted && 'bg-[#fff8e1]',
-    flashType === 'success' && 'bg-[#f0fdf4]',
-    flashType === 'error' && 'bg-[#fef2f2]'
+    'bg-[var(--apple-table-row-alt-bg)]',
+    isSelected && 'bg-[var(--apple-table-row-selected)]',
+    isHighlighted && 'bg-[var(--apple-table-row-highlighted)]',
+    flashType === 'success' && 'bg-[var(--apple-table-row-flash-success)]',
+    flashType === 'error' && 'bg-[var(--apple-table-row-flash-error)]'
   );
 
   return (
@@ -107,21 +107,21 @@ export function AdSetRow({
     <tr
       id={rowId}
       className={cn(
-        'group border-b border-[rgba(0,0,0,0.03)] dark:border-border bg-[#f8fafc] dark:bg-[#1a2332] border-l-2 border-l-[#3b82f620] transition-colors duration-150',
-        'hover:!bg-[#f0f4f8] dark:hover:!bg-[#1e2d3d]',
-        isSelected && 'bg-[#e8f0fe]',
-        isHighlighted && 'bg-[#fff8e1]',
-        flashType === 'success' && 'bg-[#f0fdf4]',
-        flashType === 'error' && 'bg-[#fef2f2]'
+        'group border-b border-[rgba(0,0,0,0.03)] dark:border-border bg-[var(--apple-table-row-alt-bg)] border-l-2 border-l-[#3b82f620] transition-colors duration-150',
+        'hover:!bg-[var(--apple-table-row-alt-hover)]',
+        isSelected && 'bg-[var(--apple-table-row-selected)]',
+        isHighlighted && 'bg-[var(--apple-table-row-highlighted)]',
+        flashType === 'success' && 'bg-[var(--apple-table-row-flash-success)]',
+        flashType === 'error' && 'bg-[var(--apple-table-row-flash-error)]'
       )}
     >
       {/* Checkbox */}
-      <td className={cn("w-10 whitespace-nowrap py-3 pl-10 pr-4 sticky left-0 z-10 group-hover:!bg-[#f0f4f8] dark:group-hover:!bg-[#1e2d3d] transition-colors duration-150", stickyBg)}>
+      <td className={cn("w-10 whitespace-nowrap py-3 pl-10 pr-4 sticky left-0 z-10 group-hover:!bg-[var(--apple-table-row-alt-hover)] transition-colors duration-150", stickyBg)}>
         <Checkbox checked={isSelected} onChange={onToggleSelect} />
       </td>
 
       {/* Toggle */}
-      <td className={cn("w-14 whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 group-hover:!bg-[#f0f4f8] dark:group-hover:!bg-[#1e2d3d] transition-colors duration-150", stickyBg)}>
+      <td className={cn("w-14 whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 group-hover:!bg-[var(--apple-table-row-alt-hover)] transition-colors duration-150", stickyBg)}>
         <Toggle
           checked={isActive}
           onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
@@ -132,7 +132,7 @@ export function AdSetRow({
 
       {/* Name + Targeting */}
       <td
-        className={cn("whitespace-nowrap px-3 py-2 sticky left-[96px] z-10 group-hover:!bg-[#f0f4f8] dark:group-hover:!bg-[#1e2d3d] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
+        className={cn("whitespace-nowrap px-3 py-2 sticky left-[96px] z-10 group-hover:!bg-[var(--apple-table-row-alt-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
         style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth } : undefined}
       >
         <div className="flex items-center gap-2 pl-8">
@@ -169,17 +169,51 @@ export function AdSetRow({
 
       {/* Status */}
       <td className="whitespace-nowrap px-3 py-2">
-        <div className="flex items-center gap-2">
-          <span className={cn(
-            'inline-flex items-center gap-1.5 text-[11px] font-semibold',
-            isActive && !deliveryBlocked ? 'apple-status-active' : 'apple-status-paused'
-          )}>
-            <span className={cn(
-              'h-1.5 w-1.5 rounded-full',
-              isActive && !deliveryBlocked ? 'bg-emerald-500' : 'bg-[#aeaeb2]'
-            )} />
-            {isActive && !deliveryBlocked ? 'Active' : deliveryBlocked ? 'Not Delivering' : 'Paused'}
-          </span>
+        <div className="relative flex items-center gap-2">
+          {isActive && !deliveryBlocked ? (
+            <button
+              type="button"
+              onMouseEnter={() => setShowStatusTooltip(true)}
+              onMouseLeave={() => setShowStatusTooltip(false)}
+              onClick={() => { if (!isExpanded) onToggleExpand(); }}
+              className={cn(
+                'inline-flex items-center gap-1.5 text-[11px] font-semibold apple-status-active cursor-pointer',
+                'hover:bg-[#bbf7d0] dark:hover:bg-emerald-900/60 transition-all duration-150 hover:scale-[1.02]'
+              )}
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+              Active
+            </button>
+          ) : (
+            <span
+              className={cn(
+                'inline-flex items-center gap-1.5 text-[11px] font-semibold apple-status-paused',
+                deliveryBlocked ? 'cursor-default' : 'cursor-not-allowed'
+              )}
+              title={deliveryBlocked ? 'Delivery is blocked' : 'Ad set is paused'}
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-[#aeaeb2]" />
+              {deliveryBlocked ? 'Not Delivering' : 'Paused'}
+            </span>
+          )}
+          {showStatusTooltip && isActive && !deliveryBlocked && (
+            <div className="absolute left-0 top-full mt-1.5 z-50 min-w-[200px] rounded-[10px] border border-[#e5e7eb] dark:border-[#334155] bg-white dark:bg-[#1e293b] p-3 px-4 shadow-[0_8px_24px_rgba(0,0,0,0.12)] animate-tooltip-in">
+              <div className="space-y-2 text-[12px]">
+                <div className="flex justify-between gap-6">
+                  <span className="text-[11px] text-text-muted">Status</span>
+                  <span className="font-bold text-emerald-600 dark:text-emerald-400">Active</span>
+                </div>
+                <div className="flex justify-between gap-6">
+                  <span className="text-[11px] text-text-muted">Running since</span>
+                  <span className="font-medium text-text-primary">{new Date(adSet.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                </div>
+                <div className="flex justify-between gap-6">
+                  <span className="text-[11px] text-text-muted">Active ads</span>
+                  <span className="font-bold text-text-primary">{adSet.ads.length > 0 ? activeAdsCount : '\u2014'}</span>
+                </div>
+              </div>
+            </div>
+          )}
           {issues.length > 0 && (
             <button
               onClick={() => setShowIssueDetails(true)}
@@ -200,26 +234,9 @@ export function AdSetRow({
       {/* Budget */}
       <td className="whitespace-nowrap px-3 py-2">
         {isCBO ? (
-          <div className="flex items-center gap-1.5">
-            <span className="inline-flex items-center gap-1 rounded-md bg-blue-500/10 px-2 py-0.5 text-xs font-semibold text-blue-400 border border-blue-500/20">
-              CBO
-            </span>
-            <div className="group relative">
-              <Info className="h-3.5 w-3.5 text-text-dimmed cursor-help hover:text-blue-400 transition-colors" />
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-50 min-w-[220px] rounded-lg border border-border-light bg-surface-elevated p-3 shadow-xl animate-in fade-in duration-150">
-                <p className="font-semibold text-text-primary text-xs">Campaign Budget Optimization</p>
-                <p className="text-text-muted text-xs mt-1">Budget is managed at the campaign level.</p>
-                {campaignBudget !== undefined && (
-                  <p className="text-text-secondary text-xs mt-1">
-                    Campaign budget: ${campaignBudget.toFixed(2)}
-                  </p>
-                )}
-                <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-px">
-                  <div className="border-4 border-transparent border-t-border-light" />
-                </div>
-              </div>
-            </div>
-          </div>
+          <span className="inline-flex items-center gap-1 rounded-md bg-blue-500/10 px-2 py-0.5 text-xs font-semibold text-blue-400 border border-blue-500/20">
+            CBO
+          </span>
         ) : (
           <div className="flex flex-col gap-0.5">
             <div>

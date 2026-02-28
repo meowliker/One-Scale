@@ -1,6 +1,6 @@
 'use client';
 
-
+import { useState } from 'react';
 import { ChevronRight, ChevronDown, AlertTriangle, Lock } from 'lucide-react';
 import type { Campaign, EntityStatus } from '@/types/campaign';
 import type { MetricKey } from '@/types/metrics';
@@ -35,6 +35,8 @@ export interface CampaignRowProps {
   nameColWidth?: number;
   isToggling?: boolean;
   flashType?: 'success' | 'error';
+  /** Shopify-attributed ROAS for this campaign (Real ROAS) */
+  shopifyRoas?: number;
 }
 
 const objectiveLabels: Record<string, { label: string; variant: 'success' | 'warning' | 'danger' | 'info' | 'default' }> = {
@@ -74,38 +76,41 @@ export function CampaignRow({
   nameColWidth,
   isToggling = false,
   flashType,
+  shopifyRoas,
 }: CampaignRowProps) {
   const isActive = campaign.status === 'ACTIVE';
+  const [showStatusTooltip, setShowStatusTooltip] = useState(false);
+  const activeAdSetsCount = campaign.adSets.filter((a) => a.status === 'ACTIVE').length;
   const isABO = !(campaign.dailyBudget > 0) && !(campaign.lifetimeBudget && campaign.lifetimeBudget > 0);
   const isLifetimeBudget = !isABO && campaign.lifetimeBudget && campaign.lifetimeBudget > 0;
   const objective = objectiveLabels[campaign.objective] ?? { label: campaign.objective, variant: 'default' as const };
   const stickyBg = cn(
-    'bg-white dark:bg-surface',
-    isSelected && 'bg-[#e8f0fe]',
-    isHighlighted && 'bg-[#fff8e1]',
-    flashType === 'success' && 'bg-[#f0fdf4]',
-    flashType === 'error' && 'bg-[#fef2f2]'
+    'bg-[var(--apple-table-row-bg)]',
+    isSelected && 'bg-[var(--apple-table-row-selected)]',
+    isHighlighted && 'bg-[var(--apple-table-row-highlighted)]',
+    flashType === 'success' && 'bg-[var(--apple-table-row-flash-success)]',
+    flashType === 'error' && 'bg-[var(--apple-table-row-flash-error)]'
   );
 
   return (
     <tr
       id={rowId}
       className={cn(
-        'group border-b border-[rgba(0,0,0,0.04)] dark:border-border bg-white dark:bg-surface transition-colors duration-150',
-        'hover:!bg-[#f9fafb] dark:hover:!bg-[#273449]',
-        isSelected && 'bg-[#e8f0fe]',
-        isHighlighted && 'bg-[#fff8e1]',
-        flashType === 'success' && 'bg-[#f0fdf4]',
-        flashType === 'error' && 'bg-[#fef2f2]'
+        'group border-b border-[rgba(0,0,0,0.04)] dark:border-border bg-[var(--apple-table-row-bg)] transition-colors duration-150',
+        'hover:!bg-[var(--apple-table-row-hover)]',
+        isSelected && 'bg-[var(--apple-table-row-selected)]',
+        isHighlighted && 'bg-[var(--apple-table-row-highlighted)]',
+        flashType === 'success' && 'bg-[var(--apple-table-row-flash-success)]',
+        flashType === 'error' && 'bg-[var(--apple-table-row-flash-error)]'
       )}
     >
       {/* Checkbox */}
-      <td className={cn("w-10 whitespace-nowrap px-3 py-2 sticky left-0 z-10 group-hover:!bg-[#f9fafb] dark:group-hover:!bg-[#273449] transition-colors duration-150", stickyBg)}>
+      <td className={cn("w-10 whitespace-nowrap px-3 py-2 sticky left-0 z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)}>
         <Checkbox checked={isSelected} onChange={onToggleSelect} />
       </td>
 
       {/* Toggle */}
-      <td className={cn("w-14 whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 group-hover:!bg-[#f9fafb] dark:group-hover:!bg-[#273449] transition-colors duration-150", stickyBg)}>
+      <td className={cn("w-14 whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)}>
         <Toggle
           checked={isActive}
           onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
@@ -116,7 +121,7 @@ export function CampaignRow({
 
       {/* Name + Objective + CBO/ABO */}
       <td
-        className={cn("whitespace-nowrap px-3 py-2 sticky left-[96px] z-10 group-hover:!bg-[#f9fafb] dark:group-hover:!bg-[#273449] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
+        className={cn("whitespace-nowrap px-3 py-2 sticky left-[96px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
         style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth } : undefined}
       >
         <div className="flex items-center gap-2">
@@ -164,16 +169,49 @@ export function CampaignRow({
 
       {/* Status */}
       <td className="whitespace-nowrap px-3 py-2">
-        <span className={cn(
-          'inline-flex items-center gap-1.5 text-[11px] font-semibold',
-          isActive ? 'apple-status-active' : 'apple-status-paused'
-        )}>
-          <span className={cn(
-            'h-1.5 w-1.5 rounded-full',
-            isActive ? 'bg-emerald-500' : 'bg-[#aeaeb2]'
-          )} />
-          {isActive ? 'Active' : 'Paused'}
-        </span>
+        <div className="relative">
+          {isActive ? (
+            <button
+              type="button"
+              onMouseEnter={() => setShowStatusTooltip(true)}
+              onMouseLeave={() => setShowStatusTooltip(false)}
+              onClick={() => { if (!isExpanded) onToggleExpand(); }}
+              className={cn(
+                'inline-flex items-center gap-1.5 text-[11px] font-semibold apple-status-active cursor-pointer',
+                'hover:bg-[#bbf7d0] dark:hover:bg-emerald-900/60 transition-all duration-150 hover:scale-[1.02]'
+              )}
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+              Active
+            </button>
+          ) : (
+            <span
+              className="inline-flex items-center gap-1.5 text-[11px] font-semibold apple-status-paused cursor-not-allowed"
+              title="Campaign is paused"
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-[#aeaeb2]" />
+              Paused
+            </span>
+          )}
+          {showStatusTooltip && isActive && (
+            <div className="absolute left-0 top-full mt-1.5 z-50 min-w-[200px] rounded-[10px] border border-[#e5e7eb] dark:border-[#334155] bg-white dark:bg-[#1e293b] p-3 px-4 shadow-[0_8px_24px_rgba(0,0,0,0.12)] animate-tooltip-in">
+              <div className="space-y-2 text-[12px]">
+                <div className="flex justify-between gap-6">
+                  <span className="text-[11px] text-text-muted">Status</span>
+                  <span className="font-bold text-emerald-600 dark:text-emerald-400">Active</span>
+                </div>
+                <div className="flex justify-between gap-6">
+                  <span className="text-[11px] text-text-muted">Running since</span>
+                  <span className="font-medium text-text-primary">{new Date(campaign.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                </div>
+                <div className="flex justify-between gap-6">
+                  <span className="text-[11px] text-text-muted">Active ad sets</span>
+                  <span className="font-bold text-text-primary">{campaign.adSets.length > 0 ? activeAdSetsCount : '\u2014'}</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </td>
 
       {/* Budget — ABO has no campaign-level budget (it lives on each ad set) */}
@@ -221,6 +259,7 @@ export function CampaignRow({
           key={key}
           metricKey={key}
           value={getMetricValue(campaign.metrics as unknown as Record<string, number>, key)}
+          shopifyRoas={key === 'roas' ? shopifyRoas : undefined}
         />
       ))}
     </tr>

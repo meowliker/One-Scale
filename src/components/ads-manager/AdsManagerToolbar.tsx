@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Plus, Columns3, AlertTriangle, LayoutDashboard, Loader2, Target } from 'lucide-react';
 import { SearchInput } from '@/components/ui/SearchInput';
@@ -8,6 +8,16 @@ import { ColumnPicker } from '@/components/columns/ColumnPicker';
 import { cn } from '@/lib/utils';
 
 export type StatusFilter = 'all' | 'ACTIVE' | 'PAUSED';
+
+function formatTimeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60) return 'Synced just now';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `Synced ${min}m ago`;
+  const hr = Math.floor(min / 60);
+  return `Synced ${hr}h ago`;
+}
 
 export interface AdsManagerToolbarProps {
   search: string;
@@ -35,6 +45,7 @@ export interface AdsManagerToolbarProps {
     windowDays: number;
     loading?: boolean;
   };
+  lastSyncedAt?: string | null;
 }
 
 const filterButtons: { label: string; value: StatusFilter }[] = [
@@ -55,8 +66,16 @@ export function AdsManagerToolbar({
   syncStatus,
   syncPercent = 0,
   attributionCoverage,
+  lastSyncedAt,
 }: AdsManagerToolbarProps) {
   const [columnPickerOpen, setColumnPickerOpen] = useState(false);
+  // Re-render "X min ago" every 30s
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!lastSyncedAt) return;
+    const id = setInterval(() => setTick((t) => t + 1), 30_000);
+    return () => clearInterval(id);
+  }, [lastSyncedAt]);
   const isRunning =
     syncStatus?.core === 'loading' ||
     syncStatus?.actions === 'loading' ||
@@ -189,6 +208,11 @@ export function AdsManagerToolbar({
                 />
               </div>
             </div>
+          )}
+          {lastSyncedAt && !isRunning && (
+            <span className="text-[11px] text-text-dimmed whitespace-nowrap" title={new Date(lastSyncedAt).toLocaleString()}>
+              {formatTimeAgo(lastSyncedAt)}
+            </span>
           )}
           <Link
             href="/dashboard/ads-manager/create"

@@ -3,7 +3,7 @@
 import type { PnLEntry } from '@/types/pnl';
 import { formatCurrency } from '@/lib/utils';
 import {
-  ComposedChart,
+  BarChart,
   Bar,
   XAxis,
   YAxis,
@@ -29,9 +29,9 @@ interface PnLWaterfallChartProps {
 
 interface WaterfallItem {
   name: string;
-  value: number;       // Actual signed dollar value
-  base: number;        // Invisible spacer (Y position of bar bottom)
-  bar: number;         // Visible bar height (always >= 0)
+  value: number;       // Actual signed dollar value (for labels/tooltip)
+  base: number;        // Invisible spacer (Y start position)
+  bar: number;         // Visible bar height (positive = up, negative = down)
   isPositive: boolean;
   isTotal: boolean;
 }
@@ -62,12 +62,13 @@ function buildWaterfallData(entry: PnLEntry, isDigital: boolean): WaterfallItem[
   if (entry.refunds > 0) addCost('Refunds', entry.refunds);
 
   // Net Profit: always anchored at 0
+  // Positive → bar goes UP from 0; Negative → bar goes DOWN from 0
   const np = entry.netProfit;
   items.push({
     name: 'Net Profit',
     value: np,
-    base: np >= 0 ? 0 : np,
-    bar: Math.abs(np),
+    base: 0,
+    bar: np,
     isPositive: np >= 0,
     isTotal: true,
   });
@@ -101,8 +102,8 @@ function WaterfallTooltip({
   if (!item) return null;
 
   return (
-    <div className="rounded-lg border border-[rgba(0,0,0,0.08)] bg-white px-3 py-2 shadow-lg">
-      <p className="text-[13px] font-semibold text-[#1d1d1f]">{item.name}</p>
+    <div className="rounded-lg border border-[rgba(0,0,0,0.08)] bg-white dark:bg-[#1e293b] dark:border-[#334155] px-3 py-2 shadow-lg">
+      <p className="text-[13px] font-semibold text-[#1d1d1f] dark:text-[#f1f5f9]">{item.name}</p>
       <p className={`text-[13px] font-bold ${item.isPositive ? 'text-emerald-600' : 'text-red-500'}`}>
         {item.value >= 0 ? '' : '-'}
         {formatCurrency(Math.abs(item.value))}
@@ -124,14 +125,18 @@ function renderBarLabel(items: WaterfallItem[]) {
     const x = Number(props.x ?? 0);
     const y = Number(props.y ?? 0);
     const width = Number(props.width ?? 0);
+    const height = Number(props.height ?? 0);
     const index = Number(props.index ?? 0);
     const item = items[index];
-    if (!item || item.bar === 0) return null;
+    if (!item || item.value === 0) return null;
+
+    // For negative bars, label goes below; for positive, above
+    const labelY = item.bar < 0 ? y + height + 14 : y - 8;
 
     return (
       <text
         x={x + width / 2}
-        y={y - 8}
+        y={labelY}
         textAnchor="middle"
         fill={item.isPositive ? '#059669' : '#dc2626'}
         fontSize={12}
@@ -146,11 +151,10 @@ function renderBarLabel(items: WaterfallItem[]) {
 export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChartProps) {
   const items = buildWaterfallData(entry, isDigital);
 
-  // Y domain: [0, max * 1.15] — only go negative if net profit is negative
-  const tops = items.map((d) => d.base + d.bar);
-  const bases = items.map((d) => d.base);
-  const maxY = Math.max(...tops, 0);
-  const minY = Math.min(...bases, 0);
+  // Y domain: compute from all bar endpoints
+  const allEnds = items.flatMap((d) => [d.base, d.base + d.bar]);
+  const maxY = Math.max(...allEnds, 0);
+  const minY = Math.min(...allEnds, 0);
   const yDomain: [number, number] = [
     minY < 0 ? minY * 1.15 : 0,
     maxY * 1.15,
@@ -159,7 +163,7 @@ export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChar
   return (
     <div className="w-full" style={{ height: 280 }}>
       <ResponsiveContainer width="100%" height={280}>
-        <ComposedChart data={items} margin={{ top: 32, right: 16, left: 16, bottom: 8 }}>
+        <BarChart data={items} margin={{ top: 32, right: 16, left: 16, bottom: 8 }}>
           <CartesianGrid
             strokeDasharray="3 3"
             vertical={false}
@@ -203,9 +207,7 @@ export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChar
             dataKey="bar"
             stackId="waterfall"
             radius={[4, 4, 0, 0]}
-            isAnimationActive={true}
-            animationDuration={600}
-            animationBegin={100}
+            isAnimationActive={false}
             label={renderBarLabel(items)}
           >
             {items.map((item, idx) => (
@@ -216,7 +218,7 @@ export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChar
               />
             ))}
           </Bar>
-        </ComposedChart>
+        </BarChart>
       </ResponsiveContainer>
     </div>
   );

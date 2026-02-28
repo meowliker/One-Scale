@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Campaign } from '@/types/campaign';
 import type { DateRangePreset } from '@/types/analytics';
 import { getCampaigns } from '@/services/adsManager';
@@ -46,8 +46,8 @@ function readLocalCache(key: string): Campaign[] | null {
     const raw = localStorage.getItem(key);
     if (!raw) return null;
     const { data, ts } = JSON.parse(raw);
-    // Only use cache if less than 10 minutes old
-    if (Date.now() - ts > 10 * 60 * 1000) return null;
+    // Use cache if less than 30 minutes old (background sync keeps it fresh)
+    if (Date.now() - ts > 30 * 60 * 1000) return null;
     return data as Campaign[];
   } catch {
     return null;
@@ -66,6 +66,7 @@ function writeLocalCache(key: string, data: Campaign[]) {
 export default function AdsManagerPage() {
   const [dateRange, setDateRange] = useState<DateRangeState | null>(null);
   const didInit = useRef(false);
+  const queryClient = useQueryClient();
 
   const connectionLoading = useConnectionStore((s) => s.loading);
   const connectionStatus = useConnectionStore((s) => s.status);
@@ -109,9 +110,12 @@ export default function AdsManagerPage() {
         if (cached.length > 0) {
           // Write to localStorage for next visit
           if (cacheKey) writeLocalCache(cacheKey, cached);
-          // Phase 2: Background refresh (fire-and-forget, result updates on next query)
+          // Phase 2: Background refresh — update query cache + localStorage silently
           getCampaigns({ since, until }).then((live) => {
-            if (live.length > 0 && cacheKey) writeLocalCache(cacheKey, live);
+            if (live.length > 0) {
+              if (cacheKey) writeLocalCache(cacheKey, live);
+              queryClient.setQueryData(['campaigns', activeStoreId, since, until], live);
+            }
           }).catch(() => {});
           return cached;
         }
