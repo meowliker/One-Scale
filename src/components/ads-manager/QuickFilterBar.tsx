@@ -32,10 +32,10 @@ export function QuickFilterBar({ activeFilter, onFilterChange }: Props) {
             key={f.id}
             onClick={() => onFilterChange(isActive ? null : f.id)}
             className={cn(
-              'rounded-full px-3 py-1 text-[11px] font-medium transition-all duration-150',
+              'rounded-[20px] px-3 py-1 text-[12px] font-medium cursor-pointer transition-all duration-150 border',
               isActive
-                ? 'bg-[#0071e3] text-white shadow-sm'
-                : 'bg-[#f5f5f7] text-[#6b7280] hover:bg-[#e8e8ed] hover:text-[#1d1d1f] dark:bg-[#2a2a2e] dark:text-[#9ca3af] dark:hover:bg-[#3a3a3e] dark:hover:text-[#e5e7eb]'
+                ? 'bg-[#2563eb] border-[#2563eb] text-white dark:bg-[#3b82f6] dark:border-[#3b82f6]'
+                : 'bg-[#f1f5f9] border-[#e2e8f0] text-[#475569] hover:bg-[#e2e8f0] hover:text-[#1e293b] dark:bg-[#1e293b] dark:border-[#334155] dark:text-[#94a3b8] dark:hover:bg-[#334155] dark:hover:text-[#e5e7eb]'
             )}
           >
             {f.label}

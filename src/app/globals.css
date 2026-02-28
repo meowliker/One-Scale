@@ -600,3 +600,23 @@ button:active:not(:disabled),
   transform: scale(0.97);
   transition: transform 0.1s ease;
 }
+
+/* TOTALS ROW - PERMANENT FIX - DO NOT REMOVE */
+.totals-row,
+.totals-row td,
+.totals-row th,
+.totals-row > * {
+  background-color: #f8fafc !important;
+  color: #111827 !important;
+  font-weight: 600 !important;
+  border-top: 2px solid #e5e7eb !important;
+}
+
+.dark .totals-row,
+.dark .totals-row td,
+.dark .totals-row th,
+.dark .totals-row > * {
+  background-color: #1e293b !important;
+  color: #f1f5f9 !important;
+  border-top-color: #334155 !important;
+}

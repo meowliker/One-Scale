@@ -2436,15 +2436,15 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
             )}
             {sortedCampaigns.length > 0 && (
               <tfoot>
-                <tr className="border-t-2 border-[#e5e7eb] dark:border-[#334155] bg-[#f8fafc] dark:bg-[#1e293b]">
-                  <td colSpan={3} className="whitespace-nowrap px-3 py-2.5 text-[13.5px] font-bold text-[#111827] dark:text-[#f1f5f9] sticky left-0 z-10 bg-[#f8fafc] dark:bg-[#1e293b]">
+                <tr className="totals-row">
+                  <td colSpan={3} className="whitespace-nowrap px-3 py-2.5 text-[13.5px] sticky left-0 z-10">
                     Total — {totals.activeCampaigns} active
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-[12px] font-bold text-[#111827] dark:text-[#f1f5f9]">&mdash;</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-[12px] font-bold text-[#111827] dark:text-[#f1f5f9]">&mdash;</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-[12px] font-bold text-[#111827] dark:text-[#f1f5f9]">&mdash;</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-[12px] font-bold text-[#111827] dark:text-[#f1f5f9]">&mdash;</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-[12px] font-bold text-[#111827] dark:text-[#f1f5f9]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-[12px]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-[12px]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-[12px]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-[12px]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-[12px]">&mdash;</td>
                   {columnOrder.map((key) => (
                     <MetricCell
                       key={`totals-${key}`}
