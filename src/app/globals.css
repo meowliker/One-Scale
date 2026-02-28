@@ -81,8 +81,8 @@
   --color-info-light: #5ac8fa;
 
   /* Apple-table backgrounds */
-  --apple-table-header-bg: #f5f5f7;
-  --apple-table-header-border: rgba(0, 0, 0, 0.08);
+  --apple-table-header-bg: #f8fafc;
+  --apple-table-header-border: #e5e7eb;
   --apple-table-row-bg: #ffffff;
   --apple-table-row-alt-bg: #f8fafc;
   --apple-table-row-hover: #f9fafb;

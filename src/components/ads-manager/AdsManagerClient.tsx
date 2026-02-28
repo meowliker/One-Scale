@@ -2203,9 +2203,9 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         <div ref={tableContainerRef} className="apple-table-container apple-scroll">
           <table className="w-full min-w-[1200px] apple-table">
             <thead>
-              <tr className="sticky top-0 z-20 border-b-2 border-[#e5e7eb] dark:border-[#334155] bg-[#f8fafc] dark:bg-[#0f172a]" style={{ height: 44 }}>
+              <tr className="sticky top-0 z-20 border-b-2 border-[var(--apple-table-header-border)] bg-[var(--apple-table-header-bg)]" style={{ height: 44 }}>
                 {/* Checkbox — 40px */}
-                <th className="w-10 min-w-[40px] max-w-[40px] whitespace-nowrap px-3 py-2.5 text-center sticky left-0 z-20 bg-[#f8fafc] dark:bg-[#0f172a]">
+                <th className="w-10 min-w-[40px] max-w-[40px] whitespace-nowrap px-3 py-2.5 text-center sticky left-0 z-20 bg-[var(--apple-table-header-bg)]">
                   <Checkbox
                     checked={allSelected}
                     onChange={handleSelectAll}
@@ -2213,12 +2213,12 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                   />
                 </th>
                 {/* ON/OFF — 70px */}
-                <th className="min-w-[70px] max-w-[70px] whitespace-nowrap px-3 py-2.5 text-center text-[11px] font-bold uppercase tracking-[0.06em] text-[#6b7280] dark:text-[#9ca3af] sticky left-[40px] z-20 bg-[#f8fafc] dark:bg-[#0f172a]" style={{ width: 70 }}>
+                <th className="min-w-[70px] max-w-[70px] whitespace-nowrap px-3 py-2.5 text-center text-[11px] font-bold uppercase tracking-[0.06em] text-[#6b7280] dark:text-[#9ca3af] sticky left-[40px] z-20 bg-[var(--apple-table-header-bg)]" style={{ width: 70 }}>
                   On/Off
                 </th>
                 {/* Name — flex, min 280px */}
                 <th
-                  className="relative whitespace-nowrap px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-[0.06em] text-[#6b7280] dark:text-[#9ca3af] sticky left-[110px] z-20 bg-[#f8fafc] dark:bg-[#0f172a] border-r border-[#e5e7eb] dark:border-[#334155]"
+                  className="relative whitespace-nowrap px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-[0.06em] text-[#6b7280] dark:text-[#9ca3af] sticky left-[110px] z-20 bg-[var(--apple-table-header-bg)] border-r border-[var(--apple-table-header-border)]"
                   style={{ width: nameColWidth, minWidth: Math.max(nameColWidth, 280) }}
                 >
                   <button
