@@ -1478,24 +1478,11 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     [loadAdsForAdSet]
   );
 
-  // Auto-expand active campaigns ONLY when user explicitly clicks "Active" tab;
-  // collapse all when switching to Paused or All.
-  // Skip auto-expand on initial mount — page loads collapsed by default.
-  const autoExpandDoneRef = useRef(false);
+  // Collapse all campaigns and reset visible count when filter changes
   const prevFilterRef = useRef<StatusFilter>(statusFilter);
-  const isInitialMountRef = useRef(true);
-
-  // Collapse all campaigns when filter changes — manual chevron click only for expansion
   useEffect(() => {
-    const filterChanged = prevFilterRef.current !== statusFilter;
-    prevFilterRef.current = statusFilter;
-
-    if (isInitialMountRef.current) {
-      isInitialMountRef.current = false;
-      return;
-    }
-
-    if (filterChanged) {
+    if (prevFilterRef.current !== statusFilter) {
+      prevFilterRef.current = statusFilter;
       collapseAllCampaigns();
     }
   }, [statusFilter, collapseAllCampaigns]);
