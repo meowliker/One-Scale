@@ -64,7 +64,7 @@ export function MetricCell({ metricKey, value, isTotals, shopifyRoas }: MetricCe
       "whitespace-nowrap px-3 py-2 text-right text-[12px] tabular-nums",
       colorClass || "text-text-primary",
       PIXEL_METRIC_KEYS.has(metricKey) && "bg-[#e8f2ff] dark:bg-[#1e3a5f] border-l border-[#0071e3]/10",
-      isTotals && "!font-bold !text-[13.5px] bg-[#f0f4ff] dark:bg-[#172554]"
+      isTotals && "!font-bold !text-[13.5px] bg-[#f8fafc] dark:bg-[#1e293b] text-[#111827] dark:text-[#f1f5f9]"
     )}>
       {hasDualRoas ? (
         /* Dual ROAS: Shopify "Real" (prominent) + Meta (muted) */
