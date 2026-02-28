@@ -62,9 +62,10 @@ export async function apiClient<T>(
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    // Wait before retrying (exponential backoff: 1s, 2s, 4s)
+    // Wait before retrying (backoff: 2s, 5s, 10s)
     if (attempt > 0) {
-      const delay = Math.min(1000 * Math.pow(2, attempt - 1), 8000);
+      const delays = [2000, 5000, 10000];
+      const delay = delays[Math.min(attempt - 1, delays.length - 1)];
       console.log(`[API] Retry ${attempt}/${maxRetries} for ${endpoint} after ${delay}ms`);
       await new Promise((r) => setTimeout(r, delay));
     }

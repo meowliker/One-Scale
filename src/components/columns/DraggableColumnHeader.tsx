@@ -78,7 +78,7 @@ export function DraggableColumnHeader({ metricKey, sortKey, sortDirection, onSor
       ref={(node) => { setNodeRef(node); thRef.current = node; }}
       style={{ ...style, ...(columnWidth ? { width: columnWidth, minWidth: columnWidth } : {}) }}
       className={cn(
-        'relative whitespace-nowrap px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-[0.04em] text-[#86868b] select-none transition-colors duration-150 hover:text-[#1d1d1f]',
+        'relative whitespace-nowrap px-3 py-2 text-right text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary select-none transition-colors duration-150 hover:text-text-primary',
         isDragging && 'z-50 bg-[#e8f0fe] opacity-90 shadow-md rounded-lg'
       )}
     >

@@ -62,7 +62,7 @@ const MAX_RETRIES = 2;
 const BASE_DELAY_MS = 2000; // 2 seconds — keep retries fast, fail early if still limited
 
 function isRateLimitError(status: number, body: string): boolean {
-  // Meta rate limit: error code 17, subcode 2446079, or HTTP 429
+  // Meta rate limit: error code 17 or 32, subcode 2446079, or HTTP 429
   if (status === 429) return true;
   if (status === 400 || status === 403) {
     return (

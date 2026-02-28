@@ -3,21 +3,23 @@ import { cn } from '@/lib/utils';
 export interface BadgeProps {
   children: React.ReactNode;
   variant: 'success' | 'warning' | 'danger' | 'info' | 'default';
+  size?: 'sm' | 'md';
 }
 
 const variantClasses: Record<BadgeProps['variant'], string> = {
-  success: 'bg-green-100 text-green-800',
-  warning: 'bg-yellow-100 text-yellow-800',
-  danger: 'bg-red-100 text-red-800',
-  info: 'bg-blue-100 text-blue-800',
-  default: 'bg-surface-hover text-text-primary',
+  success: 'border-emerald-400/40 text-emerald-600 dark:text-emerald-400',
+  warning: 'border-amber-400/40 text-amber-600 dark:text-amber-400',
+  danger: 'border-red-400/40 text-red-500 dark:text-red-400',
+  info: 'border-blue-400/40 text-blue-600 dark:text-blue-400',
+  default: 'border-border text-text-muted',
 };
 
-export function Badge({ children, variant }: BadgeProps) {
+export function Badge({ children, variant, size = 'md' }: BadgeProps) {
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium',
+        'inline-flex items-center rounded-full border font-medium',
+        size === 'sm' ? 'px-1.5 py-px text-[9px]' : 'px-2 py-0.5 text-[10px]',
         variantClasses[variant]
       )}
     >

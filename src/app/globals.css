@@ -79,18 +79,32 @@
   --color-danger-light: #ff6961;
   --color-info: #0071e3;
   --color-info-light: #5ac8fa;
+
+  /* Apple-table backgrounds */
+  --apple-table-header-bg: #f8fafc;
+  --apple-table-header-border: #e5e7eb;
+  --apple-table-row-bg: #ffffff;
+  --apple-table-row-alt-bg: #f8fafc;
+  --apple-table-row-hover: #f9fafb;
+  --apple-table-row-alt-hover: #f0f4f8;
+  --apple-table-row-selected: #e8f0fe;
+  --apple-table-row-highlighted: #fff8e1;
+  --apple-table-row-flash-success: #f0fdf4;
+  --apple-table-row-flash-error: #fef2f2;
+  --apple-table-footer-bg: #f8fafc;
+  --apple-table-footer-text: #1d1d1f;
 }
 
 /* ===== Dark Theme ===== */
 .dark {
-  --color-background: #0f1117;
+  --color-background: #0f172a;
   --color-foreground: #f1f5f9;
-  --color-surface: #161823;
-  --color-surface-elevated: #1e2030;
-  --color-surface-hover: #262a3e;
-  --color-surface-active: #2e3350;
-  --color-border: #232740;
-  --color-border-light: #2d3250;
+  --color-surface: #1e293b;
+  --color-surface-elevated: #1e293b;
+  --color-surface-hover: #263348;
+  --color-surface-active: #2e3d52;
+  --color-border: #334155;
+  --color-border-light: #293548;
   --color-border-focus: #7c5cfc;
   --color-primary: #7c5cfc;
   --color-primary-light: #a78bfa;
@@ -101,6 +115,37 @@
   --color-text-secondary: #94a3b8;
   --color-text-muted: #64748b;
   --color-text-dimmed: #475569;
+
+  /* Apple-table backgrounds */
+  --apple-table-header-bg: #0f172a;
+  --apple-table-header-border: #1e293b;
+  --apple-table-row-bg: #1e293b;
+  --apple-table-row-alt-bg: #1a2332;
+  --apple-table-row-hover: #273449;
+  --apple-table-row-alt-hover: #1e2d3d;
+  --apple-table-row-selected: #1a3152;
+  --apple-table-row-highlighted: #332d1a;
+  --apple-table-row-flash-success: #132d1b;
+  --apple-table-row-flash-error: #301818;
+  --apple-table-footer-bg: #1e293b;
+  --apple-table-footer-text: #f1f5f9;
+}
+
+/* ===== Shared Tooltip ===== */
+.onescale-tooltip {
+  background: white !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.10) !important;
+  color: #111827 !important;
+  font-size: 12px !important;
+  padding: 8px 12px !important;
+  z-index: 50 !important;
+}
+.dark .onescale-tooltip {
+  background: #1e293b !important;
+  border-color: #334155 !important;
+  color: #f1f5f9 !important;
 }
 
 /* ===== Global Styles ===== */
@@ -108,6 +153,59 @@
 body {
   background: var(--color-background);
   color: var(--color-foreground);
+}
+
+/* ===== Dark Mode Transition System ===== */
+/* Smooth transitions when toggling themes */
+*,
+*::before,
+*::after {
+  transition: background-color 350ms ease,
+              color 300ms ease,
+              border-color 300ms ease;
+}
+
+/* Exclude charts, sparklines, and toggle switches from theme transitions */
+.no-transition,
+.no-transition *,
+.no-transition *::before,
+.no-transition *::after {
+  transition: none !important;
+}
+
+/* ===== View Transition API — dark mode fade ===== */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 400ms;
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+::view-transition-old(root) {
+  animation-name: vt-fade-out;
+}
+
+::view-transition-new(root) {
+  animation-name: vt-fade-in;
+}
+
+@keyframes vt-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes vt-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ===== Theme toggle icon animation ===== */
+@keyframes theme-icon-rotate {
+  from { transform: rotate(0deg) scale(0.6); opacity: 0; }
+  to { transform: rotate(180deg) scale(1); opacity: 1; }
+}
+
+.theme-icon-enter {
+  animation: theme-icon-rotate 400ms ease-out forwards;
 }
 
 /* Custom scrollbar — thin, dark */
@@ -150,6 +248,11 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes tooltip-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 @keyframes shimmer {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
@@ -172,6 +275,10 @@ body {
 
 .animate-slide-up {
   animation: slide-up 0.4s ease-out forwards;
+}
+
+.animate-tooltip-in {
+  animation: tooltip-in 150ms ease-out forwards;
 }
 
 .animate-shimmer {
@@ -259,8 +366,8 @@ body {
 }
 
 .apple-toolbar {
-  background: #ffffff;
-  border: 1px solid rgba(0, 0, 0, 0.06);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
   border-radius: 12px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
 }
@@ -272,28 +379,26 @@ body {
 }
 
 .apple-table thead tr {
-  background: #fbfbfd;
+  background: var(--apple-table-header-bg);
 }
 
 .apple-table thead th {
-  color: #86868b;
-  font-size: 10px;
-  font-weight: 600;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
   padding: 8px 12px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  border-bottom: 1px solid var(--apple-table-header-border);
   position: relative;
 }
 
 .apple-table tbody tr {
-  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+  border-bottom: 1px solid var(--color-border-light);
   transition: background-color 0.15s ease;
 }
 
-.apple-table tbody tr:hover {
-  background-color: #f5f5f7;
-}
+/* Row hover handled by Tailwind classes on each row component */
 
 /* Column resize handle - Apple style */
 .col-resize-handle {
@@ -326,28 +431,38 @@ body {
 
 /* Status badges - Apple style */
 .apple-status-active {
-  background: #e8f7ed;
-  color: #1b7d36;
-  border: none;
+  background: #f0fdf4;
+  color: #16a34a;
+  border: 1px solid #86efac;
   font-size: 11px;
   font-weight: 600;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: 9999px;
+}
+
+.dark .apple-status-active {
+  background: #052e16;
+  color: #4ade80;
+  border-color: #166534;
 }
 
 .apple-status-paused {
-  background: #f0f0f5;
-  color: #86868b;
-  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border, rgba(0,0,0,0.08));
   font-size: 11px;
   font-weight: 600;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: 9999px;
+}
+
+.dark .apple-status-paused {
+  border-color: var(--color-border);
 }
 
 .apple-status-error {
-  background: #ffeae8;
-  color: #d42a1e;
+  background: var(--color-danger-light, #ffeae8);
+  color: var(--color-danger);
   border: none;
   font-size: 11px;
   font-weight: 600;
@@ -357,9 +472,9 @@ body {
 
 /* Apple card */
 .apple-card {
-  background: #ffffff;
+  background: var(--color-surface);
   border-radius: 12px;
-  border: 1px solid rgba(0, 0, 0, 0.06);
+  border: 1px solid var(--color-border);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
   transition: box-shadow 0.2s ease;
 }
@@ -384,14 +499,15 @@ body {
   background: rgba(0, 0, 0, 0.2);
 }
 
-/* Apple table container */
+/* Apple table container — scroll container for both axes.
+   sticky header works because this is the nearest scroll ancestor. */
 .apple-table-container {
   position: relative;
   border-radius: 12px;
-  overflow-x: auto;
-  overflow-y: visible;
-  background: #ffffff;
-  border: 1px solid rgba(0, 0, 0, 0.06);
+  overflow: auto;
+  max-height: calc(100vh - 260px);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
 }
 
@@ -423,13 +539,32 @@ body {
 }
 
 /* ===== Override Recharts for dark theme ===== */
+/* Exclude all Recharts internals and sparklines from theme transitions */
+.recharts-wrapper,
+.recharts-wrapper *,
+.recharts-wrapper *::before,
+.recharts-wrapper *::after {
+  transition: none !important;
+}
+
 .recharts-cartesian-grid-horizontal line,
 .recharts-cartesian-grid-vertical line {
   stroke: var(--color-border) !important;
 }
 
+.dark .recharts-cartesian-grid-horizontal line,
+.dark .recharts-cartesian-grid-vertical line {
+  stroke: #334155 !important;
+}
+
 .recharts-text {
   fill: var(--color-text-muted) !important;
+}
+
+/* Charts: transparent background in dark mode */
+.dark .recharts-wrapper,
+.dark .recharts-surface {
+  background: transparent !important;
 }
 
 /* ===== Status dot animation ===== */
@@ -457,49 +592,11 @@ body {
   }
 }
 
-/* ===== Totals Row ===== */
-tr.totals-row,
-tr.totals-row td,
-tr.totals-row th {
-  background-color: #f8fafc !important;
-  color: #111827 !important;
-  font-weight: 700 !important;
-  border-top: 2px solid #e5e7eb !important;
-}
+/* ===== Active status badge — no heavy glow ===== */
 
-.dark tr.totals-row,
-.dark tr.totals-row td,
-.dark tr.totals-row th {
-  background-color: #1e293b !important;
-  color: #f1f5f9 !important;
-  font-weight: 700 !important;
-  border-top-color: #334155 !important;
-}
-
-/* ===== Tooltip Overrides ===== */
-.onescale-tooltip,
-[role="tooltip"] {
-  background: white !important;
-  border: 1px solid #e5e7eb !important;
-  border-radius: 8px !important;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.10) !important;
-  color: #111827 !important;
-  font-size: 12px !important;
-  padding: 8px 12px !important;
-  z-index: 50 !important;
-}
-
-.dark .onescale-tooltip,
-.dark [role="tooltip"] {
-  background: #1e293b !important;
-  border-color: #334155 !important;
-  color: #f1f5f9 !important;
-}
-
-/* ===== Table Header ===== */
-thead th {
-  background-color: #f8fafc !important;
-}
-.dark thead th {
-  background-color: #0f172a !important;
+/* ===== Button micro-press ===== */
+button:active:not(:disabled),
+[role="button"]:active:not(:disabled) {
+  transform: scale(0.97);
+  transition: transform 0.1s ease;
 }

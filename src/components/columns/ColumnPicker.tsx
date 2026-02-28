@@ -1,159 +1,376 @@
 'use client';
 
-import { useState, useEffect, useRef, useMemo } from 'react';
-import { Save } from 'lucide-react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
+import { X, GripVertical, Save, RotateCcw } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable,
+  arrayMove,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { cn } from '@/lib/utils';
 import { SearchInput } from '@/components/ui/SearchInput';
 import { useColumnPresetStore } from '@/stores/columnPresetStore';
 import { allMetrics, metricsByCategory, defaultColumnPresets } from '@/data/metricDefinitions';
-import { ColumnPickerCategory } from '@/components/columns/ColumnPickerCategory';
 import { SavePresetDialog } from '@/components/columns/SavePresetDialog';
-import type { MetricKey, MetricCategory } from '@/types/metrics';
+import type { MetricKey, MetricCategory, MetricDefinition } from '@/types/metrics';
 
 export interface ColumnPickerProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-const categoryOrder: { key: MetricCategory; label: string }[] = [
+const categoryTabs: { key: MetricCategory | 'all'; label: string }[] = [
+  { key: 'all', label: 'All' },
   { key: 'performance', label: 'Performance' },
   { key: 'delivery', label: 'Delivery' },
   { key: 'engagement', label: 'Engagement' },
   { key: 'conversions', label: 'Conversions' },
   { key: 'financial', label: 'Financial' },
+  { key: 'video', label: 'Video' },
+  { key: 'quality', label: 'Quality' },
 ];
 
+/* ─── Sortable column item ─── */
+function SortableColumnItem({
+  metric,
+  isChecked,
+  onToggle,
+}: {
+  metric: MetricDefinition;
+  isChecked: boolean;
+  onToggle: (key: MetricKey) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: metric.key, disabled: !isChecked });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        'flex items-center gap-3 px-4 py-2.5 border-b border-[rgba(0,0,0,0.04)] transition-colors duration-150',
+        isChecked ? 'bg-[#eff6ff]' : 'bg-transparent hover:bg-[#f5f5f7]',
+        isDragging && 'opacity-50 shadow-lg z-50 bg-[#dbeafe]'
+      )}
+    >
+      {/* Checkbox */}
+      <button
+        onClick={() => onToggle(metric.key)}
+        className={cn(
+          'flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border transition-all duration-150',
+          isChecked
+            ? 'border-[#0071e3] bg-[#0071e3]'
+            : 'border-[#c7c7cc] bg-white hover:border-[#8e8e93]'
+        )}
+      >
+        {isChecked && (
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <path
+              d="M2.5 6L5 8.5L9.5 4"
+              stroke="white"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        )}
+      </button>
+
+      {/* Name + Description */}
+      <div className="flex-1 min-w-0">
+        <div className="text-[13px] font-semibold text-[#1d1d1f] leading-tight truncate">
+          {metric.label}
+        </div>
+        <div className="text-[11px] text-[#8e8e93] leading-tight mt-0.5 truncate">
+          {metric.description}
+        </div>
+      </div>
+
+      {/* Drag Handle — only for checked items */}
+      {isChecked && (
+        <button
+          {...attributes}
+          {...listeners}
+          className="shrink-0 cursor-grab rounded p-1 text-[#c7c7cc] hover:text-[#8e8e93] hover:bg-[rgba(0,0,0,0.04)] active:cursor-grabbing transition-colors"
+          tabIndex={-1}
+        >
+          <GripVertical className="h-4 w-4" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ─── Main Drawer ─── */
 export function ColumnPicker({ isOpen, onClose }: ColumnPickerProps) {
   const [search, setSearch] = useState('');
+  const [activeTab, setActiveTab] = useState<MetricCategory | 'all'>('all');
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
-  const panelRef = useRef<HTMLDivElement>(null);
 
   const {
     visibleColumns,
+    columnOrder,
     activePresetId,
-    customPresets,
     addColumn,
     removeColumn,
+    reorderColumns,
     setPreset,
   } = useColumnPresetStore();
 
-  // Close on outside click
+  // Reset search when opening
+  useEffect(() => {
+    if (isOpen) setSearch('');
+  }, [isOpen]);
+
+  // Close on Escape
   useEffect(() => {
     if (!isOpen) return;
-
-    function handleClickOutside(e: MouseEvent) {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
-        onClose();
-      }
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
     }
-
-    // Delay adding listener so the opening click doesn't immediately close
-    const timer = setTimeout(() => {
-      document.addEventListener('mousedown', handleClickOutside);
-    }, 0);
-
-    return () => {
-      clearTimeout(timer);
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
-  const filteredMetricsByCategory = useMemo(() => {
-    const query = search.toLowerCase().trim();
-    if (!query) return metricsByCategory;
+  // DnD sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
 
-    const filtered: Record<string, typeof allMetrics> = {};
-    for (const [category, metrics] of Object.entries(metricsByCategory)) {
-      const matching = metrics.filter(
+  // Count selected per category
+  const selectedCountByCategory = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const cat of categoryTabs) {
+      if (cat.key === 'all') {
+        counts.all = visibleColumns.length;
+      } else {
+        const catMetrics = metricsByCategory[cat.key] ?? [];
+        counts[cat.key] = catMetrics.filter((m) => visibleColumns.includes(m.key)).length;
+      }
+    }
+    return counts;
+  }, [visibleColumns]);
+
+  // Filter metrics by tab + search
+  const displayedMetrics = useMemo(() => {
+    const query = search.toLowerCase().trim();
+    let metrics: MetricDefinition[];
+
+    if (activeTab === 'all') {
+      metrics = allMetrics;
+    } else {
+      metrics = metricsByCategory[activeTab] ?? [];
+    }
+
+    if (query) {
+      metrics = metrics.filter(
         (m) =>
           m.label.toLowerCase().includes(query) ||
           m.shortLabel.toLowerCase().includes(query) ||
           m.description.toLowerCase().includes(query)
       );
-      if (matching.length > 0) {
-        filtered[category] = matching;
+    }
+
+    // Sort: checked items first, preserving their column order
+    const checked = metrics.filter((m) => visibleColumns.includes(m.key));
+    const unchecked = metrics.filter((m) => !visibleColumns.includes(m.key));
+    // Sort checked by their position in columnOrder
+    checked.sort(
+      (a, b) => columnOrder.indexOf(a.key) - columnOrder.indexOf(b.key)
+    );
+
+    return [...checked, ...unchecked];
+  }, [search, activeTab, visibleColumns, columnOrder]);
+
+  const handleToggle = useCallback(
+    (key: MetricKey) => {
+      if (visibleColumns.includes(key)) {
+        removeColumn(key);
+      } else {
+        addColumn(key);
       }
-    }
-    return filtered;
-  }, [search]);
+    },
+    [visibleColumns, addColumn, removeColumn]
+  );
 
-  function handleToggle(key: MetricKey) {
-    if (visibleColumns.includes(key)) {
-      removeColumn(key);
-    } else {
-      addColumn(key);
-    }
-  }
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
 
-  if (!isOpen) return null;
+      const oldIndex = columnOrder.indexOf(active.id as MetricKey);
+      const newIndex = columnOrder.indexOf(over.id as MetricKey);
+
+      if (oldIndex === -1 || newIndex === -1) return;
+
+      const newOrder = arrayMove(columnOrder, oldIndex, newIndex);
+      reorderColumns(newOrder);
+    },
+    [columnOrder, reorderColumns]
+  );
+
+  const handleResetToDefault = useCallback(() => {
+    setPreset('performance');
+  }, [setPreset]);
+
+  // Sortable IDs = only checked items (so unchecked items are not draggable)
+  const sortableIds = useMemo(
+    () => displayedMetrics.filter((m) => visibleColumns.includes(m.key)).map((m) => m.key),
+    [displayedMetrics, visibleColumns]
+  );
 
   return (
     <>
-      <div
-        ref={panelRef}
-        className="absolute right-0 top-full z-40 mt-1 w-80 rounded-lg border border-border bg-surface-elevated shadow-lg"
-      >
-        {/* Search */}
-        <div className="p-3 border-b border-border">
-          <SearchInput
-            value={search}
-            onChange={setSearch}
-            placeholder="Search metrics..."
-          />
-        </div>
+      <AnimatePresence>
+        {isOpen && (
+          <>
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="fixed inset-0 z-40 bg-black/20"
+              onClick={onClose}
+            />
 
-        {/* Preset tabs */}
-        <div className="flex gap-1 overflow-x-auto px-3 py-2 border-b border-border">
-          {[...defaultColumnPresets, ...customPresets].map((preset) => (
-            <button
-              key={preset.id}
-              onClick={() => setPreset(preset.id)}
-              className={cn(
-                'whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
-                activePresetId === preset.id
-                  ? 'bg-primary/10 text-primary-light'
-                  : 'text-text-secondary hover:bg-surface-hover'
-              )}
+            {/* Drawer */}
+            <motion.div
+              initial={{ x: 380 }}
+              animate={{ x: 0 }}
+              exit={{ x: 380 }}
+              transition={{ duration: 0.25, ease: [0.32, 0.72, 0, 1] }}
+              className="fixed right-0 top-0 z-50 flex h-full w-[380px] flex-col border-l border-[rgba(0,0,0,0.08)] bg-white shadow-2xl"
             >
-              {preset.name}
-            </button>
-          ))}
-        </div>
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 py-4 border-b border-[rgba(0,0,0,0.06)]">
+                <h2 className="text-[15px] font-semibold text-[#1d1d1f]">Customise Columns</h2>
+                <button
+                  onClick={onClose}
+                  className="rounded-lg p-1.5 text-[#8e8e93] hover:bg-[#f5f5f7] hover:text-[#1d1d1f] transition-colors"
+                >
+                  <X className="h-4.5 w-4.5" />
+                </button>
+              </div>
 
-        {/* Metric categories */}
-        <div className="max-h-96 overflow-y-auto">
-          {categoryOrder.map(({ key, label }) => {
-            const metrics = filteredMetricsByCategory[key];
-            if (!metrics || metrics.length === 0) return null;
-            return (
-              <ColumnPickerCategory
-                key={key}
-                title={label}
-                metrics={metrics}
-                visibleColumns={visibleColumns}
-                onToggle={handleToggle}
-              />
-            );
-          })}
+              {/* Search — sticky */}
+              <div className="px-4 py-3 border-b border-[rgba(0,0,0,0.06)]">
+                <SearchInput
+                  value={search}
+                  onChange={setSearch}
+                  placeholder="Search columns..."
+                />
+              </div>
 
-          {Object.keys(filteredMetricsByCategory).length === 0 && (
-            <div className="px-4 py-6 text-center text-sm text-text-dimmed">
-              No metrics match your search.
-            </div>
-          )}
-        </div>
+              {/* Category Tabs */}
+              <div className="flex gap-1 overflow-x-auto px-4 py-2.5 border-b border-[rgba(0,0,0,0.06)] scrollbar-hide">
+                {categoryTabs.map((tab) => {
+                  const count = selectedCountByCategory[tab.key] ?? 0;
+                  const isActive = activeTab === tab.key;
+                  return (
+                    <button
+                      key={tab.key}
+                      onClick={() => setActiveTab(tab.key)}
+                      className={cn(
+                        'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-[12px] font-medium transition-all duration-150',
+                        isActive
+                          ? 'bg-[#1d1d1f] text-white shadow-sm'
+                          : 'text-[#6e6e73] hover:bg-[#f5f5f7] hover:text-[#1d1d1f]'
+                      )}
+                    >
+                      {tab.label}
+                      {count > 0 && (
+                        <span
+                          className={cn(
+                            'inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-bold',
+                            isActive
+                              ? 'bg-white/20 text-white'
+                              : 'bg-[#0071e3]/10 text-[#0071e3]'
+                          )}
+                        >
+                          {count}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
 
-        {/* Save as Preset */}
-        <div className="border-t border-border p-3">
-          <button
-            onClick={() => setSaveDialogOpen(true)}
-            className="flex w-full items-center justify-center gap-2 rounded-md border border-border-light bg-surface-elevated px-3 py-2 text-sm font-medium text-text-secondary hover:bg-surface-hover transition-colors"
-          >
-            <Save className="h-4 w-4" />
-            Save as Preset
-          </button>
-        </div>
-      </div>
+              {/* Column List */}
+              <div className="flex-1 overflow-y-auto">
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={handleDragEnd}
+                >
+                  <SortableContext
+                    items={sortableIds}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    {displayedMetrics.length > 0 ? (
+                      displayedMetrics.map((metric) => (
+                        <SortableColumnItem
+                          key={metric.key}
+                          metric={metric}
+                          isChecked={visibleColumns.includes(metric.key)}
+                          onToggle={handleToggle}
+                        />
+                      ))
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-12 text-center">
+                        <p className="text-sm text-[#8e8e93]">No columns match your search.</p>
+                      </div>
+                    )}
+                  </SortableContext>
+                </DndContext>
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-between border-t border-[rgba(0,0,0,0.06)] px-5 py-3.5">
+                <button
+                  onClick={handleResetToDefault}
+                  className="inline-flex items-center gap-1.5 text-[13px] font-medium text-[#8e8e93] hover:text-[#1d1d1f] transition-colors"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Reset to default
+                </button>
+                <button
+                  onClick={() => setSaveDialogOpen(true)}
+                  className="inline-flex items-center gap-2 rounded-lg bg-[#0071e3] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#0077ED] transition-colors"
+                >
+                  <Save className="h-3.5 w-3.5" />
+                  Save as Preset
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
       <SavePresetDialog
         isOpen={saveDialogOpen}

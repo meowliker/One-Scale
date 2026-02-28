@@ -25,7 +25,7 @@ export function Checkbox({ checked, onChange, indeterminate = false }: CheckboxP
       checked={checked}
       onChange={(e) => onChange(e.target.checked)}
       className={cn(
-        'h-4 w-4 cursor-pointer rounded border-border-light text-primary-light focus:ring-2 focus:ring-primary focus:ring-offset-1',
+        'h-4 w-4 cursor-pointer rounded border-border-light text-primary-light focus:ring-2 focus:ring-primary focus:ring-offset-0 bg-transparent dark:bg-transparent dark:border-[#334155]',
         indeterminate && 'indeterminate:bg-primary'
       )}
     />

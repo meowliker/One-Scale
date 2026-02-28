@@ -29,7 +29,9 @@ const presetLabels: Record<DateRangePreset, string> = {
 const selectablePresets: DateRangePreset[] = [
   'today',
   'yesterday',
+  'last3',
   'last7',
+  'last7today',
   'last14',
   'last30',
   'thisMonth',

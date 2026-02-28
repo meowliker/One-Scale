@@ -1,5 +1,12 @@
+'use client';
+
+import { useCallback } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
+import { prefetchRouteData } from '@/lib/prefetch';
+import { useStoreStore } from '@/stores/storeStore';
 import type { NavItem } from '@/types/navigation';
 
 interface SidebarNavItemProps {
@@ -10,20 +17,37 @@ interface SidebarNavItemProps {
 
 export function SidebarNavItem({ item, isCollapsed, isActive }: SidebarNavItemProps) {
   const Icon = item.icon;
+  const router = useRouter();
+  const activeStoreId = useStoreStore((s) => s.activeStoreId);
+
+  // Prefetch both Next.js route chunks AND React Query data on hover
+  const handleMouseEnter = useCallback(() => {
+    router.prefetch(item.href);
+    prefetchRouteData(item.href, activeStoreId);
+  }, [router, item.href, activeStoreId]);
 
   return (
     <Link
       href={item.href}
+      prefetch={true}
+      onMouseEnter={handleMouseEnter}
       className={cn(
-        'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-150',
+        'relative flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13px] font-medium transition-colors duration-150',
         isActive
-          ? 'bg-primary/10 text-primary-light border-l-2 border-primary shadow-sm shadow-primary-glow'
-          : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary border-l-2 border-transparent',
+          ? 'text-primary'
+          : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary',
         isCollapsed && 'justify-center px-2'
       )}
     >
-      <Icon className={cn('h-5 w-5 shrink-0', isActive && 'text-primary-light')} />
-      {!isCollapsed && <span className="truncate">{item.label}</span>}
+      {isActive && (
+        <motion.div
+          layoutId="sidebar-active"
+          className="absolute inset-0 rounded-md bg-primary/10"
+          transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+        />
+      )}
+      <Icon className={cn('relative z-[1] h-[18px] w-[18px] shrink-0', isActive ? 'text-primary' : 'text-text-muted')} />
+      {!isCollapsed && <span className="relative z-[1] truncate">{item.label}</span>}
     </Link>
   );
 }

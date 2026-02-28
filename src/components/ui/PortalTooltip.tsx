@@ -8,9 +8,10 @@ interface PortalTooltipProps {
   visible: boolean;
   children: ReactNode;
   placement?: 'top' | 'bottom';
+  onClose?: () => void;
 }
 
-export function PortalTooltip({ anchorRef, visible, children, placement = 'top' }: PortalTooltipProps) {
+export function PortalTooltip({ anchorRef, visible, children, placement = 'bottom', onClose }: PortalTooltipProps) {
   const [coords, setCoords] = useState({ top: 0, left: 0 });
   const tooltipRef = useRef<HTMLDivElement>(null);
   const [mounted, setMounted] = useState(false);
@@ -29,16 +30,20 @@ export function PortalTooltip({ anchorRef, visible, children, placement = 'top' 
 
     let top: number;
     if (placement === 'top') {
-      top = rect.top + window.scrollY - tooltipHeight - 8;
+      top = rect.top - tooltipHeight - 8;
       // If tooltip would go above viewport, place below instead
-      if (top < window.scrollY) {
-        top = rect.bottom + window.scrollY + 8;
+      if (top < 8) {
+        top = rect.bottom + 8;
       }
     } else {
-      top = rect.bottom + window.scrollY + 8;
+      top = rect.bottom + 8;
+      // If tooltip would go below viewport, place above instead
+      if (top + tooltipHeight > window.innerHeight - 8) {
+        top = rect.top - tooltipHeight - 8;
+      }
     }
 
-    let left = rect.left + window.scrollX + rect.width / 2 - tooltipWidth / 2;
+    let left = rect.left + rect.width / 2 - tooltipWidth / 2;
     // Clamp to viewport
     left = Math.max(8, Math.min(left, window.innerWidth - tooltipWidth - 8));
 
@@ -62,17 +67,26 @@ export function PortalTooltip({ anchorRef, visible, children, placement = 'top' 
   if (!mounted || !visible) return null;
 
   return createPortal(
-    <div
-      ref={tooltipRef}
-      style={{
-        position: 'absolute',
-        top: coords.top,
-        left: coords.left,
-        zIndex: 9999,
-      }}
-    >
-      {children}
-    </div>,
+    <>
+      {/* Invisible backdrop to catch outside clicks */}
+      {onClose && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 9998 }}
+          onClick={onClose}
+        />
+      )}
+      <div
+        ref={tooltipRef}
+        style={{
+          position: 'fixed',
+          top: coords.top,
+          left: coords.left,
+          zIndex: 9999,
+        }}
+      >
+        {children}
+      </div>
+    </>,
     document.body
   );
 }

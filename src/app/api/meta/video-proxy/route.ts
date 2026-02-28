@@ -82,7 +82,16 @@ export async function GET(request: NextRequest) {
           let pageCount = 0;
           while (!sourceUrl && nextUrl && pageCount < 2) {
             pageCount++;
-            const nextRes = await fetch(nextUrl);
+            const pageController = new AbortController();
+            const pageTimeout = setTimeout(() => pageController.abort(), 10_000);
+            let nextRes: Response;
+            try {
+              nextRes = await fetch(nextUrl, { signal: pageController.signal });
+            } catch {
+              clearTimeout(pageTimeout);
+              break;
+            }
+            clearTimeout(pageTimeout);
             if (!nextRes.ok) break;
             const nextData = await nextRes.json() as {
               data: { id: string; source?: string }[];
@@ -112,12 +121,25 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Stream the video from Meta's CDN through our server
-    const videoResponse = await fetch(sourceUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-      },
-    });
+    // Stream the video from Meta's CDN through our server (30s timeout)
+    const cdnController = new AbortController();
+    const cdnTimeout = setTimeout(() => cdnController.abort(), 30_000);
+    let videoResponse: Response;
+    try {
+      videoResponse = await fetch(sourceUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+        },
+        signal: cdnController.signal,
+      });
+    } catch (fetchErr) {
+      clearTimeout(cdnTimeout);
+      if (fetchErr instanceof DOMException && fetchErr.name === 'AbortError') {
+        return NextResponse.json({ error: 'Video fetch timed out (30s)' }, { status: 504 });
+      }
+      throw fetchErr;
+    }
+    clearTimeout(cdnTimeout);
 
     if (!videoResponse.ok) {
       return NextResponse.json(

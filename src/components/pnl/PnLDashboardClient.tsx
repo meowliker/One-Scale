@@ -96,11 +96,7 @@ export function PnLDashboardClient({
   };
 
   const activeEntry = useMemo(() => {
-    const entry = computeEntryFromDaily(dailyPnL, dateRange);
-    const startStr = formatDateInTimezone(dateRange.start);
-    const endStr = formatDateInTimezone(dateRange.end);
-    console.log(`[P&L] Range: ${startStr} to ${endStr} | Revenue: $${entry.revenue.toFixed(2)} | Orders: ${entry.orderCount} | Ad Spend: $${entry.adSpend.toFixed(2)}`);
-    return entry;
+    return computeEntryFromDaily(dailyPnL, dateRange);
   }, [dailyPnL, dateRange]);
 
   // When productType changes (e.g. after data loads), update bottom tab
@@ -124,16 +120,16 @@ export function PnLDashboardClient({
       <PnLSummaryCards entry={activeEntry} isDigital={isDigital} />
 
       {/* Waterfall chart + Margin indicator */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="lg:col-span-2">
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-            <h3 className="text-base font-semibold text-gray-800 mb-4">Profit Waterfall</h3>
+          <div className="apple-card p-5">
+            <h3 className="text-sm font-semibold text-text-primary mb-3">Profit Waterfall</h3>
             <PnLWaterfallChart entry={activeEntry} isDigital={isDigital} />
           </div>
         </div>
-        <div className="lg:col-span-1 space-y-4">
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-            <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">Margin</h3>
+        <div className="lg:col-span-1 space-y-3">
+          <div className="apple-card p-5">
+            <h3 className="text-[11px] font-semibold text-text-secondary uppercase tracking-wide mb-3">Margin</h3>
             <MarginIndicator
               margin={activeEntry.margin}
               netProfit={activeEntry.netProfit}
@@ -141,8 +137,8 @@ export function PnLDashboardClient({
           </div>
 
           {/* Quick stats */}
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-            <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">Quick Stats</h3>
+          <div className="apple-card p-5">
+            <h3 className="text-[11px] font-semibold text-text-secondary uppercase tracking-wide mb-3">Quick Stats</h3>
             <div className="space-y-3">
               {[
                 { label: 'Revenue', value: activeEntry.revenue, color: 'text-emerald-600' },
@@ -150,7 +146,7 @@ export function PnLDashboardClient({
                 { label: 'Net Profit', value: activeEntry.netProfit, color: activeEntry.netProfit >= 0 ? 'text-emerald-600' : 'text-red-600' },
               ].map((stat) => (
                 <div key={stat.label} className="flex items-center justify-between">
-                  <span className="text-xs text-gray-500">{stat.label}</span>
+                  <span className="text-xs text-text-secondary">{stat.label}</span>
                   <span className={`text-sm font-semibold tabular-nums ${stat.color}`}>
                     {formatCurrency(stat.value)}
                   </span>
@@ -162,13 +158,13 @@ export function PnLDashboardClient({
       </div>
 
       {/* Net Profit Trend chart */}
-      <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-        <h3 className="text-base font-semibold text-gray-800 mb-4">Net Profit Trend</h3>
+      <div className="apple-card p-5">
+        <h3 className="text-sm font-semibold text-text-primary mb-3">Net Profit Trend</h3>
         <PnLTrendChart dailyPnL={dailyPnL} />
       </div>
 
       {/* Daily P&L breakdown chart */}
-      <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+      <div className="apple-card p-5">
         <PnLDayPartChart dailyPnL={dailyPnL} />
       </div>
 
@@ -187,8 +183,8 @@ export function PnLDashboardClient({
       {bottomTab === 'cogs' && <COGSManager products={products} />}
 
       {bottomTab === 'breakdown' && (
-        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-          <h3 className="mb-4 text-sm font-semibold text-gray-800">
+        <div className="apple-card p-5">
+          <h3 className="mb-3 text-sm font-semibold text-text-primary">
             Cost Breakdown
           </h3>
           <div className="space-y-3">

@@ -25,6 +25,29 @@ const defaultStatus: ConnectionStatus = {
   shopify: { connected: false },
 };
 
+const CONNECTION_CACHE_KEY = 'onescale:connection-cache';
+
+/** Read cached connection state from localStorage for instant hydration */
+function readConnectionCache(storeId: string): { status: ConnectionStatus; mappedAccounts: MappedAccount[] } | null {
+  try {
+    const raw = localStorage.getItem(`${CONNECTION_CACHE_KEY}:${storeId}`);
+    if (!raw) return null;
+    const { status, mappedAccounts, ts } = JSON.parse(raw);
+    // Use cache if less than 30 minutes old
+    if (Date.now() - ts > 30 * 60 * 1000) return null;
+    return { status, mappedAccounts };
+  } catch {
+    return null;
+  }
+}
+
+/** Write connection state to localStorage */
+function writeConnectionCache(storeId: string, status: ConnectionStatus, mappedAccounts: MappedAccount[]) {
+  try {
+    localStorage.setItem(`${CONNECTION_CACHE_KEY}:${storeId}`, JSON.stringify({ status, mappedAccounts, ts: Date.now() }));
+  } catch { /* quota exceeded */ }
+}
+
 export const useConnectionStore = create<ConnectionState>()((set, get) => ({
   status: null,
   mappedAccounts: [],
@@ -32,7 +55,13 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
   error: null,
 
   refreshStatus: async (storeId: string) => {
-    set({ loading: true, error: null });
+    // Hydrate from localStorage immediately if available (eliminates skeleton flash)
+    const cached = typeof window !== 'undefined' ? readConnectionCache(storeId) : null;
+    if (cached && get().status === null) {
+      set({ status: cached.status, mappedAccounts: cached.mappedAccounts, loading: true, error: null });
+    } else {
+      set({ loading: true, error: null });
+    }
     try {
       // Fetch connection status and mapped accounts in parallel
       const [statusRes, accountsRes] = await Promise.all([
@@ -59,6 +88,7 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
       }
 
       set({ status: data, mappedAccounts: mapped, loading: false });
+      if (typeof window !== 'undefined') writeConnectionCache(storeId, data, mapped);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       set({ status: defaultStatus, mappedAccounts: [], loading: false, error: message });

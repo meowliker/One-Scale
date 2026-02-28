@@ -43,6 +43,7 @@ export interface ShopifyOrder {
   financialStatus: string;
   fulfillmentStatus: string | null;
   createdAt: string;
+  landingSite?: string | null;
   lineItems: ShopifyLineItem[];
   customer: ShopifyCustomerRef | null;
   paymentGatewayNames: string[];

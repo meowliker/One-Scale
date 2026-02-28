@@ -93,6 +93,10 @@ export interface PerformanceMetrics {
   uniqueCTR: number;
   landingPageViews: number;
   costPerLandingPageView: number;
+  // Shopify attribution (populated by /api/attribution/campaign-revenue)
+  shopifyRevenue?: number;
+  shopifyOrderCount?: number;
+  realRoas?: number;
 }
 
 export interface MetaPolicyInfo {

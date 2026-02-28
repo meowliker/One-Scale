@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Loader2, Radio, RefreshCw } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/services/api';
 import { formatCurrency, formatNumber } from '@/lib/utils';
 import { useConnectionStore } from '@/stores/connectionStore';
@@ -217,13 +218,7 @@ function TopEntityTable({
 
 export default function AttributionPage() {
   const [days, setDays] = useState<1 | 7 | 30>(1);
-  const [loading, setLoading] = useState(true);
-  const [data, setData] = useState<CoverageDashboardPayload | null>(null);
-  const [liveData, setLiveData] = useState<LiveOrderMappingPayload | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [liveErrorMessage, setLiveErrorMessage] = useState<string | null>(null);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
-  const [liveLoading, setLiveLoading] = useState(true);
   const [syncingOrders, setSyncingOrders] = useState(false);
   const [newOrderKeys, setNewOrderKeys] = useState<Set<string>>(new Set());
   const [urlTagAuditLoading, setUrlTagAuditLoading] = useState(false);
@@ -237,6 +232,7 @@ export default function AttributionPage() {
   const mappedAccounts = useConnectionStore((s) => s.mappedAccounts);
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
   const connectionReady = !connectionLoading && connectionStatus !== null;
+  const queryClient = useQueryClient();
 
   const emptyReason = useMemo(() => {
     if (!connectionReady) return null;
@@ -246,32 +242,35 @@ export default function AttributionPage() {
     return null;
   }, [connectionReady, connectionStatus, mappedAccounts]);
 
-  const fetchData = useCallback(async () => {
-    if (!activeStoreId) return;
-    setLoading(true);
-    setErrorMessage(null);
-    try {
+  const canFetch = connectionReady && !emptyReason && !!activeStoreId;
+
+  // Main coverage dashboard data
+  const {
+    data,
+    isLoading: loading,
+    error: coverageError,
+  } = useQuery<CoverageDashboardPayload, Error>({
+    queryKey: ['attribution-coverage', activeStoreId, days],
+    queryFn: async () => {
       const response = await apiClient<{ data: CoverageDashboardPayload }>('/api/tracking/coverage-dashboard', {
         params: { days: String(days) },
         timeoutMs: 12_000,
         maxRetries: 1,
       });
-      setData(response.data);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load attribution dashboard';
-      setErrorMessage(message);
-    } finally {
-      setLoading(false);
-    }
-  }, [activeStoreId, days]);
+      return response.data;
+    },
+    enabled: canFetch,
+    staleTime: 2 * 60 * 1000,
+  });
 
-  const fetchLiveData = useCallback(async (options?: { silent?: boolean }) => {
-    if (!activeStoreId) return;
-    if (!options?.silent) {
-      setLiveLoading(true);
-    }
-    setLiveErrorMessage(null);
-    try {
+  // Live order mapping (polls every 10 seconds)
+  const {
+    data: liveData,
+    isLoading: liveLoading,
+    error: liveError,
+  } = useQuery<LiveOrderMappingPayload, Error>({
+    queryKey: ['attribution-live', activeStoreId],
+    queryFn: async () => {
       const response = await apiClient<{ data: LiveOrderMappingPayload }>('/api/tracking/live-orders', {
         params: { limit: '40' },
         timeoutMs: 10_000,
@@ -279,6 +278,7 @@ export default function AttributionPage() {
       });
       const payload = response.data;
 
+      // Track new order flash animation
       const incomingKeys = new Set<string>();
       const freshKeys = new Set<string>();
       for (const row of payload.liveOrders) {
@@ -288,18 +288,19 @@ export default function AttributionPage() {
           freshKeys.add(key);
         }
       }
-
       seenLiveOrderKeysRef.current = incomingKeys;
       setNewOrderKeys(freshKeys);
-      setLiveData(payload);
       setTimeout(() => setNewOrderKeys(new Set()), 5000);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load live order mapping';
-      setLiveErrorMessage(message);
-    } finally {
-      setLiveLoading(false);
-    }
-  }, [activeStoreId]);
+
+      return payload;
+    },
+    enabled: canFetch,
+    refetchInterval: 10_000,
+    staleTime: 5_000,
+  });
+
+  const errorMessage = coverageError instanceof Error ? coverageError.message : null;
+  const liveErrorMessage = liveError instanceof Error ? liveError.message : null;
 
   const syncShopifyOrders = useCallback(
     async (windowDays: 1 | 7 | 30, options?: { silent?: boolean }) => {
@@ -337,14 +338,15 @@ export default function AttributionPage() {
   );
 
   const refreshAll = useCallback(
-    async (options?: { withSync?: boolean; silentSync?: boolean }) => {
+    async (options?: { withSync?: boolean }) => {
       const withSync = options?.withSync ?? true;
       if (withSync) {
-        await syncShopifyOrders(days, { silent: options?.silentSync });
+        await syncShopifyOrders(days);
       }
-      await Promise.all([fetchData(), fetchLiveData()]);
+      await queryClient.invalidateQueries({ queryKey: ['attribution-coverage', activeStoreId, days] });
+      await queryClient.invalidateQueries({ queryKey: ['attribution-live', activeStoreId] });
     },
-    [days, fetchData, fetchLiveData, syncShopifyOrders]
+    [days, syncShopifyOrders, queryClient, activeStoreId]
   );
 
   const runUrlTagAudit = useCallback(async (apply: boolean) => {
@@ -360,7 +362,7 @@ export default function AttributionPage() {
       });
       setUrlTagAuditData(response.data);
       if (apply) {
-        fetchData();
+        queryClient.invalidateQueries({ queryKey: ['attribution-coverage', activeStoreId, days] });
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to run Meta URL tag check';
@@ -368,31 +370,18 @@ export default function AttributionPage() {
     } finally {
       setUrlTagAuditLoading(false);
     }
-  }, [activeStoreId, fetchData]);
+  }, [activeStoreId, queryClient, days]);
 
+  // Initial silent sync on first load
   useEffect(() => {
-    if (connectionReady && !emptyReason) {
-      refreshAll({ withSync: false });
-    }
-  }, [connectionReady, emptyReason, refreshAll, activeStoreId]);
-
-  useEffect(() => {
-    if (!connectionReady || emptyReason || !activeStoreId) return;
+    if (!canFetch || !activeStoreId) return;
     if (didInitialSyncRef.current === activeStoreId) return;
     didInitialSyncRef.current = activeStoreId;
     syncShopifyOrders(days, { silent: true }).then(() => {
-      fetchData();
-      fetchLiveData({ silent: true });
+      queryClient.invalidateQueries({ queryKey: ['attribution-coverage', activeStoreId, days] });
+      queryClient.invalidateQueries({ queryKey: ['attribution-live', activeStoreId] });
     });
-  }, [connectionReady, emptyReason, activeStoreId, syncShopifyOrders, fetchData, fetchLiveData, days]);
-
-  useEffect(() => {
-    if (!connectionReady || emptyReason) return;
-    const timer = window.setInterval(() => {
-      fetchLiveData({ silent: true });
-    }, 10_000);
-    return () => window.clearInterval(timer);
-  }, [connectionReady, emptyReason, fetchLiveData]);
+  }, [canFetch, activeStoreId, syncShopifyOrders, queryClient, days]);
 
   if ((!connectionReady || loading) && !data && !errorMessage) {
     return (

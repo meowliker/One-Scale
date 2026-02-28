@@ -2,7 +2,7 @@ export function cn(...classes: (string | boolean | undefined | null)[]): string 
   return classes.filter(Boolean).join(' ');
 }
 
-export function formatCurrency(value: number): string {
+export function formatCurrency(value: number | null | undefined): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
@@ -11,14 +11,14 @@ export function formatCurrency(value: number): string {
   }).format(value ?? 0);
 }
 
-export function formatNumber(value: number): string {
+export function formatNumber(value: number | null | undefined): string {
   return new Intl.NumberFormat('en-US').format(value ?? 0);
 }
 
-export function formatPercentage(value: number): string {
+export function formatPercentage(value: number | null | undefined): string {
   return `${(value ?? 0).toFixed(2)}%`;
 }
 
-export function formatRoas(value: number): string {
+export function formatRoas(value: number | null | undefined): string {
   return `${(value ?? 0).toFixed(2)}x`;
 }

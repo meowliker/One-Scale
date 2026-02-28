@@ -2,38 +2,46 @@
 
 import { cn } from '@/lib/utils';
 
-export type QuickFilter = 'all' | 'highRoas' | 'lowRoas' | 'learning' | 'fatigue';
+export type QuickFilterId = 'all-active' | 'high-roas' | 'low-roas' | 'learning' | 'fatigue-risk';
 
-interface QuickFilterBarProps {
-  value: QuickFilter;
-  onChange: (filter: QuickFilter) => void;
+interface QuickFilterDef {
+  id: QuickFilterId;
+  label: string;
 }
 
-const filters: { id: QuickFilter; label: string }[] = [
-  { id: 'all', label: 'All Active' },
-  { id: 'highRoas', label: 'High ROAS (>2x)' },
-  { id: 'lowRoas', label: 'Low ROAS (<1x)' },
+const QUICK_FILTERS: QuickFilterDef[] = [
+  { id: 'all-active', label: 'All Active' },
+  { id: 'high-roas', label: 'High ROAS (>2x)' },
+  { id: 'low-roas', label: 'Low ROAS (<1x)' },
   { id: 'learning', label: 'Learning' },
-  { id: 'fatigue', label: 'Fatigue Risk' },
+  { id: 'fatigue-risk', label: 'Fatigue Risk' },
 ];
 
-export function QuickFilterBar({ value, onChange }: QuickFilterBarProps) {
+interface Props {
+  activeFilter: QuickFilterId | null;
+  onFilterChange: (filter: QuickFilterId | null) => void;
+}
+
+export function QuickFilterBar({ activeFilter, onFilterChange }: Props) {
   return (
-    <div className="flex items-center gap-2 flex-wrap">
-      {filters.map((f) => (
-        <button
-          key={f.id}
-          onClick={() => onChange(f.id)}
-          className={cn(
-            'rounded-full px-3 py-1 text-[11px] font-medium transition-colors',
-            value === f.id
-              ? 'bg-[#0071e3] text-white shadow-sm'
-              : 'bg-[#f0f0f5] text-[#86868b] hover:bg-[#e8e8ed] hover:text-[#1d1d1f]'
-          )}
-        >
-          {f.label}
-        </button>
-      ))}
+    <div className="flex items-center gap-1.5 px-0.5">
+      {QUICK_FILTERS.map((f) => {
+        const isActive = activeFilter === f.id;
+        return (
+          <button
+            key={f.id}
+            onClick={() => onFilterChange(isActive ? null : f.id)}
+            className={cn(
+              'rounded-full px-3 py-1 text-[11px] font-medium transition-all duration-150',
+              isActive
+                ? 'bg-[#0071e3] text-white shadow-sm'
+                : 'bg-[#f5f5f7] text-[#6b7280] hover:bg-[#e8e8ed] hover:text-[#1d1d1f] dark:bg-[#2a2a2e] dark:text-[#9ca3af] dark:hover:bg-[#3a3a3e] dark:hover:text-[#e5e7eb]'
+            )}
+          >
+            {f.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

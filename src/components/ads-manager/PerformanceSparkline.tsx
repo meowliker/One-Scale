@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, CartesianGrid } from 'recharts';
+import { X } from 'lucide-react';
 import { getSparklineData } from '@/data/mockSparklineData';
 import type { SparklineDataPoint } from '@/data/mockSparklineData';
 import { PortalTooltip } from '@/components/ui/PortalTooltip';
@@ -29,10 +30,12 @@ function getRoasColor(roas: number): string {
 }
 
 function getTrendColor(data: SparklineDataPoint[]): string {
-  if (data.length < 2) return '#0071e3';
-  // Use the current (last) ROAS value to determine color, not direction
+  if (data.length < 2) return '#aeaeb2';
+  const first = data[0].roas;
   const last = data[data.length - 1].roas;
-  return getRoasColor(last);
+  const pctChange = first > 0 ? ((last - first) / first) * 100 : 0;
+  if (Math.abs(pctChange) < 3) return '#ffcc00'; // yellow = flat (< 3% change)
+  return pctChange > 0 ? '#34c759' : '#ff3b30'; // green = growing, red = declining
 }
 
 function formatRoasChange(first: number, last: number): { text: string; arrow: string; color: string } {
@@ -67,6 +70,11 @@ export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: 
     timeoutRef.current = setTimeout(() => setShowTooltip(false), 150);
   }, []);
 
+  const handleClose = useCallback(() => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    setShowTooltip(false);
+  }, []);
+
   if (!data || data.length === 0) {
     return (
       <td className="whitespace-nowrap px-3 py-2 text-center text-xs text-[#aeaeb2]">
@@ -75,10 +83,8 @@ export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: 
     );
   }
 
-  // Prefer actual campaign ROAS for color accuracy; fall back to last sparkline point
-  const trendColor = (currentRoas !== undefined && currentRoas !== null)
-    ? getRoasColor(currentRoas)
-    : getTrendColor(data);
+  // Color based on trend direction: red=declining, green=growing, yellow=flat
+  const trendColor = getTrendColor(data);
   const gradientId = `sparkGrad-${entityId.replace(/[^a-zA-Z0-9]/g, '')}`;
 
   const firstRoas = data[0].roas;
@@ -125,17 +131,25 @@ export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: 
       </div>
 
       {/* Hover tooltip (rendered via portal to avoid overflow clipping) */}
-      <PortalTooltip anchorRef={cellRef} visible={showTooltip}>
+      <PortalTooltip anchorRef={cellRef} visible={showTooltip} onClose={handleClose}>
         <div
           className="rounded-xl border border-[rgba(0,0,0,0.08)] bg-white shadow-lg"
-          style={{ width: 272, padding: 16 }}
+          style={{ width: 280, padding: 16 }}
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
         >
-          {/* Title */}
-          <p className="mb-2 text-xs font-semibold text-[#1d1d1f]">
-            Performance Trend (7d)
-          </p>
+          {/* Title + close button */}
+          <div className="mb-2 flex items-center justify-between">
+            <p className="text-xs font-semibold text-[#1d1d1f]">
+              Performance Trend (7d)
+            </p>
+            <button
+              onClick={handleClose}
+              className="flex h-5 w-5 items-center justify-center rounded-full text-[#86868b] transition-colors hover:bg-[#f5f5f7] hover:text-[#1d1d1f]"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
 
           {/* Larger chart */}
           <div
