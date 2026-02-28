@@ -929,21 +929,46 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   const batchLoadAdSets = useCallback(async (campaignIdsToLoad: string[]) => {
     if (campaignIdsToLoad.length === 0) return;
 
-    // Mark all as loading
+    // --- Cache-first: resolve as many campaigns from localStorage as possible ---
+    const needsApi: string[] = [];
+    const cachedUpdates: { id: string; adSets: AdSet[] }[] = [];
+    for (const id of campaignIdsToLoad) {
+      if (fetchedAdSets.current.has(id)) continue;
+      const cached = readAdSetCache(id);
+      if (cached && cached.length > 0) {
+        const normalized = cached.map((as) => ({ ...as, ads: as.ads ?? [] }));
+        cachedUpdates.push({ id, adSets: normalized });
+        fetchedAdSets.current.add(id);
+      } else {
+        needsApi.push(id);
+      }
+    }
+    // Apply cached results immediately
+    if (cachedUpdates.length > 0) {
+      setCampaigns((prev) =>
+        prev.map((c) => {
+          const hit = cachedUpdates.find((u) => u.id === c.id);
+          return hit ? { ...c, adSets: hit.adSets } : c;
+        })
+      );
+    }
+    if (needsApi.length === 0) return;
+
+    // Mark only uncached campaigns as loading
     setLoadingAdSets((prev) => {
       const next = new Set(prev);
-      for (const id of campaignIdsToLoad) next.add(id);
+      for (const id of needsApi) next.add(id);
       return next;
     });
     setErrorAdSets((prev) => {
       const next = new Set(prev);
-      for (const id of campaignIdsToLoad) next.delete(id);
+      for (const id of needsApi) next.delete(id);
       return next;
     });
 
     try {
       const params: Record<string, string> = {
-        campaignIds: campaignIdsToLoad.join(','),
+        campaignIds: needsApi.join(','),
       };
       if (dateRange) {
         params.since = dateRange.since;
@@ -970,7 +995,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       );
 
       // Mark unfetched campaigns as errors
-      for (const id of campaignIdsToLoad) {
+      for (const id of needsApi) {
         if (!resultMap[id]) {
           setErrorAdSets((prev) => new Set(prev).add(id));
         }
@@ -981,11 +1006,11 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         rateLimitUntilRef.current = Date.now() + 60_000;
         if (Date.now() - lastRateLimitToastAtRef.current > 120_000) {
           setRateLimitCountdown(60);
-        toast.loading('Rate limited — retrying in 60s', { id: 'rate-limit-countdown', icon: '⏳' });
+          toast.loading('Rate limited — retrying in 60s', { id: 'rate-limit-countdown', icon: '⏳' });
           lastRateLimitToastAtRef.current = Date.now();
         }
       }
-      for (const id of campaignIdsToLoad) {
+      for (const id of needsApi) {
         if (!fetchedAdSets.current.has(id)) {
           setErrorAdSets((prev) => new Set(prev).add(id));
         }
@@ -993,11 +1018,11 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     } finally {
       setLoadingAdSets((prev) => {
         const next = new Set(prev);
-        for (const id of campaignIdsToLoad) next.delete(id);
+        for (const id of needsApi) next.delete(id);
         return next;
       });
     }
-  }, [dateRange, writeAdSetCache]);
+  }, [dateRange, readAdSetCache, writeAdSetCache]);
 
   // --- Lazy load adsets when campaign is expanded ---
   const loadAdSetsForCampaign = useCallback(async (campaignId: string, force = false, mode?: 'fast' | 'basic') => {
