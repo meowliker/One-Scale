@@ -119,6 +119,7 @@ export interface AdsManagerClientProps {
 
 type SyncStageState = 'idle' | 'loading' | 'done';
 const PAGE_PREWARM_INTERVAL_MS = 10 * 60 * 1000; // 10 min cooldown for Summary/P&L prewarm
+const INITIAL_LIMIT = 15;
 
 interface SummaryWarmCachePayload {
   blendedMetrics: Record<string, number>;
@@ -351,6 +352,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     try { window.sessionStorage.setItem('onescale_status_filter', f); } catch { /* ignore */ }
   }, []);
   const [quickFilter, setQuickFilter] = useState<QuickFilterId | null>(null);
+  const [visibleCount, setVisibleCount] = useState(INITIAL_LIMIT);
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc' | null>(null);
   // Scroll container ref for virtual scrolling
@@ -1502,6 +1504,11 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     autoExpandDoneRef.current = true;
   }, [statusFilter, campaigns, setExpandedCampaigns, collapseAllCampaigns, batchLoadAdSets]);
 
+  // Reset visible campaign count when search or filters change
+  useEffect(() => {
+    setVisibleCount(INITIAL_LIMIT);
+  }, [search, statusFilter]);
+
   const campaignsWithAppPixel = useMemo(() => {
     return campaigns.map((campaign) => ({
       ...campaign,
@@ -1662,13 +1669,19 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     return sorted;
   }, [filteredCampaigns, sortKey, sortDirection, compareEntities]);
 
+  // Limit displayed campaigns for initial render; Load More reveals more
+  const displayedCampaigns = useMemo(
+    () => sortedCampaigns.slice(0, visibleCount),
+    [sortedCampaigns, visibleCount]
+  );
+
   // Virtual scrolling — render only visible campaign groups in the DOM
   const rowVirtualizer = useVirtualizer({
-    count: sortedCampaigns.length,
+    count: displayedCampaigns.length,
     getScrollElement: () => tableContainerRef.current,
     estimateSize: (index) => {
       // Estimate: collapsed campaign ~48px, expanded varies
-      const c = sortedCampaigns[index];
+      const c = displayedCampaigns[index];
       if (!c || !expandedCampaigns.has(c.id)) return 48;
       const adSets = c.adSets || [];
       const adSetCount = adSets.length || 1; // at least 1 for loading/empty row
@@ -2332,7 +2345,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                 </SortableContext>
               </tr>
             </thead>
-            {sortedCampaigns.length === 0 ? (
+            {displayedCampaigns.length === 0 ? (
               <tbody>
                 <tr>
                   <td colSpan={totalColumns} className="px-6 py-12 text-center text-sm text-[#aeaeb2]">
@@ -2354,7 +2367,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                 )}
                 {/* Virtualized campaign groups — only visible groups are in the DOM */}
                 {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                  const campaign = sortedCampaigns[virtualRow.index];
+                  const campaign = displayedCampaigns[virtualRow.index];
                   const campaignExpanded = expandedCampaigns.has(campaign.id);
                   return (
                     <tbody
@@ -2459,6 +2472,18 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
           </table>
         </div>
       </DndContext>}
+
+      {/* Load More button */}
+      {visibleCount < sortedCampaigns.length && (
+        <div className="flex justify-center py-4">
+          <button
+            onClick={() => setVisibleCount((prev) => prev + INITIAL_LIMIT)}
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface-elevated px-5 py-2 text-sm font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-colors duration-150"
+          >
+            Load More ({sortedCampaigns.length - visibleCount} remaining)
+          </button>
+        </div>
+      )}
 
       {/* Bulk action bar */}
       {!showErrorCenter && <BulkActionBar
