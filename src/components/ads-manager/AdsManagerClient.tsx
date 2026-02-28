@@ -16,7 +16,7 @@ import {
   horizontalListSortingStrategy,
   arrayMove,
 } from '@dnd-kit/sortable';
-import { Loader2, AlertCircle, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, History } from 'lucide-react';
+import { Loader2, AlertCircle, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 import toast from 'react-hot-toast';
 import type { Campaign, AdSet, Ad, EntityStatus } from '@/types/campaign';
 import type { HourlyPnLEntry, PnLEntry, PnLSummary } from '@/types/pnl';
@@ -42,6 +42,7 @@ import {
   bulkUpdateStatus,
 } from '@/services/adsManager';
 import { apiClient, RateLimitError, TimeoutError } from '@/services/api';
+import { cn } from '@/lib/utils';
 import { getMetricValue } from '@/lib/metrics';
 import { useStoreStore } from '@/stores/storeStore';
 import { todayInTimezone } from '@/lib/timezone';
@@ -61,33 +62,46 @@ import { BulkActionPanel } from './BulkActionPanel';
 
 // Sort indicator for fixed column headers
 function FixedSortIndicator({ active, direction }: { active: boolean; direction: 'asc' | 'desc' | null }) {
-  if (!active) return <ArrowUpDown className="h-3 w-3 text-text-dimmed opacity-0 group-hover/sort:opacity-50 transition-opacity" />;
+  if (!active) return <ArrowUpDown className="h-3 w-3 text-[#9ca3af] opacity-0 group-hover/sort:opacity-100 transition-opacity duration-150" />;
   return direction === 'asc'
-    ? <ArrowUp className="h-3 w-3 text-primary" />
-    : <ArrowDown className="h-3 w-3 text-primary" />;
+    ? <ArrowUp className="h-3 w-3 text-[#0071e3]" />
+    : <ArrowDown className="h-3 w-3 text-[#0071e3]" />;
 }
 
-// Sortable fixed column header (Name, Status, Budget)
+// Premium fixed column header with sort
 function SortableFixedHeader({
   label,
   sortKeyName,
   sortKey,
   sortDirection,
   onSort,
-  minWidth,
+  width,
+  align = 'left',
 }: {
   label: string;
   sortKeyName: string;
   sortKey: string | null;
   sortDirection: 'asc' | 'desc' | null;
   onSort: (key: string) => void;
-  minWidth?: number;
+  width?: number;
+  align?: 'left' | 'center' | 'right';
 }) {
   return (
-    <th className="whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary" style={minWidth ? { minWidth } : undefined}>
+    <th
+      className={cn(
+        'whitespace-nowrap px-3 py-2.5 text-[11px] font-bold uppercase tracking-[0.06em] text-[#6b7280] dark:text-[#9ca3af]',
+        align === 'center' && 'text-center',
+        align === 'right' && 'text-right'
+      )}
+      style={width ? { width, minWidth: width } : undefined}
+    >
       <button
         onClick={() => onSort(sortKeyName)}
-        className="group/sort flex items-center gap-1 cursor-pointer hover:text-text-primary transition-colors duration-150"
+        className={cn(
+          'group/sort inline-flex items-center gap-1 cursor-pointer hover:text-[#374151] dark:hover:text-[#e5e7eb] transition-colors duration-150',
+          align === 'center' && 'mx-auto',
+          align === 'right' && 'ml-auto'
+        )}
         title={`Sort by ${label}`}
       >
         <span>{label}</span>
@@ -2189,25 +2203,27 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         <div ref={tableContainerRef} className="apple-table-container apple-scroll">
           <table className="w-full min-w-[1200px] apple-table">
             <thead>
-              <tr className="sticky top-0 z-20 border-b border-[var(--apple-table-header-border)] bg-[var(--apple-table-header-bg)]">
-                {/* Header: [checkbox][toggle][name][status][budget][bid][performance][actions] + dynamic metrics */}
-                <th className="w-10 min-w-[40px] max-w-[40px] whitespace-nowrap px-3 py-2 text-left sticky left-0 z-20 bg-[var(--apple-table-header-bg)]">
+              <tr className="sticky top-0 z-20 border-b-2 border-[#e5e7eb] dark:border-[#334155] bg-[#f8fafc] dark:bg-[#0f172a]" style={{ height: 44 }}>
+                {/* Checkbox — 40px */}
+                <th className="w-10 min-w-[40px] max-w-[40px] whitespace-nowrap px-3 py-2.5 text-center sticky left-0 z-20 bg-[#f8fafc] dark:bg-[#0f172a]">
                   <Checkbox
                     checked={allSelected}
                     onChange={handleSelectAll}
                     indeterminate={someSelected}
                   />
                 </th>
-                <th className="w-14 min-w-[56px] max-w-[56px] whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary sticky left-[40px] z-20 bg-[var(--apple-table-header-bg)]">
+                {/* ON/OFF — 70px */}
+                <th className="min-w-[70px] max-w-[70px] whitespace-nowrap px-3 py-2.5 text-center text-[11px] font-bold uppercase tracking-[0.06em] text-[#6b7280] dark:text-[#9ca3af] sticky left-[40px] z-20 bg-[#f8fafc] dark:bg-[#0f172a]" style={{ width: 70 }}>
                   On/Off
                 </th>
+                {/* Name — flex, min 280px */}
                 <th
-                  className="relative whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary sticky left-[96px] z-20 bg-[var(--apple-table-header-bg)] border-r border-[var(--apple-table-header-border)]"
-                  style={{ width: nameColWidth, minWidth: nameColWidth }}
+                  className="relative whitespace-nowrap px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-[0.06em] text-[#6b7280] dark:text-[#9ca3af] sticky left-[110px] z-20 bg-[#f8fafc] dark:bg-[#0f172a] border-r border-[#e5e7eb] dark:border-[#334155]"
+                  style={{ width: nameColWidth, minWidth: Math.max(nameColWidth, 280) }}
                 >
                   <button
                     onClick={() => handleSort('name')}
-                    className="group/sort flex items-center gap-1 cursor-pointer hover:text-text-primary transition-colors duration-150"
+                    className="group/sort flex items-center gap-1 cursor-pointer hover:text-[#374151] dark:hover:text-[#e5e7eb] transition-colors duration-150"
                     title="Sort by Name"
                   >
                     <span>Name</span>
@@ -2219,31 +2235,12 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                   />
                 </th>
                 <SortableFixedHeader label="Status" sortKeyName="status" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} />
-                <SortableFixedHeader label="Budget" sortKeyName="budget" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} minWidth={100} />
-                <th className="whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary">
-                  Bid Strategy
-                </th>
-                <th className="whitespace-nowrap px-3 py-2 text-center text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary">
-                  Performance
-                </th>
-                <th className="whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary">
-                  <div className="flex items-center gap-1.5">
-                    <span>Latest Actions</span>
-                    {!activitiesFullyLoaded && (
-                      <button
-                        onClick={loadFullActivityHistory}
-                        disabled={activitiesFullLoading}
-                        className="inline-flex items-center justify-center rounded-md bg-[#e8f0fe] p-1 text-[#0071e3] hover:bg-[#d4e4fd] disabled:opacity-50 transition-colors"
-                        title={activitiesFullLoading ? 'Loading full 90-day history...' : 'Load full 90-day activity history'}
-                      >
-                        {activitiesFullLoading ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : (
-                          <History className="h-3 w-3" />
-                        )}
-                      </button>
-                    )}
-                  </div>
+                <SortableFixedHeader label="Budget" sortKeyName="budget" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} width={120} align="right" />
+                <SortableFixedHeader label="Bid Strategy" sortKeyName="bidStrategy" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} width={140} />
+                <SortableFixedHeader label="Performance" sortKeyName="performance" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} width={130} align="center" />
+                {/* Latest Actions — 150px, no History icon */}
+                <th className="whitespace-nowrap px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-[0.06em] text-[#6b7280] dark:text-[#9ca3af]" style={{ width: 150, minWidth: 150 }}>
+                  Latest Actions
                 </th>
                 {/* Dynamic metric columns with drag-to-reorder */}
                 <SortableContext

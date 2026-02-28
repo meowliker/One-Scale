@@ -126,7 +126,7 @@ export function AdRow({
         </td>
 
         {/* Toggle */}
-        <td className={cn("w-14 min-w-[56px] max-w-[56px] whitespace-nowrap px-3 py-1.5 sticky left-[40px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)}>
+        <td className={cn("min-w-[70px] max-w-[70px] whitespace-nowrap px-3 py-1.5 sticky left-[40px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)} style={{ width: 70 }}>
           <Toggle
             checked={isActive}
             onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
@@ -137,7 +137,7 @@ export function AdRow({
 
         {/* Name + Creative Thumbnail */}
         <td
-          className={cn("whitespace-nowrap px-3 py-1.5 sticky left-[96px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
+          className={cn("whitespace-nowrap px-3 py-1.5 sticky left-[110px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
           style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth } : undefined}
         >
           <div className="flex items-center gap-3 pl-8">
