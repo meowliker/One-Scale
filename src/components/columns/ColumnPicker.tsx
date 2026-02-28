@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useCallback, useEffect } from 'react';
-import { X, GripVertical, Save, RotateCcw } from 'lucide-react';
+import { X, GripVertical, Save, RotateCcw, Trash2, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   DndContext,
@@ -135,10 +135,12 @@ export function ColumnPicker({ isOpen, onClose }: ColumnPickerProps) {
     visibleColumns,
     columnOrder,
     activePresetId,
+    customPresets,
     addColumn,
     removeColumn,
     reorderColumns,
     setPreset,
+    deletePreset,
   } = useColumnPresetStore();
 
   // Reset search when opening
@@ -349,6 +351,52 @@ export function ColumnPicker({ isOpen, onClose }: ColumnPickerProps) {
                   </SortableContext>
                 </DndContext>
               </div>
+
+              {/* Saved Presets */}
+              {customPresets.length > 0 && (
+                <div className="border-t border-[rgba(0,0,0,0.06)] px-4 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[#8e8e93] mb-2">
+                    Saved Presets
+                  </p>
+                  <div className="space-y-0.5">
+                    {customPresets.map((preset) => {
+                      const isActive = activePresetId === preset.id;
+                      return (
+                        <div
+                          key={preset.id}
+                          className={cn(
+                            'group/preset flex items-center justify-between rounded-lg px-2.5 py-2 cursor-pointer transition-colors duration-150',
+                            isActive
+                              ? 'bg-[#0071e3]/10'
+                              : 'hover:bg-[#f5f5f7]'
+                          )}
+                        >
+                          <button
+                            className={cn(
+                              'flex items-center gap-2 text-[13px] font-medium min-w-0',
+                              isActive ? 'text-[#0071e3]' : 'text-[#1d1d1f]'
+                            )}
+                            onClick={() => setPreset(preset.id)}
+                          >
+                            {isActive && <Check className="h-3.5 w-3.5 shrink-0" />}
+                            <span className="truncate">{preset.name}</span>
+                            <span className="text-[11px] text-[#8e8e93] shrink-0">
+                              {preset.columns.length} cols
+                            </span>
+                          </button>
+                          <button
+                            className="shrink-0 p-1 rounded text-[#c7c7cc] opacity-0 group-hover/preset:opacity-100 hover:text-red-500 hover:bg-red-50 transition-all"
+                            onClick={() => deletePreset(preset.id)}
+                            title="Delete preset"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {/* Footer */}
               <div className="flex items-center justify-between border-t border-[rgba(0,0,0,0.06)] px-5 py-3.5">

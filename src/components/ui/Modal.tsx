@@ -41,16 +41,16 @@ export function Modal({ isOpen, onClose, title, children, size = 'md' }: ModalPr
   if (!isOpen) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center">
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-black/50 transition-opacity"
+        className="fixed inset-0 bg-black/30 backdrop-blur-sm transition-opacity"
         onClick={onClose}
       />
       {/* Panel */}
       <div
         className={cn(
-          'relative z-10 w-full rounded-lg bg-surface-elevated shadow-xl',
+          'relative z-10 w-full mx-4 rounded-xl bg-surface-elevated shadow-2xl',
           sizeClasses[size]
         )}
       >
