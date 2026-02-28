@@ -152,6 +152,7 @@ export interface Campaign {
   bidStrategy: BidStrategy;
   startDate: string;
   endDate: string | null;
+  updatedTime?: string;
   adSets: AdSet[];
   metrics: PerformanceMetrics;
 }

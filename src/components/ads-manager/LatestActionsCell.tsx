@@ -26,6 +26,7 @@ interface LatestActionsCellProps {
   entityId: string;
   actions?: EntityAction[]; // Real API data from Meta activities
   activitiesFullyLoaded?: boolean; // Whether full 90-day history has been fetched
+  updatedTime?: string; // Fallback: campaign/adset updated_time from Meta API
 }
 
 interface ActionConfig {
@@ -348,7 +349,7 @@ function AllActionsTooltipContent({
   );
 }
 
-export function LatestActionsCell({ entityId, actions: actionsProp, activitiesFullyLoaded }: LatestActionsCellProps) {
+export function LatestActionsCell({ entityId, actions: actionsProp, activitiesFullyLoaded, updatedTime }: LatestActionsCellProps) {
   const [hoveredActionId, setHoveredActionId] = useState<string | null>(null);
   const [showAllActions, setShowAllActions] = useState(false);
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -403,7 +404,14 @@ export function LatestActionsCell({ entityId, actions: actionsProp, activitiesFu
   if (actions.length === 0) {
     return (
       <td className="whitespace-nowrap px-3 py-2">
-        <span className="text-[12px] text-text-muted">&mdash;</span>
+        {updatedTime ? (
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[11px] font-medium text-text-secondary">Modified</span>
+            <span className="text-[11px] text-text-muted">{formatTimeAgo(updatedTime)}</span>
+          </div>
+        ) : (
+          <span className="text-[11px] text-text-muted">No activity</span>
+        )}
       </td>
     );
   }

@@ -470,7 +470,8 @@ export async function fetchMetaCampaigns(
 ): Promise<Campaign[]> {
   const fields = [
     'id', 'name', 'objective', 'status', 'daily_budget', 'lifetime_budget',
-    'bid_strategy', 'start_time', 'stop_time', 'effective_status', 'configured_status', 'issues_info', 'ad_review_feedback',
+    'bid_strategy', 'start_time', 'stop_time', 'updated_time',
+    'effective_status', 'configured_status', 'issues_info', 'ad_review_feedback',
   ].join(',');
 
   const data = await fetchFromMeta<{
@@ -589,6 +590,7 @@ export async function fetchMetaCampaigns(
       bidStrategy: mapBidStrategy(raw.bid_strategy || ''),
       startDate: raw.start_time || new Date().toISOString(),
       endDate: raw.stop_time || null,
+      updatedTime: raw.updated_time || undefined,
       adSets: [],
       metrics,
     };

@@ -826,7 +826,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     const timer = window.setTimeout(() => {
       apiClient<{ data: Record<string, EntityAction[]> }>(
         '/api/meta/activities',
-        { params: { since: '7', limit: '30' }, timeoutMs: 7000, maxRetries: 0 }
+        { params: { since: '14', limit: '200' }, timeoutMs: 10000, maxRetries: 0 }
       )
         .then((res) => {
           if (cancelled) return;

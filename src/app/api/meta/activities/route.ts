@@ -297,10 +297,12 @@ async function fetchAccountActivities(
     // Filter: actor is a pure system actor (not a real user)
     if (isSystemActor(actorName)) continue;
 
-    // Filter: both old and new values are empty/null (no actual change recorded).
-    // Exception: creation events are always meaningful even without old/new values.
-    const isCreateEvent = activity.event_type.startsWith('create_');
-    if (!oldValue && !newValue && !isCreateEvent) continue;
+    // Filter: budget/bid/spend_limit changes with no old/new values are not meaningful.
+    // Other event types (status, creative, targeting, etc.) are kept even without values.
+    const isValueRequiredEvent = activity.event_type.includes('budget')
+      || activity.event_type.includes('bid')
+      || activity.event_type.includes('spend_limit');
+    if (!oldValue && !newValue && isValueRequiredEvent) continue;
 
     // Filter: old and new values are identical (no real change)
     if (oldValue && newValue && oldValue === newValue) continue;
