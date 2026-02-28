@@ -403,13 +403,7 @@ export function LatestActionsCell({ entityId, actions: actionsProp, activitiesFu
   if (actions.length === 0) {
     return (
       <td className="whitespace-nowrap px-3 py-2">
-        {!activitiesFullyLoaded ? (
-          <span className="text-[10px] text-text-dimmed" title="No activity in last 7 days">
-            &mdash;
-          </span>
-        ) : (
-          <span className="text-[10px] text-text-dimmed">&mdash;</span>
-        )}
+        <span className="text-[12px] text-text-muted">&mdash;</span>
       </td>
     );
   }
