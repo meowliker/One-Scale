@@ -1087,27 +1087,20 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       // keep bounded even for accounts with many campaigns
       const MAX_ACTIVE_PRELOAD = 8;
       const selectedCampaigns = activeCampaigns.slice(0, MAX_ACTIVE_PRELOAD);
-      setCoreProgress({ loaded: 0, total: selectedCampaigns.length });
+      const total = selectedCampaigns.length;
+      setCoreProgress({ loaded: 0, total });
 
-      for (let i = 0; i < selectedCampaigns.length; i++) {
+      // Phase 1: Load adsets for all campaigns (batch where possible)
+      let loaded = 0;
+      for (const campaign of selectedCampaigns) {
         if (cancelled) break;
-        const campaign = selectedCampaigns[i];
-
-        const adSets = await loadAdSetsForCampaign(campaign.id, false, 'fast');
-        setCoreProgress({ loaded: i + 1, total: selectedCampaigns.length });
-        if (!adSets || adSets.length === 0) {
-          await new Promise((resolve) => window.setTimeout(resolve, 320));
-          continue;
+        await loadAdSetsForCampaign(campaign.id, false, 'fast');
+        loaded++;
+        setCoreProgress({ loaded, total });
+        // Small delay to avoid rate limits
+        if (loaded < total) {
+          await new Promise((resolve) => window.setTimeout(resolve, 200));
         }
-
-        const MAX_ADSETS_PER_CAMPAIGN = 10;
-        for (const adSet of adSets.slice(0, MAX_ADSETS_PER_CAMPAIGN)) {
-          if (cancelled) break;
-          await loadAdsForAdSet(adSet.id, false, 'fast');
-          await new Promise((resolve) => window.setTimeout(resolve, 260));
-        }
-
-        await new Promise((resolve) => window.setTimeout(resolve, 360));
       }
     })()
       .catch(() => {
@@ -2086,19 +2079,19 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         <div className="apple-table-container apple-scroll">
           <table className="w-full min-w-[1200px] apple-table">
             <thead>
-              <tr className="sticky top-0 z-20 bg-[#f5f5f7] border-b border-[rgba(0,0,0,0.08)]">
-                <th className="w-10 whitespace-nowrap px-3 py-2 text-left sticky left-0 z-20 bg-[#f5f5f7]">
+              <tr className="sticky top-0 z-20 bg-[#f5f5f7] dark:bg-[#0f172a] border-b border-[rgba(0,0,0,0.08)] dark:border-[#1e293b]">
+                <th className="w-10 whitespace-nowrap px-3 py-2 text-left sticky left-0 z-20 bg-[#f5f5f7] dark:bg-[#0f172a]">
                   <Checkbox
                     checked={allSelected}
                     onChange={handleSelectAll}
                     indeterminate={someSelected}
                   />
                 </th>
-                <th className="w-14 whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary sticky left-[40px] z-20 bg-[#f5f5f7]">
+                <th className="w-14 whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary sticky left-[40px] z-20 bg-[#f5f5f7] dark:bg-[#0f172a]">
                   On/Off
                 </th>
                 <th
-                  className="relative whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary sticky left-[96px] z-20 bg-[#f5f5f7] border-r border-[rgba(0,0,0,0.06)]"
+                  className="relative whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary sticky left-[96px] z-20 bg-[#f5f5f7] dark:bg-[#0f172a] border-r border-[rgba(0,0,0,0.06)] dark:border-r-[#1e293b]"
                   style={{ width: nameColWidth, minWidth: nameColWidth }}
                 >
                   <button

@@ -95,7 +95,7 @@ export function AdSetRow({
   const statusLabel = !isActive ? adSet.status : deliveryBlocked ? 'NOT DELIVERING' : 'ACTIVE';
   const statusVariant: 'success' | 'default' | 'danger' = !isActive ? 'default' : deliveryBlocked ? 'danger' : 'success';
   const stickyBg = cn(
-    'bg-[#fafbfc] dark:bg-[#162032]',
+    'bg-[#f8fafc] dark:bg-[#1a2332]',
     isSelected && 'bg-[#e8f0fe]',
     isHighlighted && 'bg-[#fff8e1]',
     flashType === 'success' && 'bg-[#f0fdf4]',
@@ -107,8 +107,8 @@ export function AdSetRow({
     <tr
       id={rowId}
       className={cn(
-        'group border-b border-[rgba(0,0,0,0.03)] dark:border-border bg-[#fafbfc] dark:bg-[#162032] transition-colors duration-150',
-        'hover:!bg-[#f9fafb] dark:hover:!bg-[#273449]',
+        'group border-b border-[rgba(0,0,0,0.03)] dark:border-border bg-[#f8fafc] dark:bg-[#1a2332] border-l-2 border-l-[#3b82f620] transition-colors duration-150',
+        'hover:!bg-[#f0f4f8] dark:hover:!bg-[#1e2d3d]',
         isSelected && 'bg-[#e8f0fe]',
         isHighlighted && 'bg-[#fff8e1]',
         flashType === 'success' && 'bg-[#f0fdf4]',
@@ -116,12 +116,12 @@ export function AdSetRow({
       )}
     >
       {/* Checkbox */}
-      <td className={cn("w-10 whitespace-nowrap py-3 pl-10 pr-4 sticky left-0 z-10 group-hover:!bg-[#f9fafb] dark:group-hover:!bg-[#273449] transition-colors duration-150", stickyBg)}>
+      <td className={cn("w-10 whitespace-nowrap py-3 pl-10 pr-4 sticky left-0 z-10 group-hover:!bg-[#f0f4f8] dark:group-hover:!bg-[#1e2d3d] transition-colors duration-150", stickyBg)}>
         <Checkbox checked={isSelected} onChange={onToggleSelect} />
       </td>
 
       {/* Toggle */}
-      <td className={cn("w-14 whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 group-hover:!bg-[#f9fafb] dark:group-hover:!bg-[#273449] transition-colors duration-150", stickyBg)}>
+      <td className={cn("w-14 whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 group-hover:!bg-[#f0f4f8] dark:group-hover:!bg-[#1e2d3d] transition-colors duration-150", stickyBg)}>
         <Toggle
           checked={isActive}
           onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
@@ -132,7 +132,7 @@ export function AdSetRow({
 
       {/* Name + Targeting */}
       <td
-        className={cn("whitespace-nowrap px-3 py-2 sticky left-[96px] z-10 group-hover:!bg-[#f9fafb] dark:group-hover:!bg-[#273449] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
+        className={cn("whitespace-nowrap px-3 py-2 sticky left-[96px] z-10 group-hover:!bg-[#f0f4f8] dark:group-hover:!bg-[#1e2d3d] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
         style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth } : undefined}
       >
         <div className="flex items-center gap-2 pl-8">
@@ -152,15 +152,15 @@ export function AdSetRow({
                 onClick={onToggleExpand}
                 className="truncate max-w-[220px] block text-sm font-medium text-text-primary hover:text-primary-light transition-colors text-left"
               >
-                {adSet.name}
+                {adSet.name || `Ad Set ${adSet.id}`}
               </button>
               <div className="absolute left-0 top-full mt-1 z-50 pointer-events-none opacity-0 group-hover/tooltip:opacity-100 translate-y-1 group-hover/tooltip:translate-y-0 transition-all duration-150 ease-out">
                 <div className="rounded-lg border border-[rgba(0,0,0,0.08)] bg-[#1d1d1f] px-3 py-1.5 text-xs text-white shadow-md whitespace-nowrap max-w-xs">
-                  {adSet.name}
+                  {adSet.name || adSet.id}
                 </div>
               </div>
             </div>
-            <span className="text-xs text-text-dimmed">
+            <span className="text-[11px] text-text-dimmed">
               {formatTargetingSummary(adSet)}
             </span>
           </div>
