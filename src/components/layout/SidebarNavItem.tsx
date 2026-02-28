@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
+import { prefetchRouteData } from '@/lib/prefetch';
+import { useStoreStore } from '@/stores/storeStore';
 import type { NavItem } from '@/types/navigation';
 
 interface SidebarNavItemProps {
@@ -16,11 +18,13 @@ interface SidebarNavItemProps {
 export function SidebarNavItem({ item, isCollapsed, isActive }: SidebarNavItemProps) {
   const Icon = item.icon;
   const router = useRouter();
+  const activeStoreId = useStoreStore((s) => s.activeStoreId);
 
-  // Prefetch route on hover for instant navigation
+  // Prefetch both Next.js route chunks AND React Query data on hover
   const handleMouseEnter = useCallback(() => {
     router.prefetch(item.href);
-  }, [router, item.href]);
+    prefetchRouteData(item.href, activeStoreId);
+  }, [router, item.href, activeStoreId]);
 
   return (
     <Link

@@ -18,9 +18,8 @@ function getMetricColorClass(metricKey: MetricKey, value: number): string {
     case 'appPixelRoas': {
       if (value === 0) return 'text-[#aeaeb2]';
       if (value < 1.0) return 'text-[#ff3b30]';       // red — bad
-      if (value < 1.3) return 'text-[#ff9500]';       // orange — ok
-      if (value < 1.6) return 'text-[#34c759]';       // green — good
-      return 'text-[#34c759] font-bold';               // bold green — very good
+      if (value < 1.5) return 'text-[#ff9500]';       // orange — ok
+      return 'text-[#34c759] font-bold';               // bold green — good
     }
     case 'ctr': {
       if (value === 0) return 'text-[#aeaeb2]';
@@ -42,7 +41,7 @@ function getMetricColorClass(metricKey: MetricKey, value: number): string {
 function getRoasDotColor(value: number): string {
   if (value === 0) return 'bg-[#aeaeb2]';
   if (value < 1.0) return 'bg-[#ff3b30]';
-  if (value < 1.3) return 'bg-[#ff9500]';
+  if (value < 1.5) return 'bg-[#ff9500]';
   return 'bg-[#34c759]';
 }
 
@@ -54,7 +53,7 @@ export function MetricCell({ metricKey, value, isTotals }: MetricCellProps) {
       "whitespace-nowrap px-3 py-2 text-right text-[12px] tabular-nums",
       colorClass || "text-[#1d1d1f]",
       PIXEL_METRIC_KEYS.has(metricKey) && "bg-[#e8f2ff] border-l border-[#0071e3]/10",
-      isTotals && "font-semibold bg-[#f0f4ff]"
+      isTotals && "!font-bold !text-[13.5px] bg-[#f0f4ff]"
     )}>
       {(metricKey === 'roas' || metricKey === 'appPixelRoas') && (
         <span

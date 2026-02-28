@@ -11,15 +11,15 @@ import {
   Tooltip,
   Cell,
   ResponsiveContainer,
-  ReferenceLine,
 } from 'recharts';
 
 /* ================================================================
-   PnL Waterfall Chart — complete rewrite
-   Uses stacked bar pattern: invisible base (spacer) + visible bar.
+   PnL Waterfall Chart
+   Uses stacked bar pattern: invisible base + visible bar.
    Revenue starts at 0 → goes up (green).
    Each cost starts at the running total → drops down (red).
    Net Profit always starts from 0 → goes up/down (green/red).
+   Y domain anchored at 0 so bars never float.
    ================================================================ */
 
 interface PnLWaterfallChartProps {
@@ -30,7 +30,7 @@ interface PnLWaterfallChartProps {
 interface WaterfallItem {
   name: string;
   value: number;       // Actual signed dollar value
-  spacer: number;      // Invisible base positioning the bar
+  base: number;        // Invisible spacer (Y position of bar bottom)
   bar: number;         // Visible bar height (always >= 0)
   isPositive: boolean;
   isTotal: boolean;
@@ -40,68 +40,51 @@ function buildWaterfallData(entry: PnLEntry, isDigital: boolean): WaterfallItem[
   const items: WaterfallItem[] = [];
   let running = 0;
 
-  // Income step: bar grows UP from current running total
+  // Income: bar grows UP from current running total
   const addIncome = (name: string, amount: number) => {
-    const base = running;
+    const b = running;
     running += amount;
-    items.push({
-      name,
-      value: amount,
-      spacer: base,
-      bar: amount,
-      isPositive: true,
-      isTotal: false,
-    });
+    items.push({ name, value: amount, base: b, bar: amount, isPositive: true, isTotal: false });
   };
 
-  // Cost step: bar drops DOWN from current running total
+  // Cost: bar drops DOWN from current running total
   const addCost = (name: string, amount: number) => {
     if (amount <= 0) return;
     running -= amount;
-    items.push({
-      name,
-      value: -amount,
-      spacer: running,     // bar bottom = new running total
-      bar: amount,         // bar height = cost
-      isPositive: false,
-      isTotal: false,
-    });
+    items.push({ name, value: -amount, base: running, bar: amount, isPositive: false, isTotal: false });
   };
 
-  // --- Build waterfall steps ---
   addIncome('Revenue', entry.revenue);
-
-  if (!isDigital) {
-    addCost('COGS', entry.cogs);
-  }
-
+  if (!isDigital) addCost('COGS', entry.cogs);
   addCost('Ad Spend', entry.adSpend);
-
-  if (!isDigital) {
-    addCost('Shipping', entry.shipping);
-  }
-
+  if (!isDigital) addCost('Shipping', entry.shipping);
   addCost(isDigital ? 'Txn Fees' : 'Fees', entry.fees);
-
-  if (entry.refunds > 0) {
-    addCost('Refunds', entry.refunds);
-  }
+  if (entry.refunds > 0) addCost('Refunds', entry.refunds);
 
   // Net Profit: always anchored at 0
-  const netProfit = entry.netProfit;
+  const np = entry.netProfit;
   items.push({
     name: 'Net Profit',
-    value: netProfit,
-    spacer: netProfit >= 0 ? 0 : netProfit,
-    bar: Math.abs(netProfit),
-    isPositive: netProfit >= 0,
+    value: np,
+    base: np >= 0 ? 0 : np,
+    bar: Math.abs(np),
+    isPositive: np >= 0,
     isTotal: true,
   });
 
   return items;
 }
 
-// --- Tooltip ---
+// Compact currency: $1.2k, $12.5k, $1.2M
+function formatCompact(v: number): string {
+  const abs = Math.abs(v);
+  const sign = v < 0 ? '-' : '';
+  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}k`;
+  return `${sign}$${abs.toFixed(0)}`;
+}
+
+// Tooltip
 function WaterfallTooltip({
   active,
   payload,
@@ -133,7 +116,7 @@ function WaterfallTooltip({
   );
 }
 
-// --- Value labels above/below bars ---
+// Value labels above bars — bold, compact format
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function renderBarLabel(items: WaterfallItem[]) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -143,20 +126,18 @@ function renderBarLabel(items: WaterfallItem[]) {
     const width = Number(props.width ?? 0);
     const index = Number(props.index ?? 0);
     const item = items[index];
-    if (!item) return null;
-
-    const label = `${item.value < 0 ? '-' : ''}${formatCurrency(Math.abs(item.value))}`;
+    if (!item || item.bar === 0) return null;
 
     return (
       <text
         x={x + width / 2}
-        y={y - 6}
+        y={y - 8}
         textAnchor="middle"
-        fill={item.isTotal ? '#1d1d1f' : '#6e6e73'}
-        fontSize={11}
-        fontWeight={item.isTotal ? 700 : 500}
+        fill={item.isPositive ? '#059669' : '#dc2626'}
+        fontSize={12}
+        fontWeight={700}
       >
-        {label}
+        {formatCompact(item.value)}
       </text>
     );
   };
@@ -165,18 +146,20 @@ function renderBarLabel(items: WaterfallItem[]) {
 export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChartProps) {
   const items = buildWaterfallData(entry, isDigital);
 
-  // Y-axis domain: cover all bar edges with 18% padding
-  const edges = items.flatMap((d) => [d.spacer, d.spacer + d.bar]);
-  const minY = Math.min(...edges, 0);
-  const maxY = Math.max(...edges, 0);
-  const span = maxY - minY || 100;
-  const pad = span * 0.18;
-  const yDomain: [number, number] = [minY - pad, maxY + pad];
+  // Y domain: [0, max * 1.15] — only go negative if net profit is negative
+  const tops = items.map((d) => d.base + d.bar);
+  const bases = items.map((d) => d.base);
+  const maxY = Math.max(...tops, 0);
+  const minY = Math.min(...bases, 0);
+  const yDomain: [number, number] = [
+    minY < 0 ? minY * 1.15 : 0,
+    maxY * 1.15,
+  ];
 
   return (
-    <div className="w-full">
-      <ResponsiveContainer width="100%" height={320}>
-        <ComposedChart data={items} margin={{ top: 28, right: 16, left: 16, bottom: 8 }}>
+    <div className="w-full" style={{ height: 280 }}>
+      <ResponsiveContainer width="100%" height={280}>
+        <ComposedChart data={items} margin={{ top: 32, right: 16, left: 16, bottom: 8 }}>
           <CartesianGrid
             strokeDasharray="3 3"
             vertical={false}
@@ -193,12 +176,7 @@ export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChar
             axisLine={false}
             tickLine={false}
             width={55}
-            tickFormatter={(v: number) => {
-              const abs = Math.abs(v);
-              const sign = v < 0 ? '-' : '';
-              if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}k`;
-              return `${sign}$${abs.toFixed(0)}`;
-            }}
+            tickFormatter={formatCompact}
             domain={yDomain}
           />
           <Tooltip
@@ -212,18 +190,15 @@ export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChar
             )}
           />
 
-          {/* Zero reference line */}
-          <ReferenceLine y={0} stroke="rgba(0,0,0,0.10)" strokeWidth={1} />
-
-          {/* Invisible spacer — stacked below the visible bar */}
+          {/* Invisible base — positions the visible bar */}
           <Bar
-            dataKey="spacer"
+            dataKey="base"
             stackId="waterfall"
             fill="transparent"
             isAnimationActive={false}
           />
 
-          {/* Visible colored bar — grows on mount */}
+          {/* Visible colored bar */}
           <Bar
             dataKey="bar"
             stackId="waterfall"

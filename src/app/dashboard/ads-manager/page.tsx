@@ -5,7 +5,12 @@ import { useQuery } from '@tanstack/react-query';
 import type { Campaign } from '@/types/campaign';
 import type { DateRangePreset } from '@/types/analytics';
 import { getCampaigns } from '@/services/adsManager';
-import { AdsManagerClient } from '@/components/ads-manager/AdsManagerClient';
+import dynamic from 'next/dynamic';
+
+const AdsManagerClient = dynamic(
+  () => import('@/components/ads-manager/AdsManagerClient').then((m) => m.AdsManagerClient),
+  { ssr: false }
+);
 import { DateRangePicker } from '@/components/ui/DateRangePicker';
 import { SkeletonTableRow, SkeletonCard } from '@/components/ui/Skeleton';
 import { getDateRange } from '@/lib/dateUtils';

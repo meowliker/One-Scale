@@ -3,7 +3,12 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Loader2 } from 'lucide-react';
 import { getTrackingConfig, getTrackingHealth } from '@/services/tracking';
-import { TrackingDashboardClient } from '@/components/tracking/TrackingDashboardClient';
+import dynamic from 'next/dynamic';
+
+const TrackingDashboardClient = dynamic(
+  () => import('@/components/tracking/TrackingDashboardClient').then((m) => m.TrackingDashboardClient),
+  { ssr: false }
+);
 import type { TrackingConfig, TrackingHealth } from '@/types/tracking';
 import { useConnectionStore } from '@/stores/connectionStore';
 import { useStoreStore } from '@/stores/storeStore';

@@ -4,7 +4,12 @@ import { useEffect, useState, useCallback } from 'react';
 import { Loader2, RefreshCw } from 'lucide-react';
 import { mockDayPartingData } from '@/data/mockDayParting';
 import type { DayPartingCell } from '@/data/mockDayParting';
-import { DayPartingClient } from '@/components/day-parting/DayPartingClient';
+import dynamic from 'next/dynamic';
+
+const DayPartingClient = dynamic(
+  () => import('@/components/day-parting/DayPartingClient').then((m) => m.DayPartingClient),
+  { ssr: false }
+);
 
 export default function DayPartingPage() {
   const [data, setData] = useState<DayPartingCell[]>([]);

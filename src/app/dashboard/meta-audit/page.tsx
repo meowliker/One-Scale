@@ -3,7 +3,12 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { MetaAuditClient } from '@/components/meta-audit/MetaAuditClient';
+import dynamic from 'next/dynamic';
+
+const MetaAuditClient = dynamic(
+  () => import('@/components/meta-audit/MetaAuditClient').then((m) => m.MetaAuditClient),
+  { ssr: false }
+);
 import {
   getAuditOverview,
   getTargetingInsights,

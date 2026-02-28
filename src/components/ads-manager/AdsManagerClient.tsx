@@ -2107,8 +2107,8 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
             </tbody>
             {sortedCampaigns.length > 0 && (
               <tfoot>
-                <tr className="border-t-2 border-[#0071e3]/20 bg-[#f0f4ff]">
-                  <td colSpan={3} className="whitespace-nowrap px-3 py-2.5 text-[12px] font-bold text-[#1d1d1f] sticky left-0 z-10 bg-[#f0f4ff]">
+                <tr className="border-t border-[#e5e7eb] bg-[#f0f4ff]">
+                  <td colSpan={3} className="whitespace-nowrap px-3 py-2.5 text-[13.5px] font-bold text-[#1d1d1f] sticky left-0 z-10 bg-[#f0f4ff]">
                     Total — {totals.activeCampaigns} active
                   </td>
                   <td className="whitespace-nowrap px-3 py-2 text-[12px] text-[#aeaeb2]">&mdash;</td>

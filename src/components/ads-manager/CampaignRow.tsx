@@ -79,6 +79,13 @@ export function CampaignRow({
   const isABO = !(campaign.dailyBudget > 0) && !(campaign.lifetimeBudget && campaign.lifetimeBudget > 0);
   const isLifetimeBudget = !isABO && campaign.lifetimeBudget && campaign.lifetimeBudget > 0;
   const objective = objectiveLabels[campaign.objective] ?? { label: campaign.objective, variant: 'default' as const };
+  const stickyBg = cn(
+    'bg-white',
+    isSelected && 'bg-[#e8f0fe]',
+    isHighlighted && 'bg-[#fff8e1]',
+    flashType === 'success' && 'bg-[#f0fdf4]',
+    flashType === 'error' && 'bg-[#fef2f2]'
+  );
 
   return (
     <tr
@@ -93,12 +100,12 @@ export function CampaignRow({
       )}
     >
       {/* Checkbox */}
-      <td className="w-10 whitespace-nowrap px-3 py-2 sticky left-0 z-10 bg-white group-hover:bg-[#f9fafb] transition-colors duration-150">
+      <td className={cn("w-10 whitespace-nowrap px-3 py-2 sticky left-0 z-10 group-hover:!bg-[#f9fafb] transition-colors duration-150", stickyBg)}>
         <Checkbox checked={isSelected} onChange={onToggleSelect} />
       </td>
 
       {/* Toggle */}
-      <td className="w-14 whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 bg-white group-hover:bg-[#f9fafb] transition-colors duration-150">
+      <td className={cn("w-14 whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 group-hover:!bg-[#f9fafb] transition-colors duration-150", stickyBg)}>
         <Toggle
           checked={isActive}
           onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
@@ -109,7 +116,7 @@ export function CampaignRow({
 
       {/* Name + Objective + CBO/ABO */}
       <td
-        className="whitespace-nowrap px-3 py-2 sticky left-[96px] z-10 bg-white group-hover:bg-[#f9fafb] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)]"
+        className={cn("whitespace-nowrap px-3 py-2 sticky left-[96px] z-10 group-hover:!bg-[#f9fafb] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)]", stickyBg)}
         style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth } : undefined}
       >
         <div className="flex items-center gap-2">

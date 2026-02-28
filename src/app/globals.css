@@ -83,14 +83,14 @@
 
 /* ===== Dark Theme ===== */
 .dark {
-  --color-background: #0f1117;
+  --color-background: #0f172a;
   --color-foreground: #f1f5f9;
-  --color-surface: #161823;
-  --color-surface-elevated: #1e2030;
-  --color-surface-hover: #262a3e;
-  --color-surface-active: #2e3350;
-  --color-border: #232740;
-  --color-border-light: #2d3250;
+  --color-surface: #1e293b;
+  --color-surface-elevated: #1e293b;
+  --color-surface-hover: #263348;
+  --color-surface-active: #2e3d52;
+  --color-border: #334155;
+  --color-border-light: #293548;
   --color-border-focus: #7c5cfc;
   --color-primary: #7c5cfc;
   --color-primary-light: #a78bfa;
@@ -108,6 +108,65 @@
 body {
   background: var(--color-background);
   color: var(--color-foreground);
+}
+
+/* ===== Dark Mode Transition System ===== */
+/* Smooth 400ms transitions when toggling themes */
+*,
+*::before,
+*::after {
+  transition: background-color 400ms ease,
+              color 400ms ease,
+              border-color 400ms ease,
+              box-shadow 400ms ease,
+              fill 400ms ease,
+              stroke 400ms ease;
+}
+
+/* Exclude charts and sparklines from theme transitions to prevent jank */
+.no-transition,
+.no-transition *,
+.no-transition *::before,
+.no-transition *::after {
+  transition: none !important;
+}
+
+/* ===== View Transition API — dark mode ripple ===== */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+::view-transition-old(root) {
+  z-index: 1;
+}
+::view-transition-new(root) {
+  z-index: 9999;
+}
+
+/* Circular ripple reveal for the new theme */
+::view-transition-new(root) {
+  animation: theme-ripple-reveal 400ms ease-out;
+}
+
+@keyframes theme-ripple-reveal {
+  from {
+    clip-path: circle(0% at var(--toggle-x, 50%) var(--toggle-y, 50%));
+  }
+  to {
+    clip-path: circle(150% at var(--toggle-x, 50%) var(--toggle-y, 50%));
+  }
+}
+
+/* ===== Theme toggle icon animation ===== */
+@keyframes theme-icon-rotate {
+  from { transform: rotate(0deg) scale(0.6); opacity: 0; }
+  to { transform: rotate(180deg) scale(1); opacity: 1; }
+}
+
+.theme-icon-enter {
+  animation: theme-icon-rotate 400ms ease-out forwards;
 }
 
 /* Custom scrollbar — thin, dark */
@@ -422,13 +481,32 @@ body {
 }
 
 /* ===== Override Recharts for dark theme ===== */
+/* Exclude all Recharts internals and sparklines from theme transitions */
+.recharts-wrapper,
+.recharts-wrapper *,
+.recharts-wrapper *::before,
+.recharts-wrapper *::after {
+  transition: none !important;
+}
+
 .recharts-cartesian-grid-horizontal line,
 .recharts-cartesian-grid-vertical line {
   stroke: var(--color-border) !important;
 }
 
+.dark .recharts-cartesian-grid-horizontal line,
+.dark .recharts-cartesian-grid-vertical line {
+  stroke: #334155 !important;
+}
+
 .recharts-text {
   fill: var(--color-text-muted) !important;
+}
+
+/* Charts: transparent background in dark mode */
+.dark .recharts-wrapper,
+.dark .recharts-surface {
+  background: transparent !important;
 }
 
 /* ===== Status dot animation ===== */

@@ -1,6 +1,7 @@
 'use client';
 
 import { QueryClient } from '@tanstack/react-query';
+import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister';
 
 function makeQueryClient() {
   return new QueryClient({
@@ -27,4 +28,18 @@ export function getQueryClient() {
     browserQueryClient = makeQueryClient();
   }
   return browserQueryClient;
+}
+
+let persisterInstance: ReturnType<typeof createSyncStoragePersister> | undefined;
+
+export function getStoragePersister() {
+  if (typeof window === 'undefined') return undefined;
+  if (!persisterInstance) {
+    persisterInstance = createSyncStoragePersister({
+      storage: window.localStorage,
+      key: 'onescale:query-cache',
+      throttleTime: 1000,
+    });
+  }
+  return persisterInstance;
 }

@@ -97,6 +97,13 @@ export function AdRow({
     effectiveStatus.includes('PENDING');
   const statusLabel = !isActive ? ad.status : deliveryBlocked ? 'NOT DELIVERING' : 'ACTIVE';
   const statusVariant: 'success' | 'default' | 'danger' = !isActive ? 'default' : deliveryBlocked ? 'danger' : 'success';
+  const stickyBg = cn(
+    'bg-white',
+    isSelected && 'bg-[#e8f0fe]',
+    isHighlighted && 'bg-[#fff8e1]',
+    flashType === 'success' && 'bg-[#f0fdf4]',
+    flashType === 'error' && 'bg-[#fef2f2]'
+  );
 
   return (
     <>
@@ -112,12 +119,12 @@ export function AdRow({
         )}
       >
         {/* Checkbox */}
-        <td className="w-10 whitespace-nowrap py-2.5 pl-16 pr-4 sticky left-0 z-10 bg-white group-hover:bg-[#f9fafb] transition-colors duration-150">
+        <td className={cn("w-10 whitespace-nowrap py-2.5 pl-16 pr-4 sticky left-0 z-10 group-hover:!bg-[#f9fafb] transition-colors duration-150", stickyBg)}>
           <Checkbox checked={isSelected} onChange={onToggleSelect} />
         </td>
 
         {/* Toggle */}
-        <td className="w-14 whitespace-nowrap px-3 py-1.5 sticky left-[40px] z-10 bg-white group-hover:bg-[#f9fafb] transition-colors duration-150">
+        <td className={cn("w-14 whitespace-nowrap px-3 py-1.5 sticky left-[40px] z-10 group-hover:!bg-[#f9fafb] transition-colors duration-150", stickyBg)}>
           <Toggle
             checked={isActive}
             onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
@@ -128,7 +135,7 @@ export function AdRow({
 
         {/* Name + Creative Thumbnail */}
         <td
-          className="whitespace-nowrap px-3 py-1.5 sticky left-[96px] z-10 bg-white group-hover:bg-[#f9fafb] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)]"
+          className={cn("whitespace-nowrap px-3 py-1.5 sticky left-[96px] z-10 group-hover:!bg-[#f9fafb] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)]", stickyBg)}
           style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth } : undefined}
         >
           <div className="flex items-center gap-3 pl-8">
