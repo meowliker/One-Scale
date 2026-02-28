@@ -74,15 +74,17 @@ function SortableFixedHeader({
   sortKey,
   sortDirection,
   onSort,
+  minWidth,
 }: {
   label: string;
   sortKeyName: string;
   sortKey: string | null;
   sortDirection: 'asc' | 'desc' | null;
   onSort: (key: string) => void;
+  minWidth?: number;
 }) {
   return (
-    <th className="whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary">
+    <th className="whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary" style={minWidth ? { minWidth } : undefined}>
       <button
         onClick={() => onSort(sortKeyName)}
         className="group/sort flex items-center gap-1 cursor-pointer hover:text-text-primary transition-colors duration-150"
@@ -2217,7 +2219,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                   />
                 </th>
                 <SortableFixedHeader label="Status" sortKeyName="status" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} />
-                <SortableFixedHeader label="Budget" sortKeyName="budget" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} />
+                <SortableFixedHeader label="Budget" sortKeyName="budget" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} minWidth={100} />
                 <th className="whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary">
                   Bid Strategy
                 </th>
@@ -2225,25 +2227,19 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                   Performance
                 </th>
                 <th className="whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     <span>Latest Actions</span>
                     {!activitiesFullyLoaded && (
                       <button
                         onClick={loadFullActivityHistory}
                         disabled={activitiesFullLoading}
-                        className="inline-flex items-center gap-1 rounded-md bg-[#e8f0fe] px-1.5 py-0.5 text-[10px] font-medium text-[#0071e3] hover:bg-[#d4e4fd] disabled:opacity-50 transition-colors normal-case tracking-normal"
-                        title="Load full 90-day activity history (initial load shows last 7 days only)"
+                        className="inline-flex items-center justify-center rounded-md bg-[#e8f0fe] p-1 text-[#0071e3] hover:bg-[#d4e4fd] disabled:opacity-50 transition-colors"
+                        title={activitiesFullLoading ? 'Loading full 90-day history...' : 'Load full 90-day activity history'}
                       >
                         {activitiesFullLoading ? (
-                          <>
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            Loading...
-                          </>
+                          <Loader2 className="h-3 w-3 animate-spin" />
                         ) : (
-                          <>
-                            <History className="h-3 w-3" />
-                            Full history
-                          </>
+                          <History className="h-3 w-3" />
                         )}
                       </button>
                     )}

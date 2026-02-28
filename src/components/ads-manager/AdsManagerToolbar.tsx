@@ -92,7 +92,7 @@ export function AdsManagerToolbar({
 
   return (
     <div className="flex w-full items-center justify-between gap-3 apple-toolbar px-4 py-2.5 flex-nowrap overflow-visible">
-        <div className="flex items-center gap-4 min-w-0 overflow-hidden">
+        <div className="flex items-center gap-4 min-w-0">
           <div className="w-64">
             <SearchInput
               value={search}
@@ -125,14 +125,14 @@ export function AdsManagerToolbar({
             <Link
               href="/dashboard/attribution"
               title={`Attribution: ${attributionCoverage.mapped}/${attributionCoverage.total} purchases (${attributionCoverage.windowDays}d)`}
-              className="relative inline-flex items-center gap-1 rounded-lg border border-[rgba(52,199,89,0.2)] bg-[#e8f7ed] px-2 py-1.5 transition-colors duration-150 hover:bg-[#d4f0de]"
+              className="group/attr relative inline-flex items-center justify-center rounded-full border-2 border-emerald-500 bg-transparent w-8 h-8 hover:w-auto hover:h-auto hover:rounded-lg hover:border hover:border-[rgba(52,199,89,0.2)] hover:bg-[#f0fdf4] hover:px-2 hover:py-1.5 transition-all duration-200"
             >
-              <Target className="h-4 w-4 text-[#1b7d36]" />
-              <span className="text-[11px] font-semibold text-[#1b7d36]">
+              <Target className="h-4 w-4 text-emerald-600 shrink-0" />
+              <span className="max-w-0 overflow-hidden opacity-0 group-hover/attr:max-w-[80px] group-hover/attr:opacity-100 group-hover/attr:ml-1 text-[11px] font-semibold text-[#1b7d36] transition-all duration-200 whitespace-nowrap">
                 {Math.max(0, Math.min(100, attributionCoverage.percent)).toFixed(1)}%
               </span>
               {attributionCoverage.loading && (
-                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+                <span className="absolute -top-0.5 -right-0.5 h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
               )}
             </Link>
           )}
