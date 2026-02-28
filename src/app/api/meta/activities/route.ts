@@ -254,15 +254,40 @@ async function fetchAccountActivities(
   fetchLimit: number = 500,
 ): Promise<Record<string, MappedAction[]>> {
   const since = Math.floor((Date.now() - sinceDays * 24 * 60 * 60 * 1000) / 1000);
+
+  // Fetch first page
   const data = await fetchFromMeta<{
     data: ActivityEntry[];
+    paging?: { next?: string; cursors?: { after?: string } };
   }>(accessToken, `/${accountId}/activities`, {
     fields: 'event_type,event_time,object_id,object_name,extra_data,actor_name',
     since: since.toString(),
-    limit: String(fetchLimit),
+    limit: String(Math.min(fetchLimit, 500)),
   });
 
-  const activities = data.data || [];
+  const activities: ActivityEntry[] = data.data || [];
+
+  // Follow pagination to get more results (up to fetchLimit total, max 3 pages)
+  let nextCursor = data.paging?.cursors?.after;
+  let pagesFollowed = 0;
+  while (nextCursor && activities.length < fetchLimit && pagesFollowed < 3) {
+    pagesFollowed++;
+    try {
+      const nextData = await fetchFromMeta<{
+        data: ActivityEntry[];
+        paging?: { next?: string; cursors?: { after?: string } };
+      }>(accessToken, `/${accountId}/activities`, {
+        fields: 'event_type,event_time,object_id,object_name,extra_data,actor_name',
+        since: since.toString(),
+        limit: String(Math.min(fetchLimit - activities.length, 500)),
+        after: nextCursor,
+      });
+      activities.push(...(nextData.data || []));
+      nextCursor = nextData.paging?.cursors?.after;
+    } catch {
+      break; // Stop pagination on error
+    }
+  }
   const actionsMap: Record<string, MappedAction[]> = {};
 
   for (const activity of activities) {
@@ -307,8 +332,9 @@ async function fetchAccountActivities(
     // Filter: old and new values are identical (no real change)
     if (oldValue && newValue && oldValue === newValue) continue;
 
-    // Filter: status changes FROM or TO a Meta system/internal state
-    // e.g. "Active → Pending Process" (Meta internal transition) or "Pending Process → Active" (auto-resume)
+    // Filter: purely system-internal status transitions (both sides are system states).
+    // Keep transitions where at least one side is a user-facing state (Active, Paused, etc.)
+    // so we show meaningful changes like "Pending Review → Active" or "Active → With Issues".
     if (activity.event_type.includes('run_status')) {
       try {
         const extra = typeof activity.extra_data === 'string'
@@ -318,7 +344,7 @@ async function fetchAccountActivities(
         const rawNew = String(extra.new_value || '');
         const oldIsSystem = META_SYSTEM_STATUS_VALUES.has(rawOld) || META_SYSTEM_STATUS_VALUES.has(formatStatusValue(rawOld));
         const newIsSystem = META_SYSTEM_STATUS_VALUES.has(rawNew) || META_SYSTEM_STATUS_VALUES.has(formatStatusValue(rawNew));
-        if (oldIsSystem || newIsSystem) {
+        if (oldIsSystem && newIsSystem) {
           continue;
         }
       } catch {
