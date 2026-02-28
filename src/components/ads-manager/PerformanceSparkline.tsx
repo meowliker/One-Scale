@@ -83,14 +83,19 @@ export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: 
     );
   }
 
-  // Color based on trend direction: red=declining, green=growing, yellow=flat
-  const trendColor = getTrendColor(data);
-  const gradientId = `sparkGrad-${entityId.replace(/[^a-zA-Z0-9]/g, '')}`;
-
   const firstRoas = data[0].roas;
   // Use the aggregate currentRoas from the table column if provided; fall back to the last daily point
   const effectiveCurrentRoas = currentRoas ?? data[data.length - 1].roas;
   const roasChange = formatRoasChange(firstRoas, effectiveCurrentRoas);
+
+  // Color based on current ROAS level: green >= 1.5, blue >= 1.0, red < 1.0
+  const lineColor =
+    effectiveCurrentRoas >= 1.5
+      ? '#10b981'
+      : effectiveCurrentRoas >= 1.0
+        ? '#0071e3'
+        : '#ef4444';
+  const gradientId = `sparkGrad-${entityId.replace(/[^a-zA-Z0-9]/g, '')}`;
 
   const totalSpend = data.reduce((sum, d) => sum + d.spend, 0);
   const daysWithSpend = data.filter((d) => d.spend > 0).length;
@@ -113,14 +118,14 @@ export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: 
         >
           <defs>
             <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={trendColor} stopOpacity={0.30} />
-              <stop offset="100%" stopColor={trendColor} stopOpacity={0.0} />
+              <stop offset="0%" stopColor={lineColor} stopOpacity={0.30} />
+              <stop offset="100%" stopColor={lineColor} stopOpacity={0.0} />
             </linearGradient>
           </defs>
           <Area
             type="monotone"
             dataKey="roas"
-            stroke={trendColor}
+            stroke={lineColor}
             strokeWidth={1.5}
             fill={`url(#${gradientId})`}
             dot={false}
@@ -164,8 +169,8 @@ export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: 
             >
               <defs>
                 <linearGradient id={`${gradientId}-lg`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={trendColor} stopOpacity={0.25} />
-                  <stop offset="100%" stopColor={trendColor} stopOpacity={0.0} />
+                  <stop offset="0%" stopColor={lineColor} stopOpacity={0.25} />
+                  <stop offset="100%" stopColor={lineColor} stopOpacity={0.0} />
                 </linearGradient>
               </defs>
               <CartesianGrid
@@ -205,11 +210,11 @@ export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: 
               <Area
                 type="monotone"
                 dataKey="roas"
-                stroke={trendColor}
+                stroke={lineColor}
                 strokeWidth={2}
                 fill={`url(#${gradientId}-lg)`}
-                dot={{ r: 2.5, fill: trendColor, stroke: '#ffffff', strokeWidth: 1.5 }}
-                activeDot={{ r: 4, fill: trendColor, stroke: '#ffffff', strokeWidth: 2 }}
+                dot={{ r: 2.5, fill: lineColor, stroke: '#ffffff', strokeWidth: 1.5 }}
+                activeDot={{ r: 4, fill: lineColor, stroke: '#ffffff', strokeWidth: 2 }}
                 isAnimationActive={false}
               />
             </AreaChart>

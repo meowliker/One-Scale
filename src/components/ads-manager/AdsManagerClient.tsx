@@ -831,11 +831,12 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         .then((res) => {
           if (cancelled) return;
           setActivityData((prev) => ({ ...prev, ...(res.data || {}) }));
+          setActivitiesFullyLoaded(true);
           setSyncStatus((prev) => ({ ...prev, actions: 'done' }));
         })
         .catch(() => {
-          // keep existing/fallback UI
           if (cancelled) return;
+          setActivitiesFullyLoaded(true);
           setSyncStatus((prev) => ({ ...prev, actions: 'done' }));
         });
     }, 1200);
@@ -2282,12 +2283,12 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                   />
                 </th>
                 {/* ON/OFF — 70px */}
-                <th className="min-w-[70px] max-w-[70px] whitespace-nowrap px-3 py-2.5 text-center text-[11px] font-bold uppercase tracking-[0.06em] text-[#6b7280] dark:text-[#9ca3af] sticky left-[40px] z-20 bg-[var(--apple-table-header-bg)]" style={{ width: 70 }}>
+                <th className="min-w-[52px] max-w-[52px] whitespace-nowrap px-2 py-2.5 text-center text-[11px] font-bold uppercase tracking-[0.06em] text-[#6b7280] dark:text-[#9ca3af] sticky left-[40px] z-20 bg-[var(--apple-table-header-bg)]" style={{ width: 52 }}>
                   On/Off
                 </th>
                 {/* Name — flex, min 280px */}
                 <th
-                  className="relative whitespace-nowrap px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-[0.06em] text-[#6b7280] dark:text-[#9ca3af] sticky left-[110px] z-20 bg-[var(--apple-table-header-bg)] border-r border-[var(--apple-table-header-border)]"
+                  className="relative whitespace-nowrap px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-[0.06em] text-[#6b7280] dark:text-[#9ca3af] sticky left-[92px] z-20 bg-[var(--apple-table-header-bg)] border-r border-[var(--apple-table-header-border)]"
                   style={{ width: nameColWidth, minWidth: Math.max(nameColWidth, 280) }}
                 >
                   <button
@@ -2307,9 +2308,19 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                 <SortableFixedHeader label="Budget" sortKeyName="budget" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} width={120} align="right" />
                 <SortableFixedHeader label="Bid Strategy" sortKeyName="bidStrategy" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} width={140} />
                 <SortableFixedHeader label="Performance" sortKeyName="performance" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} width={130} align="center" />
-                {/* Latest Actions — 150px, no History icon */}
-                <th className="whitespace-nowrap px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-[0.06em] text-[#6b7280] dark:text-[#9ca3af]" style={{ width: 150, minWidth: 150 }}>
-                  Latest Actions
+                {/* Latest Actions — 200px, with Full History button */}
+                <th className="whitespace-nowrap px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-[0.06em] text-[#6b7280] dark:text-[#9ca3af]" style={{ width: 200, minWidth: 200 }}>
+                  <div className="flex items-center gap-2">
+                    <span>Latest Actions</span>
+                    <button
+                      onClick={loadFullActivityHistory}
+                      disabled={activitiesFullLoading || activitiesFullyLoaded}
+                      className="inline-flex items-center gap-1 rounded-md border border-[#e5e7eb] dark:border-[var(--color-border)] bg-white dark:bg-transparent px-2 py-0.5 text-[10px] font-medium text-[#0071e3] hover:bg-[#f0f7ff] transition-colors disabled:opacity-50 disabled:cursor-default normal-case tracking-normal"
+                    >
+                      {activitiesFullLoading ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : null}
+                      {activitiesFullyLoaded ? 'Loaded' : 'Full History'}
+                    </button>
+                  </div>
                 </th>
                 {/* Dynamic metric columns with drag-to-reorder */}
                 <SortableContext

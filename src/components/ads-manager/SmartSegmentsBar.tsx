@@ -176,7 +176,7 @@ export function SmartSegmentsBar({ campaigns, sparklineData = {} }: Props) {
               isActive
                 ? cn(seg.color, seg.textColor, 'shadow-sm')
                 : hasHits
-                  ? 'border-[rgba(0,0,0,0.1)] bg-white text-[#1d1d1f] hover:bg-[#f5f5f7]'
+                  ? cn(seg.color, seg.textColor, 'opacity-70 hover:opacity-100')
                   : 'border-transparent bg-transparent text-[#aeaeb2] hover:bg-[#f5f5f7] hover:text-[#86868b] hover:border-[rgba(0,0,0,0.06)]'
             )}
           >
