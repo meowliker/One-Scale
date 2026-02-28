@@ -119,7 +119,7 @@ export interface AdsManagerClientProps {
 
 type SyncStageState = 'idle' | 'loading' | 'done';
 const PAGE_PREWARM_INTERVAL_MS = 10 * 60 * 1000; // 10 min cooldown for Summary/P&L prewarm
-const INITIAL_LIMIT = 15;
+const INITIAL_LIMIT = 10000;
 
 interface SummaryWarmCachePayload {
   blendedMetrics: Record<string, number>;
@@ -2455,18 +2455,6 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
           </table>
         </div>
       </DndContext>}
-
-      {/* Load More button */}
-      {visibleCount < sortedCampaigns.length && (
-        <div className="flex justify-center py-4">
-          <button
-            onClick={() => setVisibleCount((prev) => prev + INITIAL_LIMIT)}
-            className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface-elevated px-5 py-2 text-sm font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-colors duration-150"
-          >
-            Load More ({sortedCampaigns.length - visibleCount} remaining)
-          </button>
-        </div>
-      )}
 
       {/* Bulk action bar */}
       {!showErrorCenter && <BulkActionBar
