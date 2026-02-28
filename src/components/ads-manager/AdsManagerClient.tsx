@@ -931,8 +931,10 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       console.error('Batch adset load failed', err);
       if (err instanceof RateLimitError) {
         rateLimitUntilRef.current = Date.now() + 60_000;
-        toast.error('Meta API rate limited — syncing will resume shortly', { duration: 5000, icon: '⏳' });
-        lastRateLimitToastAtRef.current = Date.now();
+        if (Date.now() - lastRateLimitToastAtRef.current > 120_000) {
+          toast.error('Meta API rate limited — syncing will resume shortly', { id: 'rate-limit', duration: 5000, icon: '⏳' });
+          lastRateLimitToastAtRef.current = Date.now();
+        }
       }
       for (const id of campaignIdsToLoad) {
         if (!fetchedAdSets.current.has(id)) {
@@ -1045,7 +1047,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       if (err instanceof RateLimitError) {
         rateLimitUntilRef.current = Date.now() + 60_000;
         if (Date.now() - lastRateLimitToastAtRef.current > 120_000) {
-          toast.error('Meta API rate limited — wait a minute and try again', { duration: 5000, icon: '⏳' });
+          toast.error('Meta API rate limited — wait a minute and try again', { id: 'rate-limit', duration: 5000, icon: '⏳' });
           lastRateLimitToastAtRef.current = Date.now();
         }
       } else if (err instanceof TimeoutError) {
@@ -1107,7 +1109,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       if (err instanceof RateLimitError) {
         rateLimitUntilRef.current = Date.now() + 60_000;
         if (Date.now() - lastRateLimitToastAtRef.current > 120_000) {
-          toast.error('Meta API rate limited — wait a minute and try again', { duration: 5000, icon: '⏳' });
+          toast.error('Meta API rate limited — wait a minute and try again', { id: 'rate-limit', duration: 5000, icon: '⏳' });
           lastRateLimitToastAtRef.current = Date.now();
         }
       } else if (err instanceof TimeoutError) {
@@ -2185,19 +2187,19 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         <div ref={tableContainerRef} className="apple-table-container apple-scroll">
           <table className="w-full min-w-[1200px] apple-table">
             <thead>
-              <tr className="sticky top-0 z-20 border-b border-[var(--apple-table-header-border)]">
-                <th className="w-10 whitespace-nowrap px-3 py-2 text-left sticky left-0 z-20 bg-[var(--apple-table-header-bg)]">
+              <tr className="sticky top-0 z-20 border-b border-[var(--apple-table-header-border)] bg-[var(--apple-table-header-bg)]">
+                <th className="w-10 whitespace-nowrap px-3 py-2 text-left sticky left-0 z-20 bg-inherit">
                   <Checkbox
                     checked={allSelected}
                     onChange={handleSelectAll}
                     indeterminate={someSelected}
                   />
                 </th>
-                <th className="w-14 whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary sticky left-[40px] z-20 bg-[var(--apple-table-header-bg)]">
+                <th className="w-14 whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary sticky left-[40px] z-20 bg-inherit">
                   On/Off
                 </th>
                 <th
-                  className="relative whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary sticky left-[96px] z-20 bg-[var(--apple-table-header-bg)] border-r border-[var(--apple-table-header-border)]"
+                  className="relative whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary sticky left-[96px] z-20 bg-inherit border-r border-[var(--apple-table-header-border)]"
                   style={{ width: nameColWidth, minWidth: nameColWidth }}
                 >
                   <button
@@ -2367,7 +2369,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
             )}
             {sortedCampaigns.length > 0 && (
               <tfoot>
-                <tr className="border-t border-[#e5e7eb] bg-[var(--apple-table-footer-bg)]">
+                <tr className="border-t-2 border-[#e5e7eb] dark:border-[#334155] bg-[var(--apple-table-footer-bg)]">
                   <td colSpan={3} className="whitespace-nowrap px-3 py-2.5 text-[13.5px] font-bold text-[var(--apple-table-footer-text)] sticky left-0 z-10 bg-[var(--apple-table-footer-bg)]">
                     Total — {totals.activeCampaigns} active
                   </td>

@@ -91,7 +91,7 @@
   --apple-table-row-highlighted: #fff8e1;
   --apple-table-row-flash-success: #f0fdf4;
   --apple-table-row-flash-error: #fef2f2;
-  --apple-table-footer-bg: #f0f4ff;
+  --apple-table-footer-bg: #f8fafc;
   --apple-table-footer-text: #1d1d1f;
 }
 
@@ -127,8 +127,25 @@
   --apple-table-row-highlighted: #332d1a;
   --apple-table-row-flash-success: #132d1b;
   --apple-table-row-flash-error: #301818;
-  --apple-table-footer-bg: #1a2744;
+  --apple-table-footer-bg: #1e293b;
   --apple-table-footer-text: #f1f5f9;
+}
+
+/* ===== Shared Tooltip ===== */
+.onescale-tooltip {
+  background: white !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.10) !important;
+  color: #111827 !important;
+  font-size: 12px !important;
+  padding: 8px 12px !important;
+  z-index: 50 !important;
+}
+.dark .onescale-tooltip {
+  background: #1e293b !important;
+  border-color: #334155 !important;
+  color: #f1f5f9 !important;
 }
 
 /* ===== Global Styles ===== */

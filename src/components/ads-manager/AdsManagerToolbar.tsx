@@ -175,16 +175,16 @@ export function AdsManagerToolbar({
               <div className="pointer-events-none absolute right-0 top-full z-50 mt-2
                 opacity-0 translate-y-1 group-hover/err:opacity-100 group-hover/err:translate-y-0
                 transition-all duration-150 ease-out">
-                <div className="w-48 rounded-xl bg-[#1d1d1f] px-3 py-2.5 shadow-xl">
+                <div className="onescale-tooltip w-48 !rounded-xl !px-3 !py-2.5">
                   <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[#86868b]">Last 12 hours</p>
                   <div className="flex items-center justify-between">
-                    <span className="text-[12px] text-white">Issues</span>
-                    <span className="text-[13px] font-semibold text-blue-400">{errorCounts.recent12h}</span>
+                    <span className="text-[12px]">Issues</span>
+                    <span className="text-[13px] font-semibold text-blue-500">{errorCounts.recent12h}</span>
                   </div>
                   {errorCounts.critical > 0 && (
                     <div className="mt-1 flex items-center justify-between">
-                      <span className="text-[12px] text-white">Critical</span>
-                      <span className="text-[13px] font-semibold text-red-400">{errorCounts.critical}</span>
+                      <span className="text-[12px]">Critical</span>
+                      <span className="text-[13px] font-semibold text-red-500">{errorCounts.critical}</span>
                     </div>
                   )}
                   <p className="mt-2 text-[10px] text-[#86868b]">Click to open Error Center</p>

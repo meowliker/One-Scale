@@ -143,7 +143,7 @@ export function CampaignRow({
               {campaign.name}
             </button>
             <div className="absolute left-0 top-full mt-1 z-50 pointer-events-none opacity-0 group-hover/tooltip:opacity-100 translate-y-1 group-hover/tooltip:translate-y-0 transition-all duration-150 ease-out">
-              <div className="rounded-lg border border-[rgba(0,0,0,0.08)] bg-[#1d1d1f] px-3 py-1.5 text-xs text-white shadow-md whitespace-nowrap max-w-xs">
+              <div className="onescale-tooltip whitespace-nowrap max-w-xs">
                 {campaign.name}
               </div>
             </div>

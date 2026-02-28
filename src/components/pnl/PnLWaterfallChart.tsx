@@ -102,8 +102,8 @@ function WaterfallTooltip({
   if (!item) return null;
 
   return (
-    <div className="rounded-lg border border-[rgba(0,0,0,0.08)] bg-white dark:bg-[#1e293b] dark:border-[#334155] px-3 py-2 shadow-lg">
-      <p className="text-[13px] font-semibold text-[#1d1d1f] dark:text-[#f1f5f9]">{item.name}</p>
+    <div className="onescale-tooltip">
+      <p className="text-[13px] font-semibold">{item.name}</p>
       <p className={`text-[13px] font-bold ${item.isPositive ? 'text-emerald-600' : 'text-red-500'}`}>
         {item.value >= 0 ? '' : '-'}
         {formatCurrency(Math.abs(item.value))}
