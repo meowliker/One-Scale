@@ -39,17 +39,6 @@ export interface CampaignRowProps {
   shopifyRoas?: number;
 }
 
-const objectiveLabels: Record<string, { label: string; variant: 'success' | 'warning' | 'danger' | 'info' | 'default' }> = {
-  CONVERSIONS: { label: 'Conversions', variant: 'success' },
-  TRAFFIC: { label: 'Traffic', variant: 'info' },
-  REACH: { label: 'Reach', variant: 'info' },
-  ENGAGEMENT: { label: 'Engagement', variant: 'warning' },
-  APP_INSTALLS: { label: 'App Installs', variant: 'default' },
-  VIDEO_VIEWS: { label: 'Video Views', variant: 'default' },
-  LEAD_GENERATION: { label: 'Lead Gen', variant: 'warning' },
-  BRAND_AWARENESS: { label: 'Brand', variant: 'info' },
-};
-
 const bidStrategyLabels: Record<string, string> = {
   LOWEST_COST: 'Lowest Cost',
   COST_CAP: 'Cost Cap',
@@ -83,7 +72,6 @@ export function CampaignRow({
   const activeAdSetsCount = campaign.adSets.filter((a) => a.status === 'ACTIVE').length;
   const isABO = !(campaign.dailyBudget > 0) && !(campaign.lifetimeBudget && campaign.lifetimeBudget > 0);
   const isLifetimeBudget = !isABO && campaign.lifetimeBudget && campaign.lifetimeBudget > 0;
-  const objective = objectiveLabels[campaign.objective] ?? { label: campaign.objective, variant: 'default' as const };
   const stickyBg = cn(
     'bg-[var(--apple-table-row-bg)]',
     isSelected && 'bg-[var(--apple-table-row-selected)]',
