@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback, useMemo } from 'react';
+import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import {
   TrendingUp,
   TrendingDown,
@@ -13,7 +13,6 @@ import {
   Users,
   Clock,
   User,
-  ChevronDown,
   ChevronUp,
   Pencil,
 } from 'lucide-react';
@@ -147,22 +146,15 @@ function ActionPill({
     <div
       ref={innerRef}
       className={cn(
-        'flex items-center gap-1.5 rounded-md px-2 py-1 cursor-default transition-all duration-150',
+        'flex h-7 w-7 items-center justify-center rounded-md cursor-default transition-all duration-150',
         'hover:ring-1 hover:ring-border-light',
         config.bg,
       )}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
+      title={config.label}
     >
-      <Icon className={cn('h-3 w-3 shrink-0', config.color)} />
-      <div className="flex flex-col min-w-0">
-        <span className={cn('text-[11px] font-semibold leading-tight truncate', config.color)}>
-          {config.label}
-        </span>
-        <span className="text-[10px] leading-tight text-text-dimmed">
-          {formatTimeAgo(action.timestamp)}
-        </span>
-      </div>
+      <Icon className={cn('h-3.5 w-3.5 shrink-0', config.color)} />
     </div>
   );
 }
@@ -218,7 +210,7 @@ function AllActionsTooltipContent({ actions, onCollapse }: { actions: EntityActi
   return (
     <div className="min-w-[320px] max-w-[380px] rounded-lg border border-border-light bg-surface-elevated shadow-xl">
       <div className="flex items-center justify-between px-3 pt-3 pb-2 border-b border-border">
-        <span className="text-xs font-semibold text-text-primary">Activity History ({actions.length})</span>
+        <span className="text-xs font-semibold text-text-primary">Recent Actions (last 12h) ({actions.length})</span>
         <button onClick={onCollapse} className="flex items-center gap-0.5 text-[10px] text-text-muted hover:text-text-secondary transition-colors">
           Collapse <ChevronUp className="h-3 w-3" />
         </button>
@@ -270,6 +262,9 @@ export function LatestActionsCell({ entityId, actions: actionsProp, activitiesFu
     return [];
   }, [entityId, actionsProp, activitiesFullyLoaded]);
 
+  const twelveHoursAgo = Date.now() - 12 * 3600000;
+  const recentActions = actions.filter(a => new Date(a.timestamp).getTime() > twelveHoursAgo);
+
   const handleMouseEnter = useCallback((actionId: string) => {
     if (hideTimeoutRef.current) { clearTimeout(hideTimeoutRef.current); hideTimeoutRef.current = null; }
     setShowAllActions(false);
@@ -280,17 +275,19 @@ export function LatestActionsCell({ entityId, actions: actionsProp, activitiesFu
     hideTimeoutRef.current = setTimeout(() => { setHoveredActionId(null); setShowAllActions(false); hideTimeoutRef.current = null; }, 150);
   }, []);
 
-  const handleOverflowEnter = useCallback(() => {
-    if (hideTimeoutRef.current) { clearTimeout(hideTimeoutRef.current); hideTimeoutRef.current = null; }
-    setHoveredActionId(null);
-    setShowAllActions(true);
-  }, []);
+  // Close overflow tooltip on outside click
+  useEffect(() => {
+    if (!showAllActions) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (overflowRef.current && !overflowRef.current.contains(e.target as Node)) {
+        setShowAllActions(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showAllActions]);
 
-  const handleOverflowLeave = useCallback(() => {
-    hideTimeoutRef.current = setTimeout(() => { setShowAllActions(false); hideTimeoutRef.current = null; }, 150);
-  }, []);
-
-  // Empty state
+  // Empty state: no actions at all
   if (actions.length === 0) {
     return (
       <td className="px-3 py-2 min-w-[180px]">
@@ -309,12 +306,21 @@ export function LatestActionsCell({ entityId, actions: actionsProp, activitiesFu
     );
   }
 
-  const visibleActions = actions.slice(0, 2);
-  const overflowCount = actions.length - 2;
+  // No recent actions within the last 12h, but there are older actions
+  if (recentActions.length === 0) {
+    return (
+      <td className="px-3 py-2 min-w-[180px]">
+        <span className="text-[11px] text-text-dimmed px-2">&mdash;</span>
+      </td>
+    );
+  }
+
+  const visibleActions = recentActions.slice(0, 3);
+  const overflowCount = recentActions.length - 3;
 
   return (
     <td className="px-3 py-2 min-w-[180px]">
-      <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-1">
         {visibleActions.map((action) => (
           <div key={action.id}>
             <ActionPill
@@ -334,16 +340,14 @@ export function LatestActionsCell({ entityId, actions: actionsProp, activitiesFu
           <>
             <span
               ref={overflowRef}
-              className="flex h-5 items-center gap-0.5 rounded-md bg-surface-hover px-2 text-[10px] font-medium text-text-muted cursor-default hover:bg-surface-active transition-colors w-fit"
-              onMouseEnter={handleOverflowEnter}
-              onMouseLeave={handleOverflowLeave}
+              className="flex h-7 items-center gap-0.5 rounded-md bg-surface-hover px-1.5 text-[10px] font-medium text-text-muted cursor-pointer hover:bg-surface-active transition-colors"
+              onClick={(e) => { e.stopPropagation(); setShowAllActions(prev => !prev); }}
             >
-              +{overflowCount} more
-              <ChevronDown className="h-3 w-3" />
+              +{overflowCount}
             </span>
             <PortalTooltip anchorRef={overflowRef} visible={showAllActions}>
-              <div onMouseEnter={handleOverflowEnter} onMouseLeave={handleOverflowLeave}>
-                <AllActionsTooltipContent actions={actions} onCollapse={() => setShowAllActions(false)} />
+              <div>
+                <AllActionsTooltipContent actions={recentActions} onCollapse={() => setShowAllActions(false)} />
               </div>
             </PortalTooltip>
           </>
