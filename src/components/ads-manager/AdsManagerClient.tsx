@@ -2188,18 +2188,19 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
           <table className="w-full min-w-[1200px] apple-table">
             <thead>
               <tr className="sticky top-0 z-20 border-b border-[var(--apple-table-header-border)] bg-[var(--apple-table-header-bg)]">
-                <th className="w-10 whitespace-nowrap px-3 py-2 text-left sticky left-0 z-20 bg-inherit">
+                {/* Header: [checkbox][toggle][name][status][budget][bid][performance][actions] + dynamic metrics */}
+                <th className="w-10 min-w-[40px] max-w-[40px] whitespace-nowrap px-3 py-2 text-left sticky left-0 z-20 bg-[var(--apple-table-header-bg)]">
                   <Checkbox
                     checked={allSelected}
                     onChange={handleSelectAll}
                     indeterminate={someSelected}
                   />
                 </th>
-                <th className="w-14 whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary sticky left-[40px] z-20 bg-inherit">
+                <th className="w-14 min-w-[56px] max-w-[56px] whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary sticky left-[40px] z-20 bg-[var(--apple-table-header-bg)]">
                   On/Off
                 </th>
                 <th
-                  className="relative whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary sticky left-[96px] z-20 bg-inherit border-r border-[var(--apple-table-header-border)]"
+                  className="relative whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary sticky left-[96px] z-20 bg-[var(--apple-table-header-bg)] border-r border-[var(--apple-table-header-border)]"
                   style={{ width: nameColWidth, minWidth: nameColWidth }}
                 >
                   <button
