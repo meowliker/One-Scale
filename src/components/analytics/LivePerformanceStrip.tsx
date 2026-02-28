@@ -26,7 +26,8 @@ function ShopifyBadge() {
 export function LivePerformanceStrip({ metrics }: LivePerformanceStripProps) {
   const spend = metrics.totalSpend ?? 0;
   const fbRevenue = metrics.totalRevenue ?? 0;
-  const shopifyRevenue = metrics.shopifyRevenue ?? fbRevenue;
+  const shopifyRevenue = metrics.shopifyRevenue;
+  const hasShopifyRevenue = shopifyRevenue !== undefined && shopifyRevenue !== null;
   const conversions = metrics.totalConversions ?? 0;
   const roas = spend > 0 ? fbRevenue / spend : 0;
   const cpa = conversions > 0 ? spend / conversions : 0;
@@ -81,7 +82,7 @@ export function LivePerformanceStrip({ metrics }: LivePerformanceStripProps) {
               <ShopifyBadge />
             </span>
             <span className="text-sm font-bold tabular-nums text-emerald-400 transition-all duration-300">
-              {formatCurrency(shopifyRevenue)}
+              {hasShopifyRevenue ? formatCurrency(shopifyRevenue!) : '—'}
             </span>
           </div>
 

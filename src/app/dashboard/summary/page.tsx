@@ -4,7 +4,6 @@ import { useState, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
 import type { DateRangePreset } from '@/types/analytics';
-import type { PnLEntry } from '@/types/pnl';
 import { getBlendedMetricsForRange, getTimeSeriesForRange, getTopCampaignsForRange } from '@/services/analytics';
 import dynamic from 'next/dynamic';
 
@@ -16,46 +15,78 @@ import { useConnectionStore } from '@/stores/connectionStore';
 import { useStoreStore } from '@/stores/storeStore';
 import { NotConnectedError } from '@/services/withMockFallback';
 import { ConnectionEmptyState } from '@/components/ui/ConnectionEmptyState';
-import { getDailyPnL } from '@/services/pnl';
-import { formatDateInTimezone } from '@/lib/timezone';
+import { apiClient } from '@/services/api';
+import { getStoreTimezone } from '@/lib/timezone';
 import { getDateRange } from '@/lib/dateUtils';
 
-function computeShopifyMetricsFromPnL(dailyPnL: PnLEntry[], preset: DateRangePreset) {
-  const range = getDateRange(preset);
-  const startStr = formatDateInTimezone(range.start);
-  const endStr = formatDateInTimezone(range.end);
+async function fetchShopifyRevenueForPreset(preset: DateRangePreset): Promise<{
+  shopifyRevenue: number;
+  shopifyOrders: number;
+  shopifyAov: number;
+} | null> {
+  try {
+    const tz = getStoreTimezone();
+    const range = getDateRange(preset);
 
-  const filteredDays = dailyPnL.filter((day) => {
-    return day.date >= startStr && day.date <= endStr;
-  });
+    // These Date objects already represent start/end of day in the store timezone (as UTC)
+    const createdAtMin = range.start.toISOString();
+    const createdAtMax = range.end.toISOString();
 
-  const shopifyRevenue = Math.round(
-    filteredDays.reduce((sum, day) => sum + (day.revenue || 0), 0) * 100
-  ) / 100;
-  const shopifyOrders = filteredDays.reduce((sum, day) => sum + (day.orderCount || 0), 0);
-  const shopifyAov = shopifyOrders > 0
-    ? Math.round((shopifyRevenue / shopifyOrders) * 100) / 100
-    : 0;
+    // Fetch orders for the date range (paginate up to 2 pages = 500 orders)
+    const allOrders: Array<{ totalPrice: string; financialStatus: string }> = [];
+    let sinceId = '0';
+    for (let page = 0; page < 2; page++) {
+      const res = await apiClient<{ data: Array<{ id: number; totalPrice: string; financialStatus: string }> }>(
+        '/api/shopify/orders',
+        {
+          params: {
+            created_at_min: createdAtMin,
+            created_at_max: createdAtMax,
+            limit: '250',
+            since_id: sinceId,
+          },
+          timeoutMs: 15_000,
+          maxRetries: 1,
+        }
+      );
+      const batch = res.data;
+      allOrders.push(...batch);
+      if (batch.length < 250) break;
+      sinceId = String(batch[batch.length - 1].id ?? sinceId);
+    }
 
-  return { shopifyRevenue, shopifyOrders, shopifyAov };
+    const validOrders = allOrders.filter((o) => o.financialStatus !== 'refunded');
+    const shopifyRevenue = Math.round(
+      validOrders.reduce((sum, o) => sum + parseFloat(o.totalPrice || '0'), 0) * 100
+    ) / 100;
+    const shopifyOrders = validOrders.length;
+    const shopifyAov = shopifyOrders > 0
+      ? Math.round((shopifyRevenue / shopifyOrders) * 100) / 100
+      : 0;
+
+    return { shopifyRevenue, shopifyOrders, shopifyAov };
+  } catch {
+    // Shopify not connected or API error — return null so callers know it's unavailable
+    return null;
+  }
 }
 
 async function fetchSummaryData(preset: DateRangePreset) {
-  const [metrics, series, campaigns, dailyPnL] = await Promise.all([
+  const [metrics, series, campaigns, shopifyData] = await Promise.all([
     getBlendedMetricsForRange(preset)(),
     getTimeSeriesForRange(preset)(),
     getTopCampaignsForRange(preset)(),
-    getDailyPnL().catch(() => [] as PnLEntry[]),
+    fetchShopifyRevenueForPreset(preset),
   ]);
-
-  const shopifyMetrics = computeShopifyMetricsFromPnL(dailyPnL, preset);
 
   return {
     blendedMetrics: {
       ...metrics,
-      shopifyRevenue: shopifyMetrics.shopifyRevenue,
-      shopifyOrders: shopifyMetrics.shopifyOrders,
-      shopifyAov: shopifyMetrics.shopifyAov,
+      ...(shopifyData !== null && {
+        shopifyRevenue: shopifyData.shopifyRevenue,
+        shopifyOrders: shopifyData.shopifyOrders,
+        shopifyAov: shopifyData.shopifyAov,
+      }),
     },
     timeSeries: series,
     topCampaigns: campaigns,
