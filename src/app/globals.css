@@ -456,3 +456,18 @@ body {
     opacity: 0;
   }
 }
+
+/* ===== Totals Row ===== */
+tr.totals-row,
+tr.totals-row td {
+  background: #f8fafc !important;
+  color: #1d1d1f !important;
+  font-weight: 700 !important;
+}
+
+.dark tr.totals-row,
+.dark tr.totals-row td {
+  background: #1e293b !important;
+  color: #f1f5f9 !important;
+  font-weight: 700 !important;
+}

@@ -54,7 +54,7 @@ export function MetricCell({ metricKey, value, isTotals }: MetricCellProps) {
       "whitespace-nowrap px-3 py-2 text-right text-[12px] tabular-nums",
       colorClass || "text-[#1d1d1f]",
       PIXEL_METRIC_KEYS.has(metricKey) && "bg-[#e8f2ff] border-l border-[#0071e3]/10",
-      isTotals && "font-semibold bg-[#f0f4ff]"
+      isTotals && "!font-bold !text-[13.5px]"
     )}>
       {(metricKey === 'roas' || metricKey === 'appPixelRoas') && (
         <span

@@ -57,6 +57,7 @@ import { DraggableColumnHeader } from '@/components/columns/DraggableColumnHeade
 import { useSmartFilterStore, type SmartSegmentId } from '@/stores/smartFilterStore';
 import { SmartSegmentsBar } from './SmartSegmentsBar';
 import { BulkActionPanel } from './BulkActionPanel';
+import { QuickFilterBar, type QuickFilter } from './QuickFilterBar';
 
 // Sort indicator for fixed column headers
 function FixedSortIndicator({ active, direction }: { active: boolean; direction: 'asc' | 'desc' | null }) {
@@ -320,7 +321,16 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     loading: true,
   });
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('ACTIVE');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = window.sessionStorage.getItem('adsManagerStatusFilter');
+      if (saved === 'ACTIVE' || saved === 'PAUSED' || saved === 'all') return saved;
+    }
+    return 'all';
+  });
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>('all');
+  const [rateLimitCountdown, setRateLimitCountdown] = useState(0);
+  const isInitialMountRef = useRef(true);
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc' | null>(null);
   // Track which campaigns/adsets are currently loading children
@@ -370,6 +380,27 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     const until = dateRange?.until || 'na';
     return `ads-manager-hierarchy:${activeStoreId}:${since}:${until}`;
   }, [activeStoreId, dateRange?.since, dateRange?.until]);
+
+  // Persist statusFilter to sessionStorage
+  useEffect(() => {
+    try { window.sessionStorage.setItem('adsManagerStatusFilter', statusFilter); } catch { /* ignore */ }
+  }, [statusFilter]);
+
+  // Rate limit countdown timer
+  useEffect(() => {
+    if (rateLimitCountdown <= 0) return;
+    const id = window.setInterval(() => {
+      setRateLimitCountdown((prev) => {
+        if (prev <= 1) {
+          toast.dismiss('rate-limit-countdown');
+          return 0;
+        }
+        toast(`Rate limited — retrying in ${prev - 1}s`, { id: 'rate-limit-countdown', icon: '⏳', duration: 2000 });
+        return prev - 1;
+      });
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [rateLimitCountdown]);
 
   // Resizable Name column
   const [nameColWidth, setNameColWidth] = useState(280);
@@ -823,7 +854,8 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       if (err instanceof RateLimitError) {
         rateLimitUntilRef.current = Date.now() + 60_000;
         if (Date.now() - lastRateLimitToastAtRef.current > 120_000) {
-          toast.error('Meta API rate limited — wait a minute and try again', { duration: 5000, icon: '⏳' });
+          setRateLimitCountdown(60);
+          toast('Rate limited — retrying in 60s', { id: 'rate-limit-countdown', icon: '⏳', duration: 2000 });
           lastRateLimitToastAtRef.current = Date.now();
         }
       } else if (err instanceof TimeoutError) {
@@ -885,7 +917,8 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       if (err instanceof RateLimitError) {
         rateLimitUntilRef.current = Date.now() + 60_000;
         if (Date.now() - lastRateLimitToastAtRef.current > 120_000) {
-          toast.error('Meta API rate limited — wait a minute and try again', { duration: 5000, icon: '⏳' });
+          setRateLimitCountdown(60);
+          toast('Rate limited — retrying in 60s', { id: 'rate-limit-countdown', icon: '⏳', duration: 2000 });
           lastRateLimitToastAtRef.current = Date.now();
         }
       } else if (err instanceof TimeoutError) {
@@ -904,6 +937,27 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       });
     }
   }, [dateRange]);
+
+  // Batch load ad sets for multiple campaigns with 1s delays between calls
+  const batchLoadAdSets = useCallback(async (campaignIds: string[]) => {
+    for (const campaignId of campaignIds) {
+      await loadAdSetsForCampaign(campaignId);
+      // 1s delay between calls to avoid rate limiting
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    }
+  }, [loadAdSetsForCampaign]);
+
+  // Auto-expand: load adsets for campaigns restored from sessionStorage
+  useEffect(() => {
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
+      return;
+    }
+    if (expandedCampaigns.size === 0) return;
+    const needsLoad = [...expandedCampaigns].filter((id) => !fetchedAdSets.current.has(id));
+    if (needsLoad.length === 0) return;
+    batchLoadAdSets(needsLoad);
+  }, [expandedCampaigns, batchLoadAdSets]);
 
   // Management-first preload:
   // Core preload: loads ad sets + ads for active campaigns.
@@ -965,7 +1019,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
 
         const adSets = await loadAdSetsForCampaign(campaign.id, false, 'fast');
         if (!adSets || adSets.length === 0) {
-          await new Promise((resolve) => window.setTimeout(resolve, 320));
+          await new Promise((resolve) => window.setTimeout(resolve, 1000));
           continue;
         }
 
@@ -973,10 +1027,10 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         for (const adSet of adSets.slice(0, MAX_ADSETS_PER_CAMPAIGN)) {
           if (cancelled) break;
           await loadAdsForAdSet(adSet.id, false, 'fast');
-          await new Promise((resolve) => window.setTimeout(resolve, 260));
+          await new Promise((resolve) => window.setTimeout(resolve, 1000));
         }
 
-        await new Promise((resolve) => window.setTimeout(resolve, 360));
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
       }
     })()
       .catch(() => {
@@ -1202,6 +1256,28 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       return matchesSearch && matchesStatus;
     });
 
+    // Quick filter bar filtering
+    if (quickFilter !== 'all') {
+      filteredList = filteredList.filter((campaign) => {
+        const metrics = campaign.metrics;
+        const roas = metrics.roas ?? 0;
+        const conversions = metrics.conversions ?? 0;
+        const frequency = metrics.frequency ?? 0;
+        switch (quickFilter) {
+          case 'highRoas':
+            return roas >= 2.0;
+          case 'lowRoas':
+            return roas > 0 && roas < 1.0;
+          case 'learning':
+            return campaign.status === 'ACTIVE' && conversions < 5;
+          case 'fatigue':
+            return frequency > 3.5 && roas < 1.3;
+          default:
+            return true;
+        }
+      });
+    }
+
     // Smart segment filtering
     if (activeSegment) {
       filteredList = filteredList.filter(campaign => {
@@ -1249,7 +1325,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     }
 
     return filteredList;
-  }, [campaignsWithAppPixel, search, statusFilter, activeSegment, columnFilters, sparklineData]);
+  }, [campaignsWithAppPixel, search, statusFilter, quickFilter, activeSegment, columnFilters, sparklineData]);
 
   // Sort handler: cycles null -> asc -> desc -> null
   const handleSort = useCallback((key: string) => {
@@ -1763,6 +1839,8 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         sparklineData={sparklineData}
       />
 
+      <QuickFilterBar value={quickFilter} onChange={setQuickFilter} />
+
       {activeSegment && (
         <BulkActionPanel
           segment={activeSegment}
@@ -1939,15 +2017,15 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
             </tbody>
             {sortedCampaigns.length > 0 && (
               <tfoot>
-                <tr className="border-t-2 border-[#0071e3]/20 bg-[#f0f4ff]">
-                  <td colSpan={3} className="whitespace-nowrap px-3 py-2.5 text-[12px] font-bold text-[#1d1d1f] sticky left-0 z-10 bg-[#f0f4ff]">
+                <tr className="totals-row border-t-2 border-[#0071e3]/20">
+                  <td colSpan={3} className="whitespace-nowrap px-3 py-2.5 text-[12px] sticky left-0 z-10">
                     Total — {totals.activeCampaigns} active
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-[12px] text-[#aeaeb2]">&mdash;</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-[12px] text-[#aeaeb2]">&mdash;</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-[12px] text-[#aeaeb2]">&mdash;</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-[12px] text-[#aeaeb2]">&mdash;</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-[12px] text-[#aeaeb2]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-[12px]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-[12px]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-[12px]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-[12px]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-[12px]">&mdash;</td>
                   {columnOrder.map((key) => (
                     <MetricCell
                       key={`totals-${key}`}

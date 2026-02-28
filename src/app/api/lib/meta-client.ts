@@ -68,6 +68,8 @@ function isRateLimitError(status: number, body: string): boolean {
     return (
       body.includes('"code":17') ||
       body.includes('"code": 17') ||
+      body.includes('"code":32') ||
+      body.includes('"code": 32') ||
       body.includes('Too Many') ||
       body.includes('User request limit reached') ||
       body.includes('too many api calls') ||
