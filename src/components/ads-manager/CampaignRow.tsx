@@ -194,7 +194,7 @@ export function CampaignRow({
             </span>
           )}
           {showStatusTooltip && isActive && (
-            <div className="absolute left-0 top-full mt-1.5 z-50 min-w-[200px] rounded-[10px] border border-[#e5e7eb] dark:border-[#334155] bg-white dark:bg-[#1e293b] p-3 px-4 shadow-[0_8px_24px_rgba(0,0,0,0.12)] animate-tooltip-in">
+            <div className="onescale-tooltip absolute left-0 top-full mt-1.5 z-50 min-w-[200px] p-3 px-4 animate-tooltip-in">
               <div className="space-y-2 text-[12px]">
                 <div className="flex justify-between gap-6">
                   <span className="text-[11px] text-text-muted">Status</span>
