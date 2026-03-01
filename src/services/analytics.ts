@@ -8,6 +8,25 @@ import { getDateRange } from '@/lib/dateUtils';
 import { formatDateInTimezone } from '@/lib/timezone';
 import { buildStoreScopedKey, memoizePromise } from '@/services/perfCache';
 
+/**
+ * Fetch Meta insights directly using storeId only (no accountIds).
+ * This lets the API fall back to DB-stored ad accounts, which are always correct.
+ * Using apiClient would auto-inject accountIds from the frontend connection store,
+ * which may be stale or contain wrong IDs — causing ad spend mismatches between
+ * the summary page and the P&L page.
+ */
+async function fetchInsightsDirect(
+  datePreset: string,
+): Promise<{ data: { date: string; metrics: Record<string, number> }[] }> {
+  const { useStoreStore } = await import('@/stores/storeStore');
+  const storeId = useStoreStore.getState().activeStoreId;
+  if (!storeId) return { data: [] };
+
+  const res = await fetch(`/api/meta/insights?storeId=${encodeURIComponent(storeId)}&datePreset=${datePreset}`);
+  if (!res.ok) return { data: [] };
+  return res.json();
+}
+
 // Map frontend date range presets to Meta API date_preset values
 function mapPresetToMeta(preset?: DateRangePreset): string {
   switch (preset) {
@@ -33,10 +52,9 @@ function createRealGetBlendedMetrics(datePreset: string) {
   return async function realGetBlendedMetrics(): Promise<Record<string, number>> {
     const key = buildStoreScopedKey('analytics:blended', datePreset);
     return memoizePromise(key, 45_000, async () => {
-      const response = await apiClient<{ data: { date: string; metrics: Record<string, number> }[] }>(
-        '/api/meta/insights',
-        { params: { datePreset } }
-      );
+      // Use direct fetch (storeId only) so the API resolves ad accounts from DB,
+      // matching the P&L page and avoiding stale frontend account IDs.
+      const response = await fetchInsightsDirect(datePreset);
 
       // Aggregate daily insights into totals
       const totals = { spend: 0, revenue: 0, conversions: 0, impressions: 0, clicks: 0 };
@@ -87,10 +105,9 @@ function createRealGetTimeSeries(datePreset: string) {
   return async function realGetTimeSeries(): Promise<TimeSeriesDataPoint[]> {
     const key = buildStoreScopedKey('analytics:timeseries', datePreset);
     return memoizePromise(key, 45_000, async () => {
-      const response = await apiClient<{ data: { date: string; metrics: Record<string, number> }[] }>(
-        '/api/meta/insights',
-        { params: { datePreset } }
-      );
+      // Use direct fetch (storeId only) so the API resolves ad accounts from DB,
+      // matching the P&L page and avoiding stale frontend account IDs.
+      const response = await fetchInsightsDirect(datePreset);
       return response.data.map((day) => ({
         date: day.date,
         spend: day.metrics.spend || 0,
