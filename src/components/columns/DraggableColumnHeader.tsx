@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, ArrowUp, ArrowDown, BarChart2 } from 'lucide-react';
+import { GripVertical, ArrowUp, ArrowDown } from 'lucide-react';
 import type { MetricKey } from '@/types/metrics';
 import { getMetricDefinition } from '@/data/metricDefinitions';
 import { cn } from '@/lib/utils';
@@ -136,7 +136,7 @@ export function DraggableColumnHeader({ metricKey, sortKey, sortDirection, onSor
       >
         <div className="flex items-center justify-end gap-1.5">
           <SortIndicator active={sortKey === metricKey} direction={sortKey === metricKey ? (sortDirection ?? null) : null} />
-          <BarChart2 className="h-3.5 w-3.5" />
+          <span>{label}</span>
           <button
             data-drag-handle
             {...attributes}
