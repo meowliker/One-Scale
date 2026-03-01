@@ -236,6 +236,71 @@ export async function createInitialAdmin(input: {
   };
 }
 
+export async function registerUser(input: {
+  email: string;
+  password: string;
+  fullName?: string;
+  workspaceName?: string;
+}): Promise<AuthenticatedUserContext> {
+  const email = normalizeEmail(input.email);
+  const existing = await getUserByEmail(email);
+  if (existing) {
+    throw new Error('An account with this email already exists.');
+  }
+
+  if (!input.password || input.password.length < 8) {
+    throw new Error('Password must be at least 8 characters.');
+  }
+
+  const userId = randomUUID();
+  const workspaceId = randomUUID();
+  const trimmedName = input.fullName?.trim() || null;
+  const workspaceName = (input.workspaceName?.trim() || (trimmedName ? `${trimmedName}'s Workspace` : 'My Workspace'));
+
+  try {
+    await rest('/app_users', {
+      method: 'POST',
+      headers: headers({ Prefer: 'return=minimal' }),
+      body: JSON.stringify([{
+        id: userId,
+        email,
+        password_hash: hashPassword(input.password),
+        full_name: trimmedName,
+        is_active: true,
+        must_reset_password: false,
+      }]),
+    });
+
+    await rest('/workspaces', {
+      method: 'POST',
+      headers: headers({ Prefer: 'return=minimal' }),
+      body: JSON.stringify([{ id: workspaceId, name: workspaceName }]),
+    });
+
+    await rest('/workspace_members', {
+      method: 'POST',
+      headers: headers({ Prefer: 'return=minimal' }),
+      body: JSON.stringify([{ workspace_id: workspaceId, user_id: userId, role: 'owner' }]),
+    });
+  } catch (error) {
+    await Promise.allSettled([
+      rest(`/workspace_members?workspace_id=eq.${encodeURIComponent(workspaceId)}&user_id=eq.${encodeURIComponent(userId)}`, { method: 'DELETE' }),
+      rest(`/workspaces?id=eq.${encodeURIComponent(workspaceId)}`, { method: 'DELETE' }),
+      rest(`/app_users?id=eq.${encodeURIComponent(userId)}`, { method: 'DELETE' }),
+    ]);
+    throw error;
+  }
+
+  return {
+    userId,
+    email,
+    fullName: trimmedName,
+    role: 'owner',
+    workspaceId,
+    mustResetPassword: false,
+  };
+}
+
 export async function authenticateUser(email: string, password: string): Promise<AuthenticatedUserContext | null> {
   const user = await getUserByEmail(email);
   if (!user || !normalizeBool(user.is_active)) return null;

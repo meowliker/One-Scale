@@ -2,6 +2,7 @@
 
 import { FormEvent, Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 
 function LoginForm() {
   const router = useRouter();
@@ -120,6 +121,14 @@ function LoginForm() {
                 : 'Sign in'}
           </button>
         </form>
+        {isFirstSetup === false && (
+          <p className="mt-4 text-center text-sm text-[#86868b]">
+            {"Don't have an account? "}
+            <Link href="/login/signup" className="text-[#0071e3] hover:underline">
+              Create one
+            </Link>
+          </p>
+        )}
       </div>
     </div>
   );
