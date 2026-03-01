@@ -13,7 +13,7 @@ const META_GRAPH_URL = 'https://graph.facebook.com/v21.0';
 // ------ Concurrency Limiter ------
 // Meta API rate limits: ~200 calls/hour per token.
 // More importantly, too many simultaneous TCP connections overloads Node.
-const MAX_CONCURRENT = 5;
+const MAX_CONCURRENT = 3;
 let activeRequests = 0;
 const queue: Array<() => void> = [];
 

@@ -205,3 +205,11 @@ create index if not exists idx_visitor_identities_store_email
 create index if not exists idx_visitor_identities_store_customer
   on visitor_identities(store_id, customer_id)
   where customer_id is not null;
+
+create table if not exists column_presets (
+  id text primary key,
+  store_id text not null references stores(id) on delete cascade,
+  name text not null,
+  columns jsonb not null default '[]',
+  created_at timestamptz not null default now()
+);

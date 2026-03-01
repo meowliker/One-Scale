@@ -47,21 +47,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ data: {}, lastSyncedAt: new Date().toISOString() });
     }
 
-    // Fetch fresh campaign data from all accounts in parallel
+    // Fetch fresh campaign data from all accounts sequentially to avoid rate limits
     const campaignUpdates: Record<string, Partial<PerformanceMetrics>> = {};
 
-    const results = await Promise.allSettled(
-      activeAccounts.map((account) =>
-        fetchMetaCampaigns(token.accessToken, account.ad_account_id, dateRange, {
+    for (let i = 0; i < activeAccounts.length; i++) {
+      const account = activeAccounts[i];
+      try {
+        const campaigns = await fetchMetaCampaigns(token.accessToken, account.ad_account_id, dateRange, {
           disableDateFallback: true,
-        })
-      )
-    );
-
-    for (const result of results) {
-      if (result.status !== 'fulfilled') continue;
-      for (const campaign of result.value) {
-        campaignUpdates[campaign.id] = campaign.metrics;
+        });
+        for (const campaign of campaigns) {
+          campaignUpdates[campaign.id] = campaign.metrics;
+        }
+      } catch (err) {
+        console.warn(`[sync/refresh] Account ${account.ad_account_id} failed:`, err instanceof Error ? err.message : err);
+      }
+      // Small delay between accounts to avoid rate limits
+      if (i < activeAccounts.length - 1) {
+        await new Promise((r) => setTimeout(r, 500));
       }
     }
 

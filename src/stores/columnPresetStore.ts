@@ -2,18 +2,21 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { MetricKey, ColumnPreset } from '@/types/metrics';
 import { defaultColumnPresets } from '@/data/metricDefinitions';
+import { useStoreStore } from '@/stores/storeStore';
 
 interface ColumnPresetState {
   activePresetId: string;
   customPresets: ColumnPreset[];
   visibleColumns: MetricKey[];
   columnOrder: MetricKey[];
+  serverPresetsLoaded: boolean;
   setPreset: (presetId: string) => void;
   addColumn: (key: MetricKey) => void;
   removeColumn: (key: MetricKey) => void;
   reorderColumns: (columns: MetricKey[]) => void;
-  saveCustomPreset: (name: string) => void;
-  deletePreset: (presetId: string) => void;
+  saveCustomPreset: (name: string) => Promise<void>;
+  deletePreset: (presetId: string) => Promise<void>;
+  loadPresetsFromServer: () => Promise<void>;
 }
 
 export const useColumnPresetStore = create<ColumnPresetState>()(
@@ -23,6 +26,7 @@ export const useColumnPresetStore = create<ColumnPresetState>()(
       customPresets: [],
       visibleColumns: defaultColumnPresets[0].columns,
       columnOrder: defaultColumnPresets[0].columns,
+      serverPresetsLoaded: false,
 
       setPreset: (presetId) => {
         const allPresets = [...defaultColumnPresets, ...get().customPresets];
@@ -58,8 +62,9 @@ export const useColumnPresetStore = create<ColumnPresetState>()(
         set({ columnOrder: columns, visibleColumns: columns });
       },
 
-      saveCustomPreset: (name) => {
+      saveCustomPreset: async (name) => {
         const { visibleColumns, customPresets } = get();
+        const storeId = useStoreStore.getState().activeStoreId;
         const newPreset: ColumnPreset = {
           id: `custom-${Date.now()}`,
           name,
@@ -68,11 +73,66 @@ export const useColumnPresetStore = create<ColumnPresetState>()(
           isCustom: true,
         };
         set({ customPresets: [...customPresets, newPreset], activePresetId: newPreset.id });
+
+        // Persist to server if storeId is available
+        if (storeId) {
+          try {
+            await fetch('/api/column-presets', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ storeId, id: newPreset.id, name: newPreset.name, columns: newPreset.columns }),
+            });
+          } catch {
+            // Silent fail - local state is already updated
+          }
+        }
       },
 
-      deletePreset: (presetId) => {
+      deletePreset: async (presetId) => {
         const { customPresets } = get();
+        const storeId = useStoreStore.getState().activeStoreId;
         set({ customPresets: customPresets.filter((p) => p.id !== presetId) });
+
+        if (storeId) {
+          try {
+            await fetch(`/api/column-presets?id=${encodeURIComponent(presetId)}&storeId=${encodeURIComponent(storeId)}`, {
+              method: 'DELETE',
+            });
+          } catch {
+            // Silent fail
+          }
+        }
+      },
+
+      loadPresetsFromServer: async () => {
+        const storeId = useStoreStore.getState().activeStoreId;
+        if (!storeId || get().serverPresetsLoaded) return;
+        try {
+          const res = await fetch(`/api/column-presets?storeId=${encodeURIComponent(storeId)}`);
+          if (!res.ok) return;
+          const json = await res.json() as { data: Array<{ id: string; name: string; columns: string[] }> };
+          if (!json.data?.length) return;
+
+          const serverPresets: ColumnPreset[] = json.data.map((p) => ({
+            id: p.id,
+            name: p.name,
+            columns: p.columns as MetricKey[],
+            isDefault: false,
+            isCustom: true,
+          }));
+
+          // Merge server presets with local ones (server wins on id conflicts)
+          const localPresets = get().customPresets;
+          const merged = [...localPresets];
+          for (const sp of serverPresets) {
+            if (!merged.find((lp) => lp.id === sp.id)) {
+              merged.push(sp);
+            }
+          }
+          set({ customPresets: merged, serverPresetsLoaded: true });
+        } catch {
+          // Silent fail
+        }
       },
     }),
     { name: 'column-presets' }
