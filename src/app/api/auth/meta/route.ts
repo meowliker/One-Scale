@@ -3,6 +3,7 @@ import { createOAuthState, getAppCredentials } from '@/app/api/lib/db';
 import {
   isSupabasePersistenceEnabled,
   getPersistentAppCredentials,
+  createPersistentOAuthState,
 } from '@/app/api/lib/supabase-persistence';
 import { getAppUrl } from '@/app/api/lib/url';
 
@@ -47,7 +48,10 @@ export async function GET(request: NextRequest) {
   const redirectUri = `${appUrl}/api/auth/meta/callback`;
 
   // Create a random state token in DB for CSRF protection
-  const state = createOAuthState({ storeId, platform: 'meta', workspaceId });
+  const sb = isSupabasePersistenceEnabled();
+  const state = sb
+    ? await createPersistentOAuthState({ storeId, platform: 'meta', workspaceId })
+    : createOAuthState({ storeId, platform: 'meta', workspaceId });
 
   const scopes = dbCreds?.scopes || process.env.META_SCOPES || DEFAULT_META_SCOPES;
   const authUrl = new URL('https://www.facebook.com/v21.0/dialog/oauth');

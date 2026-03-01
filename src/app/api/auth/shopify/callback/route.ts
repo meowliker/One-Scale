@@ -4,6 +4,7 @@ import { consumeOAuthState, getAppCredentials } from '@/app/api/lib/db';
 import {
   isSupabasePersistenceEnabled,
   getPersistentAppCredentials,
+  consumePersistentOAuthState,
 } from '@/app/api/lib/supabase-persistence';
 import { setShopifyToken } from '@/app/api/lib/tokens';
 import { getAppUrl } from '@/app/api/lib/url';
@@ -27,7 +28,10 @@ export async function GET(request: NextRequest) {
 
   try {
     // Consume the OAuth state first to get workspace_id for credential lookup
-    const oauthState = consumeOAuthState(state);
+    const sb = isSupabasePersistenceEnabled();
+    const oauthState = sb
+      ? await consumePersistentOAuthState(state)
+      : consumeOAuthState(state);
     if (!oauthState) {
       return NextResponse.redirect(
         `${appUrl}/auth/callback?platform=shopify&status=error&message=invalid_state`
@@ -41,8 +45,9 @@ export async function GET(request: NextRequest) {
     const dbCreds = isSupabasePersistenceEnabled()
       ? await getPersistentAppCredentials('shopify', workspaceId)
       : getAppCredentials('shopify', workspaceId);
-    const apiSecret = dbCreds?.app_secret || process.env.SHOPIFY_API_SECRET!;
-    const apiKey = dbCreds?.app_id || process.env.SHOPIFY_API_KEY!;
+    // Use DB credentials atomically (both or neither) to avoid mixing sources
+    const apiKey = (dbCreds?.app_id && dbCreds?.app_secret) ? dbCreds.app_id : process.env.SHOPIFY_API_KEY!;
+    const apiSecret = (dbCreds?.app_id && dbCreds?.app_secret) ? dbCreds.app_secret : process.env.SHOPIFY_API_SECRET!;
 
     // Validate HMAC
     const queryParams = new URLSearchParams(searchParams.toString());

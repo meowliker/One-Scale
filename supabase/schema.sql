@@ -217,3 +217,18 @@ create index if not exists idx_visitor_identities_store_email
 create index if not exists idx_visitor_identities_store_customer
   on visitor_identities(store_id, customer_id)
   where customer_id is not null;
+
+-- OAuth state tokens (must survive across serverless instances)
+create table if not exists oauth_states (
+  id bigserial primary key,
+  state_token text not null unique,
+  store_id text not null,
+  platform text not null check (platform in ('meta', 'shopify')),
+  shop_domain text,
+  workspace_id text,
+  created_at timestamptz not null default now(),
+  used boolean not null default false
+);
+
+create index if not exists idx_oauth_states_token
+  on oauth_states(state_token) where not used;

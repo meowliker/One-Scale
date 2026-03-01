@@ -3,6 +3,7 @@ import { consumeOAuthState, getAppCredentials } from '@/app/api/lib/db';
 import {
   isSupabasePersistenceEnabled,
   getPersistentAppCredentials,
+  consumePersistentOAuthState,
 } from '@/app/api/lib/supabase-persistence';
 import { setMetaToken } from '@/app/api/lib/tokens';
 import { getAppUrl } from '@/app/api/lib/url';
@@ -31,7 +32,10 @@ export async function GET(request: NextRequest) {
 
   try {
     // Validate and consume the state token from DB
-    const oauthState = consumeOAuthState(state);
+    const sb = isSupabasePersistenceEnabled();
+    const oauthState = sb
+      ? await consumePersistentOAuthState(state)
+      : consumeOAuthState(state);
     if (!oauthState) {
       return NextResponse.redirect(
         `${appUrl}/auth/callback?platform=meta&status=error&message=invalid_state`

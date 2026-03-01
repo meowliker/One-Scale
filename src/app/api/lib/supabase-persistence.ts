@@ -1058,3 +1058,72 @@ export async function clearPersistentCachedPnL(storeId: string): Promise<void> {
     { method: 'DELETE' }
   );
 }
+
+// ------ OAuth States (Supabase-backed for serverless) ------
+
+import { randomBytes } from 'crypto';
+import type { OAuthState } from '@/app/api/lib/db';
+
+export async function createPersistentOAuthState(data: {
+  storeId: string;
+  platform: 'meta' | 'shopify';
+  shopDomain?: string;
+  workspaceId?: string;
+}): Promise<string> {
+  const stateToken = randomBytes(32).toString('hex');
+
+  await rest('/oauth_states', {
+    method: 'POST',
+    headers: headers({ Prefer: 'return=minimal' }),
+    body: JSON.stringify({
+      state_token: stateToken,
+      store_id: data.storeId,
+      platform: data.platform,
+      shop_domain: data.shopDomain ?? null,
+      workspace_id: data.workspaceId ?? null,
+    }),
+  });
+
+  // Clean up old states (older than 1 hour)
+  rest(
+    `/oauth_states?created_at=lt.${new Date(Date.now() - 3600_000).toISOString()}`,
+    { method: 'DELETE' }
+  ).catch(() => {/* best-effort cleanup */});
+
+  return stateToken;
+}
+
+export async function consumePersistentOAuthState(stateToken: string): Promise<OAuthState | null> {
+  const rows = await rest<Array<{
+    id: number;
+    state_token: string;
+    store_id: string;
+    platform: 'meta' | 'shopify';
+    shop_domain: string | null;
+    workspace_id: string | null;
+    created_at: string;
+    used: boolean;
+  }>>(
+    `/oauth_states?state_token=eq.${encodeURIComponent(stateToken)}&used=eq.false&select=*&limit=1`
+  );
+
+  const row = rows[0];
+  if (!row) return null;
+
+  // Mark as used so it can't be replayed
+  await rest(
+    `/oauth_states?id=eq.${row.id}`,
+    { method: 'PATCH', headers: headers({ Prefer: 'return=minimal' }), body: JSON.stringify({ used: true }) }
+  );
+
+  return {
+    id: row.id,
+    state_token: row.state_token,
+    store_id: row.store_id,
+    platform: row.platform,
+    shop_domain: row.shop_domain,
+    workspace_id: row.workspace_id,
+    created_at: row.created_at,
+    used: 1,
+  };
+}

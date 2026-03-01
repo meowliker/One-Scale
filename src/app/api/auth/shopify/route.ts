@@ -3,6 +3,7 @@ import { createOAuthState, getAppCredentials } from '@/app/api/lib/db';
 import {
   isSupabasePersistenceEnabled,
   getPersistentAppCredentials,
+  createPersistentOAuthState,
 } from '@/app/api/lib/supabase-persistence';
 import { getAppUrl } from '@/app/api/lib/url';
 
@@ -26,7 +27,8 @@ export async function GET(request: NextRequest) {
   const dbCreds = isSupabasePersistenceEnabled()
     ? await getPersistentAppCredentials('shopify', workspaceId)
     : getAppCredentials('shopify', workspaceId);
-  const apiKey = dbCreds?.app_id || process.env.SHOPIFY_API_KEY;
+  // Use DB credentials atomically (both or neither) to avoid mixing sources
+  const apiKey = (dbCreds?.app_id && dbCreds?.app_secret) ? dbCreds.app_id : process.env.SHOPIFY_API_KEY;
   const scopes = dbCreds?.scopes || process.env.SHOPIFY_SCOPES || 'read_orders,read_products,read_customers';
 
   if (!apiKey) {
@@ -39,7 +41,10 @@ export async function GET(request: NextRequest) {
   const redirectUri = `${appUrl}/api/auth/shopify/callback`;
 
   // Create a random state token in DB for CSRF protection
-  const state = createOAuthState({ storeId, platform: 'shopify', shopDomain: shop, workspaceId });
+  const sb = isSupabasePersistenceEnabled();
+  const state = sb
+    ? await createPersistentOAuthState({ storeId, platform: 'shopify', shopDomain: shop, workspaceId })
+    : createOAuthState({ storeId, platform: 'shopify', shopDomain: shop, workspaceId });
 
   // Clean shop domain (ensure no protocol)
   const cleanShop = shop.replace(/^https?:\/\//, '').replace(/\/$/, '');
