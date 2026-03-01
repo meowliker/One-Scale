@@ -23,9 +23,9 @@ import { CSS } from '@dnd-kit/utilities';
 import { cn } from '@/lib/utils';
 import { SearchInput } from '@/components/ui/SearchInput';
 import { useColumnPresetStore } from '@/stores/columnPresetStore';
-import { allMetrics, metricsByCategory, defaultColumnPresets } from '@/data/metricDefinitions';
+import { allMetrics, metricsByCategory } from '@/data/metricDefinitions';
 import { SavePresetDialog } from '@/components/columns/SavePresetDialog';
-import type { MetricKey, MetricCategory, MetricDefinition, ColumnPreset } from '@/types/metrics';
+import type { MetricKey, MetricCategory, MetricDefinition } from '@/types/metrics';
 
 export interface ColumnPickerProps {
   isOpen: boolean;
@@ -280,28 +280,27 @@ export function ColumnPicker({ isOpen, onClose }: ColumnPickerProps) {
                 </button>
               </div>
 
-              {/* Presets */}
-              <div className="px-4 py-3 border-b border-[rgba(0,0,0,0.06)]">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-[#8e8e93] mb-2">Presets</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {([...defaultColumnPresets, ...customPresets] as ColumnPreset[]).map((preset) => {
-                    const isActive = activePresetId === preset.id;
-                    return (
-                      <div key={preset.id} className="group/p relative inline-flex">
-                        <button
-                          onClick={() => setPreset(preset.id)}
-                          className={cn(
-                            'inline-flex items-center gap-1 rounded-full py-1.5 text-[12px] font-medium transition-colors duration-150',
-                            preset.isCustom ? 'pl-3 pr-6' : 'px-3',
-                            isActive
-                              ? 'bg-[#0071e3] text-white'
-                              : 'bg-[#f5f5f7] text-[#6e6e73] hover:bg-[#e8e8ed] hover:text-[#1d1d1f]'
-                          )}
-                        >
-                          {isActive && <Check className="h-3 w-3" />}
-                          <span>{preset.name}</span>
-                        </button>
-                        {preset.isCustom && (
+              {/* Presets — only show if user has saved custom presets */}
+              {customPresets.length > 0 && (
+                <div className="px-4 py-3 border-b border-[rgba(0,0,0,0.06)]">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[#8e8e93] mb-2">Saved Presets</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {customPresets.map((preset) => {
+                      const isActive = activePresetId === preset.id;
+                      return (
+                        <div key={preset.id} className="group/p relative inline-flex">
+                          <button
+                            onClick={() => setPreset(preset.id)}
+                            className={cn(
+                              'inline-flex items-center gap-1 rounded-full pl-3 pr-6 py-1.5 text-[12px] font-medium transition-colors duration-150',
+                              isActive
+                                ? 'bg-[#0071e3] text-white'
+                                : 'bg-[#f5f5f7] text-[#6e6e73] hover:bg-[#e8e8ed] hover:text-[#1d1d1f]'
+                            )}
+                          >
+                            {isActive && <Check className="h-3 w-3" />}
+                            <span>{preset.name}</span>
+                          </button>
                           <button
                             onClick={(e) => { e.stopPropagation(); deletePreset(preset.id); }}
                             className={cn(
@@ -312,12 +311,12 @@ export function ColumnPicker({ isOpen, onClose }: ColumnPickerProps) {
                           >
                             <X className="h-3 w-3" />
                           </button>
-                        )}
-                      </div>
-                    );
-                  })}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Search — sticky */}
               <div className="px-4 py-3 border-b border-[rgba(0,0,0,0.06)]">
