@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Eye, EyeOff, Save, Trash2, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, Save, Trash2, CheckCircle2, XCircle, Loader2, ChevronDown, Copy, Check as CheckIcon, ExternalLink } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { cn } from '@/lib/utils';
 
@@ -49,6 +49,17 @@ export function ApiCredentials() {
   // Visibility toggles
   const [showMetaSecret, setShowMetaSecret] = useState(false);
   const [showShopifySecret, setShowShopifySecret] = useState(false);
+
+  // Shopify setup guide
+  const [showShopifyGuide, setShowShopifyGuide] = useState(false);
+  const [copiedRedirect, setCopiedRedirect] = useState(false);
+
+  function copyRedirectUri() {
+    navigator.clipboard.writeText(shopifyForm.redirectUri).then(() => {
+      setCopiedRedirect(true);
+      setTimeout(() => setCopiedRedirect(false), 2000);
+    });
+  }
 
   useEffect(() => {
     async function loadCredentials() {
@@ -315,6 +326,62 @@ export function ApiCredentials() {
           <StatusBadge configured={credentials?.shopify.configured ?? false} />
         </div>
 
+        {/* Setup guide */}
+        <div className="border-b border-gray-100">
+          <button
+            type="button"
+            onClick={() => setShowShopifyGuide((v) => !v)}
+            className="flex w-full items-center justify-between px-5 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+          >
+            <span className="flex items-center gap-2 text-green-700">
+              <span className="text-[13px] font-semibold">How to set up your Shopify app</span>
+            </span>
+            <ChevronDown className={cn('h-4 w-4 text-gray-400 transition-transform duration-200', showShopifyGuide && 'rotate-180')} />
+          </button>
+
+          {showShopifyGuide && (
+            <div className="px-5 pb-4 space-y-3 text-sm text-gray-600">
+              <ol className="space-y-3 list-none">
+                <li className="flex gap-3">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-green-100 text-[11px] font-bold text-green-700 mt-0.5">1</span>
+                  <span>
+                    Go to{' '}
+                    <a href="https://partners.shopify.com" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-green-700 underline underline-offset-2 hover:text-green-800">
+                      partners.shopify.com <ExternalLink className="h-3 w-3" />
+                    </a>
+                    {' '}→ <strong>Apps</strong> → <strong>Create app</strong> → choose <strong>Create app manually</strong>.
+                  </span>
+                </li>
+                <li className="flex gap-3">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-green-100 text-[11px] font-bold text-green-700 mt-0.5">2</span>
+                  <div className="flex-1 min-w-0">
+                    <p>In <strong>App setup</strong>, add this exact URL to <strong>Allowed redirection URL(s)</strong>:</p>
+                    <div className="mt-1.5 flex items-center gap-2 rounded-md border border-green-200 bg-green-50 px-3 py-2">
+                      <code className="flex-1 min-w-0 truncate text-[12px] font-mono text-green-800">{shopifyForm.redirectUri}</code>
+                      <button
+                        type="button"
+                        onClick={copyRedirectUri}
+                        className="shrink-0 flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-green-700 hover:bg-green-100 transition-colors"
+                      >
+                        {copiedRedirect ? <CheckIcon className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                        {copiedRedirect ? 'Copied!' : 'Copy'}
+                      </button>
+                    </div>
+                  </div>
+                </li>
+                <li className="flex gap-3">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-green-100 text-[11px] font-bold text-green-700 mt-0.5">3</span>
+                  <span>From the app&apos;s <strong>API credentials</strong> page, copy the <strong>Client ID</strong> → paste into <em>API Key</em> below, and copy the <strong>Client secret</strong> → paste into <em>API Secret</em> below.</span>
+                </li>
+                <li className="flex gap-3">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-green-100 text-[11px] font-bold text-green-700 mt-0.5">4</span>
+                  <span>Make sure the app requests at least these scopes: <code className="rounded bg-gray-100 px-1 py-0.5 text-[12px] font-mono">read_orders, read_products, read_customers</code></span>
+                </li>
+              </ol>
+            </div>
+          )}
+        </div>
+
         <div className="space-y-4 p-5">
           <FormField
             label="API Key"
@@ -344,6 +411,17 @@ export function ApiCredentials() {
             onChange={(v) => setShopifyForm((p) => ({ ...p, redirectUri: v }))}
             placeholder="Auto-detected from current URL"
             hint="Auto-filled from your current domain — this must also be set in your Shopify app settings"
+            trailing={
+              <button
+                type="button"
+                onClick={copyRedirectUri}
+                className="flex items-center gap-1 text-[11px] font-medium text-gray-400 hover:text-gray-600 whitespace-nowrap transition-colors"
+                title="Copy redirect URI"
+              >
+                {copiedRedirect ? <CheckIcon className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+                {copiedRedirect ? 'Copied!' : 'Copy'}
+              </button>
+            }
           />
           <FormField
             label="Scopes"
