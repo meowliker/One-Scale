@@ -1064,6 +1064,23 @@ export async function clearPersistentCachedPnL(storeId: string): Promise<void> {
 import { randomBytes } from 'crypto';
 import type { OAuthState } from '@/app/api/lib/db';
 
+// Auto-detect whether the oauth_states table has the workspace_id column.
+// Cached for the lifetime of the process so we only probe once.
+let _oauthWsColumnState: boolean | null = null;
+
+async function hasOAuthStatesWorkspaceColumn(): Promise<boolean> {
+  if (_oauthWsColumnState !== null) return _oauthWsColumnState;
+  try {
+    await rest<unknown[]>(
+      '/oauth_states?workspace_id=eq.__probe__&select=id&limit=0'
+    );
+    _oauthWsColumnState = true;
+  } catch {
+    _oauthWsColumnState = false;
+  }
+  return _oauthWsColumnState;
+}
+
 export async function createPersistentOAuthState(data: {
   storeId: string;
   platform: 'meta' | 'shopify';
@@ -1072,16 +1089,22 @@ export async function createPersistentOAuthState(data: {
 }): Promise<string> {
   const stateToken = randomBytes(32).toString('hex');
 
+  const canUseWs = await hasOAuthStatesWorkspaceColumn();
+
+  const payload: Record<string, unknown> = {
+    state_token: stateToken,
+    store_id: data.storeId,
+    platform: data.platform,
+    shop_domain: data.shopDomain ?? null,
+  };
+  if (canUseWs) {
+    payload.workspace_id = data.workspaceId ?? null;
+  }
+
   await rest('/oauth_states', {
     method: 'POST',
     headers: headers({ Prefer: 'return=minimal' }),
-    body: JSON.stringify({
-      state_token: stateToken,
-      store_id: data.storeId,
-      platform: data.platform,
-      shop_domain: data.shopDomain ?? null,
-      workspace_id: data.workspaceId ?? null,
-    }),
+    body: JSON.stringify(payload),
   });
 
   // Clean up old states (older than 1 hour)
@@ -1100,7 +1123,7 @@ export async function consumePersistentOAuthState(stateToken: string): Promise<O
     store_id: string;
     platform: 'meta' | 'shopify';
     shop_domain: string | null;
-    workspace_id: string | null;
+    workspace_id?: string | null;
     created_at: string;
     used: boolean;
   }>>(
@@ -1122,7 +1145,7 @@ export async function consumePersistentOAuthState(stateToken: string): Promise<O
     store_id: row.store_id,
     platform: row.platform,
     shop_domain: row.shop_domain,
-    workspace_id: row.workspace_id,
+    workspace_id: row.workspace_id ?? null,
     created_at: row.created_at,
     used: 1,
   };
