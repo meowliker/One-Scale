@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import { decryptSecret, encryptSecret } from '@/app/api/lib/crypto';
@@ -26,12 +26,17 @@ const globalForDb = globalThis as unknown as {
 };
 
 function initDb(): Database.Database {
+  // Lazy-load native module so routes that only use Supabase don't crash
+  // if the better-sqlite3 binary is unavailable (e.g. Vercel serverless).
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const BetterSqlite3 = require('better-sqlite3') as typeof Database;
+
   const dir = path.dirname(DB_PATH);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  const instance = new Database(DB_PATH);
+  const instance = new BetterSqlite3(DB_PATH);
   instance.pragma('journal_mode = WAL');
   instance.pragma('foreign_keys = ON');
 

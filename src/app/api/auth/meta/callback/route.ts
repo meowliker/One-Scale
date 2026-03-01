@@ -16,7 +16,14 @@ export async function GET(request: NextRequest) {
   const error = searchParams.get('error');
 
   // Derive external-facing URL (handles ngrok, proxies, etc.)
-  const appUrl = getAppUrl(request);
+  let appUrl: string;
+  try {
+    appUrl = getAppUrl(request);
+  } catch {
+    // Last-resort fallback if header parsing fails
+    const reqUrl = new URL(request.url);
+    appUrl = `${reqUrl.protocol}//${reqUrl.host}`;
+  }
 
   if (error) {
     return NextResponse.redirect(
