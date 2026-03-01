@@ -45,7 +45,9 @@ async function fetchSummaryData(preset: DateRangePreset) {
     getBlendedMetricsForRange(preset)(),
     getTimeSeriesForRange(preset)(),
     getTopCampaignsForRange(preset)(),
-    getDailyPnL(),
+    // Gracefully degrade: if P&L fetch fails (e.g. Shopify not connected),
+    // the rest of the dashboard still loads with Meta data.
+    getDailyPnL().catch(() => [] as PnLEntry[]),
   ]);
 
   const shopifyMetrics = computeShopifyMetricsFromPnL(dailyPnL, preset);

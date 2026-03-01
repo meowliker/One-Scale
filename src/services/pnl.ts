@@ -683,9 +683,13 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
     fetchInsightsDirectly('last_7d'),
     fetchInsightsDirectly('today'),
     fetchPnLSettings(),
-    // ONE range call for all 8 days instead of 8 separate day calls
-    fetchOrdersForDateRange(earliestShopifyDate, todayStr, tz),
-    fetchAllRefundedOrders(displayStartDate, todayStr, earliestShopifyDate, tz),
+    // ONE range call for all 8 days instead of 8 separate day calls.
+    // Gracefully return empty arrays if Shopify isn't connected — Meta revenue
+    // fallback will kick in for those days so the page still renders.
+    fetchOrdersForDateRange(earliestShopifyDate, todayStr, tz)
+      .catch((err) => { console.warn('[P&L] Shopify orders fetch failed, using Meta fallback:', err instanceof Error ? err.message : err); return [] as ShopifyOrder[]; }),
+    fetchAllRefundedOrders(displayStartDate, todayStr, earliestShopifyDate, tz)
+      .catch((err) => { console.warn('[P&L] Shopify refunds fetch failed:', err instanceof Error ? err.message : err); return [] as ShopifyOrder[]; }),
     fetchRealTransactionFees(tz),
   ]);
 
