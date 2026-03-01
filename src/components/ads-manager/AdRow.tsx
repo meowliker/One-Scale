@@ -340,7 +340,7 @@ export function AdRow({
         <PerformanceSparkline entityId={ad.id} data={sparklineData?.[ad.id]} currentRoas={ad.metrics.roas} />
 
         {/* Latest Actions */}
-        <LatestActionsCell entityId={ad.id} actions={activityData?.[ad.id]} activitiesFullyLoaded={activitiesFullyLoaded} />
+        <LatestActionsCell entityId={ad.id} actions={activityData?.[ad.id]} activitiesFullyLoaded={activitiesFullyLoaded} status={ad.status} />
 
         {/* Dynamic Metrics */}
         {columnOrder.map((key) => (

@@ -279,7 +279,7 @@ export function AdSetRow({
       <PerformanceSparkline entityId={adSet.id} data={sparklineData?.[adSet.id]} currentRoas={adSet.metrics.roas} />
 
       {/* Latest Actions */}
-      <LatestActionsCell entityId={adSet.id} actions={activityData?.[adSet.id]} activitiesFullyLoaded={activitiesFullyLoaded} updatedTime={adSet.updatedTime} />
+      <LatestActionsCell entityId={adSet.id} actions={activityData?.[adSet.id]} activitiesFullyLoaded={activitiesFullyLoaded} updatedTime={adSet.updatedTime} status={adSet.status} />
 
       {/* Dynamic Metrics */}
       {columnOrder.map((key) => (

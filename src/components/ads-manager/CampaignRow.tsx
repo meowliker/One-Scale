@@ -252,7 +252,7 @@ export function CampaignRow({
       <PerformanceSparkline entityId={campaign.id} data={sparklineData?.[campaign.id]} currentRoas={campaign.metrics.roas} />
 
       {/* Latest Actions */}
-      <LatestActionsCell entityId={campaign.id} actions={activityData?.[campaign.id]} activitiesFullyLoaded={activitiesFullyLoaded} updatedTime={campaign.updatedTime} />
+      <LatestActionsCell entityId={campaign.id} actions={activityData?.[campaign.id]} activitiesFullyLoaded={activitiesFullyLoaded} updatedTime={campaign.updatedTime} status={campaign.status} />
 
       {/* Dynamic Metrics */}
       {columnOrder.map((key) => (

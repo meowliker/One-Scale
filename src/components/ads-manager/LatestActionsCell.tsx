@@ -13,9 +13,7 @@ import {
   Users,
   Clock,
   User,
-  ChevronDown,
   ChevronUp,
-  Pencil,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -28,6 +26,7 @@ interface LatestActionsCellProps {
   actions?: EntityAction[];
   activitiesFullyLoaded?: boolean;
   updatedTime?: string;
+  status?: string;
 }
 
 interface ActionConfig {
@@ -106,19 +105,7 @@ const performedByConfig: Record<EntityAction['performedBy'], { label: string; cl
   rule: { label: 'Rule', className: 'bg-amber-500/20 text-amber-300' },
 };
 
-function formatTimeAgo(timestamp: string): string {
-  const diff = Date.now() - new Date(timestamp).getTime();
-  const mins = Math.floor(diff / 60000);
-  const hours = Math.floor(diff / 3600000);
-  const days = Math.floor(diff / 86400000);
-
-  if (mins < 1) return 'Just now';
-  if (mins < 60) return `${mins}m ago`;
-  if (hours < 24) return `${hours}h ago`;
-  if (days === 1) return 'Yesterday';
-  if (days < 7) return `${days}d ago`;
-  return new Date(timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
+const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
 
 function formatActivityDate(timestamp: string): string {
   const date = new Date(timestamp);
@@ -128,7 +115,16 @@ function formatActivityDate(timestamp: string): string {
   return `${month} ${day} at ${time}`;
 }
 
-/* ─── Inline action pill (shown in the cell) ─── */
+function formatTimeAgo(timestamp: string): string {
+  const diff = Date.now() - new Date(timestamp).getTime();
+  const mins = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  return `${hours}h ago`;
+}
+
+/* ─── Compact icon-only pill (shown in the cell) ─── */
 function ActionPill({
   action,
   onMouseEnter,
@@ -147,22 +143,14 @@ function ActionPill({
     <div
       ref={innerRef}
       className={cn(
-        'flex items-center gap-1.5 rounded-md px-2 py-1 cursor-default transition-all duration-150',
-        'hover:ring-1 hover:ring-border-light',
+        'flex h-7 w-7 items-center justify-center rounded-full cursor-default transition-all duration-150',
+        'hover:ring-2 hover:ring-border-light hover:scale-110',
         config.bg,
       )}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
-      <Icon className={cn('h-3.5 w-3.5 shrink-0', config.color)} />
-      <div className="flex flex-col min-w-0">
-        <span className={cn('text-[11px] font-semibold leading-tight truncate', config.color)}>
-          {config.label}
-        </span>
-        <span className="text-[10px] leading-tight text-text-dimmed">
-          {formatTimeAgo(action.timestamp)}
-        </span>
-      </div>
+      <Icon className={cn('h-3.5 w-3.5', config.color)} />
     </div>
   );
 }
@@ -191,12 +179,15 @@ function ActionTooltipContent({ action }: { action: EntityAction }) {
           </div>
         )}
       </div>
-      {action.objectName && (
-        <div className="flex items-start gap-1.5 mb-2 text-xs">
-          <span className="text-text-dimmed shrink-0">Item:</span>
-          <span className="text-text-secondary font-medium truncate">{action.objectName}</span>
-        </div>
-      )}
+      <div className="flex items-center gap-1.5 mb-2 text-[11px] text-text-dimmed">
+        <span>{formatTimeAgo(action.timestamp)}</span>
+        {action.objectName && (
+          <>
+            <span className="text-text-dimmed/50">&middot;</span>
+            <span className="text-text-secondary font-medium truncate max-w-[160px]">{action.objectName}</span>
+          </>
+        )}
+      </div>
       <div className="flex items-center justify-between pt-2 border-t border-border">
         <div className="flex items-center gap-1.5">
           <User className="h-3 w-3 text-text-dimmed" />
@@ -213,7 +204,7 @@ function ActionTooltipContent({ action }: { action: EntityAction }) {
   );
 }
 
-/* ─── Expanded all-actions tooltip ─── */
+/* ─── Expanded all-actions popover ─── */
 function AllActionsTooltipContent({ actions, onCollapse }: { actions: EntityAction[]; onCollapse: () => void }) {
   return (
     <div className="min-w-[320px] max-w-[380px] rounded-lg border border-border-light bg-surface-elevated shadow-xl">
@@ -257,18 +248,25 @@ function AllActionsTooltipContent({ actions, onCollapse }: { actions: EntityActi
 }
 
 /* ─── Main cell ─── */
-export function LatestActionsCell({ entityId, actions: actionsProp, activitiesFullyLoaded, updatedTime }: LatestActionsCellProps) {
+export function LatestActionsCell({ entityId, actions: actionsProp, activitiesFullyLoaded, status }: LatestActionsCellProps) {
   const [hoveredActionId, setHoveredActionId] = useState<string | null>(null);
   const [showAllActions, setShowAllActions] = useState(false);
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iconRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const overflowRef = useRef<HTMLSpanElement | null>(null);
+  const overflowRef = useRef<HTMLButtonElement | null>(null);
 
   const actions = useMemo(() => {
-    if (actionsProp && actionsProp.length > 0) return actionsProp;
-    if (activitiesFullyLoaded) return getActionsForEntity(entityId);
-    return [];
-  }, [entityId, actionsProp, activitiesFullyLoaded]);
+    // Only show actions for ACTIVE entities
+    if (status && status !== 'ACTIVE') return [];
+
+    let raw: EntityAction[] = [];
+    if (actionsProp && actionsProp.length > 0) raw = actionsProp;
+    else if (activitiesFullyLoaded) raw = getActionsForEntity(entityId);
+
+    // Filter to last 12 hours only
+    const cutoff = Date.now() - TWELVE_HOURS_MS;
+    return raw.filter((a) => new Date(a.timestamp).getTime() >= cutoff);
+  }, [entityId, actionsProp, activitiesFullyLoaded, status]);
 
   const handleMouseEnter = useCallback((actionId: string) => {
     if (hideTimeoutRef.current) { clearTimeout(hideTimeoutRef.current); hideTimeoutRef.current = null; }
@@ -280,41 +278,34 @@ export function LatestActionsCell({ entityId, actions: actionsProp, activitiesFu
     hideTimeoutRef.current = setTimeout(() => { setHoveredActionId(null); setShowAllActions(false); hideTimeoutRef.current = null; }, 150);
   }, []);
 
-  const handleOverflowEnter = useCallback(() => {
-    if (hideTimeoutRef.current) { clearTimeout(hideTimeoutRef.current); hideTimeoutRef.current = null; }
+  const handleOverflowClick = useCallback(() => {
     setHoveredActionId(null);
-    setShowAllActions(true);
+    setShowAllActions((prev) => !prev);
   }, []);
 
   const handleOverflowLeave = useCallback(() => {
     hideTimeoutRef.current = setTimeout(() => { setShowAllActions(false); hideTimeoutRef.current = null; }, 150);
   }, []);
 
-  // Empty state
+  const handleOverflowEnter = useCallback(() => {
+    if (hideTimeoutRef.current) { clearTimeout(hideTimeoutRef.current); hideTimeoutRef.current = null; }
+  }, []);
+
+  // Empty state — simple dash
   if (actions.length === 0) {
     return (
-      <td className="px-3 py-2 min-w-[180px]">
-        {updatedTime ? (
-          <div className={cn('flex items-center gap-1.5 rounded-md px-2 py-1', 'bg-slate-50 dark:bg-slate-800/60')}>
-            <Pencil className="h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-slate-400" />
-            <div className="flex flex-col min-w-0">
-              <span className="text-[11px] font-semibold leading-tight text-slate-500 dark:text-slate-300">Modified</span>
-              <span className="text-[10px] leading-tight text-text-dimmed">{formatTimeAgo(updatedTime)}</span>
-            </div>
-          </div>
-        ) : (
-          <span className="text-[11px] text-text-dimmed px-2">&mdash;</span>
-        )}
+      <td className="px-3 py-2 min-w-[120px]">
+        <span className="text-[11px] text-text-dimmed px-2">&mdash;</span>
       </td>
     );
   }
 
-  const visibleActions = actions.slice(0, 2);
-  const overflowCount = actions.length - 2;
+  const visibleActions = actions.slice(0, 3);
+  const overflowCount = actions.length - 3;
 
   return (
-    <td className="px-3 py-2 min-w-[180px]">
-      <div className="flex flex-col gap-1">
+    <td className="px-3 py-2 min-w-[120px]">
+      <div className="flex items-center gap-1.5">
         {visibleActions.map((action) => (
           <div key={action.id}>
             <ActionPill
@@ -332,15 +323,16 @@ export function LatestActionsCell({ entityId, actions: actionsProp, activitiesFu
         ))}
         {overflowCount > 0 && (
           <>
-            <span
+            <button
               ref={overflowRef}
-              className="flex h-5 items-center gap-0.5 rounded-md bg-surface-hover px-2 text-[10px] font-medium text-text-muted cursor-default hover:bg-surface-active transition-colors w-fit"
+              type="button"
+              className="flex h-7 w-7 items-center justify-center rounded-full bg-surface-hover text-[10px] font-bold text-text-muted cursor-pointer hover:bg-surface-active transition-colors"
+              onClick={handleOverflowClick}
               onMouseEnter={handleOverflowEnter}
               onMouseLeave={handleOverflowLeave}
             >
-              +{overflowCount} more
-              <ChevronDown className="h-3 w-3" />
-            </span>
+              +{overflowCount}
+            </button>
             <PortalTooltip anchorRef={overflowRef} visible={showAllActions}>
               <div onMouseEnter={handleOverflowEnter} onMouseLeave={handleOverflowLeave}>
                 <AllActionsTooltipContent actions={actions} onCollapse={() => setShowAllActions(false)} />
