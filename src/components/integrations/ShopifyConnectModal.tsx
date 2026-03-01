@@ -8,9 +8,10 @@ interface ShopifyConnectModalProps {
   isOpen: boolean;
   onClose: () => void;
   storeId: string;
+  workspaceId?: string;
 }
 
-export function ShopifyConnectModal({ isOpen, onClose, storeId }: ShopifyConnectModalProps) {
+export function ShopifyConnectModal({ isOpen, onClose, storeId, workspaceId }: ShopifyConnectModalProps) {
   const [shopDomain, setShopDomain] = useState('');
   const [error, setError] = useState('');
 
@@ -36,7 +37,7 @@ export function ShopifyConnectModal({ isOpen, onClose, storeId }: ShopifyConnect
     }
 
     // Open Shopify OAuth in a popup
-    const url = `/api/auth/shopify?storeId=${encodeURIComponent(storeId)}&shop=${encodeURIComponent(cleaned)}`;
+    const url = `/api/auth/shopify?storeId=${encodeURIComponent(storeId)}&shop=${encodeURIComponent(cleaned)}${workspaceId ? `&workspaceId=${encodeURIComponent(workspaceId)}` : ''}`;
     const width = 600;
     const height = 700;
     const left = window.screenX + (window.outerWidth - width) / 2;

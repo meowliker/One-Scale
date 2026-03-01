@@ -21,6 +21,7 @@ import {
 } from '@/services/integrations';
 import { useConnectionStore } from '@/stores/connectionStore';
 import { useStoreStore } from '@/stores/storeStore';
+import { getWorkspaceId } from '@/lib/auth/workspace';
 import { IntegrationCard } from '@/components/integrations/IntegrationCard';
 import { ClickUpPanel } from '@/components/integrations/ClickUpPanel';
 import { GoogleDrivePanel } from '@/components/integrations/GoogleDrivePanel';
@@ -53,6 +54,7 @@ export function IntegrationsClient() {
     Array<{ storeId: string; storeName: string; accountId: string | null; accountName: string | null; connectedAt: string }>
   >([]);
   const [copyingConnection, setCopyingConnection] = useState(false);
+  const [workspaceId, setWorkspaceId] = useState<string | undefined>();
 
   // Modal states
   const [shopifyModalOpen, setShopifyModalOpen] = useState(false);
@@ -66,6 +68,8 @@ export function IntegrationsClient() {
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
   const stores = useStoreStore((s) => s.stores);
   const activeStoreName = stores.find((s) => s.id === activeStoreId)?.name || 'Current Store';
+
+  useEffect(() => { getWorkspaceId().then(setWorkspaceId); }, []);
 
   // Listen for OAuth popup callback messages
   useEffect(() => {
@@ -259,7 +263,7 @@ export function IntegrationsClient() {
         return;
       }
       // Connect — open Meta OAuth in a popup
-      const url = `/api/auth/meta?storeId=${encodeURIComponent(activeStoreId)}`;
+      const url = `/api/auth/meta?storeId=${encodeURIComponent(activeStoreId)}${workspaceId ? `&workspaceId=${encodeURIComponent(workspaceId)}` : ''}`;
       const width = 600;
       const height = 700;
       const left = window.screenX + (window.outerWidth - width) / 2;
@@ -495,6 +499,7 @@ export function IntegrationsClient() {
         isOpen={shopifyModalOpen}
         onClose={() => setShopifyModalOpen(false)}
         storeId={activeStoreId}
+        workspaceId={workspaceId}
       />
 
     </div>

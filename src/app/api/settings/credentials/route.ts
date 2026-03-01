@@ -10,12 +10,16 @@ import {
   upsertPersistentAppCredentials,
   deletePersistentAppCredentials,
 } from '@/app/api/lib/supabase-persistence';
+import { readSessionFromRequest } from '@/lib/auth/request-session';
 
 // GET — return saved credentials (mask secrets)
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const session = await readSessionFromRequest(request);
+  const workspaceId = session.workspaceId;
+
   const creds = isSupabasePersistenceEnabled()
-    ? await getAllPersistentAppCredentials()
-    : getAllAppCredentials();
+    ? await getAllPersistentAppCredentials(workspaceId)
+    : getAllAppCredentials(workspaceId);
 
   return NextResponse.json({
     meta: creds.meta
@@ -43,6 +47,9 @@ export async function GET() {
 // POST — save credentials for a platform
 export async function POST(request: NextRequest) {
   try {
+    const session = await readSessionFromRequest(request);
+    const workspaceId = session.workspaceId;
+
     const body = await request.json();
     const { platform, appId, appSecret, redirectUri, scopes } = body as {
       platform: 'meta' | 'shopify';
@@ -67,9 +74,9 @@ export async function POST(request: NextRequest) {
     }
 
     if (isSupabasePersistenceEnabled()) {
-      await upsertPersistentAppCredentials({ platform, appId, appSecret, redirectUri, scopes });
+      await upsertPersistentAppCredentials({ platform, appId, appSecret, redirectUri, scopes, workspaceId });
     } else {
-      upsertAppCredentials({ platform, appId, appSecret, redirectUri, scopes });
+      upsertAppCredentials({ platform, appId, appSecret, redirectUri, scopes, workspaceId });
     }
 
     return NextResponse.json({ success: true });
@@ -86,6 +93,9 @@ export async function POST(request: NextRequest) {
 // DELETE — remove credentials for a platform
 export async function DELETE(request: NextRequest) {
   try {
+    const session = await readSessionFromRequest(request);
+    const workspaceId = session.workspaceId;
+
     const body = await request.json();
     const { platform } = body as { platform: 'meta' | 'shopify' };
 
@@ -97,9 +107,9 @@ export async function DELETE(request: NextRequest) {
     }
 
     if (isSupabasePersistenceEnabled()) {
-      await deletePersistentAppCredentials(platform);
+      await deletePersistentAppCredentials(platform, workspaceId);
     } else {
-      deleteAppCredentials(platform);
+      deleteAppCredentials(platform, workspaceId);
     }
 
     return NextResponse.json({ success: true });

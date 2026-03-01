@@ -10,6 +10,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const storeId = searchParams.get('storeId');
   const shop = searchParams.get('shop');
+  const workspaceId = searchParams.get('workspaceId') || undefined;
 
   if (!storeId || !shop) {
     return NextResponse.json(
@@ -23,8 +24,8 @@ export async function GET(request: NextRequest) {
 
   // Read credentials from DB first, fallback to env
   const dbCreds = isSupabasePersistenceEnabled()
-    ? await getPersistentAppCredentials('shopify')
-    : getAppCredentials('shopify');
+    ? await getPersistentAppCredentials('shopify', workspaceId)
+    : getAppCredentials('shopify', workspaceId);
   const apiKey = dbCreds?.app_id || process.env.SHOPIFY_API_KEY;
   const scopes = dbCreds?.scopes || process.env.SHOPIFY_SCOPES || 'read_orders,read_products,read_customers';
 
@@ -38,7 +39,7 @@ export async function GET(request: NextRequest) {
   const redirectUri = `${appUrl}/api/auth/shopify/callback`;
 
   // Create a random state token in DB for CSRF protection
-  const state = createOAuthState({ storeId, platform: 'shopify', shopDomain: shop });
+  const state = createOAuthState({ storeId, platform: 'shopify', shopDomain: shop, workspaceId });
 
   // Clean shop domain (ensure no protocol)
   const cleanShop = shop.replace(/^https?:\/\//, '').replace(/\/$/, '');

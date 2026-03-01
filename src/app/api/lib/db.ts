@@ -56,12 +56,14 @@ function initDb(): Database.Database {
 
     CREATE TABLE IF NOT EXISTS app_credentials (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      platform TEXT NOT NULL CHECK(platform IN ('meta', 'shopify')) UNIQUE,
+      platform TEXT NOT NULL CHECK(platform IN ('meta', 'shopify')),
+      workspace_id TEXT NOT NULL DEFAULT '__global__',
       app_id TEXT NOT NULL,
       app_secret TEXT NOT NULL,
       redirect_uri TEXT NOT NULL,
       scopes TEXT,
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(platform, workspace_id)
     );
 
     CREATE TABLE IF NOT EXISTS oauth_states (
@@ -70,6 +72,7 @@ function initDb(): Database.Database {
       store_id TEXT NOT NULL,
       platform TEXT NOT NULL CHECK(platform IN ('meta', 'shopify')),
       shop_domain TEXT,
+      workspace_id TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       used INTEGER NOT NULL DEFAULT 0
     );
@@ -301,6 +304,38 @@ function initDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_tracking_events_store_entities_time
       ON tracking_events(store_id, campaign_id, adset_id, ad_id, occurred_at DESC);
   `);
+
+  // Migration: add workspace_id to app_credentials for per-workspace credentials
+  const credColumns = instance.pragma('table_info(app_credentials)') as { name: string }[];
+  const hasWorkspaceId = credColumns.some((c) => c.name === 'workspace_id');
+  if (!hasWorkspaceId) {
+    instance.exec("ALTER TABLE app_credentials ADD COLUMN workspace_id TEXT NOT NULL DEFAULT '__global__'");
+    // Drop the old UNIQUE(platform) constraint by recreating the table
+    instance.exec(`
+      CREATE TABLE IF NOT EXISTS app_credentials_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        platform TEXT NOT NULL CHECK(platform IN ('meta', 'shopify')),
+        workspace_id TEXT NOT NULL DEFAULT '__global__',
+        app_id TEXT NOT NULL,
+        app_secret TEXT NOT NULL,
+        redirect_uri TEXT NOT NULL,
+        scopes TEXT,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(platform, workspace_id)
+      );
+      INSERT OR IGNORE INTO app_credentials_new (id, platform, workspace_id, app_id, app_secret, redirect_uri, scopes, updated_at)
+        SELECT id, platform, workspace_id, app_id, app_secret, redirect_uri, scopes, updated_at FROM app_credentials;
+      DROP TABLE app_credentials;
+      ALTER TABLE app_credentials_new RENAME TO app_credentials;
+    `);
+  }
+
+  // Migration: add workspace_id to oauth_states
+  const oauthColumns = instance.pragma('table_info(oauth_states)') as { name: string }[];
+  const oauthHasWorkspaceId = oauthColumns.some((c) => c.name === 'workspace_id');
+  if (!oauthHasWorkspaceId) {
+    instance.exec('ALTER TABLE oauth_states ADD COLUMN workspace_id TEXT');
+  }
 
   ensureMetaSnapshotSchema(instance);
 
@@ -562,6 +597,7 @@ export interface OAuthState {
   store_id: string;
   platform: 'meta' | 'shopify';
   shop_domain: string | null;
+  workspace_id: string | null;
   created_at: string;
   used: number;
 }
@@ -570,13 +606,14 @@ export function createOAuthState(data: {
   storeId: string;
   platform: 'meta' | 'shopify';
   shopDomain?: string;
+  workspaceId?: string;
 }): string {
   const db = getDb();
   const stateToken = randomBytes(32).toString('hex');
 
   db.prepare(
-    'INSERT INTO oauth_states (state_token, store_id, platform, shop_domain) VALUES (?, ?, ?, ?)'
-  ).run(stateToken, data.storeId, data.platform, data.shopDomain ?? null);
+    'INSERT INTO oauth_states (state_token, store_id, platform, shop_domain, workspace_id) VALUES (?, ?, ?, ?, ?)'
+  ).run(stateToken, data.storeId, data.platform, data.shopDomain ?? null, data.workspaceId ?? null);
 
   // Clean up old states (older than 1 hour)
   db.prepare(
@@ -605,6 +642,7 @@ export function consumeOAuthState(stateToken: string): OAuthState | null {
 export interface AppCredentials {
   id: number;
   platform: 'meta' | 'shopify';
+  workspace_id: string;
   app_id: string;
   app_secret: string;
   redirect_uri: string;
@@ -612,18 +650,27 @@ export interface AppCredentials {
   updated_at: string;
 }
 
-export function getAppCredentials(platform: 'meta' | 'shopify'): AppCredentials | null {
+export function getAppCredentials(platform: 'meta' | 'shopify', workspaceId?: string): AppCredentials | null {
   const db = getDb();
+  const wsId = workspaceId || '__global__';
+  // Try workspace-specific credentials first, fall back to global
   const row = db.prepare(
-    'SELECT * FROM app_credentials WHERE platform = ?'
-  ).get(platform) as AppCredentials | undefined;
-  return row ?? null;
+    'SELECT * FROM app_credentials WHERE platform = ? AND workspace_id = ?'
+  ).get(platform, wsId) as AppCredentials | undefined;
+  if (row) return row;
+  if (wsId !== '__global__') {
+    const globalRow = db.prepare(
+      'SELECT * FROM app_credentials WHERE platform = ? AND workspace_id = ?'
+    ).get(platform, '__global__') as AppCredentials | undefined;
+    return globalRow ?? null;
+  }
+  return null;
 }
 
-export function getAllAppCredentials(): { meta: AppCredentials | null; shopify: AppCredentials | null } {
+export function getAllAppCredentials(workspaceId?: string): { meta: AppCredentials | null; shopify: AppCredentials | null } {
   return {
-    meta: getAppCredentials('meta'),
-    shopify: getAppCredentials('shopify'),
+    meta: getAppCredentials('meta', workspaceId),
+    shopify: getAppCredentials('shopify', workspaceId),
   };
 }
 
@@ -633,12 +680,14 @@ export function upsertAppCredentials(data: {
   appSecret: string;
   redirectUri: string;
   scopes?: string;
+  workspaceId?: string;
 }): void {
   const db = getDb();
+  const wsId = data.workspaceId || '__global__';
   db.prepare(`
-    INSERT INTO app_credentials (platform, app_id, app_secret, redirect_uri, scopes, updated_at)
-    VALUES (?, ?, ?, ?, ?, datetime('now'))
-    ON CONFLICT(platform) DO UPDATE SET
+    INSERT INTO app_credentials (platform, workspace_id, app_id, app_secret, redirect_uri, scopes, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(platform, workspace_id) DO UPDATE SET
       app_id = excluded.app_id,
       app_secret = excluded.app_secret,
       redirect_uri = excluded.redirect_uri,
@@ -646,6 +695,7 @@ export function upsertAppCredentials(data: {
       updated_at = datetime('now')
   `).run(
     data.platform,
+    wsId,
     data.appId,
     data.appSecret,
     data.redirectUri,
@@ -653,9 +703,10 @@ export function upsertAppCredentials(data: {
   );
 }
 
-export function deleteAppCredentials(platform: 'meta' | 'shopify'): void {
+export function deleteAppCredentials(platform: 'meta' | 'shopify', workspaceId?: string): void {
   const db = getDb();
-  db.prepare('DELETE FROM app_credentials WHERE platform = ?').run(platform);
+  const wsId = workspaceId || '__global__';
+  db.prepare('DELETE FROM app_credentials WHERE platform = ? AND workspace_id = ?').run(platform, wsId);
 }
 
 // ------ Store CRUD ------
