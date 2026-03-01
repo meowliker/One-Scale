@@ -34,7 +34,8 @@ export async function GET(request: NextRequest) {
   const dbCreds = isSupabasePersistenceEnabled()
     ? await getPersistentAppCredentials('meta', workspaceId)
     : getAppCredentials('meta', workspaceId);
-  const appId = dbCreds?.app_id || process.env.META_APP_ID;
+  // Use DB credentials atomically (both or neither) to avoid mixing sources
+  const appId = (dbCreds?.app_id && dbCreds?.app_secret) ? dbCreds.app_id : process.env.META_APP_ID;
 
   if (!appId) {
     return NextResponse.redirect(

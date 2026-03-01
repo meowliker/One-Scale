@@ -45,8 +45,9 @@ export async function GET(request: NextRequest) {
     const dbCreds = isSupabasePersistenceEnabled()
       ? await getPersistentAppCredentials('meta', workspaceId)
       : getAppCredentials('meta', workspaceId);
-    const appId = dbCreds?.app_id || process.env.META_APP_ID!;
-    const appSecret = dbCreds?.app_secret || process.env.META_APP_SECRET!;
+    // Use DB credentials atomically (both or neither) to avoid mixing sources
+    const appId = (dbCreds?.app_id && dbCreds?.app_secret) ? dbCreds.app_id : process.env.META_APP_ID!;
+    const appSecret = (dbCreds?.app_id && dbCreds?.app_secret) ? dbCreds.app_secret : process.env.META_APP_SECRET!;
     // Build redirect URI dynamically — must match what was sent
     // in the initial OAuth request (/api/auth/meta/route.ts)
     const redirectUri = `${appUrl}/api/auth/meta/callback`;
