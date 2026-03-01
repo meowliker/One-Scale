@@ -67,6 +67,18 @@ create table if not exists store_ad_accounts (
   unique (store_id, ad_account_id)
 );
 
+create table if not exists app_credentials (
+  id bigserial primary key,
+  platform text not null check (platform in ('meta', 'shopify')),
+  workspace_id text not null default '__global__',
+  app_id text not null,
+  app_secret text not null,
+  redirect_uri text not null,
+  scopes text,
+  updated_at timestamptz not null default now(),
+  unique (platform, workspace_id)
+);
+
 create table if not exists workspace_stores (
   id bigserial primary key,
   workspace_id text not null references workspaces(id) on delete cascade,

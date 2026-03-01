@@ -39,11 +39,12 @@ export async function GET(request: NextRequest) {
     }
 
     const storeId = oauthState.store_id;
+    const workspaceId = oauthState.workspace_id || undefined;
 
     // Read credentials from DB first, fallback to env
     const dbCreds = isSupabasePersistenceEnabled()
-      ? await getPersistentAppCredentials('meta')
-      : getAppCredentials('meta');
+      ? await getPersistentAppCredentials('meta', workspaceId)
+      : getAppCredentials('meta', workspaceId);
     const appId = dbCreds?.app_id || process.env.META_APP_ID!;
     const appSecret = dbCreds?.app_secret || process.env.META_APP_SECRET!;
     // Build redirect URI dynamically — must match what was sent

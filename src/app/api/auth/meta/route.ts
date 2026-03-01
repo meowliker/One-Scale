@@ -21,6 +21,7 @@ const DEFAULT_META_SCOPES = [
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const storeId = searchParams.get('storeId');
+  const workspaceId = searchParams.get('workspaceId') || undefined;
 
   if (!storeId) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
@@ -31,8 +32,8 @@ export async function GET(request: NextRequest) {
 
   // Read credentials from DB first, fallback to env
   const dbCreds = isSupabasePersistenceEnabled()
-    ? await getPersistentAppCredentials('meta')
-    : getAppCredentials('meta');
+    ? await getPersistentAppCredentials('meta', workspaceId)
+    : getAppCredentials('meta', workspaceId);
   const appId = dbCreds?.app_id || process.env.META_APP_ID;
 
   if (!appId) {
@@ -45,7 +46,7 @@ export async function GET(request: NextRequest) {
   const redirectUri = `${appUrl}/api/auth/meta/callback`;
 
   // Create a random state token in DB for CSRF protection
-  const state = createOAuthState({ storeId, platform: 'meta' });
+  const state = createOAuthState({ storeId, platform: 'meta', workspaceId });
 
   const scopes = dbCreds?.scopes || process.env.META_SCOPES || DEFAULT_META_SCOPES;
   const authUrl = new URL('https://www.facebook.com/v21.0/dialog/oauth');

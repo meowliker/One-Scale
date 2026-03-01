@@ -408,6 +408,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
 export interface PersistentAppCredentials {
   id: number;
   platform: 'meta' | 'shopify';
+  workspace_id?: string;
   app_id: string;
   app_secret: string;
   redirect_uri: string;
@@ -415,25 +416,71 @@ export interface PersistentAppCredentials {
   updated_at: string;
 }
 
-export async function getPersistentAppCredentials(
-  platform: 'meta' | 'shopify'
-): Promise<PersistentAppCredentials | null> {
-  const rows = await rest<PersistentAppCredentials[]>(
-    `/app_credentials?platform=eq.${encodeURIComponent(platform)}&select=*&limit=1`
-  );
-  return rows[0] || null;
+// Auto-detect whether the app_credentials table has the workspace_id column.
+// Cached for the lifetime of the process so we only probe once.
+let _wsColumnState: boolean | null = null; // null = not checked yet
+
+async function hasWorkspaceColumn(): Promise<boolean> {
+  if (_wsColumnState !== null) return _wsColumnState;
+  try {
+    // Probe: attempt a select with workspace_id filter.
+    // If the column exists, this returns 200 (even with 0 rows).
+    // If the column or table doesn't exist, PostgREST returns 400/404.
+    await rest<unknown[]>(
+      '/app_credentials?workspace_id=eq.__global__&select=id&limit=0'
+    );
+    _wsColumnState = true;
+  } catch {
+    _wsColumnState = false;
+    console.warn(
+      '[app_credentials] workspace_id column not found in Supabase. ' +
+      'Credentials will be stored globally (not per-workspace). ' +
+      'To enable per-workspace credentials, run in Supabase SQL editor:\n' +
+      "  ALTER TABLE app_credentials ADD COLUMN workspace_id text NOT NULL DEFAULT '__global__';\n" +
+      '  ALTER TABLE app_credentials DROP CONSTRAINT IF EXISTS app_credentials_platform_key;\n' +
+      '  ALTER TABLE app_credentials ADD CONSTRAINT app_credentials_platform_workspace_id_key UNIQUE (platform, workspace_id);'
+    );
+  }
+  return _wsColumnState;
 }
 
-export async function getAllPersistentAppCredentials(): Promise<{
+export async function getPersistentAppCredentials(
+  platform: 'meta' | 'shopify',
+  workspaceId?: string
+): Promise<PersistentAppCredentials | null> {
+  const canUseWs = await hasWorkspaceColumn();
+
+  if (!canUseWs) {
+    // Fallback: query by platform only (old global behavior)
+    const rows = await rest<PersistentAppCredentials[]>(
+      `/app_credentials?platform=eq.${encodeURIComponent(platform)}&select=*&limit=1`
+    );
+    return rows[0] || null;
+  }
+
+  const wsId = workspaceId || '__global__';
+  // Try workspace-specific credentials first
+  const rows = await rest<PersistentAppCredentials[]>(
+    `/app_credentials?platform=eq.${encodeURIComponent(platform)}&workspace_id=eq.${encodeURIComponent(wsId)}&select=*&limit=1`
+  );
+  if (rows[0]) return rows[0];
+  // Fall back to global credentials
+  if (wsId !== '__global__') {
+    const globalRows = await rest<PersistentAppCredentials[]>(
+      `/app_credentials?platform=eq.${encodeURIComponent(platform)}&workspace_id=eq.__global__&select=*&limit=1`
+    );
+    return globalRows[0] || null;
+  }
+  return null;
+}
+
+export async function getAllPersistentAppCredentials(workspaceId?: string): Promise<{
   meta: PersistentAppCredentials | null;
   shopify: PersistentAppCredentials | null;
 }> {
-  const rows = await rest<PersistentAppCredentials[]>(
-    '/app_credentials?select=*'
-  );
   return {
-    meta: rows.find((r) => r.platform === 'meta') || null,
-    shopify: rows.find((r) => r.platform === 'shopify') || null,
+    meta: await getPersistentAppCredentials('meta', workspaceId),
+    shopify: await getPersistentAppCredentials('shopify', workspaceId),
   };
 }
 
@@ -443,9 +490,40 @@ export async function upsertPersistentAppCredentials(data: {
   appSecret: string;
   redirectUri: string;
   scopes?: string;
+  workspaceId?: string;
 }): Promise<void> {
+  const canUseWs = await hasWorkspaceColumn();
+
+  if (!canUseWs) {
+    // Fallback: upsert without workspace_id (old global behavior)
+    const payload = {
+      platform: data.platform,
+      app_id: data.appId,
+      app_secret: data.appSecret,
+      redirect_uri: data.redirectUri,
+      scopes: data.scopes ?? null,
+      updated_at: new Date().toISOString(),
+    };
+    const existing = await rest<PersistentAppCredentials[]>(
+      `/app_credentials?platform=eq.${encodeURIComponent(data.platform)}&select=*&limit=1`
+    );
+    if (existing[0]) {
+      await rest(
+        `/app_credentials?platform=eq.${encodeURIComponent(data.platform)}`,
+        { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(payload) }
+      );
+    } else {
+      await rest('/app_credentials', {
+        method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(payload),
+      });
+    }
+    return;
+  }
+
+  const wsId = data.workspaceId || '__global__';
   const payload = {
     platform: data.platform,
+    workspace_id: wsId,
     app_id: data.appId,
     app_secret: data.appSecret,
     redirect_uri: data.redirectUri,
@@ -453,13 +531,15 @@ export async function upsertPersistentAppCredentials(data: {
     updated_at: new Date().toISOString(),
   };
 
-  // First try to check if a row exists for this platform
-  const existing = await getPersistentAppCredentials(data.platform);
+  // Check if a row exists for this platform + workspace
+  const rows = await rest<PersistentAppCredentials[]>(
+    `/app_credentials?platform=eq.${encodeURIComponent(data.platform)}&workspace_id=eq.${encodeURIComponent(wsId)}&select=*&limit=1`
+  );
 
-  if (existing) {
+  if (rows[0]) {
     // PATCH (update) existing row
     await rest(
-      `/app_credentials?platform=eq.${encodeURIComponent(data.platform)}`,
+      `/app_credentials?platform=eq.${encodeURIComponent(data.platform)}&workspace_id=eq.${encodeURIComponent(wsId)}`,
       {
         method: 'PATCH',
         headers: { Prefer: 'return=minimal' },
@@ -477,10 +557,23 @@ export async function upsertPersistentAppCredentials(data: {
 }
 
 export async function deletePersistentAppCredentials(
-  platform: 'meta' | 'shopify'
+  platform: 'meta' | 'shopify',
+  workspaceId?: string
 ): Promise<void> {
+  const canUseWs = await hasWorkspaceColumn();
+
+  if (!canUseWs) {
+    // Fallback: delete by platform only
+    await rest(
+      `/app_credentials?platform=eq.${encodeURIComponent(platform)}`,
+      { method: 'DELETE' }
+    );
+    return;
+  }
+
+  const wsId = workspaceId || '__global__';
   await rest(
-    `/app_credentials?platform=eq.${encodeURIComponent(platform)}`,
+    `/app_credentials?platform=eq.${encodeURIComponent(platform)}&workspace_id=eq.${encodeURIComponent(wsId)}`,
     { method: 'DELETE' }
   );
 }

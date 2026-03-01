@@ -12,6 +12,7 @@ const PUBLIC_API_PREFIXES = [
   '/api/auth/shopify',
   '/api/auth/status',
   '/api/auth/session',
+  '/api/auth/register',
   '/api/shopify/webhooks',
   '/api/tracking/pixel',
   '/api/tracking/collect',
@@ -27,7 +28,7 @@ export async function middleware(request: NextRequest) {
   }
 
   const { pathname, search } = request.nextUrl;
-  if (pathname === '/login') {
+  if (pathname === '/login' || pathname.startsWith('/login/')) {
     return NextResponse.next();
   }
 

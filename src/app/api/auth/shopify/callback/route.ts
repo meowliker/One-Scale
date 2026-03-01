@@ -26,10 +26,21 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    // Consume the OAuth state first to get workspace_id for credential lookup
+    const oauthState = consumeOAuthState(state);
+    if (!oauthState) {
+      return NextResponse.redirect(
+        `${appUrl}/auth/callback?platform=shopify&status=error&message=invalid_state`
+      );
+    }
+
+    const storeId = oauthState.store_id;
+    const workspaceId = oauthState.workspace_id || undefined;
+
     // Read credentials from DB first, fallback to env
     const dbCreds = isSupabasePersistenceEnabled()
-      ? await getPersistentAppCredentials('shopify')
-      : getAppCredentials('shopify');
+      ? await getPersistentAppCredentials('shopify', workspaceId)
+      : getAppCredentials('shopify', workspaceId);
     const apiSecret = dbCreds?.app_secret || process.env.SHOPIFY_API_SECRET!;
     const apiKey = dbCreds?.app_id || process.env.SHOPIFY_API_KEY!;
 
@@ -52,16 +63,6 @@ export async function GET(request: NextRequest) {
         `${appUrl}/auth/callback?platform=shopify&status=error&message=invalid_hmac`
       );
     }
-
-    // Validate and consume the state token from DB
-    const oauthState = consumeOAuthState(state);
-    if (!oauthState) {
-      return NextResponse.redirect(
-        `${appUrl}/auth/callback?platform=shopify&status=error&message=invalid_state`
-      );
-    }
-
-    const storeId = oauthState.store_id;
 
     // Exchange code for permanent access token
     const tokenResponse = await fetch(
