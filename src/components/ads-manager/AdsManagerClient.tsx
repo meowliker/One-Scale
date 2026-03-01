@@ -47,7 +47,6 @@ import { getMetricValue } from '@/lib/metrics';
 import { useStoreStore } from '@/stores/storeStore';
 import { todayInTimezone } from '@/lib/timezone';
 import { AdsManagerToolbar, type StatusFilter } from './AdsManagerToolbar';
-import { ColumnPresetSelector } from '@/components/columns/ColumnPresetSelector';
 import { CampaignRow } from './CampaignRow';
 import { AdSetRow } from './AdSetRow';
 import { AdRow } from './AdRow';
@@ -2235,12 +2234,6 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         attributionCoverage={attributionCoverage}
         lastSyncedAt={lastSyncedAt}
       />
-
-      {/* Column Preset Bar */}
-      <div className="flex items-center gap-2 px-1">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted whitespace-nowrap">Columns</span>
-        <ColumnPresetSelector />
-      </div>
 
       <SmartSegmentsBar
         campaigns={campaigns}
