@@ -55,7 +55,7 @@ export function MetricCell({ metricKey, value }: MetricCellProps) {
   return (
     <td className={cn(
       "whitespace-nowrap px-3 py-3 text-right text-sm tabular-nums",
-      appPixelMetric && "bg-[var(--color-app-pixel-cell)] border-x border-[var(--color-app-pixel-border)]",
+      appPixelMetric && "app-pixel-cell border-x",
       appPixelMetric && !colorClass && "text-text-primary",
       colorClass || "text-text-secondary"
     )}>

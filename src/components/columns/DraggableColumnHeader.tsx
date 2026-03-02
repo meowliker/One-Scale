@@ -50,7 +50,7 @@ export function DraggableColumnHeader({ metricKey, sortKey, sortDirection, onSor
       style={style}
       className={cn(
         'whitespace-nowrap px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-text-muted select-none',
-        appPixelMetric && 'bg-[var(--color-app-pixel-header)] border-x border-[var(--color-app-pixel-border)] text-[var(--color-app-pixel-header-text)]',
+        appPixelMetric && 'app-pixel-header border-x',
         isDragging && 'z-50 bg-primary/10 opacity-80 shadow-lg rounded'
       )}
     >

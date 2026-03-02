@@ -237,6 +237,29 @@ body {
   background: var(--color-surface-hover);
 }
 
+/* Ads Manager App Pixel column theming */
+.app-pixel-header {
+  background: rgba(38, 66, 112, 0.74);
+  border-color: rgba(59, 130, 246, 0.22);
+  color: #dbeafe;
+}
+
+.app-pixel-cell {
+  background: rgba(36, 66, 112, 0.88);
+  border-color: rgba(59, 130, 246, 0.22);
+}
+
+.light .app-pixel-header {
+  background: #eff6ff;
+  border-color: #dbeafe;
+  color: #1d4ed8;
+}
+
+.light .app-pixel-cell {
+  background: #f8fbff;
+  border-color: #dbeafe;
+}
+
 /* ===== Override Recharts for dark theme ===== */
 .recharts-cartesian-grid-horizontal line,
 .recharts-cartesian-grid-vertical line {
