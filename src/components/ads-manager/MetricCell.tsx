@@ -9,6 +9,10 @@ export interface MetricCellProps {
   value: number;
 }
 
+function isAppPixelMetric(metricKey: MetricKey): boolean {
+  return metricKey.startsWith('appPixel');
+}
+
 function getMetricColorClass(metricKey: MetricKey, value: number): string {
   switch (metricKey) {
     case 'roas':
@@ -46,10 +50,13 @@ function getRoasDotColor(value: number): string {
 
 export function MetricCell({ metricKey, value }: MetricCellProps) {
   const colorClass = getMetricColorClass(metricKey, value);
+  const appPixelMetric = isAppPixelMetric(metricKey);
 
   return (
     <td className={cn(
       "whitespace-nowrap px-3 py-3 text-right text-sm tabular-nums",
+      appPixelMetric && "bg-[var(--color-app-pixel-cell)] border-x border-[var(--color-app-pixel-border)]",
+      appPixelMetric && !colorClass && "text-text-primary",
       colorClass || "text-text-secondary"
     )}>
       {(metricKey === 'roas' || metricKey === 'appPixelRoas') && (

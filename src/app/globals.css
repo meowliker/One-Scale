@@ -70,6 +70,10 @@
   --color-text-secondary: #94a3b8;
   --color-text-muted: #64748b;
   --color-text-dimmed: #475569;
+  --color-app-pixel-header: rgba(38, 66, 112, 0.74);
+  --color-app-pixel-cell: rgba(36, 66, 112, 0.88);
+  --color-app-pixel-border: rgba(59, 130, 246, 0.22);
+  --color-app-pixel-header-text: #dbeafe;
 }
 
 /* ===== Light Theme ===== */
@@ -92,6 +96,10 @@
   --color-text-secondary: #475569;
   --color-text-muted: #64748b;
   --color-text-dimmed: #94a3b8;
+  --color-app-pixel-header: rgba(59, 130, 246, 0.08);
+  --color-app-pixel-cell: rgba(59, 130, 246, 0.12);
+  --color-app-pixel-border: rgba(59, 130, 246, 0.2);
+  --color-app-pixel-header-text: #1d4ed8;
 }
 
 /* ===== Global Styles ===== */

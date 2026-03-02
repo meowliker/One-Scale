@@ -21,6 +21,10 @@ function SortIndicator({ active, direction }: { active: boolean; direction: 'asc
     : <ArrowDown className="h-3 w-3 text-primary" />;
 }
 
+function isAppPixelMetric(metricKey: MetricKey): boolean {
+  return metricKey.startsWith('appPixel');
+}
+
 export function DraggableColumnHeader({ metricKey, sortKey, sortDirection, onSort }: DraggableColumnHeaderProps) {
   const {
     attributes,
@@ -38,6 +42,7 @@ export function DraggableColumnHeader({ metricKey, sortKey, sortDirection, onSor
 
   const def = getMetricDefinition(metricKey);
   const label = def?.shortLabel ?? metricKey;
+  const appPixelMetric = isAppPixelMetric(metricKey);
 
   return (
     <th
@@ -45,6 +50,7 @@ export function DraggableColumnHeader({ metricKey, sortKey, sortDirection, onSor
       style={style}
       className={cn(
         'whitespace-nowrap px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-text-muted select-none',
+        appPixelMetric && 'bg-[var(--color-app-pixel-header)] border-x border-[var(--color-app-pixel-border)] text-[var(--color-app-pixel-header-text)]',
         isDragging && 'z-50 bg-primary/10 opacity-80 shadow-lg rounded'
       )}
     >
