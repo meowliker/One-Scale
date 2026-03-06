@@ -28,6 +28,7 @@ export const sidebarConfig: SidebarConfig = {
   },
   topItems: [
     { label: 'Summary', href: '/dashboard/summary', icon: LayoutDashboard },
+    { label: 'Store Overview', href: '/dashboard/store-overview', icon: BarChart3 },
     { label: 'Ads Manager', href: '/dashboard/ads-manager', icon: Megaphone },
     { label: 'P&L Tracking', href: '/dashboard/pnl', icon: DollarSign },
     { label: 'Creative Testing', href: '/dashboard/creative-testing', icon: FlaskConical },
