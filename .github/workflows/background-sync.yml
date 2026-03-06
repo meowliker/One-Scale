@@ -18,4 +18,4 @@ jobs:
           set -euo pipefail
           curl --fail --show-error --silent \
             -H "Authorization: Bearer ${CRON_SECRET}" \
-            "${BASE_URL}/api/sync/pnl-cache?days=30"
+            "${BASE_URL}/api/sync/pnl-cache?days=7"
