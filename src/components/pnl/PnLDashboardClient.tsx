@@ -98,6 +98,9 @@ export function PnLDashboardClient({
   const activeEntry = useMemo(() => {
     return computeEntryFromDaily(dailyPnL, dateRange);
   }, [dailyPnL, dateRange]);
+  const todayEntry = useMemo(() => {
+    return computeEntryFromDaily(dailyPnL, getDateRange('today'));
+  }, [dailyPnL]);
 
   // When productType changes (e.g. after data loads), update bottom tab
   useEffect(() => {
@@ -109,7 +112,7 @@ export function PnLDashboardClient({
   return (
     <div className="space-y-6">
       {/* Live ticker hero */}
-      <LiveProfitTicker netProfit={summary.today.netProfit} />
+      <LiveProfitTicker netProfit={todayEntry.netProfit || summary.today.netProfit} />
 
       {/* Date range selector */}
       <div className="flex items-center justify-between">

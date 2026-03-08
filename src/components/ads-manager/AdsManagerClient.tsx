@@ -58,7 +58,6 @@ import { Checkbox } from '@/components/ui/Checkbox';
 import { DraggableColumnHeader } from '@/components/columns/DraggableColumnHeader';
 import { useSmartFilterStore, type SmartSegmentId } from '@/stores/smartFilterStore';
 import { SmartSegmentsBar } from './SmartSegmentsBar';
-import { QuickFilterBar, type QuickFilterId } from './QuickFilterBar';
 import { BulkActionPanel } from './BulkActionPanel';
 
 // Sort indicator for fixed column headers
@@ -90,7 +89,7 @@ function SortableFixedHeader({
   return (
     <th
       className={cn(
-        'whitespace-nowrap px-3 py-2.5 text-[11px] font-bold uppercase tracking-[0.06em] text-[#6b7280] dark:text-[#9ca3af]',
+        'whitespace-nowrap px-3 py-2 text-[11px] font-bold uppercase tracking-[0.05em] text-[#6b7280] dark:text-[#9ca3af]',
         align === 'center' && 'text-center',
         align === 'right' && 'text-right'
       )}
@@ -119,7 +118,6 @@ export interface AdsManagerClientProps {
 
 type SyncStageState = 'idle' | 'loading' | 'done';
 const PAGE_PREWARM_INTERVAL_MS = 10 * 60 * 1000; // 10 min cooldown for Summary/P&L prewarm
-const INITIAL_LIMIT = 15;
 
 interface SummaryWarmCachePayload {
   blendedMetrics: Record<string, number>;
@@ -351,8 +349,6 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     setStatusFilterRaw(f);
     try { window.sessionStorage.setItem('onescale_status_filter', f); } catch { /* ignore */ }
   }, []);
-  const [quickFilter, setQuickFilter] = useState<QuickFilterId | null>(null);
-  const [visibleCount, setVisibleCount] = useState(INITIAL_LIMIT);
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc' | null>(null);
   // Scroll container ref for virtual scrolling
@@ -423,6 +419,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   const preloadingCoreRef = useRef(false);
   const actionsLoadedRef = useRef(false);
   const prewarmingPagesRef = useRef(false);
+  const hierarchySyncInFlightRef = useRef(false);
   // Track which campaign IDs have already had their sparkline fetched to avoid duplicate calls
   const fetchedSparklineCampaigns = useRef<Set<string>>(new Set());
   const hierarchyCacheKey = useMemo(() => {
@@ -521,9 +518,34 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       }
     }
     setCampaigns(hydrated);
-    // Clear lazy-load caches so expanded items re-fetch with new date range
-    fetchedAdSets.current.clear();
-    fetchedAds.current.clear();
+
+    // Prime lazy-load trackers from hydrated hierarchy cache so expanding rows is instant.
+    // If a campaign/ad set already has cached children, treat it as fetched.
+    const hydratedAdSetIds = new Set<string>();
+    for (const campaign of hydrated) {
+      const adSets = campaign.adSets || [];
+      if (adSets.length > 0) {
+        fetchedAdSets.current.add(campaign.id);
+      } else {
+        fetchedAdSets.current.delete(campaign.id);
+      }
+      for (const adSet of adSets) {
+        hydratedAdSetIds.add(adSet.id);
+        const ads = adSet.ads || [];
+        if (ads.length > 0) {
+          fetchedAds.current.add(adSet.id);
+        } else {
+          fetchedAds.current.delete(adSet.id);
+        }
+      }
+    }
+    // Remove stale fetch marks from entities no longer present.
+    fetchedAdSets.current.forEach((id) => {
+      if (!hydrated.some((campaign) => campaign.id === id)) fetchedAdSets.current.delete(id);
+    });
+    fetchedAds.current.forEach((id) => {
+      if (!hydratedAdSetIds.has(id)) fetchedAds.current.delete(id);
+    });
     // Clear error states
     setErrorAdSets(new Set());
     setErrorAds(new Set());
@@ -717,7 +739,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     return () => { cancelled = true; };
   }, [activeStoreId, dateRange?.since, dateRange?.until, campaigns]);
 
-  // Background sync polling — refresh today's metrics every 60s
+  // Background sync polling — refresh today's metrics every 2 minutes
   useEffect(() => {
     if (!activeStoreId) return;
     // Only poll when the selected date range includes today
@@ -733,7 +755,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
           lastSyncedAt: string;
         }>('/api/sync/refresh', {
           method: 'POST',
-          body: JSON.stringify({ storeId: activeStoreId }),
+          body: JSON.stringify({ storeId: activeStoreId, includeHierarchy: false }),
           timeoutMs: 15_000,
           maxRetries: 0,
         });
@@ -773,7 +795,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
 
     // Initial sync after 5s delay to avoid competing with page load
     const initialTimer = window.setTimeout(runSync, 5_000);
-    const intervalId = window.setInterval(runSync, 60_000);
+    const intervalId = window.setInterval(runSync, 120_000);
 
     return () => {
       cancelled = true;
@@ -926,20 +948,27 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   }, [getAdSetCacheKey]);
 
   // --- Batch load adsets for multiple campaigns ---
-  const batchLoadAdSets = useCallback(async (campaignIdsToLoad: string[]) => {
-    if (campaignIdsToLoad.length === 0) return;
+  const batchLoadAdSets = useCallback(async (campaignIdsToLoad: string[], force = false): Promise<Record<string, AdSet[]>> => {
+    if (campaignIdsToLoad.length === 0) return {};
+    const resolvedMap: Record<string, AdSet[]> = {};
 
     // --- Cache-first: resolve as many campaigns from localStorage as possible ---
     const needsApi: string[] = [];
     const cachedUpdates: { id: string; adSets: AdSet[] }[] = [];
     for (const id of campaignIdsToLoad) {
-      if (fetchedAdSets.current.has(id)) continue;
-      const cached = readAdSetCache(id);
-      if (cached && cached.length > 0) {
+      if (!force && fetchedAdSets.current.has(id)) {
+        const existing = campaigns.find((c) => c.id === id)?.adSets || [];
+        if (existing.length > 0) resolvedMap[id] = existing;
+        continue;
+      }
+      const cached = !force ? readAdSetCache(id) : null;
+      if (!force && cached && cached.length > 0) {
         const normalized = cached.map((as) => ({ ...as, ads: as.ads ?? [] }));
         cachedUpdates.push({ id, adSets: normalized });
+        resolvedMap[id] = normalized;
         fetchedAdSets.current.add(id);
       } else {
+        if (force) fetchedAdSets.current.delete(id);
         needsApi.push(id);
       }
     }
@@ -952,7 +981,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         })
       );
     }
-    if (needsApi.length === 0) return;
+    if (needsApi.length === 0) return resolvedMap;
 
     // Mark only uncached campaigns as loading
     setLoadingAdSets((prev) => {
@@ -976,6 +1005,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         params.strictDate = '1';
       }
       params.mode = 'fast';
+      if (!force) params.preferCache = '1';
       const response = await apiClient<{ data: Record<string, AdSet[]> }>('/api/meta/adsets', {
         params,
         timeoutMs: 25000,
@@ -988,6 +1018,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
           const adSets = resultMap[c.id];
           if (!adSets) return c;
           const normalized = adSets.map((as) => ({ ...as, ads: as.ads ?? [] }));
+          resolvedMap[c.id] = normalized;
           writeAdSetCache(c.id, normalized);
           fetchedAdSets.current.add(c.id);
           return { ...c, adSets: normalized };
@@ -1022,11 +1053,12 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         return next;
       });
     }
-  }, [dateRange, readAdSetCache, writeAdSetCache]);
+    return resolvedMap;
+  }, [campaigns, dateRange, readAdSetCache, writeAdSetCache]);
 
   // --- Lazy load adsets when campaign is expanded ---
   const loadAdSetsForCampaign = useCallback(async (campaignId: string, force = false, mode?: 'fast' | 'basic') => {
-    if (fetchedAdSets.current.has(campaignId)) return;
+    if (!force && fetchedAdSets.current.has(campaignId)) return;
     if (!force && Date.now() < rateLimitUntilRef.current) {
       setErrorAdSets((prev) => new Set(prev).add(campaignId));
       return;
@@ -1057,6 +1089,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         params.strictDate = '1';
       }
       params.mode = mode || 'fast';
+      if (!force) params.preferCache = '1';
       const response = await apiClient<{ data: AdSet[] }>('/api/meta/adsets', {
         params,
         timeoutMs: 25000,
@@ -1144,7 +1177,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
 
   // --- Lazy load ads when adset is expanded ---
   const loadAdsForAdSet = useCallback(async (adSetId: string, force = false, mode?: 'fast' | 'basic') => {
-    if (fetchedAds.current.has(adSetId)) return;
+    if (!force && fetchedAds.current.has(adSetId)) return;
     if (!force && Date.now() < rateLimitUntilRef.current) {
       setErrorAds((prev) => new Set(prev).add(adSetId));
       return;
@@ -1164,6 +1197,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         params.strictDate = '1';
       }
       params.mode = mode || 'fast';
+      if (!force) params.preferCache = '1';
       const response = await apiClient<{ data: Ad[] }>('/api/meta/ads', {
         params,
         timeoutMs: 12000,
@@ -1205,24 +1239,41 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     }
   }, [dateRange]);
 
-  // Management-first preload:
-  // Core preload: loads ad sets + ads for active campaigns.
-  // OPTIMIZATION: If localStorage hierarchy cache is fresh (<30 min), skip the
-  // expensive sequential Meta API calls. The cached ad sets/ads from the last
-  // sync are already hydrated into the campaign state. A full refresh runs in
-  // the background every 30 min via the page-level cache-then-refresh pattern.
-  const HIERARCHY_CACHE_MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes
-  useEffect(() => {
+  const refreshRecentOperationalData = useCallback(async (options?: { includeIssues?: boolean }) => {
+    const includeIssues = options?.includeIssues === true;
     if (!activeStoreId) return;
-    if (showErrorCenter) return;
-    if (corePreloadDone) return;
-    if (preloadingCoreRef.current) return;
-    if (campaigns.length === 0) {
-      setCorePreloadDone(true);
-      setSyncStatus((prev) => ({ ...prev, core: 'done' }));
-      return;
+    setSyncStatus((prev) => ({
+      ...prev,
+      actions: 'loading',
+      errors: includeIssues ? 'loading' : prev.errors,
+    }));
+    try {
+      const activitiesRes = await apiClient<{ data: Record<string, EntityAction[]> }>(
+        '/api/meta/activities',
+        { params: { since: '1', limit: '500' }, timeoutMs: 15000, maxRetries: 0 }
+      );
+      setActivityData((prev) => ({ ...prev, ...(activitiesRes.data || {}) }));
+      if (includeIssues) {
+        const issuesRes = await apiClient<{ data: AdIssue[] }>(
+          '/api/meta/issues',
+          { params: { storeId: activeStoreId }, timeoutMs: 20000, maxRetries: 0 }
+        );
+        setPrefetchedIssues(issuesRes.data || []);
+      }
+    } catch {
+      // best-effort background refresh
+    } finally {
+      setSyncStatus((prev) => ({
+        ...prev,
+        actions: 'done',
+        errors: includeIssues ? 'done' : prev.errors,
+      }));
     }
+  }, [activeStoreId]);
 
+  const preloadActiveHierarchy = useCallback(async (force = false) => {
+    if (!activeStoreId) return;
+    if (hierarchySyncInFlightRef.current) return;
     const activeCampaigns = campaigns.filter((c) => c.status === 'ACTIVE');
     if (activeCampaigns.length === 0) {
       setCorePreloadDone(true);
@@ -1230,70 +1281,85 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       return;
     }
 
-    // Check if hierarchy cache is fresh enough to skip the full preload
-    if (typeof window !== 'undefined') {
-      try {
-        const raw = window.localStorage.getItem(hierarchyCacheKey);
-        if (raw) {
-          const parsed = JSON.parse(raw) as { cachedAt?: number; campaigns?: Record<string, unknown> };
-          const cacheAge = Date.now() - (parsed.cachedAt || 0);
-          const hasCachedData = parsed.campaigns && Object.keys(parsed.campaigns).length > 0;
-          if (hasCachedData && cacheAge < HIERARCHY_CACHE_MAX_AGE_MS) {
-            // Cache is fresh — skip expensive sequential API calls
-            setCorePreloadDone(true);
-            setSyncStatus((prev) => ({ ...prev, core: 'done' }));
-            return;
-          }
-        }
-      } catch {
-        // Ignore cache read errors — proceed with normal preload
-      }
-    }
-
-    let cancelled = false;
+    hierarchySyncInFlightRef.current = true;
     preloadingCoreRef.current = true;
     setCorePreloadDone(false);
-    setSyncStatus((prev) => ({ ...prev, core: 'loading', actions: 'idle' }));
+    setSyncStatus((prev) => ({ ...prev, core: 'loading' }));
+    setCoreProgress({ loaded: 0, total: 3 });
 
-    (async () => {
-      const MAX_ACTIVE_PRELOAD = 8;
-      const selectedCampaigns = activeCampaigns.slice(0, MAX_ACTIVE_PRELOAD);
-      setCoreProgress({ loaded: 0, total: 3 });
-
-      // Step 1/3: campaigns already loaded from initialCampaigns
+    try {
+      // Step 1/3: campaign list already loaded.
       setCoreProgress({ loaded: 1, total: 3 });
 
-      // 1-second delay between API calls to avoid rate limits
-      await new Promise((r) => setTimeout(r, 1000));
-
-      // Step 2/3: batch load all adsets in one request
-      const ids = selectedCampaigns.map((c) => c.id);
-      if (!cancelled && ids.length > 0) {
-        await batchLoadAdSets(ids);
-      }
+      const campaignIds = activeCampaigns.map((c) => c.id);
+      const adSetMap = await batchLoadAdSets(campaignIds, force);
       setCoreProgress({ loaded: 2, total: 3 });
 
-      // 1-second delay before marking complete
-      await new Promise((r) => setTimeout(r, 1000));
-
-      // Step 3/3: done — insights come with adsets already
-      setCoreProgress({ loaded: 3, total: 3 });
-    })()
-      .catch(() => {
-        // keep UI usable; individual loaders already set row-level errors.
-      })
-      .finally(() => {
-        preloadingCoreRef.current = false;
-        if (!cancelled) {
-          setCorePreloadDone(true);
-          setSyncStatus((prev) => ({ ...prev, core: 'done' }));
+      // Step 3/3: preload ads for active campaigns' ad sets with controlled concurrency.
+      const adSetIds = Object.values(adSetMap).flat().map((adSet) => adSet.id);
+      const queue = [...adSetIds];
+      const CONCURRENCY = 2;
+      const workers = Array.from({ length: CONCURRENCY }, async () => {
+        while (queue.length > 0) {
+          const nextId = queue.shift();
+          if (!nextId) break;
+          await loadAdsForAdSet(nextId, force);
+          await new Promise((resolve) => setTimeout(resolve, 220));
         }
       });
+      await Promise.all(workers);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [activeStoreId, campaigns, corePreloadDone, hierarchyCacheKey, loadAdSetsForCampaign, loadAdsForAdSet, showErrorCenter]);
+      setCoreProgress({ loaded: 3, total: 3 });
+      setCorePreloadDone(true);
+      setSyncStatus((prev) => ({ ...prev, core: 'done' }));
+
+      // After hierarchy is warm, refresh latest actions/issues (last 12h view uses this).
+      actionsLoadedRef.current = true;
+      await refreshRecentOperationalData({ includeIssues: false });
+    } catch {
+      // keep UI usable; row-level loaders/errors already handle details
+      setSyncStatus((prev) => ({ ...prev, core: 'done' }));
+    } finally {
+      preloadingCoreRef.current = false;
+      hierarchySyncInFlightRef.current = false;
+    }
+  }, [activeStoreId, batchLoadAdSets, campaigns, loadAdsForAdSet, refreshRecentOperationalData]);
+
+  // Initial hierarchy preload on first load.
+  useEffect(() => {
+    if (!activeStoreId || showErrorCenter || corePreloadDone) return;
+    void preloadActiveHierarchy(false);
+  }, [activeStoreId, corePreloadDone, preloadActiveHierarchy, showErrorCenter]);
+
+  // Kick off a backend hierarchy refresh on page open.
+  useEffect(() => {
+    if (!activeStoreId || showErrorCenter) return;
+    void apiClient('/api/sync/refresh', {
+      method: 'POST',
+      body: JSON.stringify({ storeId: activeStoreId, includeHierarchy: true }),
+      timeoutMs: 20_000,
+      maxRetries: 0,
+    }).catch(() => {});
+  }, [activeStoreId, showErrorCenter]);
+
+  // Keep hierarchy fresh for newly created ad sets/ads every 5 minutes.
+  // Queue backend refresh, then hydrate from cache snapshots.
+  useEffect(() => {
+    if (!activeStoreId || showErrorCenter) return;
+    const id = window.setInterval(() => {
+      if (Date.now() < rateLimitUntilRef.current) return;
+      void apiClient('/api/sync/refresh', {
+        method: 'POST',
+        body: JSON.stringify({ storeId: activeStoreId, includeHierarchy: true }),
+        timeoutMs: 20_000,
+        maxRetries: 0,
+      }).catch(() => {});
+      window.setTimeout(() => {
+        void preloadActiveHierarchy(false);
+      }, 1200);
+    }, 5 * 60 * 1000);
+    return () => window.clearInterval(id);
+  }, [activeStoreId, preloadActiveHierarchy, showErrorCenter]);
 
   // Persist active campaign hierarchy cache with timestamp for fast reload.
   useEffect(() => {
@@ -1343,18 +1409,19 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     (async () => {
       // Stage 1: Summary (today) prewarm
       const preset = 'today' as const;
-      const [metrics, series, topCampaigns, dailyPnL] = await Promise.all([
+      const [metrics, series, topCampaigns, dailyPnL, pnlSummary] = await Promise.all([
         getBlendedMetricsForRange(preset)(),
         getTimeSeriesForRange(preset)(),
         getTopCampaignsForRange(preset)(),
         getDailyPnL(),
+        getPnLSummary().catch(() => null),
       ]);
       if (cancelled) return;
 
       const todayStr = todayInTimezone();
       const todayRows = dailyPnL.filter((d) => d.date === todayStr);
-      const shopifyRevenue = Math.round(todayRows.reduce((sum, d) => sum + (d.revenue || 0), 0) * 100) / 100;
-      const shopifyOrders = todayRows.reduce((sum, d) => sum + (d.orderCount || 0), 0);
+      const shopifyRevenue = Math.round(((pnlSummary?.today?.revenue ?? todayRows.reduce((sum, d) => sum + (d.revenue || 0), 0)) || 0) * 100) / 100;
+      const shopifyOrders = pnlSummary?.today?.orderCount ?? todayRows.reduce((sum, d) => sum + (d.orderCount || 0), 0);
       const shopifyAov = shopifyOrders > 0 ? Math.round((shopifyRevenue / shopifyOrders) * 100) / 100 : 0;
 
       writeSummaryWarmCache(activeStoreId, preset, {
@@ -1487,11 +1554,6 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     }
   }, [statusFilter, collapseAllCampaigns]);
 
-  // Reset visible campaign count when search or filters change
-  useEffect(() => {
-    setVisibleCount(INITIAL_LIMIT);
-  }, [search, statusFilter]);
-
   const campaignsWithAppPixel = useMemo(() => {
     return campaigns.map((campaign) => ({
       ...campaign,
@@ -1558,27 +1620,6 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       });
     }
 
-    // Quick filter pills
-    if (quickFilter) {
-      filteredList = filteredList.filter(campaign => {
-        const m = campaign.metrics;
-        switch (quickFilter) {
-          case 'all-active':
-            return campaign.status === 'ACTIVE';
-          case 'high-roas':
-            return m.roas > 2.0;
-          case 'low-roas':
-            return m.roas < 1.0 && m.spend > 0;
-          case 'learning':
-            return campaign.status === 'ACTIVE' && m.conversions < 5 && m.spend < 50;
-          case 'fatigue-risk':
-            return m.frequency > 3.0 || (m.ctr > 0 && m.ctr < 0.5 && m.spend > 10);
-          default:
-            return true;
-        }
-      });
-    }
-
     // Column value filters
     if (columnFilters.length > 0) {
       filteredList = filteredList.filter(campaign => {
@@ -1592,7 +1633,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     }
 
     return filteredList;
-  }, [campaignsWithAppPixel, search, statusFilter, activeSegment, quickFilter, columnFilters, sparklineData]);
+  }, [campaignsWithAppPixel, search, statusFilter, activeSegment, columnFilters, sparklineData]);
 
   // Sort handler: cycles null -> asc -> desc -> null
   const handleSort = useCallback((key: string) => {
@@ -1624,6 +1665,9 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       } else if (sortKey === 'budget') {
         aVal = (a.dailyBudget as number) ?? 0;
         bVal = (b.dailyBudget as number) ?? 0;
+      } else if (sortKey === 'bidStrategy') {
+        aVal = (a.bidStrategy as string) ?? '';
+        bVal = (b.bidStrategy as string) ?? '';
       } else {
         aVal = getMetricValue(a.metrics as Record<string, number>, sortKey as MetricKey);
         bVal = getMetricValue(b.metrics as Record<string, number>, sortKey as MetricKey);
@@ -1652,11 +1696,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     return sorted;
   }, [filteredCampaigns, sortKey, sortDirection, compareEntities]);
 
-  // Limit displayed campaigns for initial render; Load More reveals more
-  const displayedCampaigns = useMemo(
-    () => sortedCampaigns.slice(0, visibleCount),
-    [sortedCampaigns, visibleCount]
-  );
+  const displayedCampaigns = sortedCampaigns;
 
   // Virtual scrolling — render only visible campaign groups in the DOM
   const rowVirtualizer = useVirtualizer({
@@ -1824,7 +1864,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     };
   }, [sortedCampaigns]);
 
-  // Total column count: checkbox + toggle + name + status + budget + bid strategy + dynamic metrics
+  // Total column count: checkbox + toggle + name + status + budget + bid strategy + performance + latest actions + dynamic metrics
   const totalColumns = 8 + columnOrder.length;
 
   // --- Handlers ---
@@ -2157,6 +2197,39 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     return Math.min(100, corePart + actionsPart);
   }, [syncStatus.actions, syncStatus.core, coreProgress]);
 
+  const handleManualSync = useCallback(async () => {
+    if (!activeStoreId || hierarchySyncInFlightRef.current) return;
+    setSyncStatus({ core: 'loading', actions: 'loading', errors: 'loading' });
+    try {
+      const res = await apiClient<{
+        data: Record<string, Partial<{ spend: number; impressions: number; clicks: number; conversions: number; revenue: number; roas: number }>>;
+        lastSyncedAt: string;
+      }>('/api/sync/refresh', {
+        method: 'POST',
+        body: JSON.stringify({ storeId: activeStoreId, includeHierarchy: true, force: true }),
+        timeoutMs: 25_000,
+        maxRetries: 0,
+      });
+      setLastSyncedAt(res.lastSyncedAt || new Date().toISOString());
+      if (res.data) {
+        setCampaigns((prev) =>
+          prev.map((campaign) => ({
+            ...campaign,
+            metrics: { ...campaign.metrics, ...(res.data[campaign.id] || {}) },
+          }))
+        );
+      }
+      await preloadActiveHierarchy(false);
+      await refreshRecentOperationalData({ includeIssues: true });
+      await fetchAttributionCoverage();
+      toast.success('Ads Manager refreshed');
+    } catch {
+      toast.error('Refresh failed. Please try again in a moment.');
+    } finally {
+      setSyncStatus((prev) => ({ ...prev, core: 'done', actions: 'done', errors: 'done' }));
+    }
+  }, [activeStoreId, fetchAttributionCoverage, preloadActiveHierarchy, refreshRecentOperationalData]);
+
   const scrollToRow = useCallback((rowId: string) => {
     const node = document.getElementById(rowId);
     if (!node) return false;
@@ -2228,16 +2301,12 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         syncPercent={syncPercent}
         attributionCoverage={attributionCoverage}
         lastSyncedAt={lastSyncedAt}
+        onManualSync={handleManualSync}
       />
 
       <SmartSegmentsBar
         campaigns={campaigns}
         sparklineData={sparklineData}
-      />
-
-      <QuickFilterBar
-        activeFilter={quickFilter}
-        onFilterChange={setQuickFilter}
       />
 
       {activeSegment && (
@@ -2269,12 +2338,12 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         collisionDetection={closestCenter}
         onDragEnd={handleDragEnd}
       >
-        <div ref={tableContainerRef} className="apple-table-container apple-scroll">
-          <table className="w-full min-w-[1200px] apple-table">
+        <div ref={tableContainerRef} className="apple-table-container ads-manager-table-container apple-scroll">
+          <table className="w-full min-w-[1600px] apple-table">
             <thead>
               <tr className="sticky top-0 z-20 border-b-2 border-[var(--apple-table-header-border)] bg-[var(--apple-table-header-bg)]" style={{ height: 44 }}>
                 {/* Checkbox — 40px */}
-                <th className="w-10 min-w-[40px] max-w-[40px] whitespace-nowrap px-3 py-2.5 text-center sticky left-0 z-20 bg-[var(--apple-table-header-bg)]">
+                <th className="w-10 min-w-[40px] max-w-[40px] whitespace-nowrap px-3 py-2 text-center sticky left-0 z-20 bg-[var(--apple-table-header-bg)]">
                   <Checkbox
                     checked={allSelected}
                     onChange={handleSelectAll}
@@ -2282,12 +2351,12 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                   />
                 </th>
                 {/* ON/OFF — 70px */}
-                <th className="min-w-[70px] max-w-[70px] whitespace-nowrap px-3 py-2.5 text-center text-[11px] font-bold uppercase tracking-[0.06em] text-[#6b7280] dark:text-[#9ca3af] sticky left-[40px] z-20 bg-[var(--apple-table-header-bg)]" style={{ width: 70 }}>
+                <th className="min-w-[70px] max-w-[70px] whitespace-nowrap px-3 py-2 text-center text-[11px] font-bold uppercase tracking-[0.05em] text-[#6b7280] dark:text-[#9ca3af] sticky left-[40px] z-20 bg-[var(--apple-table-header-bg)]" style={{ width: 70 }}>
                   On/Off
                 </th>
                 {/* Name — flex, min 280px */}
                 <th
-                  className="relative whitespace-nowrap px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-[0.06em] text-[#6b7280] dark:text-[#9ca3af] sticky left-[110px] z-20 bg-[var(--apple-table-header-bg)] border-r border-[var(--apple-table-header-border)]"
+                  className="relative whitespace-nowrap px-2 py-2 text-left text-[11px] font-bold uppercase tracking-[0.05em] text-[#6b7280] dark:text-[#9ca3af] sticky left-[110px] z-20 bg-[var(--apple-table-header-bg)] border-r border-[var(--apple-table-header-border)]"
                   style={{ width: nameColWidth, minWidth: Math.max(nameColWidth, 280) }}
                 >
                   <button
@@ -2303,12 +2372,12 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                     className="absolute right-0 top-0 h-full w-2 cursor-col-resize hover:bg-[#0071e3]/20 transition-colors"
                   />
                 </th>
-                <SortableFixedHeader label="Status" sortKeyName="status" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} />
+                <SortableFixedHeader label="Status" sortKeyName="status" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} width={150} />
                 <SortableFixedHeader label="Budget" sortKeyName="budget" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} width={120} align="right" />
                 <SortableFixedHeader label="Bid Strategy" sortKeyName="bidStrategy" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} width={140} />
                 <SortableFixedHeader label="Performance" sortKeyName="performance" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} width={130} align="center" />
                 {/* Latest Actions — 150px, no History icon */}
-                <th className="whitespace-nowrap px-3 py-2.5 text-left text-[11px] font-bold uppercase tracking-[0.06em] text-[#6b7280] dark:text-[#9ca3af]" style={{ width: 150, minWidth: 150 }}>
+                <th className="whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.05em] text-[#6b7280] dark:text-[#9ca3af]" style={{ width: 160, minWidth: 160 }}>
                   Latest Actions
                 </th>
                 {/* Dynamic metric columns with drag-to-reorder */}
@@ -2432,15 +2501,15 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
             )}
             {sortedCampaigns.length > 0 && (
               <tfoot>
-                <tr className="totals-row">
-                  <td colSpan={3} className="whitespace-nowrap px-3 py-2.5 text-[13.5px] sticky left-0 z-10">
+                <tr className="totals-row sticky bottom-0 z-20">
+                  <td colSpan={3} className="whitespace-nowrap px-3 py-3 text-[15px] sticky left-0 z-30">
                     Total — {totals.activeCampaigns} active
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-[12px]">&mdash;</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-[12px]">&mdash;</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-[12px]">&mdash;</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-[12px]">&mdash;</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-[12px]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-[13px]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-[13px]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-[13px]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-[13px]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-[13px]">&mdash;</td>
                   {columnOrder.map((key) => (
                     <MetricCell
                       key={`totals-${key}`}
@@ -2455,18 +2524,6 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
           </table>
         </div>
       </DndContext>}
-
-      {/* Load More button */}
-      {visibleCount < sortedCampaigns.length && (
-        <div className="flex justify-center py-4">
-          <button
-            onClick={() => setVisibleCount((prev) => prev + INITIAL_LIMIT)}
-            className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface-elevated px-5 py-2 text-sm font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-colors duration-150"
-          >
-            Load More ({sortedCampaigns.length - visibleCount} remaining)
-          </button>
-        </div>
-      )}
 
       {/* Bulk action bar */}
       {!showErrorCenter && <BulkActionBar
@@ -2734,6 +2791,7 @@ function CampaignGroup({
             <AdSetGroup
               key={adSet.id}
               adSet={adSet}
+              campaignBidStrategy={campaign.bidStrategy}
               isExpanded={adSetExpanded}
               selectedIds={selectedIds}
               columnOrder={columnOrder}
@@ -2772,6 +2830,7 @@ function CampaignGroup({
 // --- Internal grouping component for adset + ads ---
 interface AdSetGroupProps {
   adSet: Campaign['adSets'][number];
+  campaignBidStrategy: Campaign['bidStrategy'];
   isExpanded: boolean;
   selectedIds: Set<string>;
   columnOrder: MetricKey[];
@@ -2805,6 +2864,7 @@ interface AdSetGroupProps {
 
 function AdSetGroup({
   adSet,
+  campaignBidStrategy,
   isExpanded,
   selectedIds,
   columnOrder,
@@ -2854,6 +2914,7 @@ function AdSetGroup({
         onStatusChange={(status) => onAdSetStatusChange(adSet.id, status)}
         onBudgetChange={(budget) => onAdSetBudgetChange(adSet.id, budget)}
         onBidChange={(bid) => onAdSetBidChange(adSet.id, bid)}
+        bidStrategy={campaignBidStrategy}
         columnOrder={columnOrder}
         isCBO={isCBO}
         sparklineData={sparklineData}

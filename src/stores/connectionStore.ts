@@ -26,6 +26,7 @@ const defaultStatus: ConnectionStatus = {
 };
 
 const CONNECTION_CACHE_KEY = 'onescale:connection-cache';
+let latestRefreshSeq = 0;
 
 /** Read cached connection state from localStorage for instant hydration */
 function readConnectionCache(storeId: string): { status: ConnectionStatus; mappedAccounts: MappedAccount[] } | null {
@@ -55,12 +56,14 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
   error: null,
 
   refreshStatus: async (storeId: string) => {
+    const refreshSeq = ++latestRefreshSeq;
     // Hydrate from localStorage immediately if available (eliminates skeleton flash)
     const cached = typeof window !== 'undefined' ? readConnectionCache(storeId) : null;
-    if (cached && get().status === null) {
+    if (cached) {
       set({ status: cached.status, mappedAccounts: cached.mappedAccounts, loading: true, error: null });
     } else {
-      set({ loading: true, error: null });
+      // Clear stale account mapping immediately to prevent cross-store accountIds injection.
+      set({ status: defaultStatus, mappedAccounts: [], loading: true, error: null });
     }
     try {
       // Fetch connection status and mapped accounts in parallel
@@ -87,9 +90,12 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
         );
       }
 
+      // Ignore stale async response if a newer store refresh started.
+      if (refreshSeq !== latestRefreshSeq) return;
       set({ status: data, mappedAccounts: mapped, loading: false });
       if (typeof window !== 'undefined') writeConnectionCache(storeId, data, mapped);
     } catch (err) {
+      if (refreshSeq !== latestRefreshSeq) return;
       const message = err instanceof Error ? err.message : 'Unknown error';
       set({ status: defaultStatus, mappedAccounts: [], loading: false, error: message });
     }

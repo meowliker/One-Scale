@@ -8,10 +8,12 @@ import {
   getLatestPersistentMetaEndpointSnapshot,
   upsertPersistentMetaEndpointSnapshot,
 } from '@/app/api/lib/supabase-tracking';
+import { enqueueMetaSyncTask, isMetaCallBlocked, markMetaRateLimited } from '@/app/api/lib/meta-sync-queue';
 import type { AdSet } from '@/types/campaign';
 
 const adSetCache = new Map<string, { at: number; data: AdSet[] }>();
 const CACHE_TTL_MS = 30 * 60 * 1000;
+const BACKGROUND_REFRESH_MS = 90 * 1000;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -34,6 +36,102 @@ function hasAdSetSignal(rows: AdSet[]): boolean {
   );
 }
 
+async function persistAdSets(
+  useSupabase: boolean,
+  storeId: string,
+  campaignId: string,
+  exactVariant: string,
+  mode: string,
+  adSets: AdSet[]
+) {
+  if (useSupabase) {
+    await Promise.all([
+      upsertPersistentMetaEndpointSnapshot(storeId, 'adsets', campaignId, exactVariant, adSets),
+      upsertPersistentMetaEndpointSnapshot(storeId, 'adsets', campaignId, 'latest', adSets),
+      hasAdSetSignal(adSets)
+        ? upsertPersistentMetaEndpointSnapshot(storeId, 'adsets', campaignId, `mode:${mode}`, adSets)
+        : Promise.resolve(),
+    ]);
+    return;
+  }
+
+  upsertMetaEndpointSnapshot(storeId, 'adsets', campaignId, exactVariant, adSets);
+  upsertMetaEndpointSnapshot(storeId, 'adsets', campaignId, 'latest', adSets);
+  if (hasAdSetSignal(adSets)) {
+    upsertMetaEndpointSnapshot(storeId, 'adsets', campaignId, `mode:${mode}`, adSets);
+  }
+}
+
+async function readCachedSnapshot(
+  useSupabase: boolean,
+  storeId: string,
+  campaignId: string,
+  exactVariant: string,
+  mode: string
+): Promise<{ data: AdSet[]; updatedAt?: string } | null> {
+  const exactSnapshot = useSupabase
+    ? await getPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, exactVariant)
+    : getMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, exactVariant);
+  if (exactSnapshot && exactSnapshot.data.length > 0) {
+    return { data: exactSnapshot.data, updatedAt: exactSnapshot.updatedAt };
+  }
+
+  const modeSnapshot = useSupabase
+    ? await getPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, `mode:${mode}`)
+    : getMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, `mode:${mode}`);
+  if (modeSnapshot && modeSnapshot.data.length > 0) {
+    return { data: modeSnapshot.data, updatedAt: modeSnapshot.updatedAt };
+  }
+
+  const latestSnapshot = useSupabase
+    ? await getLatestPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId)
+    : getLatestMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId);
+  if (latestSnapshot && latestSnapshot.data.length > 0) {
+    return { data: latestSnapshot.data, updatedAt: latestSnapshot.updatedAt };
+  }
+
+  return null;
+}
+
+function queueAdSetRefresh(args: {
+  storeId: string;
+  campaignId: string;
+  since: string | null;
+  until: string | null;
+  strictDate: boolean;
+  mode: string;
+  useSupabase: boolean;
+  minIntervalMs: number;
+}) {
+  const { storeId, campaignId, since, until, strictDate, mode, useSupabase, minIntervalMs } = args;
+  const taskKey = `adsets:${storeId}:${campaignId}:${since || ''}:${until || ''}:${strictDate ? '1' : '0'}:${mode}`;
+
+  enqueueMetaSyncTask(taskKey, minIntervalMs, async () => {
+    if (isMetaCallBlocked(storeId)) return;
+
+    const token = await getMetaToken(storeId);
+    if (!token) return;
+
+    const dateRange = since && until ? { since, until } : undefined;
+    const exactVariant = `mode:${mode}|since:${since || ''}|until:${until || ''}|strict:${strictDate ? '1' : '0'}`;
+
+    try {
+      const adSets = await fetchMetaAdSets(token.accessToken, campaignId, dateRange, {
+        disableDateFallback: strictDate,
+        preferLightweight: mode === 'basic' || mode === 'audit',
+        basicOnly: mode === 'basic',
+      });
+      const cacheKey = [storeId, campaignId, since || '', until || '', strictDate ? 'strict' : 'flex', mode].join('|');
+      adSetCache.set(cacheKey, { at: Date.now(), data: adSets });
+      await persistAdSets(useSupabase, storeId, campaignId, exactVariant, mode, adSets);
+    } catch (err) {
+      if (err instanceof MetaRateLimitError) {
+        markMetaRateLimited(storeId, 60);
+      }
+    }
+  });
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const storeId = searchParams.get('storeId');
@@ -43,11 +141,14 @@ export async function GET(request: NextRequest) {
   const until = searchParams.get('until');
   const strictDate = searchParams.get('strictDate') === '1';
   const mode = searchParams.get('mode') || 'fast';
-  const preferCache = searchParams.get('preferCache') === '1';
+  const preferCache = searchParams.get('preferCache') !== '0';
+  const forceLive = searchParams.get('forceLive') === '1';
 
   if (!storeId) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
+
+  const useSupabase = isSupabasePersistenceEnabled();
 
   // Batch mode: fetch adsets for multiple campaigns in one request
   if (campaignIds) {
@@ -56,52 +157,80 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'campaignIds must contain at least one ID' }, { status: 400 });
     }
 
+    const results: Record<string, AdSet[]> = {};
+    const missing: string[] = [];
+
+    for (const id of ids) {
+      const cacheKey = [storeId, id, since || '', until || '', strictDate ? 'strict' : 'flex', mode].join('|');
+      const cached = adSetCache.get(cacheKey);
+      if (cached && Date.now() - cached.at < CACHE_TTL_MS && !forceLive) {
+        results[id] = cached.data;
+        continue;
+      }
+
+      if (preferCache && !forceLive) {
+        const exactVariant = `mode:${mode}|since:${since || ''}|until:${until || ''}|strict:${strictDate ? '1' : '0'}`;
+        const snap = await readCachedSnapshot(useSupabase, storeId, id, exactVariant, mode);
+        if (snap && snap.data.length > 0) {
+          results[id] = snap.data;
+          adSetCache.set(cacheKey, { at: Date.now(), data: snap.data });
+          queueAdSetRefresh({
+            storeId,
+            campaignId: id,
+            since,
+            until,
+            strictDate,
+            mode,
+            useSupabase,
+            minIntervalMs: BACKGROUND_REFRESH_MS,
+          });
+          continue;
+        }
+      }
+
+      missing.push(id);
+    }
+
+    if (missing.length === 0) {
+      return NextResponse.json({ data: results, cached: true });
+    }
+
+    if (isMetaCallBlocked(storeId)) {
+      return NextResponse.json(
+        { data: results, partial: true, rateLimited: true, error: 'Meta sync cooling down' },
+        { status: Object.keys(results).length > 0 ? 200 : 429, headers: { 'Retry-After': '60' } }
+      );
+    }
+
     const token = await getMetaToken(storeId);
     if (!token) {
       return NextResponse.json({ error: 'Not authenticated with Meta' }, { status: 401 });
     }
 
     const dateRange = since && until ? { since, until } : undefined;
-    const results: Record<string, AdSet[]> = {};
 
     try {
-      // Fetch adsets for each campaign sequentially with small delays to avoid rate limits
-      for (const id of ids) {
-        try {
-          const adSets = await fetchMetaAdSets(token.accessToken, id, dateRange, {
-            disableDateFallback: strictDate,
-            preferLightweight: mode === 'basic' || mode === 'audit',
-            basicOnly: mode === 'basic',
-          });
-          results[id] = adSets;
+      for (const id of missing) {
+        const adSets = await fetchMetaAdSets(token.accessToken, id, dateRange, {
+          disableDateFallback: strictDate,
+          preferLightweight: mode === 'basic' || mode === 'audit',
+          basicOnly: mode === 'basic',
+        });
+        results[id] = adSets;
 
-          // Cache each campaign's result
-          const batchCacheKey = [storeId, id, since || '', until || '', strictDate ? 'strict' : 'flex', mode].join('|');
-          adSetCache.set(batchCacheKey, { at: Date.now(), data: adSets });
-        } catch (err) {
-          if (err instanceof MetaRateLimitError) {
-            // Return what we have so far with a 429 status
-            return NextResponse.json(
-              { data: results, partial: true, rateLimited: true, error: 'Rate limited by Meta' },
-              { status: 429, headers: { 'Retry-After': '60' } }
-            );
-          }
-          // For other errors, store empty array and continue
-          results[id] = [];
-        }
-
-        // Small delay between campaigns to avoid rate limits
-        if (ids.indexOf(id) < ids.length - 1) {
-          await sleep(300);
-        }
+        const exactVariant = `mode:${mode}|since:${since || ''}|until:${until || ''}|strict:${strictDate ? '1' : '0'}`;
+        const cacheKey = [storeId, id, since || '', until || '', strictDate ? 'strict' : 'flex', mode].join('|');
+        adSetCache.set(cacheKey, { at: Date.now(), data: adSets });
+        await persistAdSets(useSupabase, storeId, id, exactVariant, mode, adSets);
+        await sleep(200);
       }
-
       return NextResponse.json({ data: results });
     } catch (err) {
       if (err instanceof MetaRateLimitError) {
+        markMetaRateLimited(storeId, 60);
         return NextResponse.json(
-          { error: 'Rate limited by Meta. Please wait a minute and try again.', rateLimited: true, data: results },
-          { status: 429, headers: { 'Retry-After': '60' } }
+          { data: results, partial: true, rateLimited: true, error: 'Rate limited by Meta' },
+          { status: Object.keys(results).length > 0 ? 200 : 429, headers: { 'Retry-After': '60' } }
         );
       }
       const message = err instanceof Error ? err.message : 'Failed to fetch ad sets';
@@ -113,54 +242,59 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'campaignId is required' }, { status: 400 });
   }
 
-  const useSupabase = isSupabasePersistenceEnabled();
   const dateRange = since && until ? { since, until } : undefined;
   const cacheKey = [storeId, campaignId, since || '', until || '', strictDate ? 'strict' : 'flex', mode].join('|');
   const exactVariant = `mode:${mode}|since:${since || ''}|until:${until || ''}|strict:${strictDate ? '1' : '0'}`;
   const cached = adSetCache.get(cacheKey);
   const prefix = `${storeId}|${campaignId}|`;
   const cachedByCampaign = findFallbackCache(prefix);
-  if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+
+  if (!forceLive && cached && Date.now() - cached.at < CACHE_TTL_MS) {
+    queueAdSetRefresh({
+      storeId,
+      campaignId,
+      since,
+      until,
+      strictDate,
+      mode,
+      useSupabase,
+      minIntervalMs: BACKGROUND_REFRESH_MS,
+    });
     return NextResponse.json({ data: cached.data, cached: true });
   }
 
-  if (preferCache) {
-    const exactSnapshot = useSupabase
-      ? await getPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, exactVariant)
-      : getMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, exactVariant);
-    if (exactSnapshot && exactSnapshot.data.length > 0) {
+  if (preferCache && !forceLive) {
+    const snap = await readCachedSnapshot(useSupabase, storeId, campaignId, exactVariant, mode);
+    if (snap && snap.data.length > 0) {
+      adSetCache.set(cacheKey, { at: Date.now(), data: snap.data });
+      queueAdSetRefresh({
+        storeId,
+        campaignId,
+        since,
+        until,
+        strictDate,
+        mode,
+        useSupabase,
+        minIntervalMs: BACKGROUND_REFRESH_MS,
+      });
       return NextResponse.json({
-        data: exactSnapshot.data,
+        data: snap.data,
         cached: true,
         stale: true,
-        snapshotAt: exactSnapshot.updatedAt,
-        staleReason: 'snapshot_exact_fast',
+        snapshotAt: snap.updatedAt,
       });
     }
-    const modeSnapshot = useSupabase
-      ? await getPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, `mode:${mode}`)
-      : getMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, `mode:${mode}`);
-    if (modeSnapshot && modeSnapshot.data.length > 0) {
-      return NextResponse.json({
-        data: modeSnapshot.data,
-        cached: true,
-        stale: true,
-        snapshotAt: modeSnapshot.updatedAt,
-        staleReason: 'snapshot_mode_fast',
-      });
+  }
+
+  if (isMetaCallBlocked(storeId)) {
+    if (cached || cachedByCampaign) {
+      const fallback = cached || cachedByCampaign!;
+      return NextResponse.json({ data: fallback.data, cached: true, stale: true });
     }
-    const latestSnapshot = useSupabase
-      ? await getLatestPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId)
-      : getLatestMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId);
-    if (latestSnapshot && latestSnapshot.data.length > 0) {
-      return NextResponse.json({
-        data: latestSnapshot.data,
-        cached: true,
-        stale: true,
-        snapshotAt: latestSnapshot.updatedAt,
-        staleReason: 'snapshot_latest_fast',
-      });
-    }
+    return NextResponse.json(
+      { error: 'Rate limited by Meta. Cooling down and retrying in background.', rateLimited: true },
+      { status: 429, headers: { 'Retry-After': '60' } }
+    );
   }
 
   const token = await getMetaToken(storeId);
@@ -169,89 +303,36 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const preferLightweight = mode === 'basic' || mode === 'audit';
-    const basicOnly = mode === 'basic';
-    let adSets: AdSet[] | null = null;
+    const adSets = await fetchMetaAdSets(token.accessToken, campaignId, dateRange, {
+      disableDateFallback: strictDate,
+      preferLightweight: mode === 'basic' || mode === 'audit',
+      basicOnly: mode === 'basic',
+    });
 
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const fetchTask = fetchMetaAdSets(token.accessToken, campaignId, dateRange, {
-          disableDateFallback: strictDate,
-          preferLightweight,
-          basicOnly,
-        });
-        adSets = mode === 'audit'
-          ? await Promise.race([
-              fetchTask,
-              new Promise<AdSet[]>((_, reject) =>
-                setTimeout(() => reject(new Error('Adsets audit timeout')), 18_000)
-              ),
-            ])
-          : await fetchTask;
-        break;
-      } catch (err) {
-        if (err instanceof MetaRateLimitError && attempt === 0) {
-          await sleep(600);
-          continue;
-        }
-        throw err;
-      }
-    }
-
-    if (!adSets) {
-      throw new Error('Failed to fetch ad sets');
-    }
     adSetCache.set(cacheKey, { at: Date.now(), data: adSets });
-    if (useSupabase) {
-      await Promise.all([
-        upsertPersistentMetaEndpointSnapshot(storeId, 'adsets', campaignId, exactVariant, adSets),
-        upsertPersistentMetaEndpointSnapshot(storeId, 'adsets', campaignId, 'latest', adSets),
-        hasAdSetSignal(adSets)
-          ? upsertPersistentMetaEndpointSnapshot(storeId, 'adsets', campaignId, `mode:${mode}`, adSets)
-          : Promise.resolve(),
-      ]);
-    } else {
-      upsertMetaEndpointSnapshot(storeId, 'adsets', campaignId, exactVariant, adSets);
-      upsertMetaEndpointSnapshot(storeId, 'adsets', campaignId, 'latest', adSets);
-      if (hasAdSetSignal(adSets)) {
-        upsertMetaEndpointSnapshot(storeId, 'adsets', campaignId, `mode:${mode}`, adSets);
-      }
-    }
+    await persistAdSets(useSupabase, storeId, campaignId, exactVariant, mode, adSets);
     return NextResponse.json({ data: adSets });
   } catch (err) {
-    // Fallback to stale cache when Meta is unavailable/rate-limited.
+    if (err instanceof MetaRateLimitError) {
+      markMetaRateLimited(storeId, 60);
+    }
+
     if (cached || cachedByCampaign) {
       const fallback = cached || cachedByCampaign!;
       return NextResponse.json({ data: fallback.data, cached: true, stale: true });
     }
 
-    const exactSnapshot = useSupabase
-      ? await getPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, exactVariant)
-      : getMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, exactVariant);
-    if (exactSnapshot && exactSnapshot.data.length > 0) {
-      adSetCache.set(cacheKey, { at: Date.now(), data: exactSnapshot.data });
+    const snap = await readCachedSnapshot(useSupabase, storeId, campaignId, exactVariant, mode);
+    if (snap && snap.data.length > 0) {
+      adSetCache.set(cacheKey, { at: Date.now(), data: snap.data });
       return NextResponse.json({
-        data: exactSnapshot.data,
+        data: snap.data,
         cached: true,
         stale: true,
-        snapshotAt: exactSnapshot.updatedAt,
+        snapshotAt: snap.updatedAt,
       });
     }
 
-    const snapshot = useSupabase
-      ? await getLatestPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId)
-      : getLatestMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId);
-    if (snapshot && snapshot.data.length > 0) {
-      adSetCache.set(cacheKey, { at: Date.now(), data: snapshot.data });
-      return NextResponse.json({
-        data: snapshot.data,
-        cached: true,
-        stale: true,
-        snapshotAt: snapshot.updatedAt,
-      });
-    }
-
-    // Final fallback: return basic ad sets for non-audit modes only.
     if (mode !== 'audit') {
       try {
         const basicAdSets = await fetchMetaAdSets(token.accessToken, campaignId, dateRange, {
@@ -266,13 +347,13 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Return 429 for rate limit errors so client can show a specific message
     if (err instanceof MetaRateLimitError) {
       return NextResponse.json(
         { error: 'Rate limited by Meta. Please wait a minute and try again.', rateLimited: true },
-        { status: 429 }
+        { status: 429, headers: { 'Retry-After': '60' } }
       );
     }
+
     const message = err instanceof Error ? err.message : 'Failed to fetch ad sets';
     return NextResponse.json({ error: message }, { status: 500 });
   }

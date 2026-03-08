@@ -16,10 +16,10 @@ export interface DraggableColumnHeaderProps {
 }
 
 function SortIndicator({ active, direction }: { active: boolean; direction: 'asc' | 'desc' | null }) {
-  if (!active) return <ArrowUpDown className="h-2.5 w-2.5 text-text-dimmed/30 opacity-0 group-hover/sort:opacity-100 transition-all duration-200" />;
+  if (!active) return <ArrowUpDown className="h-3 w-3 text-text-dimmed/40 opacity-0 group-hover/sort:opacity-100 transition-all duration-200" />;
   return direction === 'asc'
-    ? <ArrowUp className="h-2.5 w-2.5 text-primary animate-fade-in" />
-    : <ArrowDown className="h-2.5 w-2.5 text-primary animate-fade-in" />;
+    ? <ArrowUp className="h-3 w-3 text-primary animate-fade-in" />
+    : <ArrowDown className="h-3 w-3 text-primary animate-fade-in" />;
 }
 
 export function DraggableColumnHeader({ metricKey, sortKey, sortDirection, onSort }: DraggableColumnHeaderProps) {
@@ -78,7 +78,7 @@ export function DraggableColumnHeader({ metricKey, sortKey, sortDirection, onSor
       ref={(node) => { setNodeRef(node); thRef.current = node; }}
       style={{ ...style, ...(columnWidth ? { width: columnWidth, minWidth: columnWidth } : {}) }}
       className={cn(
-        'relative whitespace-nowrap px-3 py-2 text-right text-[11px] font-bold uppercase tracking-[0.04em] text-text-secondary select-none transition-colors duration-150 hover:text-text-primary',
+        'relative whitespace-nowrap px-3 py-2 text-right text-[11px] font-bold uppercase tracking-[0.05em] text-text-secondary select-none transition-colors duration-150 hover:text-text-primary',
         isDragging && 'z-50 bg-[#e8f0fe] opacity-90 shadow-md rounded-lg'
       )}
     >
@@ -88,7 +88,7 @@ export function DraggableColumnHeader({ metricKey, sortKey, sortDirection, onSor
           className="group/sort flex items-center gap-1 cursor-pointer hover:text-[#0071e3] transition-colors duration-150"
           title={`Sort by ${label}`}
         >
-          <span className="text-[10px]">{label}</span>
+          <span className="text-[11px]">{label}</span>
           <SortIndicator active={sortKey === metricKey} direction={sortKey === metricKey ? (sortDirection ?? null) : null} />
         </button>
         <button
@@ -97,7 +97,7 @@ export function DraggableColumnHeader({ metricKey, sortKey, sortDirection, onSor
           className="cursor-grab active:cursor-grabbing text-[#aeaeb2] hover:text-[#86868b] transition-colors duration-150"
           title={`Drag to reorder ${label}`}
         >
-          <GripVertical className="h-2.5 w-2.5" />
+          <GripVertical className="h-3 w-3" />
         </button>
       </div>
       {/* Column resize handle */}

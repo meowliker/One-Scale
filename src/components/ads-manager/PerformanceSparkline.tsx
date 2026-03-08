@@ -29,15 +29,6 @@ function getRoasColor(roas: number): string {
   return '#34c759'; // green
 }
 
-function getTrendColor(data: SparklineDataPoint[]): string {
-  if (data.length < 2) return '#aeaeb2';
-  const first = data[0].roas;
-  const last = data[data.length - 1].roas;
-  const pctChange = first > 0 ? ((last - first) / first) * 100 : 0;
-  if (Math.abs(pctChange) < 3) return '#ffcc00'; // yellow = flat (< 3% change)
-  return pctChange > 0 ? '#34c759' : '#ff3b30'; // green = growing, red = declining
-}
-
 function formatRoasChange(first: number, last: number): { text: string; arrow: string; color: string } {
   if (first === 0 && last === 0) return { text: '0.00 → 0.00 (0%)', arrow: '', color: '#aeaeb2' };
 
@@ -55,7 +46,8 @@ function formatRoasChange(first: number, last: number): { text: string; arrow: s
 }
 
 export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: PerformanceSparklineProps) {
-  const data = (dataProp && dataProp.length >= 2) ? dataProp : getSparklineData(entityId);
+  const fullData = (dataProp && dataProp.length >= 2) ? dataProp : getSparklineData(entityId);
+  const data = fullData.slice(-8); // last 7 days + today when available
   const [showTooltip, setShowTooltip] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cellRef = useRef<HTMLTableCellElement>(null);
@@ -83,13 +75,14 @@ export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: 
     );
   }
 
-  // Color based on trend direction: red=declining, green=growing, yellow=flat
-  const trendColor = getTrendColor(data);
+  // Color should reflect recent performance quality over the last 7 days + today.
+  const recentRoas = data.map((d, i) => (i === data.length - 1 && currentRoas != null ? currentRoas : d.roas));
+  const effectiveCurrentRoas = recentRoas[recentRoas.length - 1];
+  const averageRecentRoas = recentRoas.reduce((sum, value) => sum + value, 0) / Math.max(recentRoas.length, 1);
+  const trendColor = getRoasColor(averageRecentRoas);
   const gradientId = `sparkGrad-${entityId.replace(/[^a-zA-Z0-9]/g, '')}`;
 
-  const firstRoas = data[0].roas;
-  // Use the aggregate currentRoas from the table column if provided; fall back to the last daily point
-  const effectiveCurrentRoas = currentRoas ?? data[data.length - 1].roas;
+  const firstRoas = recentRoas[0] ?? 0;
   const roasChange = formatRoasChange(firstRoas, effectiveCurrentRoas);
 
   const totalSpend = data.reduce((sum, d) => sum + d.spend, 0);
@@ -141,7 +134,7 @@ export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: 
           {/* Title + close button */}
           <div className="mb-2 flex items-center justify-between">
             <p className="text-xs font-semibold text-[#1d1d1f]">
-              Performance Trend (7d)
+              Performance Trend (7d + Today)
             </p>
             <button
               onClick={handleClose}
@@ -227,7 +220,7 @@ export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: 
               </span>
             </div>
             <div className="flex items-center gap-1.5 text-xs">
-              <span className="text-text-muted">7d Avg Spend:</span>
+              <span className="text-text-muted">{`${data.length}d Avg Spend:`}</span>
               <span className="text-text-secondary font-mono">
                 ${avgSpend.toFixed(2)}/day
               </span>

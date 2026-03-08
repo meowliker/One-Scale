@@ -511,6 +511,15 @@ body {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
 }
 
+/* Ads Manager: keep enough visible rows (about 10-15) while preserving both-axis scroll. */
+.ads-manager-table-container {
+  height: min(72vh, calc(100vh - 190px));
+  min-height: 560px;
+  max-height: 78vh;
+  overflow: auto;
+  scrollbar-gutter: stable both-edges;
+}
+
 /* ===== Dark table styles ===== */
 .dark-table {
   border-collapse: collapse;
@@ -619,4 +628,20 @@ button:active:not(:disabled),
   background-color: #1e293b !important;
   color: #f1f5f9 !important;
   border-top-color: #334155 !important;
+}
+
+/* App Pixel metric columns in Ads Manager */
+.app-pixel-metric-cell {
+  background: #e8f2ff;
+  border-left: 1px solid rgba(0, 113, 227, 0.1);
+}
+
+.dark .app-pixel-metric-cell {
+  background: #1e3a5f;
+  border-left-color: rgba(96, 165, 250, 0.2);
+}
+
+.light .app-pixel-metric-cell {
+  background: #eef5ff;
+  border-left-color: rgba(0, 113, 227, 0.12);
 }

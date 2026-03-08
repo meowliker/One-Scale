@@ -12,9 +12,11 @@ import { fromZonedTime } from 'date-fns-tz';
 
 // ------ Fetch P&L settings from DB ------
 
-async function fetchPnLSettings(): Promise<PnLSettings | null> {
+async function fetchPnLSettings(storeId: string): Promise<PnLSettings | null> {
   try {
-    const data = await apiClient<PnLSettings>('/api/settings/pnl');
+    const data = await apiClient<PnLSettings>('/api/settings/pnl', {
+      params: { storeId },
+    });
     return data;
   } catch {
     return null;
@@ -28,10 +30,9 @@ async function fetchPnLSettings(): Promise<PnLSettings | null> {
  * which may be stale or contain wrong IDs.
  */
 async function fetchInsightsDirectly(
+  storeId: string,
   datePreset: string,
 ): Promise<{ data: { date: string; metrics: Record<string, number> }[] }> {
-  const { useStoreStore } = await import('@/stores/storeStore');
-  const storeId = useStoreStore.getState().activeStoreId;
   if (!storeId) return { data: [] };
 
   const res = await fetch(`/api/meta/insights?storeId=${encodeURIComponent(storeId)}&datePreset=${datePreset}`);
@@ -154,48 +155,61 @@ interface FeeData {
 // Both getPnLSummary and getDailyPnL call fetchRealTransactionFees concurrently.
 // Without deduplication, both would fire separate paginated fetches simultaneously,
 // doubling API calls and rate-limit usage.
-let _feeDataCache: { data: FeeData; timestamp: number; tz: string } | null = null;
-let _feeDataInflight: Promise<FeeData> | null = null;
+let _feeDataCache: { data: FeeData; timestamp: number; tz: string; storeId: string } | null = null;
+let _feeDataInflight: { key: string; promise: Promise<FeeData> } | null = null;
 const FEE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 // Cache today's orders so getPnLSummary can reuse data from getDailyPnL (avoids double-fetch)
-let _cachedTodayOrders: { orders: ShopifyOrder[]; timestamp: number; tz: string } | null = null;
+let _cachedTodayOrders: { orders: ShopifyOrder[]; timestamp: number; tz: string; storeId: string } | null = null;
 
 /**
  * Clear all P&L caches. Call on manual refresh to get fresh data.
  */
 export function clearPnLCaches(): void {
   _feeDataCache = null;
+  _feeDataInflight = null;
   _cachedTodayOrders = null;
   clearCachePrefix('pnl:');
   clearCachePrefix('product-pnl:');
   console.log('[P&L] Caches cleared');
 }
 
-async function fetchRealTransactionFees(tz: string): Promise<FeeData> {
+async function getActiveStoreId(): Promise<string> {
+  const { useStoreStore } = await import('@/stores/storeStore');
+  return useStoreStore.getState().activeStoreId || '';
+}
+
+async function fetchRealTransactionFees(tz: string, storeId: string): Promise<FeeData> {
+  const cacheKey = `${storeId}:${tz}`;
   // Return cached result if fresh enough and same timezone
-  if (_feeDataCache && _feeDataCache.tz === tz && (Date.now() - _feeDataCache.timestamp) < FEE_CACHE_TTL_MS) {
+  if (
+    _feeDataCache &&
+    _feeDataCache.tz === tz &&
+    _feeDataCache.storeId === storeId &&
+    (Date.now() - _feeDataCache.timestamp) < FEE_CACHE_TTL_MS
+  ) {
     console.log(`[P&L] Using cached Shopify Payments fees (${_feeDataCache.data.feesByOrderId.size} orders)`);
     return _feeDataCache.data;
   }
 
   // If a fetch is already in-flight, wait for it instead of starting a new one
-  if (_feeDataInflight) {
+  if (_feeDataInflight?.key === cacheKey) {
     console.log('[P&L] Waiting for in-flight Shopify Payments fee fetch...');
-    return _feeDataInflight;
+    return _feeDataInflight.promise;
   }
 
   // Start the actual fetch and store the promise for deduplication
-  _feeDataInflight = _doFetchRealTransactionFees(tz);
+  const promise = _doFetchRealTransactionFees(tz, storeId);
+  _feeDataInflight = { key: cacheKey, promise };
   try {
-    const result = await _feeDataInflight;
+    const result = await promise;
     return result;
   } finally {
     _feeDataInflight = null;
   }
 }
 
-async function _doFetchRealTransactionFees(tz: string): Promise<FeeData> {
+async function _doFetchRealTransactionFees(tz: string, storeId: string): Promise<FeeData> {
   const feesByOrderId = new Map<number, number>();
   const feesByDate = new Map<string, number>();
   // Track seen transaction IDs to deduplicate — Shopify Balance Transactions API
@@ -211,7 +225,7 @@ async function _doFetchRealTransactionFees(tz: string): Promise<FeeData> {
   try {
     let hasMore = true;
     let lastId: string | undefined;
-    let pagesLeft = 6; // safety limit — max 1500 transactions (6 × 250), enough for 10 days
+    let pagesLeft = 40; // safety cap; loop still exits early at cutoff date
     let reachedCutoff = false;
 
     // Shopify Balance Transactions API returns results in DESCENDING order
@@ -225,7 +239,7 @@ async function _doFetchRealTransactionFees(tz: string): Promise<FeeData> {
       try {
         const response = await apiClient<{ data: BalanceTransaction[] }>(
           '/api/shopify/balance-transactions',
-          { params, timeoutMs: 30_000, maxRetries: 2 }
+          { params: { ...params, storeId }, timeoutMs: 30_000, maxRetries: 2 }
         );
         txns = response.data;
       } catch (pageErr) {
@@ -291,7 +305,7 @@ async function _doFetchRealTransactionFees(tz: string): Promise<FeeData> {
   const result = { feesByOrderId, feesByDate };
 
   // Cache the result
-  _feeDataCache = { data: result, timestamp: Date.now(), tz };
+  _feeDataCache = { data: result, timestamp: Date.now(), tz, storeId };
 
   return result;
 }
@@ -306,6 +320,7 @@ const PAGE_SIZE = 250; // Shopify max per page
  * to reduce API calls. Max 15 pages = 3750 orders per range.
  */
 async function fetchOrdersForDateRange(
+  storeId: string,
   startDateStr: string,
   endDateStr: string,
   tz: string,
@@ -327,7 +342,7 @@ async function fetchOrdersForDateRange(
 
   while (pagesLeft > 0) {
     const response = await apiClient<{ data: ShopifyOrder[] }>('/api/shopify/orders', {
-      params: { limit: String(PAGE_SIZE), since_id: sinceId, ...dateParams },
+      params: { storeId, limit: String(PAGE_SIZE), since_id: sinceId, ...dateParams },
       timeoutMs: 60_000,
     });
 
@@ -357,8 +372,9 @@ async function fetchOrdersForDateRange(
  * Returns deduplicated orders.
  */
 async function paginateOrders(
+  storeId: string,
   baseParams: Record<string, string>,
-  maxPages = 3,
+  maxPages = 20,
 ): Promise<ShopifyOrder[]> {
   const allOrders: ShopifyOrder[] = [];
   const seenIds = new Set<number>();
@@ -367,7 +383,7 @@ async function paginateOrders(
 
   while (pagesLeft > 0) {
     const response = await apiClient<{ data: ShopifyOrder[] }>('/api/shopify/orders', {
-      params,
+      params: { storeId, ...params },
       timeoutMs: 60_000,
     });
     const orders = response.data;
@@ -397,14 +413,15 @@ async function paginateOrders(
  * 'partially_refunded') and merge the results.
  */
 async function fetchRefundedOrders(
+  storeId: string,
   extraParams: Record<string, string>,
 ): Promise<ShopifyOrder[]> {
   const baseParams = { limit: String(PAGE_SIZE), ...extraParams };
 
   // Two separate calls — Shopify doesn't support comma-separated financial_status
   const [refunded, partiallyRefunded] = await Promise.all([
-    paginateOrders({ ...baseParams, financial_status: 'refunded' }),
-    paginateOrders({ ...baseParams, financial_status: 'partially_refunded' }),
+    paginateOrders(storeId, { ...baseParams, financial_status: 'refunded' }),
+    paginateOrders(storeId, { ...baseParams, financial_status: 'partially_refunded' }),
   ]);
 
   // Merge and deduplicate
@@ -432,6 +449,7 @@ async function fetchRefundedOrders(
  * already fetched by the main order fetches).
  */
 async function fetchAllRefundedOrders(
+  storeId: string,
   displayStartDateStr: string,
   displayEndDateStr: string,
   shopifyWindowStartDateStr: string,
@@ -456,8 +474,8 @@ async function fetchAllRefundedOrders(
   };
 
   const [olderWindowOrders, outsideOrders] = await Promise.all([
-    fetchRefundedOrders(olderWindowParams),
-    fetchRefundedOrders(outsideWindowParams),
+    fetchRefundedOrders(storeId, olderWindowParams),
+    fetchRefundedOrders(storeId, outsideWindowParams),
   ]);
 
   // Merge and deduplicate
@@ -532,6 +550,7 @@ async function mockGetPnLSummary(): Promise<PnLSummary> {
 }
 
 async function realGetPnLSummaryUncached(): Promise<PnLSummary> {
+  const storeId = await getActiveStoreId();
   const tz = getStoreTimezone();
   const todayStr = todayInTimezone(tz);
 
@@ -539,19 +558,20 @@ async function realGetPnLSummaryUncached(): Promise<PnLSummary> {
   // This avoids a duplicate Shopify orders fetch — the page calls getDailyPnL first.
   const useCachedOrders = _cachedTodayOrders
     && _cachedTodayOrders.tz === tz
+    && _cachedTodayOrders.storeId === storeId
     && (Date.now() - _cachedTodayOrders.timestamp) < 120_000;
 
   // Fetch refunded orders + Meta insights + fees (all use caches if getDailyPnL ran first)
   const [orders, refundedOlderOrders, historicalRes, recentRes, todayRes, pnlSettings, realFees] = await Promise.all([
     useCachedOrders
       ? Promise.resolve(_cachedTodayOrders!.orders)
-      : fetchOrdersForDateRange(todayStr, todayStr, tz),
-    fetchAllRefundedOrders(todayStr, todayStr, todayStr, tz),
-    fetchInsightsDirectly('last_30d'),
-    fetchInsightsDirectly('last_7d'),
-    fetchInsightsDirectly('today'),
-    fetchPnLSettings(),
-    fetchRealTransactionFees(tz), // uses 5-min cache — instant if getDailyPnL ran first
+      : fetchOrdersForDateRange(storeId, todayStr, todayStr, tz),
+    fetchAllRefundedOrders(storeId, todayStr, todayStr, todayStr, tz),
+    fetchInsightsDirectly(storeId, 'last_30d'),
+    fetchInsightsDirectly(storeId, 'last_7d'),
+    fetchInsightsDirectly(storeId, 'today'),
+    fetchPnLSettings(storeId),
+    fetchRealTransactionFees(tz, storeId), // uses 5-min cache — instant if getDailyPnL ran first
   ]);
 
   // Merge with priority: today > last_7d > last_30d (more recent data wins)
@@ -660,6 +680,7 @@ async function mockGetDailyPnL(): Promise<PnLEntry[]> {
 }
 
 async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
+  const storeId = await getActiveStoreId();
   const tz = getStoreTimezone();
   const todayStr = todayInTimezone(tz);
 
@@ -679,18 +700,18 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
     historicalRes, recentRes, todayRes, pnlSettings,
     allShopifyOrders, refundedOrders, realFees,
   ] = await Promise.all([
-    fetchInsightsDirectly('last_30d'),
-    fetchInsightsDirectly('last_7d'),
-    fetchInsightsDirectly('today'),
-    fetchPnLSettings(),
+    fetchInsightsDirectly(storeId, 'last_30d'),
+    fetchInsightsDirectly(storeId, 'last_7d'),
+    fetchInsightsDirectly(storeId, 'today'),
+    fetchPnLSettings(storeId),
     // ONE range call for all 8 days instead of 8 separate day calls.
     // Gracefully return empty arrays if Shopify isn't connected — Meta revenue
     // fallback will kick in for those days so the page still renders.
-    fetchOrdersForDateRange(earliestShopifyDate, todayStr, tz)
+    fetchOrdersForDateRange(storeId, earliestShopifyDate, todayStr, tz)
       .catch((err) => { console.warn('[P&L] Shopify orders fetch failed, using Meta fallback:', err instanceof Error ? err.message : err); return [] as ShopifyOrder[]; }),
-    fetchAllRefundedOrders(displayStartDate, todayStr, earliestShopifyDate, tz)
+    fetchAllRefundedOrders(storeId, displayStartDate, todayStr, earliestShopifyDate, tz)
       .catch((err) => { console.warn('[P&L] Shopify refunds fetch failed:', err instanceof Error ? err.message : err); return [] as ShopifyOrder[]; }),
-    fetchRealTransactionFees(tz),
+    fetchRealTransactionFees(tz, storeId),
   ]);
 
   // Merge with priority: today > last_7d > last_30d (more recent data wins)
@@ -723,7 +744,7 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
 
   // Cache today's orders so getPnLSummary can reuse them
   const todayOrders = ordersByDate.get(todayStr) || [];
-  _cachedTodayOrders = { orders: todayOrders, timestamp: Date.now(), tz };
+  _cachedTodayOrders = { orders: todayOrders, timestamp: Date.now(), tz, storeId };
 
   for (const dateStr of dayDates) {
     const orders = ordersByDate.get(dateStr) || [];

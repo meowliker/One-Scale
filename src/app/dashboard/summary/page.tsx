@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader2 } from 'lucide-react';
 import type { DateRangePreset } from '@/types/analytics';
+import type { TimeSeriesDataPoint } from '@/types/analytics';
 import type { PnLEntry } from '@/types/pnl';
 import { getBlendedMetricsForRange, getTimeSeriesForRange, getTopCampaignsForRange } from '@/services/analytics';
 import dynamic from 'next/dynamic';
@@ -19,6 +19,7 @@ import { ConnectionEmptyState } from '@/components/ui/ConnectionEmptyState';
 import { getDailyPnL } from '@/services/pnl';
 import { formatDateInTimezone } from '@/lib/timezone';
 import { getDateRange } from '@/lib/dateUtils';
+import type { Campaign } from '@/types/campaign';
 
 function computeShopifyMetricsFromPnL(dailyPnL: PnLEntry[], preset: DateRangePreset) {
   const range = getDateRange(preset);
@@ -36,8 +37,68 @@ function computeShopifyMetricsFromPnL(dailyPnL: PnLEntry[], preset: DateRangePre
   const shopifyAov = shopifyOrders > 0
     ? Math.round((shopifyRevenue / shopifyOrders) * 100) / 100
     : 0;
+  const shopifyFees = Math.round(
+    filteredDays.reduce((sum, day) => sum + (day.fees || 0), 0) * 100
+  ) / 100;
+  const shopifyRefunds = Math.round(
+    filteredDays.reduce((sum, day) => sum + (day.refunds || 0), 0) * 100
+  ) / 100;
+  const fullRefundAmount = Math.round(
+    filteredDays.reduce((sum, day) => sum + (day.fullRefundAmount || 0), 0) * 100
+  ) / 100;
+  const partialRefundAmount = Math.round(
+    filteredDays.reduce((sum, day) => sum + (day.partialRefundAmount || 0), 0) * 100
+  ) / 100;
+  const shopifyNetProfit = Math.round(
+    filteredDays.reduce((sum, day) => sum + (day.netProfit || 0), 0) * 100
+  ) / 100;
 
-  return { shopifyRevenue, shopifyOrders, shopifyAov };
+  return {
+    shopifyRevenue,
+    shopifyOrders,
+    shopifyAov,
+    shopifyFees,
+    shopifyRefunds,
+    fullRefundAmount,
+    partialRefundAmount,
+    shopifyNetProfit,
+  };
+}
+
+interface SummaryPayload {
+  blendedMetrics: Record<string, number> & {
+    shopifyRevenue: number;
+    shopifyOrders: number;
+    shopifyAov: number;
+    shopifyFees: number;
+    shopifyRefunds: number;
+    fullRefundAmount: number;
+    partialRefundAmount: number;
+    shopifyNetProfit: number;
+  };
+  timeSeries: TimeSeriesDataPoint[];
+  topCampaigns: Campaign[];
+  cachedAt?: string;
+}
+
+function readSummaryWarmCache(storeId: string | null, preset: DateRangePreset): SummaryPayload | null {
+  if (!storeId || typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(`summary:cache:v2:${storeId}:${preset}`);
+    if (!raw) return null;
+    return JSON.parse(raw) as SummaryPayload;
+  } catch {
+    return null;
+  }
+}
+
+function writeSummaryWarmCache(storeId: string, preset: DateRangePreset, payload: SummaryPayload): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(`summary:cache:v2:${storeId}:${preset}`, JSON.stringify(payload));
+  } catch {
+    // ignore cache write failures
+  }
 }
 
 async function fetchSummaryData(preset: DateRangePreset) {
@@ -50,6 +111,7 @@ async function fetchSummaryData(preset: DateRangePreset) {
     getDailyPnL().catch(() => [] as PnLEntry[]),
   ]);
 
+  // Single source of truth for Shopify metrics: same daily P&L pipeline used by P&L page cards.
   const shopifyMetrics = computeShopifyMetricsFromPnL(dailyPnL, preset);
 
   return {
@@ -58,6 +120,11 @@ async function fetchSummaryData(preset: DateRangePreset) {
       shopifyRevenue: shopifyMetrics.shopifyRevenue,
       shopifyOrders: shopifyMetrics.shopifyOrders,
       shopifyAov: shopifyMetrics.shopifyAov,
+      shopifyFees: shopifyMetrics.shopifyFees,
+      shopifyRefunds: shopifyMetrics.shopifyRefunds,
+      fullRefundAmount: shopifyMetrics.fullRefundAmount,
+      partialRefundAmount: shopifyMetrics.partialRefundAmount,
+      shopifyNetProfit: shopifyMetrics.shopifyNetProfit,
     },
     timeSeries: series,
     topCampaigns: campaigns,
@@ -81,15 +148,23 @@ export default function SummaryPage() {
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
   const connectionReady = !connectionLoading && connectionStatus !== null;
   const queryClient = useQueryClient();
+  const warmSummary = useMemo(
+    () => readSummaryWarmCache(activeStoreId, datePreset),
+    [activeStoreId, datePreset]
+  );
 
   const {
     data,
     isLoading,
+    isFetching,
     error,
   } = useQuery({
     queryKey: ['summary', activeStoreId, datePreset],
     queryFn: () => fetchSummaryData(datePreset),
     enabled: connectionReady && !!activeStoreId,
+    initialData: warmSummary || undefined,
+    staleTime: 60_000,
+    gcTime: 10 * 60_000,
   });
 
   // Prewarm other date presets in background on first successful load
@@ -112,9 +187,19 @@ export default function SummaryPage() {
     gcTime: 24 * 60 * 60 * 1000,
   });
 
-  const blendedMetrics = data?.blendedMetrics ?? {};
-  const timeSeries = data?.timeSeries ?? [];
-  const topCampaigns = data?.topCampaigns ?? [];
+  useEffect(() => {
+    if (!activeStoreId || !data) return;
+    writeSummaryWarmCache(activeStoreId, datePreset, {
+      blendedMetrics: data.blendedMetrics,
+      timeSeries: data.timeSeries,
+      topCampaigns: data.topCampaigns,
+      cachedAt: new Date().toISOString(),
+    });
+  }, [activeStoreId, data, datePreset]);
+
+  const blendedMetrics = data?.blendedMetrics ?? warmSummary?.blendedMetrics ?? {};
+  const timeSeries = data?.timeSeries ?? warmSummary?.timeSeries ?? [];
+  const topCampaigns = data?.topCampaigns ?? warmSummary?.topCampaigns ?? [];
 
   const emptyReason = error instanceof NotConnectedError
     ? error.reason
@@ -126,11 +211,10 @@ export default function SummaryPage() {
     setDatePreset(preset);
   }, []);
 
-  if ((!connectionReady || isLoading) && Object.keys(blendedMetrics).length === 0 && !emptyReason) {
+  if (!connectionReady && Object.keys(blendedMetrics).length === 0 && !emptyReason) {
     return (
       <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        <span className="ml-3 text-text-muted">Loading dashboard...</span>
+        <span className="text-text-muted">Loading dashboard...</span>
       </div>
     );
   }
@@ -153,7 +237,7 @@ export default function SummaryPage() {
         topCampaigns={topCampaigns}
         datePreset={datePreset}
         onDatePresetChange={handleDatePresetChange}
-        loading={isLoading}
+        loading={isLoading || isFetching}
       />
     </div>
   );

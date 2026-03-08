@@ -364,15 +364,17 @@ export function MetricsSummaryRow({ metrics }: MetricsSummaryRowProps) {
   const [showProfitBreakdown, setShowProfitBreakdown] = useState(false);
 
   const fbRevenue = metrics.totalRevenue ?? 0;
-  const shopifyRevenue = metrics.shopifyRevenue ?? 0;
+  // Keep Shopify cards consistent with the live strip:
+  // when Shopify revenue is unavailable, fall back to FB-attributed revenue.
+  const shopifyRevenue = metrics.shopifyRevenue ?? fbRevenue;
   const spend = metrics.totalSpend ?? 0;
   const conversions = metrics.totalConversions ?? 0;
   const cpa = conversions > 0 ? spend / conversions : 0;
 
-  // P&L logic for digital product (no COGS)
-  const transactionFees = shopifyRevenue * 0.029; // 2.9% Shopify Payments
-  const refunds = shopifyRevenue * 0.025; // 2.5% refund rate
-  const netProfit = shopifyRevenue - spend - transactionFees - refunds;
+  // Use P&L-derived values when available (same source as P&L and Store Overview).
+  const transactionFees = metrics.shopifyFees ?? (shopifyRevenue * 0.029);
+  const refunds = metrics.shopifyRefunds ?? (shopifyRevenue * 0.025);
+  const netProfit = metrics.shopifyNetProfit ?? (shopifyRevenue - spend - transactionFees - refunds);
   const margin = shopifyRevenue > 0 ? (netProfit / shopifyRevenue) * 100 : 0;
 
   // Additional FB metrics

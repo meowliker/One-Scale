@@ -23,7 +23,7 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
       persistOptions={{
         persister,
         maxAge: 30 * 60 * 1000, // 30 minutes — matches gcTime
-        buster: 'v1',
+        buster: 'v2',
       }}
     >
       {children}

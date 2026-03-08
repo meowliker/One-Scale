@@ -121,7 +121,7 @@ export function CampaignRow({
 
       {/* Name + Objective + CBO/ABO */}
       <td
-        className={cn("whitespace-nowrap overflow-hidden px-3 py-2 sticky left-[110px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
+        className={cn("whitespace-nowrap overflow-hidden px-2 py-2 sticky left-[110px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
         style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth, maxWidth: nameColWidth } : undefined}
       >
         <div className="flex items-center gap-2 min-w-0 overflow-hidden">
@@ -138,7 +138,7 @@ export function CampaignRow({
           <div className="relative group/tooltip min-w-0 flex-1">
             <button
               onClick={onToggleExpand}
-              className="block w-full truncate text-[13px] font-medium text-text-primary hover:text-primary transition-colors duration-150 text-left"
+              className="block w-full truncate text-[14px] font-semibold text-text-primary hover:text-primary transition-colors duration-150 text-left"
               title={campaign.name}
             >
               {campaign.name}
@@ -150,15 +150,18 @@ export function CampaignRow({
             </div>
           </div>
           {/* CBO/ABO — small outlined pill */}
-          <Badge variant={campaign.dailyBudget > 0 || (campaign.lifetimeBudget && campaign.lifetimeBudget > 0) ? 'info' : 'warning'} size="sm">
-            {campaign.dailyBudget > 0 || (campaign.lifetimeBudget && campaign.lifetimeBudget > 0) ? 'CBO' : 'ABO'}
-          </Badge>
-          {/* Objective as subtle muted text */}
-          <span className="shrink-0 text-[9px] font-medium text-text-dimmed uppercase tracking-wide">{objective.label}</span>
+          <span title={`${campaign.dailyBudget > 0 || (campaign.lifetimeBudget && campaign.lifetimeBudget > 0) ? 'CBO' : 'ABO'} • ${objective.label}`}>
+            <Badge
+              variant={campaign.dailyBudget > 0 || (campaign.lifetimeBudget && campaign.lifetimeBudget > 0) ? 'info' : 'warning'}
+              size="sm"
+            >
+              {campaign.dailyBudget > 0 || (campaign.lifetimeBudget && campaign.lifetimeBudget > 0) ? 'CBO' : 'ABO'}
+            </Badge>
+          </span>
           {issueCount > 0 && (
             <button
               onClick={() => onIssueClick?.()}
-              className="shrink-0 inline-flex items-center gap-1 rounded-md bg-[#fff4e5] px-2 py-0.5 text-[11px] font-medium text-[#cc7700] hover:bg-[#ffedcc] transition-colors duration-150"
+              className="shrink-0 inline-flex items-center gap-1 rounded-md bg-[#fff4e5] px-2 py-1 text-[12px] font-medium text-[#cc7700] hover:bg-[#ffedcc] transition-colors duration-150"
               title="This campaign has issues"
             >
               <AlertTriangle className="h-3 w-3" />
@@ -178,7 +181,7 @@ export function CampaignRow({
               onMouseLeave={() => setShowStatusTooltip(false)}
               onClick={() => { if (!isExpanded) onToggleExpand(); }}
               className={cn(
-                'inline-flex items-center gap-1.5 text-[11px] font-semibold apple-status-active cursor-pointer',
+                  'inline-flex items-center gap-1.5 text-[12px] font-semibold apple-status-active cursor-pointer',
                 'hover:bg-[#bbf7d0] dark:hover:bg-emerald-900/60 transition-all duration-150 hover:scale-[1.02]'
               )}
             >
@@ -187,7 +190,7 @@ export function CampaignRow({
             </button>
           ) : (
             <span
-              className="inline-flex items-center gap-1.5 text-[11px] font-semibold apple-status-paused cursor-not-allowed"
+              className="inline-flex items-center gap-1.5 text-[12px] font-semibold apple-status-paused cursor-not-allowed"
               title="Campaign is paused"
             >
               <span className="h-1.5 w-1.5 rounded-full bg-[#aeaeb2]" />
@@ -218,7 +221,7 @@ export function CampaignRow({
       {/* Budget — ABO has no campaign-level budget (it lives on each ad set) */}
       <td className="whitespace-nowrap px-3 py-2">
         {isABO ? (
-          <span className="inline-flex items-center gap-1 text-[12px] text-text-dimmed">
+          <span className="inline-flex items-center gap-1 text-[13px] text-text-dimmed">
             <Lock className="h-3 w-3" />
             <span className="italic">Ad set budgets</span>
           </span>
@@ -235,17 +238,9 @@ export function CampaignRow({
         )}
       </td>
 
-      {/* Bid Strategy + Cap Value */}
-      <td className="whitespace-nowrap px-3 py-2 text-sm text-text-secondary">
-        <div className="flex flex-col">
-          <span>{bidStrategyLabels[campaign.bidStrategy] ?? campaign.bidStrategy}</span>
-          {(campaign.bidStrategy === 'BID_CAP' || campaign.bidStrategy === 'COST_CAP') && (() => {
-            const capValue = campaign.adSets?.find((as) => as.bidAmount != null)?.bidAmount;
-            return capValue != null ? (
-              <span className="text-[10px] text-text-dimmed">${capValue.toFixed(2)} cap</span>
-            ) : null;
-          })()}
-        </div>
+      {/* Bid Strategy */}
+      <td className="whitespace-nowrap px-3 py-2 text-[13px] text-text-secondary">
+        <span>{bidStrategyLabels[campaign.bidStrategy] ?? campaign.bidStrategy}</span>
       </td>
 
       {/* Performance Sparkline */}

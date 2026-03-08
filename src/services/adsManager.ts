@@ -23,7 +23,7 @@ async function realGetCampaigns(
     params.until = dateRange.until;
     params.strictDate = '1';
   }
-  if (options?.preferCache) {
+  if (options?.preferCache !== false) {
     params.preferCache = '1';
   }
   const response = await apiClient<{ data: Campaign[] }>('/api/meta/campaigns', { params });

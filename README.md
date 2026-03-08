@@ -1,36 +1,99 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
-
 ## Getting Started
 
-First, run the development server:
+Run the development server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Quality Checks
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Use the full parallel quality gate before pushing:
 
-## Learn More
+```bash
+npm run check:parallel
+```
 
-To learn more about Next.js, take a look at the following resources:
+What it does:
+- Runs `lint`, `typecheck`, and `test` in parallel.
+- If all pass, runs `build`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Useful commands:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+npm run lint
+npm run lint:fix
+npm run typecheck
+npm run test
+npm run test:creative-load
+npm run build
+npm run check
+```
 
-## Deploy on Vercel
+`npm run check` is the sequential version of the full gate.
+`npm run test` auto-skips when `TEST_STORE_ID` is not set.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Workflow: Bugs and Features
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+1. Create a short plan before coding.
+2. Implement in small commits by area.
+3. Run targeted checks while coding.
+4. Run `npm run check:parallel` before PR/deploy.
+5. Open PR with risk notes and test evidence.
+
+### Bug Fix Flow
+
+1. Reproduce and isolate:
+```bash
+npm run dev
+```
+2. Add logging or a minimal failing case.
+3. Fix the smallest root cause first.
+4. Re-run checks:
+```bash
+npm run lint && npm run typecheck && npm run test
+```
+5. Run full gate:
+```bash
+npm run check:parallel
+```
+
+### New Feature Flow
+
+1. Write a one-page mini spec:
+- Problem
+- User impact
+- Scope / out of scope
+- API/data changes
+- Test plan
+
+2. Build in thin slices:
+- Data/service layer
+- UI layer
+- Edge cases and errors
+
+3. Validate:
+- Happy path
+- Empty/loading/error states
+- Regression on related pages
+
+4. Final gate:
+```bash
+npm run check:parallel
+```
+
+## Planning and Idea Backlog
+
+Use `docs/plans/` for feature thinking. For each idea, keep:
+- Goal
+- Success metrics
+- Constraints
+- Milestones
+- Risks
+- Kill criteria (when to stop)
+
+Templates:
+- `docs/plans/feature-template.md`
+- `docs/plans/bug-fix-template.md`

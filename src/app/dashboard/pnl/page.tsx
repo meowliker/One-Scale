@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, RefreshCw } from 'lucide-react';
 import type { PnLSummary, PnLEntry, ProductCOGS } from '@/types/pnl';
@@ -43,6 +43,26 @@ interface PnLData {
   productPnL: ProductPnLData[];
 }
 
+function readPnLWarmCache(storeId: string | null): PnLData | null {
+  if (!storeId || typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(`pnl:cache:v1:${storeId}`);
+    if (!raw) return null;
+    return JSON.parse(raw) as PnLData;
+  } catch {
+    return null;
+  }
+}
+
+function writePnLWarmCache(storeId: string, payload: PnLData): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(`pnl:cache:v1:${storeId}`, JSON.stringify(payload));
+  } catch {
+    // ignore cache write failures
+  }
+}
+
 async function fetchPnLData(): Promise<PnLData> {
   const [summary, products, dailyPnL, productPnL] = await Promise.all([
     getPnLSummary(),
@@ -63,6 +83,7 @@ export default function PnLPage() {
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
   const connectionReady = !connectionLoading && connectionStatus !== null;
   const queryClient = useQueryClient();
+  const warmPnL = useMemo(() => readPnLWarmCache(activeStoreId), [activeStoreId]);
 
   // Keep the "last refreshed" label updated every 30 seconds
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -90,7 +111,15 @@ export default function PnLPage() {
       return result;
     },
     enabled: connectionReady && !!activeStoreId,
+    initialData: warmPnL || undefined,
+    staleTime: 60_000,
+    gcTime: 10 * 60_000,
   });
+
+  useEffect(() => {
+    if (!activeStoreId || !data) return;
+    writePnLWarmCache(activeStoreId, data);
+  }, [activeStoreId, data]);
 
   const summary = data?.summary ?? {
     today: emptyPnLEntry, thisWeek: emptyPnLEntry, thisMonth: emptyPnLEntry, allTime: emptyPnLEntry,

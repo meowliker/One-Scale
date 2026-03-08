@@ -121,12 +121,12 @@ export function AdRow({
         )}
       >
         {/* Checkbox */}
-        <td className={cn("w-10 min-w-[40px] max-w-[40px] whitespace-nowrap py-2.5 pl-16 pr-4 sticky left-0 z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)}>
+        <td className={cn("w-10 min-w-[40px] max-w-[40px] whitespace-nowrap py-2 pl-4 pr-3 sticky left-0 z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)}>
           <Checkbox checked={isSelected} onChange={onToggleSelect} />
         </td>
 
         {/* Toggle */}
-        <td className={cn("min-w-[70px] max-w-[70px] whitespace-nowrap px-3 py-1.5 sticky left-[40px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)} style={{ width: 70 }}>
+        <td className={cn("min-w-[70px] max-w-[70px] whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)} style={{ width: 70 }}>
           <Toggle
             checked={isActive}
             onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
@@ -137,10 +137,10 @@ export function AdRow({
 
         {/* Name + Creative Thumbnail */}
         <td
-          className={cn("whitespace-nowrap overflow-hidden px-3 py-1.5 sticky left-[110px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
+          className={cn("whitespace-nowrap overflow-hidden px-2 py-2 sticky left-[110px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
           style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth, maxWidth: nameColWidth } : undefined}
         >
-          <div className="flex items-center gap-3 pl-8 min-w-0 overflow-hidden">
+          <div className="flex items-center gap-2 pl-1 min-w-0 overflow-hidden">
             {/* Creative thumbnail — clickable to open preview */}
             <button
               onClick={() => setPreviewOpen(true)}
@@ -201,7 +201,7 @@ export function AdRow({
                     />
                   </div>
                 ) : (
-                  <span className="block w-full truncate text-sm font-medium text-text-primary" title={ad.name}>{ad.name}</span>
+                    <span className="block w-full truncate text-[14px] font-semibold text-text-primary" title={ad.name}>{ad.name}</span>
                 )}
                 <div className="absolute left-0 top-full mt-1 z-50 pointer-events-none opacity-0 group-hover/tooltip:opacity-100 translate-y-1 group-hover/tooltip:translate-y-0 transition-all duration-150 ease-out">
                   <div className="onescale-tooltip whitespace-nowrap max-w-xs">
@@ -214,12 +214,12 @@ export function AdRow({
                   {ad.creative.type}
                 </Badge>
                 {ad.creative.ctaType && (
-                  <span className="text-[10px] font-medium text-text-dimmed px-1.5 py-0.5 rounded bg-surface-hover">
+                  <span className="text-[11px] font-medium text-text-dimmed px-1.5 py-0.5 rounded bg-surface-hover">
                     {ad.creative.ctaType.replace(/_/g, ' ')}
                   </span>
                 )}
                 {ad.creative.headline && (
-                  <span className="text-xs text-text-dimmed max-w-[180px] truncate">
+                  <span className="text-[12px] text-text-dimmed max-w-[180px] truncate">
                     {ad.creative.headline}
                   </span>
                 )}
@@ -265,7 +265,7 @@ export function AdRow({
         </td>
 
         {/* Status */}
-        <td className="whitespace-nowrap px-3 py-1.5">
+      <td className="whitespace-nowrap px-3 py-3">
           <div className="relative flex items-center gap-2">
             {isActive && !deliveryBlocked ? (
               <button
@@ -273,7 +273,7 @@ export function AdRow({
                 onMouseEnter={() => setShowStatusTooltip(true)}
                 onMouseLeave={() => setShowStatusTooltip(false)}
                 className={cn(
-                  'inline-flex items-center gap-1.5 text-[11px] font-semibold apple-status-active cursor-pointer',
+                  'inline-flex items-center gap-1.5 text-[12px] font-semibold apple-status-active cursor-pointer',
                   'hover:bg-[#bbf7d0] dark:hover:bg-emerald-900/60 transition-all duration-150 hover:scale-[1.02]'
                 )}
               >
@@ -283,7 +283,7 @@ export function AdRow({
             ) : (
               <span
                 className={cn(
-                  'inline-flex items-center gap-1.5 text-[11px] font-semibold apple-status-paused',
+                  'inline-flex items-center gap-1.5 text-[12px] font-semibold apple-status-paused',
                   deliveryBlocked ? 'cursor-default' : 'cursor-not-allowed'
                 )}
                 title={deliveryBlocked ? 'Delivery is blocked' : 'Ad is paused'}
@@ -314,7 +314,7 @@ export function AdRow({
               <button
                 onClick={() => setShowIssueDetails(true)}
                 className={cn(
-                  'rounded-full border px-2 py-0.5 text-[10px] font-semibold',
+                  'rounded-full border px-2 py-0.5 text-[11px] font-semibold',
                   hasRejected
                     ? 'border-red-400/60 bg-red-500/20 text-red-300'
                     : 'border-amber-400/50 bg-amber-500/20 text-amber-300'
@@ -327,12 +327,12 @@ export function AdRow({
         </td>
 
         {/* Budget — N/A for ads */}
-        <td className="whitespace-nowrap px-3 py-1.5 text-sm text-text-dimmed">
+        <td className="whitespace-nowrap px-3 py-3 text-[14px] text-text-dimmed">
           &mdash;
         </td>
 
         {/* Bid Strategy — N/A for ads */}
-        <td className="whitespace-nowrap px-3 py-1.5 text-sm text-text-dimmed">
+        <td className="whitespace-nowrap px-3 py-3 text-[14px] text-text-dimmed">
           &mdash;
         </td>
 

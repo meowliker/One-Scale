@@ -12,7 +12,6 @@ import { cn } from '@/lib/utils';
 import { getMetricValue } from '@/lib/metrics';
 import { Checkbox } from '@/components/ui/Checkbox';
 import { Toggle } from '@/components/ui/Toggle';
-import { Badge } from '@/components/ui/Badge';
 import { InlineEdit } from '@/components/ui/InlineEdit';
 import { MetricCell } from './MetricCell';
 import { PerformanceSparkline } from './PerformanceSparkline';
@@ -29,6 +28,7 @@ export interface AdSetRowProps {
   onStatusChange: (status: EntityStatus) => void;
   onBudgetChange: (newBudget: number) => void;
   onBidChange?: (newBid: number) => void;
+  bidStrategy?: string;
   columnOrder: MetricKey[];
   isCBO?: boolean;
   sparklineData?: Record<string, SparklineDataPoint[]>;
@@ -54,6 +54,16 @@ function formatTargetingSummary(adSet: AdSet): string {
   return parts.join(', ');
 }
 
+function formatBidStrategyLabel(strategy: string): string {
+  const map: Record<string, string> = {
+    LOWEST_COST: 'Lowest Cost',
+    COST_CAP: 'Cost Cap',
+    BID_CAP: 'Bid Cap',
+    MINIMUM_ROAS: 'Min ROAS',
+  };
+  return map[strategy] ?? strategy;
+}
+
 export function AdSetRow({
   adSet,
   rowId,
@@ -65,6 +75,7 @@ export function AdSetRow({
   onStatusChange,
   onBudgetChange,
   onBidChange,
+  bidStrategy,
   columnOrder,
   isCBO = false,
   sparklineData,
@@ -92,8 +103,6 @@ export function AdSetRow({
     effectiveStatus.includes('REJECTED') ||
     effectiveStatus.includes('WITH_ISSUES') ||
     effectiveStatus.includes('PENDING');
-  const statusLabel = !isActive ? adSet.status : deliveryBlocked ? 'NOT DELIVERING' : 'ACTIVE';
-  const statusVariant: 'success' | 'default' | 'danger' = !isActive ? 'default' : deliveryBlocked ? 'danger' : 'success';
   const stickyBg = cn(
     'bg-[var(--apple-table-row-alt-bg)]',
     isSelected && 'bg-[var(--apple-table-row-selected)]',
@@ -101,6 +110,7 @@ export function AdSetRow({
     flashType === 'success' && 'bg-[var(--apple-table-row-flash-success)]',
     flashType === 'error' && 'bg-[var(--apple-table-row-flash-error)]'
   );
+  const effectiveBidStrategy = bidStrategy ?? (adSet.bidAmount != null ? 'BID_CAP' : 'LOWEST_COST');
 
   return (
     <>
@@ -116,7 +126,7 @@ export function AdSetRow({
       )}
     >
       {/* Checkbox */}
-      <td className={cn("w-10 min-w-[40px] max-w-[40px] whitespace-nowrap py-3 pl-10 pr-4 sticky left-0 z-10 group-hover:!bg-[var(--apple-table-row-alt-hover)] transition-colors duration-150", stickyBg)}>
+      <td className={cn("w-10 min-w-[40px] max-w-[40px] whitespace-nowrap py-2 pl-4 pr-3 sticky left-0 z-10 group-hover:!bg-[var(--apple-table-row-alt-hover)] transition-colors duration-150", stickyBg)}>
         <Checkbox checked={isSelected} onChange={onToggleSelect} />
       </td>
 
@@ -132,10 +142,10 @@ export function AdSetRow({
 
       {/* Name + Targeting */}
       <td
-        className={cn("whitespace-nowrap overflow-hidden px-3 py-2 sticky left-[110px] z-10 group-hover:!bg-[var(--apple-table-row-alt-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
+        className={cn("whitespace-nowrap overflow-hidden px-2 py-2 sticky left-[110px] z-10 group-hover:!bg-[var(--apple-table-row-alt-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
         style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth, maxWidth: nameColWidth } : undefined}
       >
-        <div className="flex items-center gap-2 pl-8 min-w-0 overflow-hidden">
+        <div className="flex items-center gap-2 pl-1 min-w-0 overflow-hidden">
           <button
             onClick={onToggleExpand}
             className="shrink-0 flex items-center gap-1 text-text-dimmed hover:text-text-secondary transition-colors"
@@ -150,7 +160,7 @@ export function AdSetRow({
             <div className="relative group/tooltip min-w-0">
               <button
                 onClick={onToggleExpand}
-                className="block w-full truncate text-sm font-medium text-text-primary hover:text-primary-light transition-colors text-left"
+                className="block w-full truncate text-[13px] font-semibold text-text-primary hover:text-primary-light transition-colors text-left"
                 title={adSet.name || `Ad Set ${adSet.id}`}
               >
                 {adSet.name || `Ad Set ${adSet.id}`}
@@ -178,7 +188,7 @@ export function AdSetRow({
               onMouseLeave={() => setShowStatusTooltip(false)}
               onClick={() => { if (!isExpanded) onToggleExpand(); }}
               className={cn(
-                'inline-flex items-center gap-1.5 text-[11px] font-semibold apple-status-active cursor-pointer',
+                'inline-flex items-center gap-1.5 text-[12px] font-semibold apple-status-active cursor-pointer',
                 'hover:bg-[#bbf7d0] dark:hover:bg-emerald-900/60 transition-all duration-150 hover:scale-[1.02]'
               )}
             >
@@ -188,7 +198,7 @@ export function AdSetRow({
           ) : (
             <span
               className={cn(
-                'inline-flex items-center gap-1.5 text-[11px] font-semibold apple-status-paused',
+                'inline-flex items-center gap-1.5 text-[12px] font-semibold apple-status-paused',
                 deliveryBlocked ? 'cursor-default' : 'cursor-not-allowed'
               )}
               title={deliveryBlocked ? 'Delivery is blocked' : 'Ad set is paused'}
@@ -219,7 +229,7 @@ export function AdSetRow({
             <button
               onClick={() => setShowIssueDetails(true)}
               className={cn(
-                'rounded-full border px-2 py-0.5 text-[10px] font-semibold',
+                'rounded-full border px-2 py-0.5 text-[11px] font-semibold',
                 hasRejected
                   ? 'border-red-400/60 bg-red-500/20 text-red-300'
                   : 'border-amber-400/50 bg-amber-500/20 text-amber-300'
@@ -239,7 +249,7 @@ export function AdSetRow({
             CBO
           </span>
         ) : (
-          <div className="flex flex-col gap-0.5">
+          <div>
             <div>
               <InlineEdit
                 value={(adSet.dailyBudget ?? 0).toFixed(2)}
@@ -250,29 +260,34 @@ export function AdSetRow({
                 type="number"
                 prefix="$"
               />
-              <span className="text-xs text-text-dimmed ml-1">daily</span>
+              <span className="text-[11px] text-text-dimmed ml-1">daily</span>
             </div>
-            {adSet.bidAmount !== null && onBidChange && (
-              <div>
-                <InlineEdit
-                  value={(adSet.bidAmount ?? 0).toFixed(2)}
-                  onSave={(val) => {
-                    const num = parseFloat(val);
-                    if (!isNaN(num) && num > 0) onBidChange(num);
-                  }}
-                  type="number"
-                  prefix="$"
-                />
-                <span className="text-xs text-text-dimmed ml-1">bid</span>
-              </div>
-            )}
           </div>
         )}
       </td>
 
-      {/* Bid Strategy - empty for ad sets */}
-      <td className="whitespace-nowrap px-3 py-2 text-sm text-text-dimmed">
-        &mdash;
+      {/* Bid Strategy */}
+      <td className="whitespace-nowrap px-3 py-2 text-[13px] text-text-secondary">
+        {(effectiveBidStrategy === 'BID_CAP' || effectiveBidStrategy === 'COST_CAP' || effectiveBidStrategy === 'MINIMUM_ROAS') ? (
+          onBidChange ? (
+            <div className="flex items-center gap-1">
+              <InlineEdit
+                value={(adSet.bidAmount ?? 0).toFixed(2)}
+                onSave={(val) => {
+                  const num = parseFloat(val);
+                  if (!isNaN(num) && num > 0) onBidChange(num);
+                }}
+                type="number"
+                prefix="$"
+              />
+              <span className="text-[11px] text-text-dimmed">budget</span>
+            </div>
+          ) : (
+            <span className="text-[11px] text-text-dimmed">${(adSet.bidAmount ?? 0).toFixed(2)} budget</span>
+          )
+        ) : (
+          <span>{formatBidStrategyLabel(effectiveBidStrategy)}</span>
+        )}
       </td>
 
       {/* Performance Sparkline */}

@@ -12,6 +12,33 @@ import {
 import { getCampaigns } from '@/services/adsManager';
 import { formatDateInTimezone } from '@/lib/timezone';
 import { getDateRange } from '@/lib/dateUtils';
+import type { DateRangePreset } from '@/types/analytics';
+import type { PnLEntry, PnLSummary } from '@/types/pnl';
+
+function computeShopifyMetricsFromPnL(dailyPnL: PnLEntry[], preset: DateRangePreset) {
+  const range = getDateRange(preset);
+  const startStr = formatDateInTimezone(range.start);
+  const endStr = formatDateInTimezone(range.end);
+
+  const filteredDays = dailyPnL.filter((day) => day.date >= startStr && day.date <= endStr);
+  const shopifyRevenue = Math.round(filteredDays.reduce((sum, day) => sum + (day.revenue || 0), 0) * 100) / 100;
+  const shopifyOrders = filteredDays.reduce((sum, day) => sum + (day.orderCount || 0), 0);
+  const shopifyAov = shopifyOrders > 0 ? Math.round((shopifyRevenue / shopifyOrders) * 100) / 100 : 0;
+  return { shopifyRevenue, shopifyOrders, shopifyAov };
+}
+
+function computeShopifyMetrics(dailyPnL: PnLEntry[], pnlSummary: PnLSummary | null, preset: DateRangePreset) {
+  if (preset === 'today' && pnlSummary?.today) {
+    const revenue = Math.round((pnlSummary.today.revenue || 0) * 100) / 100;
+    const orders = pnlSummary.today.orderCount || 0;
+    return {
+      shopifyRevenue: revenue,
+      shopifyOrders: orders,
+      shopifyAov: orders > 0 ? Math.round((revenue / orders) * 100) / 100 : 0,
+    };
+  }
+  return computeShopifyMetricsFromPnL(dailyPnL, preset);
+}
 
 /**
  * Prefetch React Query data for a given route on sidebar hover.
@@ -27,13 +54,24 @@ export function prefetchRouteData(href: string, activeStoreId: string | null) {
       qc.prefetchQuery({
         queryKey: ['summary', activeStoreId, 'today'],
         queryFn: async () => {
-          const [metrics, series, campaigns, dailyPnL] = await Promise.all([
+          const [metrics, series, campaigns, dailyPnL, pnlSummary] = await Promise.all([
             getBlendedMetricsForRange('today')(),
             getTimeSeriesForRange('today')(),
             getTopCampaignsForRange('today')(),
             getDailyPnL(),
+            getPnLSummary().catch(() => null),
           ]);
-          return { blendedMetrics: metrics, timeSeries: series, topCampaigns: campaigns };
+          const shopifyMetrics = computeShopifyMetrics(dailyPnL, pnlSummary, 'today');
+          return {
+            blendedMetrics: {
+              ...metrics,
+              shopifyRevenue: shopifyMetrics.shopifyRevenue,
+              shopifyOrders: shopifyMetrics.shopifyOrders,
+              shopifyAov: shopifyMetrics.shopifyAov,
+            },
+            timeSeries: series,
+            topCampaigns: campaigns,
+          };
         },
         staleTime: 5 * 60 * 1000,
       });
