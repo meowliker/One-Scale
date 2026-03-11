@@ -466,7 +466,7 @@ export async function fetchMetaCampaigns(
   token: string,
   accountId: string,
   dateRange?: { since: string; until: string },
-  options?: { disableDateFallback?: boolean }
+  options?: { disableDateFallback?: boolean; datePreset?: string }
 ): Promise<Campaign[]> {
   const fields = [
     'id', 'name', 'objective', 'status', 'daily_budget', 'lifetime_budget',
@@ -490,9 +490,11 @@ export async function fetchMetaCampaigns(
     fields: insightsFields,
     level: 'campaign',
     limit: '500',
-    ...(dateRange
-      ? { time_range: JSON.stringify(dateRange) }
-      : { date_preset: 'last_30d' }),
+    ...(options?.datePreset
+      ? { date_preset: options.datePreset }
+      : dateRange
+        ? { time_range: JSON.stringify(dateRange) }
+        : { date_preset: 'last_30d' }),
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -541,7 +543,7 @@ export async function fetchMetaCampaigns(
   }
 
   // Fallback: if dateRange was used and we got NO insights, retry with date_preset
-  if (dateRange && !options?.disableDateFallback && insightsMap.size === 0 && data.data.length > 0) {
+  if (dateRange && !options?.datePreset && !options?.disableDateFallback && insightsMap.size === 0 && data.data.length > 0) {
     console.log('[Meta] Account-level campaign insights empty with time_range, retrying with date_preset: last_30d');
     const fallbackParams: Record<string, string> = {
       fields: insightsFields,
@@ -608,7 +610,7 @@ export async function fetchMetaAdSets(
   token: string,
   campaignId: string,
   dateRange?: { since: string; until: string },
-  options?: { disableDateFallback?: boolean; preferLightweight?: boolean; basicOnly?: boolean }
+  options?: { disableDateFallback?: boolean; preferLightweight?: boolean; basicOnly?: boolean; datePreset?: string }
 ): Promise<AdSet[]> {
   const fields = options?.basicOnly
     ? [
@@ -639,9 +641,11 @@ export async function fetchMetaAdSets(
       fields: insightsFields,
       level: 'adset',
       limit: '500',
-      ...(dateRange
-        ? { time_range: JSON.stringify(dateRange) }
-        : { date_preset: 'last_30d' }),
+      ...(options?.datePreset
+        ? { date_preset: options.datePreset }
+        : dateRange
+          ? { time_range: JSON.stringify(dateRange) }
+          : { date_preset: 'last_30d' }),
     };
 
     try {
@@ -663,7 +667,7 @@ export async function fetchMetaAdSets(
     }
 
     // Fallback: if dateRange was used and we got NO insights, retry with date_preset
-    if (dateRange && !options?.disableDateFallback && insightsMap.size === 0 && data.data.length > 0) {
+    if (dateRange && !options?.datePreset && !options?.disableDateFallback && insightsMap.size === 0 && data.data.length > 0) {
       console.log('[Meta] Campaign-level adset insights empty with time_range, retrying with date_preset: last_30d');
       try {
         const fallbackResponse = await fetchFromMeta<{
@@ -743,7 +747,7 @@ export async function fetchMetaAds(
   token: string,
   adSetId: string,
   dateRange?: { since: string; until: string },
-  options?: { disableDateFallback?: boolean; preferLightweight?: boolean; basicOnly?: boolean }
+  options?: { disableDateFallback?: boolean; preferLightweight?: boolean; basicOnly?: boolean; datePreset?: string }
 ): Promise<Ad[]> {
   function extractDestinationUrl(creative: Record<string, unknown>): string {
     const story = (creative.object_story_spec && typeof creative.object_story_spec === 'object')
@@ -826,9 +830,11 @@ export async function fetchMetaAds(
     fields: insightsFields,
     level: 'ad',
     limit: '500',
-    ...(dateRange
-      ? { time_range: JSON.stringify(dateRange) }
-      : { date_preset: 'last_30d' }),
+    ...(options?.datePreset
+      ? { date_preset: options.datePreset }
+      : dateRange
+        ? { time_range: JSON.stringify(dateRange) }
+        : { date_preset: 'last_30d' }),
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -864,16 +870,22 @@ export async function fetchMetaAds(
 
   if (insightsResponse.data) {
     for (const row of insightsResponse.data) {
-      if (row.ad_id) {
-        insightsMap.set(row.ad_id, row);
+      // Meta may return `ad_id` or just `id` depending on the API version/endpoint
+      const key = row.ad_id || row.id;
+      if (key) {
+        insightsMap.set(key, row);
       }
     }
   }
   console.log(`[Meta] AdSet-level ad insights: ${insightsMap.size}/${data.data.length} ads have data (1 API call)`);
 
-  // Fallback: if dateRange was used and we got NO insights, retry with date_preset
-  if (dateRange && !options?.disableDateFallback && insightsMap.size === 0 && data.data.length > 0) {
-    console.log('[Meta] AdSet-level ad insights empty with time_range, retrying with date_preset: last_30d');
+  // Fallback: if we got NO insights (primary call returned empty or failed), retry with date_preset.
+  // We always attempt the fallback when the map is empty and there are ads — even when
+  // disableDateFallback is set — because an empty map most likely indicates an API-level
+  // failure (e.g. `level=ad` unsupported on this endpoint), not a genuine "no spend" result.
+  if (insightsMap.size === 0 && data.data.length > 0 && !options?.datePreset) {
+    const fallbackPreset = 'last_30d';
+    console.log(`[Meta] AdSet-level ad insights empty, retrying with date_preset: ${fallbackPreset}`);
     try {
       const fallbackResponse = await fetchFromMeta<{
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -882,12 +894,13 @@ export async function fetchMetaAds(
         fields: insightsFields,
         level: 'ad',
         limit: '500',
-        date_preset: 'last_30d',
+        date_preset: fallbackPreset,
       });
       if (fallbackResponse.data) {
         for (const row of fallbackResponse.data) {
-          if (row.ad_id) {
-            insightsMap.set(row.ad_id, row);
+          const key = row.ad_id || row.id;
+          if (key) {
+            insightsMap.set(key, row);
           }
         }
       }

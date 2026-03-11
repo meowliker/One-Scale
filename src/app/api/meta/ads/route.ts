@@ -15,6 +15,14 @@ const adCache = new Map<string, { at: number; data: Ad[] }>();
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const BACKGROUND_REFRESH_MS = 90 * 1000;
 
+function isYesterdayRange(since: string | null, until: string | null): boolean {
+  if (!since || !until || since !== until) return false;
+  const yesterday = new Date();
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  const yStr = yesterday.toISOString().split('T')[0];
+  return since === yStr;
+}
+
 function hasAdSignal(rows: Ad[]): boolean {
   return rows.some((row) =>
     (row.metrics?.spend || 0) > 0 ||
@@ -108,7 +116,8 @@ function queueAdsRefresh(args: {
     const token = await getMetaToken(storeId);
     if (!token) return;
 
-    const dateRange = since && until ? { since, until } : undefined;
+    const bgDetectedDatePreset = isYesterdayRange(since, until) ? 'yesterday' : undefined;
+    const dateRange = !bgDetectedDatePreset && since && until ? { since, until } : undefined;
     const exactVariant = `mode:${mode}|since:${since || ''}|until:${until || ''}|strict:${strictDate ? '1' : '0'}`;
 
     try {
@@ -116,6 +125,7 @@ function queueAdsRefresh(args: {
         disableDateFallback: strictDate,
         preferLightweight: true,
         basicOnly: mode === 'basic',
+        datePreset: bgDetectedDatePreset,
       });
       const cacheKey = [storeId, adSetId, since || '', until || '', strictDate ? 'strict' : 'flex', mode].join('|');
       adCache.set(cacheKey, { at: Date.now(), data: ads });
@@ -148,7 +158,8 @@ export async function GET(request: NextRequest) {
   }
 
   const useSupabase = isSupabasePersistenceEnabled();
-  const dateRange = since && until ? { since, until } : undefined;
+  const detectedDatePreset = isYesterdayRange(since, until) ? 'yesterday' : undefined;
+  const dateRange = !detectedDatePreset && since && until ? { since, until } : undefined;
   const cacheKey = [storeId, adsetId, since || '', until || '', strictDate ? 'strict' : 'flex', mode].join('|');
   const exactVariant = `mode:${mode}|since:${since || ''}|until:${until || ''}|strict:${strictDate ? '1' : '0'}`;
   const cached = adCache.get(cacheKey);
@@ -212,6 +223,7 @@ export async function GET(request: NextRequest) {
       disableDateFallback: strictDate,
       preferLightweight: mode === 'basic' || mode === 'audit',
       basicOnly: mode === 'basic',
+      datePreset: detectedDatePreset,
     });
 
     adCache.set(cacheKey, { at: Date.now(), data: ads });
@@ -244,6 +256,7 @@ export async function GET(request: NextRequest) {
           disableDateFallback: strictDate,
           preferLightweight: true,
           basicOnly: true,
+          datePreset: detectedDatePreset,
         });
         adCache.set(cacheKey, { at: Date.now(), data: basicAds });
         return NextResponse.json({ data: basicAds, fallbackMode: 'basic' });

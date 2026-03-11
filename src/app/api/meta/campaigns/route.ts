@@ -19,6 +19,14 @@ function isApproxLast30Range(since?: string | null, until?: string | null): bool
   return days >= 28 && days <= 32;
 }
 
+function isYesterdayRange(since: string | null, until: string | null): boolean {
+  if (!since || !until || since !== until) return false;
+  const yesterday = new Date();
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  const yStr = yesterday.toISOString().split('T')[0];
+  return since === yStr;
+}
+
 function hasCampaignSignal(rows: Campaign[]): boolean {
   return rows.some((row) =>
     (row.metrics?.spend || 0) > 0 ||
@@ -121,15 +129,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Not authenticated with Meta' }, { status: 401 });
   }
 
-  // Build date range if both since and until are provided
-  const dateRange = since && until ? { since, until } : undefined;
+  // Detect "yesterday" pattern: single day = today - 1; use date_preset to avoid rate limiting
+  const detectedDatePreset = isYesterdayRange(since, until) ? 'yesterday' : undefined;
+  // Build date range if both since and until are provided (skip when using a date_preset)
+  const dateRange = !detectedDatePreset && since && until ? { since, until } : undefined;
 
   try {
 
     // Fetch campaigns from all accounts in parallel
     const allCampaigns = await Promise.all(
       sortedAccountIds.map((id) =>
-        fetchMetaCampaigns(token.accessToken, id, dateRange, { disableDateFallback: strictDate }).catch(() => [])
+        fetchMetaCampaigns(token.accessToken, id, dateRange, { disableDateFallback: strictDate, datePreset: detectedDatePreset }).catch(() => [])
       )
     );
 
@@ -152,6 +162,9 @@ export async function GET(request: NextRequest) {
           (isApproxLast30Range(since, until) || (!since && !until))
             ? upsertPersistentMetaEndpointSnapshot(storeId, 'campaigns', scopeId, 'preset:last_30d', rows)
             : Promise.resolve(),
+          detectedDatePreset === 'yesterday'
+            ? upsertPersistentMetaEndpointSnapshot(storeId, 'campaigns', scopeId, 'preset:yesterday', rows)
+            : Promise.resolve(),
           hasCampaignSignal(rows)
             ? upsertPersistentMetaEndpointSnapshot(storeId, 'campaigns', scopeId, 'latest_nonzero', rows)
             : Promise.resolve(),
@@ -161,6 +174,9 @@ export async function GET(request: NextRequest) {
         upsertMetaEndpointSnapshot(storeId, 'campaigns', scopeId, 'latest', rows);
         if (isApproxLast30Range(since, until) || (!since && !until)) {
           upsertMetaEndpointSnapshot(storeId, 'campaigns', scopeId, 'preset:last_30d', rows);
+        }
+        if (detectedDatePreset === 'yesterday') {
+          upsertMetaEndpointSnapshot(storeId, 'campaigns', scopeId, 'preset:yesterday', rows);
         }
         if (hasCampaignSignal(rows)) {
           upsertMetaEndpointSnapshot(storeId, 'campaigns', scopeId, 'latest_nonzero', rows);
