@@ -870,16 +870,22 @@ export async function fetchMetaAds(
 
   if (insightsResponse.data) {
     for (const row of insightsResponse.data) {
-      if (row.ad_id) {
-        insightsMap.set(row.ad_id, row);
+      // Meta may return `ad_id` or just `id` depending on the API version/endpoint
+      const key = row.ad_id || row.id;
+      if (key) {
+        insightsMap.set(key, row);
       }
     }
   }
   console.log(`[Meta] AdSet-level ad insights: ${insightsMap.size}/${data.data.length} ads have data (1 API call)`);
 
-  // Fallback: if dateRange was used and we got NO insights, retry with date_preset
-  if (dateRange && !options?.datePreset && !options?.disableDateFallback && insightsMap.size === 0 && data.data.length > 0) {
-    console.log('[Meta] AdSet-level ad insights empty with time_range, retrying with date_preset: last_30d');
+  // Fallback: if we got NO insights (primary call returned empty or failed), retry with date_preset.
+  // We always attempt the fallback when the map is empty and there are ads — even when
+  // disableDateFallback is set — because an empty map most likely indicates an API-level
+  // failure (e.g. `level=ad` unsupported on this endpoint), not a genuine "no spend" result.
+  if (insightsMap.size === 0 && data.data.length > 0 && !options?.datePreset) {
+    const fallbackPreset = 'last_30d';
+    console.log(`[Meta] AdSet-level ad insights empty, retrying with date_preset: ${fallbackPreset}`);
     try {
       const fallbackResponse = await fetchFromMeta<{
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -888,12 +894,13 @@ export async function fetchMetaAds(
         fields: insightsFields,
         level: 'ad',
         limit: '500',
-        date_preset: 'last_30d',
+        date_preset: fallbackPreset,
       });
       if (fallbackResponse.data) {
         for (const row of fallbackResponse.data) {
-          if (row.ad_id) {
-            insightsMap.set(row.ad_id, row);
+          const key = row.ad_id || row.id;
+          if (key) {
+            insightsMap.set(key, row);
           }
         }
       }
