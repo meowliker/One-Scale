@@ -1,214 +1,163 @@
 # OneScale — Sprint Plan
 **Target: EOD Tomorrow** | Last Updated: 2026-03-11
+**Team: You (Lead) · Anay · Mahesh**
 
 ---
 
-## OWNER MAP
+## TEAM OWNERSHIP
 
-| Section | Owner |
+| Section | Owner | Status |
+|---|---|---|
+| Ads Manager — Instant Load, Live Mode, Graphs | **Anay** | 🔴 Not Started |
+| Ads Manager — Kill/Review/Scale, Edit/Duplicate | **Anay** | 🔴 Not Started |
+| Ads Manager — Column, Date, Filters, Actions Panel | **You** | 🔴 Not Started |
+| Ads Error Center | **You** | 🔴 Not Started |
+| Attribution Center / Health | **You** | 🔴 Not Started |
+| AI Recommendations | **Anay** | 🔴 Not Started |
+| P&L Sheet (all items) | **Mahesh** | 🔴 Not Started |
+| Summary Page | **Anay** | 🔴 Not Started |
+| Creative Testing | **You + Anay + Mahesh** | 🔴 Planning |
+
+---
+
+## BUG TRACKER
+
+> Format: `[ID] Description — Owner — Status`
+> Status: 🔴 Found · 🟡 In Progress · 🟢 Fixed
+
+| ID | Bug | Owner | Status | Notes |
+|---|---|---|---|---|
+| B-01 | Summary — Top Performing Campaigns showing incorrect data | Anay | 🔴 Found | Wrong ranking metric |
+| B-02 | Summary — Conversion Funnel data mismatch | Anay | 🔴 Found | Steps don't add up |
+| B-03 | P&L — Graph broken / incorrect data mapping | Mahesh | 🔴 Found | Fix or remove |
+| B-04 | Ads Manager — Performance graph data wrong per level | Anay | 🔴 Found | Camp/Adset/Ad mismatch |
+| B-05 | Ads Manager — Active column redundant/incorrect | You | 🔴 Found | Remove it |
+| B-06 | Ads Manager — Actions/buttons not all functional | You | 🔴 Found | Needs full audit |
+
+**Bugs Summary: 6 Found · 0 In Progress · 0 Fixed**
+
+---
+
+## FEATURE TRACKER
+
+> Status: 🔴 Not Started · 🟡 In Progress · 🟢 Done
+
+### ADS MANAGER — Owner: Anay (performance/data) + You (UI/controls)
+
+| ID | Feature | Owner | Status |
+|---|---|---|---|
+| F-01 | Instant load — active campaign data on mount | Anay | 🔴 Not Started |
+| F-02 | Latest Actions panel — last 7 edits, active camps only | You | 🔴 Not Started |
+| F-03 | Date section — calendar picker + presets | You | 🔴 Not Started |
+| F-04 | Live Mode button — 2 min auto-refresh from Facebook | Anay | 🔴 Not Started |
+| F-05 | Column section — icon only + tooltip + presets inside | You | 🔴 Not Started |
+| F-06 | Performance Graph — Camp/Adset/Ad tabs, active only | Anay | 🔴 Not Started |
+| F-07 | Active Only filter — Campaigns, Adsets, Ads, Rejected | You | 🔴 Not Started |
+| F-08 | Kill/Review/Scale — 3d/7d selector + UI overhaul | Anay | 🔴 Not Started |
+| F-09 | Edit & Duplicate — inline + modal, Facebook-style | Anay | 🔴 Not Started |
+
+### ADS ERROR CENTER — Owner: You
+
+| ID | Feature | Owner | Status |
+|---|---|---|---|
+| F-10 | Auto-load rejected ads from last 12h on app open | You | 🔴 Not Started |
+| F-11 | Rejection timestamp — relative + absolute on hover | You | 🔴 Not Started |
+| F-12 | Blinking badge on nav icon if rejections in last 12h | You | 🔴 Not Started |
+
+### ATTRIBUTION CENTER — Owner: You
+
+| ID | Feature | Owner | Status |
+|---|---|---|---|
+| F-13 | Customer journey view — full touchpoint timeline | You | 🔴 Not Started |
+| F-14 | Channel attribution models — First/Last/Linear/TD/DD | You | 🔴 Not Started |
+| F-15 | Revenue reconciliation — Meta vs Shopify delta | You | 🔴 Not Started |
+| F-16 | Store Health Score (0–100) | You | 🔴 Not Started |
+| F-17 | Cohort analysis — LTV by channel + date | You | 🔴 Not Started |
+| F-18 | UTM breakdown table | You | 🔴 Not Started |
+
+### AI RECOMMENDATIONS — Owner: Anay
+
+| ID | Feature | Owner | Status |
+|---|---|---|---|
+| F-19 | Data-driven specific recommendations with 1-click apply | Anay | 🔴 Not Started |
+| F-20 | Priority ranking (High/Med/Low) + Dismiss/Snooze | Anay | 🔴 Not Started |
+
+### P&L SHEET — Owner: Mahesh
+
+| ID | Feature | Owner | Status |
+|---|---|---|---|
+| F-21 | Verify live data refresh + show last-updated timestamp | Mahesh | 🔴 Not Started |
+| F-22 | Product-wise P&L breakdown table | Mahesh | 🔴 Not Started |
+| F-23 | Remove Product Performance section | Mahesh | 🔴 Not Started |
+| F-24 | Remove Breakdown section | Mahesh | 🔴 Not Started |
+| F-25 | Chargeback section from Shopify data | Mahesh | 🔴 Not Started |
+| F-26 | Net Profit hourly trend *(NOT URGENT)* | Mahesh | 🔴 Not Started |
+
+### SUMMARY PAGE — Owner: Anay
+
+| ID | Feature | Owner | Status |
+|---|---|---|---|
+| F-27 | Instant data load + skeleton screens | Anay | 🔴 Not Started |
+| F-28 | Add Net Profit + Margin % to live top bar | Anay | 🔴 Not Started |
+
+### CREATIVE TESTING — Owner: You + Anay + Mahesh
+
+| ID | Feature | Owner | Status |
+|---|---|---|---|
+| F-29 | Creative Testing — TBD (planning in progress) | All 3 | 🔴 Planning |
+
+---
+
+## HOW TO UPDATE THIS DOC
+
+When you start something:
+1. Change status from 🔴 → 🟡 In Progress
+2. Add a "Notes" column entry if helpful
+
+When you finish:
+1. Change status from 🟡 → 🟢 Done
+2. Update the Bug Summary count at the top of Bug Tracker
+
+---
+
+## PRIORITY ORDER
+
+| Priority | ID | Item |
+|---|---|---|
+| **P0** | F-01 | Ads Manager instant load |
+| **P0** | F-10, F-12 | Error Center auto-load + blink badge |
+| **P0** | F-27, F-28 | Summary instant load + profit in live bar |
+| **P1** | F-04 | Live mode button |
+| **P1** | F-06 | Performance graph fix |
+| **P1** | B-01, B-02 | Summary data bugs |
+| **P1** | F-21, F-22, F-25 | P&L live + product breakdown + chargeback |
+| **P1** | F-08 | Kill/Review/Scale 3d/7d |
+| **P2** | F-05, F-07 | Column icon, active filters |
+| **P2** | F-03 | Date picker |
+| **P2** | F-09 | Edit & Duplicate |
+| **P2** | F-02 | Latest Actions panel |
+| **P2** | B-03, B-04, B-05, B-06 | Remaining bugs |
+| **P3** | F-13–F-18 | Attribution Center rebuild |
+| **P3** | F-19, F-20 | AI Recommendations upgrade |
+| **P3** | F-26 | Net Profit hourly trend |
+
+---
+
+## TOTALS AT A GLANCE
+
+| Category | Count |
 |---|---|
-| Ads Manager | Dev Team |
-| Ads Error Center | Dev Team |
-| Attribution / Health | Dev Team |
-| AI Recommendations | Dev Team |
-| P&L Sheet | Mahesh |
-| Summary | Dev Team |
-| Creative Testing | Gaurav |
-
----
-
-## 1. ADS MANAGER
-
-### 1.1 Instant Load
-- [ ] Load active campaign data on mount — no spinner, no delay
-- [ ] Pre-fetch all data (campaigns, adsets, ads) in parallel on page load
-- [ ] Cache the last successful response so it renders immediately on revisit
-
-### 1.2 Latest Actions Panel
-- [ ] Show the last 7 edits/actions — **active campaigns only**
-- [ ] Display: action type, target name, timestamp, changed value (before → after)
-- [ ] Collapsed by default, expandable panel on the right or bottom
-
-### 1.3 Action & Functionality Audit
-- [ ] Audit every button/action in the ads manager for correctness
-- [ ] Verify: toggle on/off, budget edit, bid edit, status change all work end-to-end
-- [ ] Fix any broken or non-functional controls
-
-### 1.4 Date Section
-- [ ] Add a calendar date-picker (single + range support)
-- [ ] Organize: Preset ranges (Today, Yesterday, Last 7d, Last 30d, This Month, Custom)
-- [ ] Consistent styling with the rest of the app
-
-### 1.5 Live Mode Button
-- [ ] Add a **"Live"** toggle button in the header bar
-- [ ] When enabled: auto-refresh data from Facebook API every **2 minutes**
-- [ ] Visual indicator (pulsing green dot) while live mode is active
-- [ ] Disable live mode automatically if the user navigates away
-
-### 1.6 Column Section Redesign
-- [ ] Replace the text "Columns" button with a **columns icon only** (no label)
-- [ ] Tooltip on hover: "Columns"
-- [ ] **Move Preset section inside the Column panel** — presets are a sub-section, not a separate control
-- [ ] Layout inside panel: Presets at top, column toggles below
-
-### 1.7 Performance Graph
-- [ ] Graphs must load for **active campaigns only** (auto-load on open)
-- [ ] Separate tabs/views: Campaign / Adset / Ad level
-- [ ] Verify data accuracy for each level — no mismatched metrics
-- [ ] Default metric: Spend + ROAS overlaid
-
-### 1.8 Active Column Filter
-- [ ] Add **"Active Only"** filter toggle for: Campaigns, Adsets, Ads, Rejected Ads
-- [ ] Filter persists within the session
-- [ ] Badge count on the filter showing how many items are hidden
-
-### 1.9 Remove Active Column
-- [ ] Remove the "Active" status column from the Ads Manager table
-- [ ] Status is shown via row styling / toggle — no redundant column needed
-
-### 1.10 Kill / Review / Scale Panel
-- [ ] Add **3d / 7d** time window selector — all recommendations are scoped to selected window
-- [ ] UI improvements:
-  - Clear "Kill" (red), "Review" (yellow), "Scale" (green) visual hierarchy
-  - Show key metric delta vs prior period
-  - One-click action buttons per recommendation
-  - Confirmation modal before Kill action
-
-### 1.11 Edit & Duplicate (Facebook-style)
-- [ ] Inline row edit: click a cell to edit budget, bid, name directly
-- [ ] Right-click context menu OR action column with: Edit | Duplicate | Preview
-- [ ] Duplicate creates a copy with "Copy of …" prefix, opens edit modal pre-filled
-- [ ] Edit modal matches Facebook Ads Manager field layout
-
----
-
-## 2. ADS ERROR CENTER
-
-### 2.1 Rejected Ads Auto-Load
-- [ ] On app load, automatically fetch ads rejected in the **last 12 hours**
-- [ ] Show in a dedicated "Error Center" panel / page section
-- [ ] Display: Ad name, Ad set, Campaign, Rejection reason, Policy link (if available)
-
-### 2.2 Timestamp
-- [ ] Show exact rejection timestamp (relative: "2h ago" + absolute on hover)
-- [ ] Sort by most recent rejection first
-
-### 2.3 Notification Badge
-- [ ] If any rejections in last 12 hours → show a **blinking red dot** on the Error Center nav icon
-- [ ] Blink animation: CSS pulse, stops after user visits Error Center
-- [ ] No number badge — icon blink only
-
----
-
-## 3. ATTRIBUTION CENTER / HEALTH
-
-> Goal: Better than TripleWhale
-
-- [ ] **Journey View**: Full customer touchpoint timeline (first click → last click → purchase)
-- [ ] **Channel Attribution**: Side-by-side comparison — First Touch / Last Touch / Linear / Time Decay / Data-Driven
-- [ ] **Revenue Reconciliation**: Meta reported vs Shopify actual — delta highlighted
-- [ ] **Store Health Score**: Single metric (0–100) combining ROAS, CVR, AOV trends
-- [ ] **Cohort Analysis**: LTV by acquisition channel + date cohort
-- [ ] **UTM Breakdown**: Revenue by utm_source / utm_medium / utm_campaign
-- [ ] Real-time view: last 24h rolling window with auto-refresh
-
----
-
-## 4. AI RECOMMENDATIONS (Ads Manager)
-
-- [ ] Replace generic tips with **data-driven, specific recommendations**:
-  - "Adset X has CPM 40% above account average — consider new audience"
-  - "Campaign Y ROAS dropped 25% in last 3d — review creative fatigue"
-  - "Scale candidate: Adset Z — stable ROAS >2.5 for 7d, budget headroom available"
-- [ ] Each recommendation: metric evidence + suggested action + 1-click apply
-- [ ] Priority ranking: High / Medium / Low
-- [ ] Dismiss / Snooze per recommendation
-
----
-
-## 5. P&L SHEET (Mahesh)
-
-### 5.1 Live Updates
-- [ ] Verify P&L data refreshes in real-time (or on a clear schedule)
-- [ ] Show last-updated timestamp prominently
-
-### 5.2 Graph
-- [ ] Fix the P&L graph (correct data mapping) OR remove it if unfixable before EOD
-
-### 5.3 Net Profit Trend — Hourly
-- [ ] Hourly breakdown chart for net profit
-- [ ] **NOT URGENT** — deprioritize if time is short
-
-### 5.4 Product-wise P&L Breakdown
-- [ ] Table: Product | Revenue | COGS | Ad Spend | Gross Profit | Net Profit | Margin %
-- [ ] Sortable columns
-- [ ] Filter by date range
-
-### 5.5 Remove Product Performance Section
-- [ ] Remove the existing "Product Performance" section OR fix it completely
-- [ ] No half-working sections shipped
-
-### 5.6 Remove Breakdown Section
-- [ ] Remove the "Breakdown" section from P&L
-
-### 5.7 Chargeback Section
-- [ ] Add a dedicated Chargeback section
-- [ ] Show: total chargebacks, chargeback rate %, by product, by time period
-- [ ] Pull from Shopify dispute/chargeback data
-
----
-
-## 6. SUMMARY PAGE
-
-### 6.1 Instant Data Load
-- [ ] Pre-load summary data on mount — same approach as Ads Manager
-- [ ] Skeleton screens while loading, not blank states
-
-### 6.2 Conversion Funnel — Fix Data
-- [ ] Audit each funnel step's data source
-- [ ] Ensure Sessions → Add to Cart → Checkout → Purchase numbers are accurate and consistent
-
-### 6.3 Top Performing Campaigns — Fix Data
-- [ ] Verify correct campaigns are shown (currently showing incorrect data)
-- [ ] Confirm metric used for ranking (ROAS? Revenue? Spend?)
-
-### 6.4 Live Bar — Add Profit
-- [ ] The live top bar currently shows: Sessions, Revenue, Orders, ROAS
-- [ ] Add: **Net Profit** and **Profit Margin %**
-
----
-
-## 7. CREATIVE TESTING
-
-> **Owner: Gaurav** — Gaurav to plan and execute independently
-
----
-
-## PRIORITY ORDER FOR TOMORROW
-
-| Priority | Item |
-|---|---|
-| P0 | Ads Manager instant load (1.1) |
-| P0 | Ads Error Center auto-load + blink badge (2.1, 2.3) |
-| P0 | Summary instant load + live bar profit (6.1, 6.4) |
-| P1 | Live mode button (1.5) |
-| P1 | Performance graph fix (1.7) |
-| P1 | P&L live check + product breakdown + chargeback (5.1, 5.4, 5.7) |
-| P1 | Kill/Review/Scale 3d/7d + UI (1.10) |
-| P2 | Column section icon + preset inside (1.6) |
-| P2 | Active filter toggles (1.8, 1.9) |
-| P2 | Date section calendar (1.4) |
-| P2 | Edit & Duplicate (1.11) |
-| P2 | Latest Actions panel (1.2) |
-| P3 | Attribution Center full rebuild (3) |
-| P3 | AI Recommendations upgrade (4) |
-| P3 | Net Profit hourly trend (5.3) |
+| Bugs Found | 6 |
+| Bugs Fixed | 0 |
+| Features Planned | 29 |
+| Features Done | 0 |
+| In Progress | 0 |
 
 ---
 
 ## DEFINITION OF DONE
 
-- Feature works end-to-end in production (not just locally)
-- No console errors related to the feature
-- Mobile responsive (where applicable)
-- Data shown matches the source (Facebook / Shopify) — spot-checked manually
+- Works end-to-end in production (not just locally)
+- No console errors related to the change
+- Mobile responsive where applicable
+- Data verified against source (Facebook / Shopify)
