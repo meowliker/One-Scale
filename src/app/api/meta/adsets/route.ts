@@ -19,6 +19,14 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isYesterdayRange(since: string | null, until: string | null): boolean {
+  if (!since || !until || since !== until) return false;
+  const yesterday = new Date();
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  const yStr = yesterday.toISOString().split('T')[0];
+  return since === yStr;
+}
+
 function findFallbackCache(prefix: string): { at: number; data: AdSet[] } | null {
   let best: { at: number; data: AdSet[] } | null = null;
   for (const [key, value] of adSetCache.entries()) {
@@ -112,7 +120,8 @@ function queueAdSetRefresh(args: {
     const token = await getMetaToken(storeId);
     if (!token) return;
 
-    const dateRange = since && until ? { since, until } : undefined;
+    const detectedDatePreset = isYesterdayRange(since, until) ? 'yesterday' : undefined;
+    const dateRange = !detectedDatePreset && since && until ? { since, until } : undefined;
     const exactVariant = `mode:${mode}|since:${since || ''}|until:${until || ''}|strict:${strictDate ? '1' : '0'}`;
 
     try {
@@ -120,6 +129,7 @@ function queueAdSetRefresh(args: {
         disableDateFallback: strictDate,
         preferLightweight: mode === 'basic' || mode === 'audit',
         basicOnly: mode === 'basic',
+        datePreset: detectedDatePreset,
       });
       const cacheKey = [storeId, campaignId, since || '', until || '', strictDate ? 'strict' : 'flex', mode].join('|');
       adSetCache.set(cacheKey, { at: Date.now(), data: adSets });
@@ -207,7 +217,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Not authenticated with Meta' }, { status: 401 });
     }
 
-    const dateRange = since && until ? { since, until } : undefined;
+    const batchDetectedDatePreset = isYesterdayRange(since, until) ? 'yesterday' : undefined;
+    const dateRange = !batchDetectedDatePreset && since && until ? { since, until } : undefined;
 
     try {
       for (const id of missing) {
@@ -215,6 +226,7 @@ export async function GET(request: NextRequest) {
           disableDateFallback: strictDate,
           preferLightweight: mode === 'basic' || mode === 'audit',
           basicOnly: mode === 'basic',
+          datePreset: batchDetectedDatePreset,
         });
         results[id] = adSets;
 
@@ -242,7 +254,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'campaignId is required' }, { status: 400 });
   }
 
-  const dateRange = since && until ? { since, until } : undefined;
+  const singleDetectedDatePreset = isYesterdayRange(since, until) ? 'yesterday' : undefined;
+  const dateRange = !singleDetectedDatePreset && since && until ? { since, until } : undefined;
   const cacheKey = [storeId, campaignId, since || '', until || '', strictDate ? 'strict' : 'flex', mode].join('|');
   const exactVariant = `mode:${mode}|since:${since || ''}|until:${until || ''}|strict:${strictDate ? '1' : '0'}`;
   const cached = adSetCache.get(cacheKey);
@@ -307,6 +320,7 @@ export async function GET(request: NextRequest) {
       disableDateFallback: strictDate,
       preferLightweight: mode === 'basic' || mode === 'audit',
       basicOnly: mode === 'basic',
+      datePreset: singleDetectedDatePreset,
     });
 
     adSetCache.set(cacheKey, { at: Date.now(), data: adSets });
@@ -339,6 +353,7 @@ export async function GET(request: NextRequest) {
           disableDateFallback: strictDate,
           preferLightweight: true,
           basicOnly: true,
+          datePreset: singleDetectedDatePreset,
         });
         adSetCache.set(cacheKey, { at: Date.now(), data: basicAdSets });
         return NextResponse.json({ data: basicAdSets, fallbackMode: 'basic' });
