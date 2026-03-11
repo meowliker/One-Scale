@@ -19,12 +19,18 @@ function isApproxLast30Range(since?: string | null, until?: string | null): bool
   return days >= 28 && days <= 32;
 }
 
-function isYesterdayRange(since: string | null, until: string | null): boolean {
-  if (!since || !until || since !== until) return false;
-  const yesterday = new Date();
-  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-  const yStr = yesterday.toISOString().split('T')[0];
-  return since === yStr;
+function detectSingleDayPreset(since: string | null, until: string | null): 'today' | 'yesterday' | undefined {
+  if (!since || !until || since !== until) return undefined;
+  const target = new Date(`${since}T00:00:00Z`);
+  if (Number.isNaN(target.getTime())) return undefined;
+  const todayUtc = new Date();
+  const todayUtcStr = todayUtc.toISOString().split('T')[0];
+  const todayStart = new Date(`${todayUtcStr}T00:00:00Z`);
+  const diffDays = Math.round((todayStart.getTime() - target.getTime()) / 86_400_000);
+  if (diffDays === 0) return 'today';
+  // Allow a ±1 day drift from store/account timezone vs server UTC.
+  if (diffDays === 1 || diffDays === 2) return 'yesterday';
+  return undefined;
 }
 
 function hasCampaignSignal(rows: Campaign[]): boolean {
@@ -79,7 +85,11 @@ export async function GET(request: NextRequest) {
     const exactSnapshot = useSupabase
       ? await getPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, exactVariant)
       : getMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, exactVariant);
-    if (exactSnapshot && exactSnapshot.data.length > 0) {
+    if (
+      exactSnapshot &&
+      exactSnapshot.data.length > 0 &&
+      (!isStrictRangeRequest || hasCampaignSignal(exactSnapshot.data))
+    ) {
       return NextResponse.json({
         data: exactSnapshot.data,
         cached: true,
@@ -130,7 +140,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Detect "yesterday" pattern: single day = today - 1; use date_preset to avoid rate limiting
-  const detectedDatePreset = isYesterdayRange(since, until) ? 'yesterday' : undefined;
+  const detectedDatePreset = detectSingleDayPreset(since, until);
   // Build date range if both since and until are provided (skip when using a date_preset)
   const dateRange = !detectedDatePreset && since && until ? { since, until } : undefined;
 

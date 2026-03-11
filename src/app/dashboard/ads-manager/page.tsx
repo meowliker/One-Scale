@@ -40,6 +40,14 @@ function buildDateRangeState(range: { start: Date; end: Date; preset?: DateRange
   };
 }
 
+function hasCampaignSignal(rows: Campaign[]): boolean {
+  return rows.some((row) =>
+    (row.metrics?.spend || 0) > 0 ||
+    (row.metrics?.revenue || 0) > 0 ||
+    (row.metrics?.conversions || 0) > 0
+  );
+}
+
 /** Read cached campaigns from localStorage for instant hydration */
 function readLocalCache(key: string): Campaign[] | null {
   try {
@@ -106,7 +114,10 @@ export default function AdsManagerPage() {
       // Cache-first fetch. Live refresh is handled by background sync endpoints.
       try {
         const cached = await getCampaigns({ since, until }, { preferCache: true });
-        if (cached.length > 0) {
+        // For strict single-day ranges (e.g. Yesterday), stale zero-signal snapshots
+        // can persist; fall through to live fetch in that case.
+        const isSingleDay = since === until;
+        if (cached.length > 0 && (!isSingleDay || hasCampaignSignal(cached))) {
           if (cacheKey) writeLocalCache(cacheKey, cached);
           return cached;
         }
