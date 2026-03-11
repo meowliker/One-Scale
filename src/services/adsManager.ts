@@ -14,7 +14,7 @@ async function mockGetCampaigns(
 }
 
 async function realGetCampaigns(
-  dateRange?: { since: string; until: string },
+  dateRange?: { since: string; until: string; preset?: string },
   options?: { preferCache?: boolean }
 ): Promise<Campaign[]> {
   const params: Record<string, string> = {};
@@ -22,6 +22,7 @@ async function realGetCampaigns(
     params.since = dateRange.since;
     params.until = dateRange.until;
     params.strictDate = '1';
+    if (dateRange.preset) params.preset = dateRange.preset;
   }
   if (options?.preferCache !== false) {
     params.preferCache = '1';
@@ -30,7 +31,7 @@ async function realGetCampaigns(
   return response.data;
 }
 
-export const getCampaigns = createServiceFn<Campaign[], [dateRange?: { since: string; until: string }, options?: { preferCache?: boolean }]>(
+export const getCampaigns = createServiceFn<Campaign[], [dateRange?: { since: string; until: string; preset?: string }, options?: { preferCache?: boolean }]>(
   'meta',
   mockGetCampaigns,
   realGetCampaigns

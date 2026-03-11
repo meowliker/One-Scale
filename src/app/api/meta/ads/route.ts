@@ -148,6 +148,7 @@ export async function GET(request: NextRequest) {
   const mode = searchParams.get('mode') || 'fast';
   const preferCache = searchParams.get('preferCache') !== '0';
   const forceLive = searchParams.get('forceLive') === '1';
+  const presetParam = searchParams.get('preset') || undefined;
 
   if (!storeId) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
@@ -158,7 +159,7 @@ export async function GET(request: NextRequest) {
   }
 
   const useSupabase = isSupabasePersistenceEnabled();
-  const detectedDatePreset = isYesterdayRange(since, until) ? 'yesterday' : undefined;
+  const detectedDatePreset = presetParam || (isYesterdayRange(since, until) ? 'yesterday' : undefined);
   const dateRange = !detectedDatePreset && since && until ? { since, until } : undefined;
   const cacheKey = [storeId, adsetId, since || '', until || '', strictDate ? 'strict' : 'flex', mode].join('|');
   const exactVariant = `mode:${mode}|since:${since || ''}|until:${until || ''}|strict:${strictDate ? '1' : '0'}`;

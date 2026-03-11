@@ -44,6 +44,7 @@ export async function GET(request: NextRequest) {
   const until = searchParams.get('until');
   const strictDate = searchParams.get('strictDate') === '1';
   const preferCache = searchParams.get('preferCache') === '1';
+  const presetParam = searchParams.get('preset') || undefined;
 
   if (!storeId) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
@@ -129,8 +130,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Not authenticated with Meta' }, { status: 401 });
   }
 
-  // Detect "yesterday" pattern: single day = today - 1; use date_preset to avoid rate limiting
-  const detectedDatePreset = isYesterdayRange(since, until) ? 'yesterday' : undefined;
+  // Use explicit preset param first (most reliable — avoids UTC/store-tz mismatch).
+  // Fall back to isYesterdayRange heuristic for backwards compatibility.
+  const detectedDatePreset = presetParam || (isYesterdayRange(since, until) ? 'yesterday' : undefined);
   // Build date range if both since and until are provided (skip when using a date_preset)
   const dateRange = !detectedDatePreset && since && until ? { since, until } : undefined;
 

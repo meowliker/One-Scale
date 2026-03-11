@@ -153,6 +153,7 @@ export async function GET(request: NextRequest) {
   const mode = searchParams.get('mode') || 'fast';
   const preferCache = searchParams.get('preferCache') !== '0';
   const forceLive = searchParams.get('forceLive') === '1';
+  const presetParam = searchParams.get('preset') || undefined;
 
   if (!storeId) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
@@ -217,7 +218,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Not authenticated with Meta' }, { status: 401 });
     }
 
-    const batchDetectedDatePreset = isYesterdayRange(since, until) ? 'yesterday' : undefined;
+    const batchDetectedDatePreset = presetParam || (isYesterdayRange(since, until) ? 'yesterday' : undefined);
     const dateRange = !batchDetectedDatePreset && since && until ? { since, until } : undefined;
 
     try {
@@ -254,7 +255,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'campaignId is required' }, { status: 400 });
   }
 
-  const singleDetectedDatePreset = isYesterdayRange(since, until) ? 'yesterday' : undefined;
+  const singleDetectedDatePreset = presetParam || (isYesterdayRange(since, until) ? 'yesterday' : undefined);
   const dateRange = !singleDetectedDatePreset && since && until ? { since, until } : undefined;
   const cacheKey = [storeId, campaignId, since || '', until || '', strictDate ? 'strict' : 'flex', mode].join('|');
   const exactVariant = `mode:${mode}|since:${since || ''}|until:${until || ''}|strict:${strictDate ? '1' : '0'}`;
