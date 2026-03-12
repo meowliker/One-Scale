@@ -10,10 +10,6 @@
     {
       "path": "/api/tracking/cron-backfill",
       "schedule": "0 6 * * *"
-    },
-    {
-      "path": "/api/sync/cron",
-      "schedule": "*/10 * * * *"
     }
   ],
   "headers": [
