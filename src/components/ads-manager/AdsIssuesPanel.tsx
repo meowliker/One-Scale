@@ -5,6 +5,21 @@ import { AlertTriangle, ArrowRightCircle, ExternalLink, ShieldAlert, Sparkles, W
 import type { Campaign, EntityStatus } from '@/types/campaign';
 import { cn } from '@/lib/utils';
 
+function formatRelativeTime(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString();
+}
+
 type IssueSeverity = 'critical' | 'warning';
 type IssueKind = 'ad_policy_rejected' | 'ad_with_issues' | 'learning_limited' | 'low_quality';
 type IssueLevel = 'campaign' | 'adset' | 'ad';
@@ -220,7 +235,7 @@ export function AdsIssuesPanel({
 }: AdsIssuesPanelProps) {
   const [workingId, setWorkingId] = useState<string | null>(null);
   const [showOnlyActiveCampaigns, setShowOnlyActiveCampaigns] = useState(false);
-  const [showRecent12hOnly, setShowRecent12hOnly] = useState(false);
+  const [showRecent12hOnly, setShowRecent12hOnly] = useState(true); // Default to showing last 12h
 
   const localIssues = useMemo(() => extractIssues(campaigns), [campaigns]);
   const issues = useMemo(() => {
@@ -440,7 +455,16 @@ export function AdsIssuesPanel({
                     </div>
                   </td>
                   <td className="px-3 py-2 text-text-muted">
-                    {issue.lastUpdatedAt ? new Date(issue.lastUpdatedAt).toLocaleString() : '-'}
+                    {issue.lastUpdatedAt ? (
+                      <div className="flex flex-col">
+                        <span className="text-text-primary font-medium">
+                          {formatRelativeTime(issue.lastUpdatedAt)}
+                        </span>
+                        <span className="text-[10px]">
+                          {new Date(issue.lastUpdatedAt).toLocaleString()}
+                        </span>
+                      </div>
+                    ) : '-'}
                   </td>
                   <td className="max-w-[260px] truncate px-3 py-2 text-text-muted" title={issue.details}>
                     {issue.details || '-'}

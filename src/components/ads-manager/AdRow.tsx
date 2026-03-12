@@ -95,10 +95,9 @@ export function AdRow({
     effectiveStatus.includes('REJECTED') ||
     effectiveStatus.includes('WITH_ISSUES') ||
     effectiveStatus.includes('PENDING');
+  const creativeTypeLabel = ad.creative.type === 'video' ? 'Video' : ad.creative.type === 'image' ? 'Image' : ad.creative.type === 'carousel' ? 'Carousel' : ad.creative.type;
   const statusLabel = !isActive ? ad.status : deliveryBlocked ? 'NOT DELIVERING' : 'ACTIVE';
   const statusVariant: 'success' | 'default' | 'danger' = !isActive ? 'default' : deliveryBlocked ? 'danger' : 'success';
-  const [showStatusTooltip, setShowStatusTooltip] = useState(false);
-  const creativeTypeLabel = ad.creative.type === 'video' ? 'Video' : ad.creative.type === 'image' ? 'Image' : ad.creative.type === 'carousel' ? 'Carousel' : ad.creative.type;
   const stickyBg = cn(
     'bg-[var(--apple-table-row-bg)]',
     isSelected && 'bg-[var(--apple-table-row-selected)]',
@@ -121,12 +120,12 @@ export function AdRow({
         )}
       >
         {/* Checkbox */}
-        <td className={cn("w-10 min-w-[40px] max-w-[40px] whitespace-nowrap py-2 pl-4 pr-3 sticky left-0 z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)}>
+        <td className={cn("whitespace-nowrap px-1 py-2 text-center sticky left-0 z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)} style={{ width: 40, minWidth: 40, maxWidth: 40 }}>
           <Checkbox checked={isSelected} onChange={onToggleSelect} />
         </td>
 
         {/* Toggle */}
-        <td className={cn("min-w-[70px] max-w-[70px] whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)} style={{ width: 70 }}>
+        <td className={cn("whitespace-nowrap px-1 py-2 text-center z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)} style={{ width: 70, minWidth: 70, maxWidth: 70 }}>
           <Toggle
             checked={isActive}
             onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
@@ -137,7 +136,7 @@ export function AdRow({
 
         {/* Name + Creative Thumbnail */}
         <td
-          className={cn("whitespace-nowrap overflow-hidden px-2 py-2 sticky left-[110px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
+          className={cn("whitespace-nowrap overflow-hidden px-2 py-2 z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
           style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth, maxWidth: nameColWidth } : undefined}
         >
           <div className="flex items-center gap-2 pl-1 min-w-0 overflow-hidden">
@@ -264,75 +263,13 @@ export function AdRow({
           </div>
         </td>
 
-        {/* Status */}
-      <td className="whitespace-nowrap px-3 py-3">
-          <div className="relative flex items-center gap-2">
-            {isActive && !deliveryBlocked ? (
-              <button
-                type="button"
-                onMouseEnter={() => setShowStatusTooltip(true)}
-                onMouseLeave={() => setShowStatusTooltip(false)}
-                className={cn(
-                  'inline-flex items-center gap-1.5 text-[12px] font-semibold apple-status-active cursor-pointer',
-                  'hover:bg-[#bbf7d0] dark:hover:bg-emerald-900/60 transition-all duration-150 hover:scale-[1.02]'
-                )}
-              >
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                Active
-              </button>
-            ) : (
-              <span
-                className={cn(
-                  'inline-flex items-center gap-1.5 text-[12px] font-semibold apple-status-paused',
-                  deliveryBlocked ? 'cursor-default' : 'cursor-not-allowed'
-                )}
-                title={deliveryBlocked ? 'Delivery is blocked' : 'Ad is paused'}
-              >
-                <span className="h-1.5 w-1.5 rounded-full bg-[#aeaeb2]" />
-                {deliveryBlocked ? 'Not Delivering' : 'Paused'}
-              </span>
-            )}
-            {showStatusTooltip && isActive && !deliveryBlocked && (
-              <div className="absolute left-0 top-full mt-1.5 z-50 min-w-[200px] rounded-[10px] border border-[#e5e7eb] dark:border-[#334155] bg-white dark:bg-[#1e293b] p-3 px-4 shadow-[0_8px_24px_rgba(0,0,0,0.12)] animate-tooltip-in">
-                <div className="space-y-2 text-[12px]">
-                  <div className="flex justify-between gap-6">
-                    <span className="text-[11px] text-text-muted">Status</span>
-                    <span className="font-bold text-emerald-600 dark:text-emerald-400">Active</span>
-                  </div>
-                  <div className="flex justify-between gap-6">
-                    <span className="text-[11px] text-text-muted">Creative</span>
-                    <span className="font-medium text-text-primary">{creativeTypeLabel}</span>
-                  </div>
-                  <div className="flex justify-between gap-6">
-                    <span className="text-[11px] text-text-muted">Spend</span>
-                    <span className="font-bold text-text-primary">${ad.metrics.spend.toFixed(2)}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-            {issues.length > 0 && (
-              <button
-                onClick={() => setShowIssueDetails(true)}
-                className={cn(
-                  'rounded-full border px-2 py-0.5 text-[11px] font-semibold',
-                  hasRejected
-                    ? 'border-red-400/60 bg-red-500/20 text-red-300'
-                    : 'border-amber-400/50 bg-amber-500/20 text-amber-300'
-                )}
-              >
-                {hasRejected ? 'Rejected' : `Issues ${issues.length}`}
-              </button>
-            )}
-          </div>
-        </td>
-
         {/* Budget — N/A for ads */}
-        <td className="whitespace-nowrap px-3 py-3 text-[14px] text-text-dimmed">
+        <td className="whitespace-nowrap px-3 py-3 text-[14px] text-text-dimmed text-right" style={{ width: 120, minWidth: 120, maxWidth: 120 }}>
           &mdash;
         </td>
 
         {/* Bid Strategy — N/A for ads */}
-        <td className="whitespace-nowrap px-3 py-3 text-[14px] text-text-dimmed">
+        <td className="whitespace-nowrap px-3 py-3 text-[14px] text-text-dimmed" style={{ width: 140, minWidth: 140, maxWidth: 140 }}>
           &mdash;
         </td>
 

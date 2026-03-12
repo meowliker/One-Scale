@@ -46,8 +46,9 @@ function formatRoasChange(first: number, last: number): { text: string; arrow: s
 }
 
 export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: PerformanceSparklineProps) {
-  const fullData = (dataProp && dataProp.length >= 2) ? dataProp : getSparklineData(entityId);
-  const data = fullData.slice(-8); // last 7 days + today when available
+  // Only use real data - don't fall back to mock data for accuracy
+  const fullData = (dataProp && dataProp.length >= 2) ? dataProp : null;
+  const data = fullData ? fullData.slice(-8) : null; // last 7 days + today when available
   const [showTooltip, setShowTooltip] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cellRef = useRef<HTMLTableCellElement>(null);
@@ -69,7 +70,7 @@ export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: 
 
   if (!data || data.length === 0) {
     return (
-      <td className="whitespace-nowrap px-3 py-2 text-center text-xs text-[#aeaeb2]">
+      <td className="whitespace-nowrap px-3 py-2 text-center text-xs text-[#aeaeb2]" style={{ width: 130, minWidth: 130, maxWidth: 130 }}>
         --
       </td>
     );
@@ -93,6 +94,7 @@ export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: 
     <td
       ref={cellRef}
       className="relative whitespace-nowrap px-3 py-2"
+      style={{ width: 130, minWidth: 130, maxWidth: 130 }}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >

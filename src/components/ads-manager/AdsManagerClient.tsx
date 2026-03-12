@@ -93,7 +93,7 @@ function SortableFixedHeader({
         align === 'center' && 'text-center',
         align === 'right' && 'text-right'
       )}
-      style={width ? { width, minWidth: width } : undefined}
+      style={width ? { width, minWidth: width, maxWidth: width } : undefined}
     >
       <button
         onClick={() => onSort(sortKeyName)}
@@ -409,6 +409,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   const [highlightedRowId, setHighlightedRowId] = useState<string | null>(null);
   const [showErrorCenter, setShowErrorCenter] = useState(false);
   const [focusedIssueId, setFocusedIssueId] = useState<string | null>(null);
+  const [lastErrorCenterViewedAt, setLastErrorCenterViewedAt] = useState<number | null>(null);
   const [corePreloadDone, setCorePreloadDone] = useState(false);
   const [coreProgress, setCoreProgress] = useState<{ loaded: number; total: number }>({ loaded: 0, total: 0 });
   const [syncStatus, setSyncStatus] = useState<{ core: SyncStageState; actions: SyncStageState; errors: SyncStageState }>({
@@ -846,16 +847,20 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     setSyncStatus((prev) => ({ ...prev, actions: 'loading' }));
 
     const timer = window.setTimeout(() => {
+      console.log('[Activities] Fetching activities...');
       apiClient<{ data: Record<string, EntityAction[]> }>(
         '/api/meta/activities',
         { params: { since: '30', limit: '500' }, timeoutMs: 15000, maxRetries: 0 }
       )
         .then((res) => {
           if (cancelled) return;
+          const entityCount = Object.keys(res.data || {}).length;
+          console.log(`[Activities] Loaded activities for ${entityCount} entities`);
           setActivityData((prev) => ({ ...prev, ...(res.data || {}) }));
           setSyncStatus((prev) => ({ ...prev, actions: 'done' }));
         })
-        .catch(() => {
+        .catch((err) => {
+          console.error('[Activities] Failed to load:', err);
           // keep existing/fallback UI
           if (cancelled) return;
           setSyncStatus((prev) => ({ ...prev, actions: 'done' }));
@@ -902,7 +907,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
 
   const { columnOrder, reorderColumns } = useColumnPresetStore();
 
-  const { activeSegment, columnFilters } = useSmartFilterStore();
+  const { activeSegment, segmentDays, columnFilters } = useSmartFilterStore();
 
   // DnD sensors
   const sensors = useSensors(
@@ -1258,7 +1263,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     try {
       const activitiesRes = await apiClient<{ data: Record<string, EntityAction[]> }>(
         '/api/meta/activities',
-        { params: { since: '1', limit: '500' }, timeoutMs: 15000, maxRetries: 0 }
+        { params: { since: '30', limit: '500' }, timeoutMs: 15000, maxRetries: 0 }
       );
       setActivityData((prev) => ({ ...prev, ...(activitiesRes.data || {}) }));
       if (includeIssues) {
@@ -1645,9 +1650,11 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         const conversions = metrics.conversions ?? 0;
         const sparkline = sparklineData[campaign.id] ?? [];
 
-        // Compute 7-day ROAS trend from sparkline
-        const roasPoints = sparkline.map(p => p.roas).filter((v): v is number => v !== undefined && v !== null);
-        const trend7d = roasPoints.length >= 2
+        // Use segmentDays (3 or 7) to compute trend from sparkline
+        const daysToUse = segmentDays;
+        const recentSparkline = sparkline.slice(-daysToUse);
+        const roasPoints = recentSparkline.map(p => p.roas).filter((v): v is number => v !== undefined && v !== null);
+        const trend = roasPoints.length >= 2
           ? ((roasPoints[roasPoints.length - 1] - roasPoints[0]) / Math.max(roasPoints[0], 0.01)) * 100
           : 0;
 
@@ -1657,9 +1664,9 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
           case 'needs-review':
             return roas < 1.0 && roas >= 0.8 && spend > 15;
           case 'scale-now':
-            return roas >= 1.4 && trend7d >= -5;
+            return roas >= 1.4 && trend >= -5;
           case 'top-7d':
-            return roas >= 1.2 && trend7d >= 0;
+            return roas >= 1.2 && trend >= 0;
           case 'learning':
             return campaign.status === 'ACTIVE' && conversions < 5 && spend < 50;
           case 'fatigue':
@@ -1683,7 +1690,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     }
 
     return filteredList;
-  }, [campaignsWithAppPixel, search, statusFilter, activeSegment, columnFilters, sparklineData]);
+  }, [campaignsWithAppPixel, search, statusFilter, activeSegment, segmentDays, columnFilters, sparklineData]);
 
   // Sort handler: cycles null -> asc -> desc -> null
   const handleSort = useCallback((key: string) => {
@@ -2227,11 +2234,21 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     const critical = mergedIssues.filter((i) => i.severity === 'critical').length;
     const now = Date.now();
     const twelveHoursMs = 12 * 60 * 60 * 1000;
+    
+    // Find the newest issue timestamp for blinking logic
+    let newestIssueAt: number | null = null;
     const recent12h = mergedIssues.filter((i) => {
       const ts = i.lastUpdatedAt ? Date.parse(i.lastUpdatedAt) : NaN;
-      return Number.isFinite(ts) && now - ts <= twelveHoursMs;
+      if (Number.isFinite(ts)) {
+        if (newestIssueAt === null || ts > newestIssueAt) {
+          newestIssueAt = ts;
+        }
+        return now - ts <= twelveHoursMs;
+      }
+      return false;
     }).length;
-    return { total, critical, recent12h };
+    
+    return { total, critical, recent12h, newestIssueAt };
   }, [mergedIssues]);
 
   const syncPercent = useMemo(() => {
@@ -2343,9 +2360,16 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         campaignCount={filteredCampaigns.length}
         showErrorCenter={showErrorCenter}
         onToggleErrorCenter={() => {
-          setShowErrorCenter((v) => !v);
+          setShowErrorCenter((v) => {
+            if (!v) {
+              // Opening the Error Center - record the timestamp
+              setLastErrorCenterViewedAt(Date.now());
+            }
+            return !v;
+          });
           setFocusedIssueId(null);
         }}
+        lastErrorCenterViewedAt={lastErrorCenterViewedAt}
         errorCounts={errorCounts}
         syncStatus={syncStatus}
         syncPercent={syncPercent}
@@ -2389,11 +2413,11 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         onDragEnd={handleDragEnd}
       >
         <div ref={tableContainerRef} className="apple-table-container ads-manager-table-container apple-scroll">
-          <table className="w-full min-w-[1600px] apple-table">
+          <table className="min-w-[1600px] apple-table table-fixed">
             <thead>
               <tr className="sticky top-0 z-20 border-b-2 border-[var(--apple-table-header-border)] bg-[var(--apple-table-header-bg)]" style={{ height: 44 }}>
                 {/* Checkbox — 40px */}
-                <th className="w-10 min-w-[40px] max-w-[40px] whitespace-nowrap px-3 py-2 text-center sticky left-0 z-20 bg-[var(--apple-table-header-bg)]">
+                <th className="whitespace-nowrap px-1 py-2 text-center sticky left-0 z-20 bg-[var(--apple-table-header-bg)]" style={{ width: 40, minWidth: 40, maxWidth: 40 }}>
                   <Checkbox
                     checked={allSelected}
                     onChange={handleSelectAll}
@@ -2401,13 +2425,13 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                   />
                 </th>
                 {/* ON/OFF — 70px */}
-                <th className="min-w-[70px] max-w-[70px] whitespace-nowrap px-3 py-2 text-center text-[11px] font-bold uppercase tracking-[0.05em] text-[#6b7280] dark:text-[#9ca3af] sticky left-[40px] z-20 bg-[var(--apple-table-header-bg)]" style={{ width: 70 }}>
+                <th className="whitespace-nowrap px-1 py-2 text-center text-[11px] font-bold uppercase tracking-[0.05em] text-[#6b7280] dark:text-[#9ca3af] z-20 bg-[var(--apple-table-header-bg)]" style={{ width: 70, minWidth: 70, maxWidth: 70 }}>
                   On/Off
                 </th>
-                {/* Name — flex, min 280px */}
+                {/* Name — fixed width matching rows */}
                 <th
-                  className="relative whitespace-nowrap px-2 py-2 text-left text-[11px] font-bold uppercase tracking-[0.05em] text-[#6b7280] dark:text-[#9ca3af] sticky left-[110px] z-20 bg-[var(--apple-table-header-bg)] border-r border-[var(--apple-table-header-border)]"
-                  style={{ width: nameColWidth, minWidth: Math.max(nameColWidth, 280) }}
+                  className="relative whitespace-nowrap px-2 py-2 text-left text-[11px] font-bold uppercase tracking-[0.05em] text-[#6b7280] dark:text-[#9ca3af] z-20 bg-[var(--apple-table-header-bg)] border-r border-[var(--apple-table-header-border)]"
+                  style={{ width: nameColWidth, minWidth: nameColWidth, maxWidth: nameColWidth }}
                 >
                   <button
                     onClick={() => handleSort('name')}
@@ -2422,12 +2446,11 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                     className="absolute right-0 top-0 h-full w-2 cursor-col-resize hover:bg-[#0071e3]/20 transition-colors"
                   />
                 </th>
-                <SortableFixedHeader label="Status" sortKeyName="status" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} width={150} />
                 <SortableFixedHeader label="Budget" sortKeyName="budget" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} width={120} align="right" />
                 <SortableFixedHeader label="Bid Strategy" sortKeyName="bidStrategy" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} width={140} />
                 <SortableFixedHeader label="Performance" sortKeyName="performance" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} width={130} align="center" />
                 {/* Latest Actions — 150px, no History icon */}
-                <th className="whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.05em] text-[#6b7280] dark:text-[#9ca3af]" style={{ width: 160, minWidth: 160 }}>
+                <th className="whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.05em] text-[#6b7280] dark:text-[#9ca3af]" style={{ width: 160, minWidth: 160, maxWidth: 160 }}>
                   Latest Actions
                 </th>
                 {/* Dynamic metric columns with drag-to-reorder */}

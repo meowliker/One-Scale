@@ -14,6 +14,7 @@ import {
   Clock,
   User,
   ChevronUp,
+  Activity,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -105,7 +106,7 @@ const performedByConfig: Record<EntityAction['performedBy'], { label: string; cl
   rule: { label: 'Rule', className: 'bg-amber-500/20 text-amber-300' },
 };
 
-const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
+const MAX_ACTIONS_TO_SHOW = 7;
 
 function formatActivityDate(timestamp: string): string {
   const date = new Date(timestamp);
@@ -143,14 +144,14 @@ function ActionPill({
     <div
       ref={innerRef}
       className={cn(
-        'flex h-7 w-7 items-center justify-center rounded-full cursor-default transition-all duration-150',
-        'hover:ring-2 hover:ring-border-light hover:scale-110',
+        'flex h-5 w-5 items-center justify-center rounded-full cursor-default transition-all duration-150',
+        'hover:ring-1 hover:ring-border-light hover:scale-105',
         config.bg,
       )}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
-      <Icon className={cn('h-3.5 w-3.5', config.color)} />
+      <Icon className={cn('h-2.5 w-2.5', config.color)} />
     </div>
   );
 }
@@ -249,11 +250,9 @@ function AllActionsTooltipContent({ actions, onCollapse }: { actions: EntityActi
 
 /* ─── Main cell ─── */
 export function LatestActionsCell({ entityId, actions: actionsProp, activitiesFullyLoaded, status }: LatestActionsCellProps) {
-  const [hoveredActionId, setHoveredActionId] = useState<string | null>(null);
   const [showAllActions, setShowAllActions] = useState(false);
   const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const iconRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const overflowRef = useRef<HTMLButtonElement | null>(null);
+  const cellRef = useRef<HTMLButtonElement | null>(null);
 
   const actions = useMemo(() => {
     // Only show actions for ACTIVE entities
@@ -263,84 +262,56 @@ export function LatestActionsCell({ entityId, actions: actionsProp, activitiesFu
     if (actionsProp && actionsProp.length > 0) raw = actionsProp;
     else if (activitiesFullyLoaded) raw = getActionsForEntity(entityId);
 
-    // Filter to last 12 hours only
-    const cutoff = Date.now() - TWELVE_HOURS_MS;
-    return raw.filter((a) => new Date(a.timestamp).getTime() >= cutoff);
+    // Sort by timestamp (newest first) and take last 7 actions
+    return raw
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, MAX_ACTIONS_TO_SHOW);
   }, [entityId, actionsProp, activitiesFullyLoaded, status]);
 
-  const handleMouseEnter = useCallback((actionId: string) => {
-    if (hideTimeoutRef.current) { clearTimeout(hideTimeoutRef.current); hideTimeoutRef.current = null; }
-    setShowAllActions(false);
-    setHoveredActionId(actionId);
-  }, []);
-
-  const handleMouseLeave = useCallback(() => {
-    hideTimeoutRef.current = setTimeout(() => { setHoveredActionId(null); setShowAllActions(false); hideTimeoutRef.current = null; }, 150);
-  }, []);
-
-  const handleOverflowClick = useCallback(() => {
-    setHoveredActionId(null);
+  const handleClick = useCallback(() => {
     setShowAllActions((prev) => !prev);
   }, []);
 
-  const handleOverflowLeave = useCallback(() => {
+  const handleMouseLeave = useCallback(() => {
     hideTimeoutRef.current = setTimeout(() => { setShowAllActions(false); hideTimeoutRef.current = null; }, 150);
   }, []);
 
-  const handleOverflowEnter = useCallback(() => {
+  const handleMouseEnter = useCallback(() => {
     if (hideTimeoutRef.current) { clearTimeout(hideTimeoutRef.current); hideTimeoutRef.current = null; }
   }, []);
 
   // Empty state — simple dash
   if (actions.length === 0) {
     return (
-      <td className="px-3 py-2 min-w-[120px]">
-        <span className="text-[11px] text-text-dimmed px-2">&mdash;</span>
+      <td className="px-3 py-2" style={{ width: 160, minWidth: 160, maxWidth: 160 }}>
+        <span className="text-[11px] text-text-dimmed">&mdash;</span>
       </td>
     );
   }
 
-  const visibleActions = actions.slice(0, 3);
-  const overflowCount = actions.length - 3;
+  const actionCount = actions.length;
+  const actionLabel = actionCount === 1 ? 'action' : 'actions';
 
   return (
-    <td className="px-3 py-2 min-w-[120px]">
-      <div className="flex items-center gap-1.5">
-        {visibleActions.map((action) => (
-          <div key={action.id}>
-            <ActionPill
-              action={action}
-              innerRef={(el) => { if (el) iconRefs.current.set(action.id, el); }}
-              onMouseEnter={(e) => { e.stopPropagation(); handleMouseEnter(action.id); }}
-              onMouseLeave={handleMouseLeave}
-            />
-            <PortalTooltip anchorRef={{ current: iconRefs.current.get(action.id) || null }} visible={hoveredActionId === action.id}>
-              <div onMouseEnter={() => handleMouseEnter(action.id)} onMouseLeave={handleMouseLeave}>
-                <ActionTooltipContent action={action} />
-              </div>
-            </PortalTooltip>
-          </div>
-        ))}
-        {overflowCount > 0 && (
-          <>
-            <button
-              ref={overflowRef}
-              type="button"
-              className="flex h-7 w-7 items-center justify-center rounded-full bg-surface-hover text-[10px] font-bold text-text-muted cursor-pointer hover:bg-surface-active transition-colors"
-              onClick={handleOverflowClick}
-              onMouseEnter={handleOverflowEnter}
-              onMouseLeave={handleOverflowLeave}
-            >
-              +{overflowCount}
-            </button>
-            <PortalTooltip anchorRef={overflowRef} visible={showAllActions}>
-              <div onMouseEnter={handleOverflowEnter} onMouseLeave={handleOverflowLeave}>
-                <AllActionsTooltipContent actions={actions} onCollapse={() => setShowAllActions(false)} />
-              </div>
-            </PortalTooltip>
-          </>
-        )}
-      </div>
+    <td className="px-3 py-2" style={{ width: 160, minWidth: 160, maxWidth: 160 }}>
+      <button
+        ref={cellRef}
+        type="button"
+        onClick={handleClick}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        className="flex items-center gap-1.5 text-[12px] text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 cursor-pointer transition-colors"
+      >
+        <div className="flex h-4 w-4 items-center justify-center rounded-full bg-blue-500/10 dark:bg-blue-400/10">
+          <Activity className="h-2.5 w-2.5 text-blue-500 dark:text-blue-400" />
+        </div>
+        <span className="font-medium">{actionCount} {actionLabel}</span>
+      </button>
+      <PortalTooltip anchorRef={cellRef} visible={showAllActions}>
+        <div onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
+          <AllActionsTooltipContent actions={actions} onCollapse={() => setShowAllActions(false)} />
+        </div>
+      </PortalTooltip>
     </td>
   );
 }

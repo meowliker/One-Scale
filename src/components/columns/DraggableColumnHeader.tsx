@@ -40,7 +40,7 @@ export function DraggableColumnHeader({ metricKey, sortKey, sortDirection, onSor
   const def = getMetricDefinition(metricKey);
   const label = def?.shortLabel ?? metricKey;
 
-  const [columnWidth, setColumnWidth] = useState<number | undefined>(undefined);
+  const [columnWidth, setColumnWidth] = useState<number>(90); // Default width for metric columns
   const [isResizing, setIsResizing] = useState(false);
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
@@ -76,7 +76,7 @@ export function DraggableColumnHeader({ metricKey, sortKey, sortDirection, onSor
   return (
     <th
       ref={(node) => { setNodeRef(node); thRef.current = node; }}
-      style={{ ...style, ...(columnWidth ? { width: columnWidth, minWidth: columnWidth } : {}) }}
+      style={{ ...style, width: columnWidth, minWidth: columnWidth, maxWidth: columnWidth }}
       className={cn(
         'relative whitespace-nowrap px-3 py-2 text-right text-[11px] font-bold uppercase tracking-[0.05em] text-text-secondary select-none transition-colors duration-150 hover:text-text-primary',
         isDragging && 'z-50 bg-[#e8f0fe] opacity-90 shadow-md rounded-lg'

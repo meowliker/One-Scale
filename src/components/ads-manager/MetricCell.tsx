@@ -60,7 +60,9 @@ export function MetricCell({ metricKey, value, isTotals, shopifyRoas }: MetricCe
   const colorClass = hasDualRoas ? '' : getMetricColorClass(metricKey, value);
 
   return (
-    <td className={cn(
+    <td 
+      style={{ width: 90, minWidth: 90, maxWidth: 90 }}
+      className={cn(
       "whitespace-nowrap px-3 py-2 text-right text-[13px] tabular-nums leading-5",
       colorClass || "text-text-primary",
       PIXEL_METRIC_KEYS.has(metricKey) && "app-pixel-metric-cell",

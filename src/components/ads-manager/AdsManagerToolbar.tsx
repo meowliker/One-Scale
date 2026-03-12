@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { Plus, Columns3, AlertTriangle, LayoutDashboard, Loader2, Check } from 'lucide-react';
 import { SearchInput } from '@/components/ui/SearchInput';
 import { ColumnPicker } from '@/components/columns/ColumnPicker';
-import { ColumnPresetSelector } from '@/components/columns/ColumnPresetSelector';
+import { useColumnPresetStore } from '@/stores/columnPresetStore';
+import { defaultColumnPresets } from '@/data/metricDefinitions';
 import { cn } from '@/lib/utils';
 
 export type StatusFilter = 'all' | 'ACTIVE' | 'PAUSED';
@@ -28,10 +29,12 @@ export interface AdsManagerToolbarProps {
   campaignCount: number;
   showErrorCenter?: boolean;
   onToggleErrorCenter?: () => void;
+  lastErrorCenterViewedAt?: number | null;
   errorCounts?: {
     total: number;
     critical: number;
     recent12h: number;
+    newestIssueAt?: number | null;
   };
   syncStatus?: {
     core: 'idle' | 'loading' | 'done';
@@ -101,6 +104,7 @@ export function AdsManagerToolbar({
   campaignCount,
   showErrorCenter = false,
   onToggleErrorCenter,
+  lastErrorCenterViewedAt,
   errorCounts,
   syncStatus,
   attributionCoverage,
@@ -108,6 +112,13 @@ export function AdsManagerToolbar({
   onManualSync,
 }: AdsManagerToolbarProps) {
   const [columnPickerOpen, setColumnPickerOpen] = useState(false);
+  const activePresetId = useColumnPresetStore((s) => s.activePresetId);
+  const customPresets = useColumnPresetStore((s) => s.customPresets);
+  
+  // Get the active preset name
+  const allPresets = [...defaultColumnPresets, ...customPresets];
+  const activePreset = allPresets.find((p) => p.id === activePresetId);
+  const activePresetName = activePreset?.name;
   // Re-render "X min ago" every 30s
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -173,9 +184,8 @@ export function AdsManagerToolbar({
         <Link
           href="/dashboard/attribution"
           className="group/health relative flex items-center justify-center shrink-0"
-          title={`Health: ${healthPercent.toFixed(1)}% — ${attributionCoverage!.mapped}/${attributionCoverage!.total} purchases`}
         >
-          {/* Default: ring only */}
+          {/* Default: ring with percentage */}
           <div className="relative flex items-center justify-center w-[34px] h-[34px]">
             <HealthRing percent={healthPercent} size={28} />
             <span
@@ -185,13 +195,7 @@ export function AdsManagerToolbar({
               {Math.round(healthPercent)}
             </span>
           </div>
-          {/* Hover: expand to show text */}
-          <span className="max-w-0 overflow-hidden opacity-0 group-hover/health:max-w-[80px] group-hover/health:opacity-100 group-hover/health:ml-1 text-[12px] font-semibold whitespace-nowrap transition-all duration-200"
-            style={{ color: healthPercent >= 80 ? '#10b981' : healthPercent >= 60 ? '#f59e0b' : '#ef4444' }}
-          >
-            {healthPercent.toFixed(1)}%
-          </span>
-          {/* Hover tooltip */}
+          {/* Hover tooltip - only show the box */}
           <div className="pointer-events-none absolute right-0 top-full z-50 mt-2 opacity-0 translate-y-1 group-hover/health:opacity-100 group-hover/health:translate-y-0 transition-all duration-150 ease-out">
             <div className="onescale-tooltip w-52 !rounded-xl !px-3 !py-2.5">
               <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[#86868b]">Attribution Health</p>
@@ -219,67 +223,101 @@ export function AdsManagerToolbar({
       {/* ── Divider ── */}
       <div className="h-6 w-px bg-[#e5e7eb] dark:bg-[var(--color-border)] shrink-0" />
 
-      {/* ── Column Presets ── */}
-      <ColumnPresetSelector />
-
       {/* ── Columns Button ── */}
-      <button
-        onClick={() => setColumnPickerOpen((prev) => !prev)}
-        className={cn(
-          'inline-flex items-center gap-1.5 border px-3 py-1.5 text-[13px] font-medium rounded-lg transition-all duration-150 shrink-0',
-          columnPickerOpen
-            ? 'border-[#0071e3] bg-[#e8f0fe] text-[#0071e3]'
-            : 'border-[#e5e7eb] dark:border-[var(--color-border)] bg-white dark:bg-transparent text-[#6b7280] dark:text-[var(--color-text-muted)] hover:bg-[#f9fafb] dark:hover:bg-[var(--color-surface-hover)]'
+      <div className="group/cols relative shrink-0">
+        <button
+          onClick={() => setColumnPickerOpen((prev) => !prev)}
+          className={cn(
+            'inline-flex items-center border rounded-lg transition-all duration-150',
+            activePresetName ? 'gap-1.5 px-3 py-1.5' : 'justify-center p-2',
+            columnPickerOpen
+              ? 'border-[#0071e3] bg-[#e8f0fe] text-[#0071e3]'
+              : activePresetName
+                ? 'border-[#0071e3]/30 bg-[#f0f7ff] text-[#0071e3] hover:bg-[#e8f0fe]'
+                : 'border-[#e5e7eb] dark:border-[var(--color-border)] bg-white dark:bg-transparent text-[#6b7280] dark:text-[var(--color-text-muted)] hover:bg-[#f9fafb] dark:hover:bg-[var(--color-surface-hover)]'
+          )}
+        >
+          <Columns3 className="h-4 w-4" />
+          {activePresetName && (
+            <span className="text-[13px] font-medium">{activePresetName}</span>
+          )}
+        </button>
+        {/* Hover tooltip */}
+        {!columnPickerOpen && !activePresetName && (
+          <div className="pointer-events-none absolute right-0 top-full z-50 mt-2
+            opacity-0 translate-y-1 group-hover/cols:opacity-100 group-hover/cols:translate-y-0
+            transition-all duration-150 ease-out">
+            <div className="onescale-tooltip w-52 !rounded-xl !px-3 !py-2.5">
+              <p className="text-[12px] font-semibold text-text-primary mb-1">Columns</p>
+              <p className="text-[11px] text-text-muted leading-relaxed">
+                Customize which metrics are displayed in the table. Add, remove, or reorder columns to focus on what matters most.
+              </p>
+            </div>
+          </div>
         )}
-      >
-        <Columns3 className="h-3.5 w-3.5" />
-        Columns
-      </button>
+      </div>
       <ColumnPicker
         isOpen={columnPickerOpen}
         onClose={() => setColumnPickerOpen(false)}
       />
 
       {/* ── Warning / Error Center ── */}
-      <div className="group/err relative shrink-0">
-        <button
-          onClick={onToggleErrorCenter}
-          className={cn(
-            'relative inline-flex items-center justify-center border p-2 rounded-lg transition-all duration-150',
-            showErrorCenter
-              ? 'border-[rgba(255,149,0,0.3)] bg-[#fff4e5] text-[#cc7700]'
-              : 'border-[#e5e7eb] dark:border-[var(--color-border)] bg-white dark:bg-transparent text-[#86868b] hover:bg-[#f9fafb] dark:hover:bg-[var(--color-surface-hover)]'
-          )}
-        >
-          {showErrorCenter ? <LayoutDashboard className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
-          {!showErrorCenter && errorCounts && errorCounts.recent12h > 0 && (
-            <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-orange-500 text-[8px] font-bold text-white">
-              {errorCounts.recent12h}
-            </span>
-          )}
-        </button>
-        {/* Hover tooltip */}
-        {!showErrorCenter && errorCounts && (
-          <div className="pointer-events-none absolute right-0 top-full z-50 mt-2
-            opacity-0 translate-y-1 group-hover/err:opacity-100 group-hover/err:translate-y-0
-            transition-all duration-150 ease-out">
-            <div className="onescale-tooltip w-48 !rounded-xl !px-3 !py-2.5">
-              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[#86868b]">Last 12 hours</p>
-              <div className="flex items-center justify-between">
-                <span className="text-[12px]">Issues</span>
-                <span className="text-[13px] font-semibold text-blue-500">{errorCounts.recent12h}</span>
-              </div>
-              {errorCounts.critical > 0 && (
-                <div className="mt-1 flex items-center justify-between">
-                  <span className="text-[12px]">Critical</span>
-                  <span className="text-[13px] font-semibold text-red-500">{errorCounts.critical}</span>
-                </div>
+      {(() => {
+        // Determine if we should blink: only if there are new issues since last viewed
+        const hasRecentIssues = errorCounts && errorCounts.recent12h > 0;
+        const hasNewIssuesSinceViewed = hasRecentIssues && (
+          !lastErrorCenterViewedAt || 
+          (errorCounts.newestIssueAt && errorCounts.newestIssueAt > lastErrorCenterViewedAt)
+        );
+        const shouldBlink = hasNewIssuesSinceViewed;
+
+        return (
+          <div className="group/err relative shrink-0">
+            <button
+              onClick={onToggleErrorCenter}
+              className={cn(
+                'relative inline-flex items-center justify-center border p-2 rounded-lg transition-all duration-150',
+                showErrorCenter
+                  ? 'border-[rgba(255,149,0,0.3)] bg-[#fff4e5] text-[#cc7700]'
+                  : shouldBlink
+                    ? 'border-red-300 bg-red-50 dark:bg-red-900/20 text-red-500 animate-[pulse_0.5s_ease-in-out_infinite]'
+                    : 'border-[#e5e7eb] dark:border-[var(--color-border)] bg-white dark:bg-transparent text-[#86868b] hover:bg-[#f9fafb] dark:hover:bg-[var(--color-surface-hover)]'
               )}
-              <p className="mt-2 text-[10px] text-[#86868b]">Click to open Error Center</p>
-            </div>
+            >
+              {showErrorCenter ? <LayoutDashboard className="h-4 w-4" /> : <AlertTriangle className={cn('h-4 w-4', shouldBlink ? 'text-red-500' : '')} />}
+              {!showErrorCenter && hasRecentIssues && (
+                <span className={cn(
+                  'absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full text-[8px] font-bold text-white',
+                  shouldBlink ? 'bg-red-500 animate-bounce' : 'bg-orange-500'
+                )}>
+                  {errorCounts.recent12h}
+                </span>
+              )}
+            </button>
+            {/* Hover tooltip */}
+            {!showErrorCenter && errorCounts && (
+              <div className="pointer-events-none absolute right-0 top-full z-50 mt-2
+                opacity-0 translate-y-1 group-hover/err:opacity-100 group-hover/err:translate-y-0
+                transition-all duration-150 ease-out">
+                <div className="onescale-tooltip w-48 !rounded-xl !px-3 !py-2.5">
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[#86868b]">Last 12 hours</p>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px]">Issues</span>
+                    <span className="text-[13px] font-semibold text-blue-500">{errorCounts.recent12h}</span>
+                  </div>
+                  {errorCounts.critical > 0 && (
+                    <div className="mt-1 flex items-center justify-between">
+                      <span className="text-[12px]">Critical</span>
+                      <span className="text-[13px] font-semibold text-red-500">{errorCounts.critical}</span>
+                    </div>
+                  )}
+                  <p className="mt-2 text-[10px] text-[#86868b]">Click to open Error Center</p>
+                </div>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        );
+      })()}
 
       {/* ── Sync Indicator ── */}
       <button
