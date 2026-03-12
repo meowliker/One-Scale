@@ -1282,18 +1282,60 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   const preloadActiveHierarchy = useCallback(async (force = false) => {
     if (!activeStoreId) return;
     if (hierarchySyncInFlightRef.current) return;
-    const activeCampaigns = campaigns.filter((c) => c.status === 'ACTIVE');
-    if (activeCampaigns.length === 0) {
-      setCorePreloadDone(true);
-      setSyncStatus((prev) => ({ ...prev, core: 'done' }));
-      return;
-    }
 
     hierarchySyncInFlightRef.current = true;
     preloadingCoreRef.current = true;
     setCorePreloadDone(false);
     setSyncStatus((prev) => ({ ...prev, core: 'loading' }));
     setCoreProgress({ loaded: 0, total: 3 });
+
+    try {
+      // Try to load full hierarchy from cache in a single request (instant)
+      const hierarchyRes = await apiClient<{
+        campaigns: Campaign[];
+        cached: boolean;
+        snapshotAt: string | null;
+      }>('/api/meta/hierarchy', {
+        timeoutMs: 10_000,
+        maxRetries: 1,
+      });
+
+      if (hierarchyRes.campaigns && hierarchyRes.campaigns.length > 0) {
+        // Full hierarchy loaded from cache - update state instantly
+        setCampaigns(hierarchyRes.campaigns);
+        
+        // Mark all campaigns and ad sets as fetched
+        for (const campaign of hierarchyRes.campaigns) {
+          if (campaign.adSets && campaign.adSets.length > 0) {
+            fetchedAdSets.current.add(campaign.id);
+            for (const adSet of campaign.adSets) {
+              if (adSet.ads && adSet.ads.length > 0) {
+                fetchedAds.current.add(adSet.id);
+              }
+            }
+          }
+        }
+
+        setCoreProgress({ loaded: 3, total: 3 });
+        setCorePreloadDone(true);
+        setSyncStatus((prev) => ({ ...prev, core: 'done' }));
+        actionsLoadedRef.current = true;
+        await refreshRecentOperationalData({ includeIssues: false });
+        return;
+      }
+    } catch {
+      // Hierarchy endpoint failed or returned empty - fall back to individual calls
+    }
+
+    // Fallback: load hierarchy with individual API calls
+    const activeCampaigns = campaigns.filter((c) => c.status === 'ACTIVE');
+    if (activeCampaigns.length === 0) {
+      setCorePreloadDone(true);
+      setSyncStatus((prev) => ({ ...prev, core: 'done' }));
+      preloadingCoreRef.current = false;
+      hierarchySyncInFlightRef.current = false;
+      return;
+    }
 
     try {
       // Step 1/3: campaign list already loaded.
