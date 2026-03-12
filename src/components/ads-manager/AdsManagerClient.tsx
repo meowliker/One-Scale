@@ -1089,7 +1089,11 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         params.strictDate = '1';
       }
       params.mode = mode || 'fast';
-      if (!force) params.preferCache = '1';
+      if (force) {
+        params.forceLive = '1';
+      } else {
+        params.preferCache = '1';
+      }
       const response = await apiClient<{ data: AdSet[] }>('/api/meta/adsets', {
         params,
         timeoutMs: 25000,
@@ -1197,7 +1201,11 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         params.strictDate = '1';
       }
       params.mode = mode || 'fast';
-      if (!force) params.preferCache = '1';
+      if (force) {
+        params.forceLive = '1';
+      } else {
+        params.preferCache = '1';
+      }
       const response = await apiClient<{ data: Ad[] }>('/api/meta/ads', {
         params,
         timeoutMs: 12000,

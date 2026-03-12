@@ -2,12 +2,24 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAllStores, getStoreAdAccounts, upsertMetaEndpointSnapshot } from '@/app/api/lib/db';
 import { isSupabasePersistenceEnabled, listPersistentStores } from '@/app/api/lib/supabase-persistence';
 import { getMetaToken } from '@/app/api/lib/tokens';
-import { fetchMetaCampaigns } from '@/app/api/lib/meta-client';
+import { fetchMetaCampaigns, fetchMetaAdSets, fetchMetaAds, MetaRateLimitError } from '@/app/api/lib/meta-client';
 import { upsertPersistentMetaEndpointSnapshot } from '@/app/api/lib/supabase-tracking';
+import { isMetaCallBlocked, markMetaRateLimited } from '@/app/api/lib/meta-sync-queue';
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
- * Cron endpoint — refresh today's campaign data for all active stores.
- * Designed to be called by Vercel Cron or external scheduler every 15 minutes.
+ * Cron endpoint — refresh campaign, adset, and ad data for all active stores.
+ * Designed to be called by Vercel Cron or external scheduler every 10 minutes.
+ * 
+ * Syncs:
+ * - All campaigns for active ad accounts
+ * - All ad sets for ACTIVE campaigns
+ * - All ads for ad sets in ACTIVE campaigns
+ * 
+ * Data is stored in Supabase snapshots and served from cache on subsequent requests.
  *
  * GET /api/sync/cron
  */
@@ -23,8 +35,12 @@ export async function GET(request: NextRequest) {
   const today = new Date().toISOString().slice(0, 10);
   const dateRange = { since: today, until: today };
   const exactVariant = `range:since:${today}|until:${today}|strict:1`;
+  const adSetVariant = `mode:fast|since:${today}|until:${today}|strict:1`;
+  const adsVariant = `mode:fast|since:${today}|until:${today}|strict:1`;
   let synced = 0;
   let errors = 0;
+  let adSetsSynced = 0;
+  let adsSynced = 0;
 
   try {
     const useSupabase = isSupabasePersistenceEnabled();
@@ -67,12 +83,88 @@ export async function GET(request: NextRequest) {
           ]);
 
           synced++;
+
+          // Sync ad sets and ads for ACTIVE campaigns only
+          const activeCampaigns = mergedCampaigns.filter((c) => c.status === 'ACTIVE');
+          
+          for (const campaign of activeCampaigns) {
+            if (isMetaCallBlocked(store.id)) {
+              console.log(`[sync/cron] Rate limited, skipping remaining campaigns for ${store.id}`);
+              break;
+            }
+
+            try {
+              // Fetch ad sets for this campaign
+              const adSets = await fetchMetaAdSets(token.accessToken, campaign.id, dateRange, {
+                disableDateFallback: true,
+                preferLightweight: true,
+                basicOnly: false,
+              });
+
+              if (adSets.length > 0) {
+                await Promise.all([
+                  upsertPersistentMetaEndpointSnapshot(store.id, 'adsets', campaign.id, adSetVariant, adSets),
+                  upsertPersistentMetaEndpointSnapshot(store.id, 'adsets', campaign.id, 'latest', adSets),
+                ]);
+                adSetsSynced += adSets.length;
+              }
+
+              // Small delay to avoid rate limiting
+              await sleep(200);
+
+              // Fetch ads for each ad set
+              for (const adSet of adSets) {
+                if (isMetaCallBlocked(store.id)) break;
+
+                try {
+                  const ads = await fetchMetaAds(token.accessToken, adSet.id, dateRange, {
+                    disableDateFallback: true,
+                    preferLightweight: true,
+                    basicOnly: false,
+                  });
+
+                  if (ads.length > 0) {
+                    await Promise.all([
+                      upsertPersistentMetaEndpointSnapshot(store.id, 'ads', adSet.id, adsVariant, ads),
+                      upsertPersistentMetaEndpointSnapshot(store.id, 'ads', adSet.id, 'latest', ads),
+                    ]);
+                    adsSynced += ads.length;
+                  }
+
+                  // Delay between ad set requests
+                  await sleep(150);
+                } catch (adErr) {
+                  if (adErr instanceof MetaRateLimitError) {
+                    markMetaRateLimited(store.id, 60);
+                    console.log(`[sync/cron] Rate limited fetching ads for adset ${adSet.id}`);
+                    break;
+                  }
+                }
+              }
+
+              // Delay between campaign requests
+              await sleep(300);
+            } catch (adSetErr) {
+              if (adSetErr instanceof MetaRateLimitError) {
+                markMetaRateLimited(store.id, 60);
+                console.log(`[sync/cron] Rate limited fetching adsets for campaign ${campaign.id}`);
+                break;
+              }
+            }
+          }
         } catch {
           errors++;
         }
       }
 
-      return NextResponse.json({ synced, errors, storeCount: stores.length, mode: 'supabase' });
+      return NextResponse.json({ 
+        synced, 
+        errors, 
+        storeCount: stores.length, 
+        adSetsSynced,
+        adsSynced,
+        mode: 'supabase' 
+      });
     }
 
     const stores = getAllStores();
@@ -108,12 +200,74 @@ export async function GET(request: NextRequest) {
         upsertMetaEndpointSnapshot(store.id, 'campaigns', scopeId, 'latest', mergedCampaigns);
 
         synced++;
+
+        // Sync ad sets and ads for ACTIVE campaigns only (SQLite mode)
+        const activeCampaigns = mergedCampaigns.filter((c) => c.status === 'ACTIVE');
+        
+        for (const campaign of activeCampaigns) {
+          if (isMetaCallBlocked(store.id)) break;
+
+          try {
+            const adSets = await fetchMetaAdSets(token.accessToken, campaign.id, dateRange, {
+              disableDateFallback: true,
+              preferLightweight: true,
+              basicOnly: false,
+            });
+
+            if (adSets.length > 0) {
+              upsertMetaEndpointSnapshot(store.id, 'adsets', campaign.id, adSetVariant, adSets);
+              upsertMetaEndpointSnapshot(store.id, 'adsets', campaign.id, 'latest', adSets);
+              adSetsSynced += adSets.length;
+            }
+
+            await sleep(200);
+
+            for (const adSet of adSets) {
+              if (isMetaCallBlocked(store.id)) break;
+
+              try {
+                const ads = await fetchMetaAds(token.accessToken, adSet.id, dateRange, {
+                  disableDateFallback: true,
+                  preferLightweight: true,
+                  basicOnly: false,
+                });
+
+                if (ads.length > 0) {
+                  upsertMetaEndpointSnapshot(store.id, 'ads', adSet.id, adsVariant, ads);
+                  upsertMetaEndpointSnapshot(store.id, 'ads', adSet.id, 'latest', ads);
+                  adsSynced += ads.length;
+                }
+
+                await sleep(150);
+              } catch (adErr) {
+                if (adErr instanceof MetaRateLimitError) {
+                  markMetaRateLimited(store.id, 60);
+                  break;
+                }
+              }
+            }
+
+            await sleep(300);
+          } catch (adSetErr) {
+            if (adSetErr instanceof MetaRateLimitError) {
+              markMetaRateLimited(store.id, 60);
+              break;
+            }
+          }
+        }
       } catch {
         errors++;
       }
     }
 
-    return NextResponse.json({ synced, errors, storeCount: stores.length, mode: 'sqlite' });
+    return NextResponse.json({ 
+      synced, 
+      errors, 
+      storeCount: stores.length, 
+      adSetsSynced,
+      adsSynced,
+      mode: 'sqlite' 
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Cron sync failed';
     console.error('[sync/cron] Error:', message);
