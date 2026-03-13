@@ -1,13 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getThirdPartyToken, getStoreAdAccounts, getLatestMetaEndpointSnapshot } from '@/app/api/lib/db';
+import { getThirdPartyToken, getStoreAdAccounts, getLatestMetaEndpointSnapshot, getStore } from '@/app/api/lib/db';
 import { getMetaToken } from '@/app/api/lib/tokens';
 import type { ProductProfile, ClickUpCreativeSet, WinnerCopy } from '@/types/creativeLaunch';
+
+interface ClickUpCustomFieldOption {
+  id: string;
+  name: string;
+  orderindex: number;
+  color?: string;
+}
 
 interface ClickUpCustomField {
   id: string;
   name: string;
   type: string;
   value?: unknown;
+  type_config?: {
+    options?: ClickUpCustomFieldOption[];
+    [key: string]: unknown;
+  };
 }
 
 interface ClickUpTask {
@@ -25,16 +36,41 @@ interface ClickUpTask {
 function extractFieldValue(fields: ClickUpCustomField[], ...nameParts: string[]): string {
   for (const field of fields) {
     const nameLower = field.name.toLowerCase();
-    if (nameParts.some((p) => nameLower.includes(p.toLowerCase()))) {
-      if (field.value == null) continue;
-      if (typeof field.value === 'string') return field.value;
-      if (typeof field.value === 'object') {
-        const v = field.value as Record<string, unknown>;
-        if (v.url) return String(v.url);
-        if (v.value) return String(v.value);
-        if (v.name) return String(v.name);
+    if (!nameParts.some((p) => nameLower.includes(p.toLowerCase()))) continue;
+    if (field.value == null) continue;
+
+    const options = field.type_config?.options || [];
+
+    if (field.type === 'drop_down') {
+      if (typeof field.value === 'number') {
+        const opt = options.find((o) => o.orderindex === field.value);
+        if (opt) return opt.name;
+      } else if (typeof field.value === 'string') {
+        const opt = options.find((o) => o.id === field.value);
+        if (opt) return opt.name;
       }
-      return String(field.value);
+      continue;
+    }
+
+    if (field.type === 'labels') {
+      if (Array.isArray(field.value)) {
+        const names = (field.value as string[])
+          .map((id) => options.find((o) => o.id === id)?.name || '')
+          .filter(Boolean);
+        if (names.length) return names.join(', ');
+      }
+      continue;
+    }
+
+    if (field.type === 'number') continue;
+
+    if (typeof field.value === 'string' && field.value.trim()) return field.value;
+
+    if (typeof field.value === 'object' && !Array.isArray(field.value)) {
+      const v = field.value as Record<string, unknown>;
+      if (v.url && typeof v.url === 'string') return v.url;
+      if (v.value && typeof v.value === 'string') return v.value;
+      if (v.name && typeof v.name === 'string') return v.name;
     }
   }
   return '';
@@ -161,7 +197,9 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // --- Get Meta ad account info for this store ---
+  // --- Get store info + Meta ad account info ---
+  const storeRecord = getStore(storeId);
+  const storeName = storeRecord?.name || storeId;
   const adAccounts = getStoreAdAccounts(storeId);
   const metaToken = await getMetaToken(storeId);
   const hasMetaConnection = !!metaToken && adAccounts.length > 0;
@@ -226,7 +264,7 @@ export async function GET(request: NextRequest) {
       clickupListId: listIds[0],
       readyCreativesCount: creatives.length,
       confidence: hasMetaConnection ? 90 : 60,
-      store: storeId,
+      store: storeName,
     };
 
     products.push(product);
