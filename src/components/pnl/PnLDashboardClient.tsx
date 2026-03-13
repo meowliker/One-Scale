@@ -1,230 +1,195 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
-import type { PnLSummary, PnLEntry, ProductCOGS } from '@/types/pnl';
+import { useState, useMemo, useCallback } from 'react';
+import type { PnLSummary, PnLEntry, HourlyPnLEntry } from '@/types/pnl';
 import type { ProductPnLData } from '@/types/productPnL';
-import type { DateRange, DateRangePreset } from '@/types/analytics';
-import { Tabs } from '@/components/ui/Tabs';
+import type { DateRange } from '@/types/analytics';
 import { DateRangePicker } from '@/components/ui/DateRangePicker';
 import { getDateRange } from '@/lib/dateUtils';
 import { formatDateInTimezone } from '@/lib/timezone';
-import { PnLSummaryCards } from '@/components/pnl/PnLSummaryCards';
-import { PnLWaterfallChart } from '@/components/pnl/PnLWaterfallChart';
-import { PnLTrendChart } from '@/components/pnl/PnLTrendChart';
-import { MarginIndicator } from '@/components/pnl/MarginIndicator';
-import { COGSManager } from '@/components/pnl/COGSManager';
-import { LiveProfitTicker } from '@/components/pnl/LiveProfitTicker';
-import { PnLDayPartChart } from '@/components/pnl/PnLDayPartChart';
-import { ProductPnLSection } from '@/components/pnl/ProductPnLSection';
 import { formatCurrency } from '@/lib/utils';
+import { useStoreStore } from '@/stores/storeStore';
+import { LiveProfitTicker } from '@/components/pnl/LiveProfitTicker';
+import { PnLChartGrid } from '@/components/pnl/PnLChartGrid';
+import { COGSManager } from '@/components/pnl/COGSManager';
 
 interface PnLDashboardClientProps {
   summary: PnLSummary;
   dailyPnL: PnLEntry[];
-  products: ProductCOGS[];
   productPnL?: ProductPnLData[];
   productType?: 'physical' | 'digital';
+  hourlyPnL?: HourlyPnLEntry[];
 }
-
-const allBottomTabs = [
-  { id: 'cogs', label: 'COGS Manager', digital: false },
-  { id: 'breakdown', label: 'Breakdown', digital: true },
-];
 
 function computeEntryFromDaily(dailyPnL: PnLEntry[], range: DateRange): PnLEntry {
   const startStr = formatDateInTimezone(range.start);
   const endStr = formatDateInTimezone(range.end);
-
-  const filtered = dailyPnL.filter((day) => day.date >= startStr && day.date <= endStr);
-
+  const filtered = dailyPnL.filter((d) => d.date >= startStr && d.date <= endStr);
   if (filtered.length === 0) {
-    return { date: startStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0, fullRefundCount: 0, partialRefundCount: 0, fullRefundAmount: 0, partialRefundAmount: 0 };
+    return { date: startStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0 };
   }
-
-  const totals = filtered.reduce(
-    (acc, day) => ({
-      revenue: acc.revenue + day.revenue,
-      cogs: acc.cogs + day.cogs,
-      adSpend: acc.adSpend + day.adSpend,
-      shipping: acc.shipping + day.shipping,
-      fees: acc.fees + day.fees,
-      refunds: acc.refunds + day.refunds,
-      orderCount: acc.orderCount + (day.orderCount || 0),
-      fullRefundCount: acc.fullRefundCount + (day.fullRefundCount || 0),
-      partialRefundCount: acc.partialRefundCount + (day.partialRefundCount || 0),
-      fullRefundAmount: acc.fullRefundAmount + (day.fullRefundAmount || 0),
-      partialRefundAmount: acc.partialRefundAmount + (day.partialRefundAmount || 0),
+  const t = filtered.reduce(
+    (acc, d) => ({
+      revenue: acc.revenue + d.revenue,
+      cogs: acc.cogs + d.cogs,
+      adSpend: acc.adSpend + d.adSpend,
+      shipping: acc.shipping + d.shipping,
+      fees: acc.fees + d.fees,
+      refunds: acc.refunds + d.refunds,
+      orderCount: acc.orderCount + (d.orderCount || 0),
+      chargebackLoss: acc.chargebackLoss + (d.chargebackLoss || 0),
+      chargebackWon: acc.chargebackWon + (d.chargebackWon || 0),
     }),
-    { revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, orderCount: 0, fullRefundCount: 0, partialRefundCount: 0, fullRefundAmount: 0, partialRefundAmount: 0 },
+    { revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, orderCount: 0, chargebackLoss: 0, chargebackWon: 0 }
   );
-
-  const netProfit = totals.revenue - totals.cogs - totals.adSpend - totals.shipping - totals.fees - totals.refunds;
-  const margin = totals.revenue > 0 ? (netProfit / totals.revenue) * 100 : 0;
-
-  return {
-    date: startStr,
-    ...totals,
-    netProfit,
-    margin,
-  };
+  const netProfit = t.revenue - t.cogs - t.adSpend - t.shipping - t.fees - t.refunds - t.chargebackLoss + t.chargebackWon;
+  const margin = t.revenue > 0 ? (netProfit / t.revenue) * 100 : 0;
+  return { date: startStr, ...t, netProfit, margin };
 }
 
 export function PnLDashboardClient({
   summary,
   dailyPnL,
-  products,
   productPnL = [],
   productType = 'physical',
+  hourlyPnL = [],
 }: PnLDashboardClientProps) {
-  const [datePreset, setDatePreset] = useState<DateRangePreset>('today');
+  const [datePreset, setDatePreset] = useState<string>('today');
   const [customRange, setCustomRange] = useState<DateRange | null>(null);
-  const [bottomTab, setBottomTab] = useState<string>(productType === 'digital' ? 'breakdown' : 'cogs');
-
-  const isDigital = productType === 'digital';
 
   const dateRange = useMemo(() => {
     if (datePreset === 'custom' && customRange) return customRange;
-    return getDateRange(datePreset);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [datePreset, customRange, dailyPnL]);
+    return getDateRange(datePreset as Parameters<typeof getDateRange>[0]);
+  }, [datePreset, customRange]);
 
   const handleDateRangeChange = (range: DateRange) => {
-    if (range.preset === 'custom') {
-      setCustomRange(range);
-    }
+    if (range.preset === 'custom') setCustomRange(range);
     setDatePreset(range.preset || 'custom');
   };
 
-  const activeEntry = useMemo(() => {
-    return computeEntryFromDaily(dailyPnL, dateRange);
-  }, [dailyPnL, dateRange]);
-  const todayEntry = useMemo(() => {
-    return computeEntryFromDaily(dailyPnL, getDateRange('today'));
-  }, [dailyPnL]);
+  const activeEntry = useMemo(() => computeEntryFromDaily(dailyPnL, dateRange), [dailyPnL, dateRange]);
+  const todayEntry = useMemo(() => computeEntryFromDaily(dailyPnL, getDateRange('today')), [dailyPnL]);
 
-  // When productType changes (e.g. after data loads), update bottom tab
-  useEffect(() => {
-    if (isDigital && bottomTab === 'cogs') {
-      setBottomTab('breakdown');
+  const isPositive = activeEntry.netProfit >= 0;
+
+  const kpiCards = [
+    { label: 'Revenue', value: activeEntry.revenue, color: 'text-emerald-600', sub: `${activeEntry.orderCount || 0} orders` },
+    { label: 'COGS', value: activeEntry.cogs, color: 'text-red-500', sub: `${activeEntry.revenue > 0 ? ((activeEntry.cogs / activeEntry.revenue) * 100).toFixed(1) : 0}% of rev` },
+    { label: 'Ad Spend', value: activeEntry.adSpend, color: 'text-orange-500', sub: `ROAS ${activeEntry.adSpend > 0 ? (activeEntry.revenue / activeEntry.adSpend).toFixed(2) : '\u2014'}\u00D7` },
+    { label: 'Fees', value: activeEntry.fees + activeEntry.shipping, color: 'text-amber-500', sub: `${activeEntry.revenue > 0 ? (((activeEntry.fees + activeEntry.shipping) / activeEntry.revenue) * 100).toFixed(1) : 0}% of rev` },
+    { label: 'Refunds', value: activeEntry.refunds, color: 'text-violet-500', sub: '' },
+    { label: 'Net Profit', value: activeEntry.netProfit, color: isPositive ? 'text-emerald-600' : 'text-red-600', sub: `${activeEntry.margin.toFixed(1)}% margin`, bold: true },
+  ];
+
+  const chargebackLoss = activeEntry.chargebackLoss || 0;
+  const chargebackWon = activeEntry.chargebackWon || 0;
+
+  const activeStoreId = useStoreStore((s) => s.activeStoreId);
+
+  const handleCogsSave = useCallback(async (updates: Record<string, number>) => {
+    if (!activeStoreId) throw new Error('No active store');
+    // Build payload: { updates: { productId: { cost_per_unit, title } } }
+    const payload: Record<string, { cost_per_unit: number; title: string }> = {};
+    for (const [productId, costPerUnit] of Object.entries(updates)) {
+      payload[productId] = { cost_per_unit: costPerUnit, title: productId };
     }
-  }, [isDigital, bottomTab]);
+    const res = await fetch(`/api/pnl/save-cogs?storeId=${encodeURIComponent(activeStoreId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ updates: payload }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Failed to save COGS');
+    }
+  }, [activeStoreId]);
 
   return (
-    <div className="space-y-6">
-      {/* Live ticker hero */}
-      <LiveProfitTicker netProfit={todayEntry.netProfit || summary.today.netProfit} />
+    <div className="space-y-5">
 
-      {/* Date range selector */}
+      {/* SECTION A: Today's Pulse */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
+        <div className="lg:col-span-3">
+          <LiveProfitTicker netProfit={todayEntry.netProfit || summary.today.netProfit} />
+        </div>
+        <div className="lg:col-span-2 grid grid-cols-2 gap-3">
+          {[
+            { label: 'Revenue', value: formatCurrency(todayEntry.revenue), color: 'text-emerald-600' },
+            { label: 'Ad Spend', value: formatCurrency(todayEntry.adSpend), color: 'text-orange-500' },
+            { label: 'Margin', value: `${todayEntry.margin.toFixed(1)}%`, color: todayEntry.margin >= 15 ? 'text-emerald-600' : todayEntry.margin >= 5 ? 'text-amber-500' : 'text-red-600' },
+            { label: 'Orders', value: (todayEntry.orderCount || 0).toString(), color: 'text-indigo-500' },
+          ].map((s) => (
+            <div key={s.label} className="rounded-2xl bg-surface border border-border p-4 shadow-sm flex flex-col justify-between">
+              <span className="text-sm font-semibold text-text-secondary uppercase tracking-widest">{s.label}</span>
+              <span className={`text-2xl font-bold tabular-nums mt-1 ${s.color}`}>{s.value}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Date picker row */}
       <div className="flex items-center justify-between">
         <DateRangePicker dateRange={dateRange} onRangeChange={handleDateRangeChange} />
       </div>
 
-      {/* Summary KPI cards */}
-      <PnLSummaryCards entry={activeEntry} isDigital={isDigital} />
-
-      {/* Waterfall chart + Margin indicator */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <div className="apple-card p-5">
-            <h3 className="text-sm font-semibold text-text-primary mb-3">Profit Waterfall</h3>
-            <PnLWaterfallChart entry={activeEntry} isDigital={isDigital} />
+      {/* SECTION B: KPI Bar */}
+      <div className="grid grid-cols-3 gap-3 lg:grid-cols-6">
+        {kpiCards.map((card) => (
+          <div
+            key={card.label}
+            className={`rounded-2xl bg-surface border p-4 shadow-sm flex flex-col gap-1 ${card.bold ? 'border-border ring-1 ring-border-light' : 'border-border'}`}
+          >
+            <span className="text-sm font-semibold uppercase tracking-widest text-text-secondary">{card.label}</span>
+            <span className={`text-2xl font-bold tabular-nums leading-none ${card.color}`}>
+              {formatCurrency(card.value)}
+            </span>
+            {card.sub && <span className="text-sm text-text-secondary">{card.sub}</span>}
           </div>
-        </div>
-        <div className="lg:col-span-1 space-y-3">
-          <div className="apple-card p-5">
-            <h3 className="text-[11px] font-semibold text-text-secondary uppercase tracking-wide mb-3">Margin</h3>
-            <MarginIndicator
-              margin={activeEntry.margin}
-              netProfit={activeEntry.netProfit}
-            />
-          </div>
-
-          {/* Quick stats */}
-          <div className="apple-card p-5">
-            <h3 className="text-[11px] font-semibold text-text-secondary uppercase tracking-wide mb-3">Quick Stats</h3>
-            <div className="space-y-3">
-              {[
-                { label: 'Revenue', value: activeEntry.revenue, color: 'text-emerald-600' },
-                { label: 'Total Costs', value: activeEntry.cogs + activeEntry.adSpend + activeEntry.shipping + activeEntry.fees + activeEntry.refunds, color: 'text-red-500' },
-                { label: 'Net Profit', value: activeEntry.netProfit, color: activeEntry.netProfit >= 0 ? 'text-emerald-600' : 'text-red-600' },
-              ].map((stat) => (
-                <div key={stat.label} className="flex items-center justify-between">
-                  <span className="text-xs text-text-secondary">{stat.label}</span>
-                  <span className={`text-sm font-semibold tabular-nums ${stat.color}`}>
-                    {formatCurrency(stat.value)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+        ))}
       </div>
 
-      {/* Net Profit Trend chart */}
-      <div className="apple-card p-5">
-        <h3 className="text-sm font-semibold text-text-primary mb-3">Net Profit Trend</h3>
-        <PnLTrendChart dailyPnL={dailyPnL} />
-      </div>
-
-      {/* Daily P&L breakdown chart */}
-      <div className="apple-card p-5">
-        <PnLDayPartChart dailyPnL={dailyPnL} />
-      </div>
-
-      {/* Product-wise P&L */}
-      {productPnL.length > 0 && (
-        <ProductPnLSection products={productPnL} />
-      )}
-
-      {/* Bottom tabs: COGS Manager / Breakdown */}
-      <Tabs
-        tabs={allBottomTabs.filter((t) => isDigital ? t.digital : true).map(({ id, label }) => ({ id, label }))}
-        activeTab={bottomTab}
-        onChange={setBottomTab}
+      {/* SECTION C: Chart Grid — all 4 panels visible */}
+      <PnLChartGrid
+        dailyPnL={dailyPnL}
+        hourlyPnL={hourlyPnL}
+        dateRange={dateRange}
+        activeEntry={activeEntry}
       />
 
-      {bottomTab === 'cogs' && <COGSManager products={products} />}
-
-      {bottomTab === 'breakdown' && (
-        <div className="apple-card p-5">
-          <h3 className="mb-3 text-sm font-semibold text-text-primary">
-            Cost Breakdown
-          </h3>
-          <div className="space-y-3">
-            {[
-              ...(!isDigital ? [{ label: 'COGS', value: activeEntry.cogs, color: 'bg-red-500' }] : []),
-              { label: 'Ad Spend', value: activeEntry.adSpend, color: 'bg-orange-500' },
-              ...(!isDigital ? [{ label: 'Shipping', value: activeEntry.shipping, color: 'bg-amber-500' }] : []),
-              { label: 'Transaction Fees', value: activeEntry.fees, color: 'bg-yellow-500' },
-              { label: 'Refunds', value: activeEntry.refunds, color: 'bg-violet-500' },
-            ].map((item) => {
-              const pct =
-                activeEntry.revenue > 0
-                  ? (item.value / activeEntry.revenue) * 100
-                  : 0;
-              return (
-                <div key={item.label}>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-gray-500">{item.label}</span>
-                    <span className="font-medium text-gray-800">
-                      ${item.value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      <span className="ml-2 text-xs text-gray-400">
-                        ({pct.toFixed(1)}%)
-                      </span>
-                    </span>
-                  </div>
-                  <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-gray-100">
-                    <div
-                      className={`h-full rounded-full ${item.color}`}
-                      style={{ width: `${Math.min(pct, 100)}%` }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
+      {/* SECTION D: Chargebacks */}
+      <div className="rounded-2xl bg-surface border border-border shadow-sm p-5">
+        <div className="flex items-center justify-between mb-4">
+          <p className="text-base font-bold uppercase tracking-widest text-text-secondary">Chargebacks</p>
+          {chargebackLoss === 0 && chargebackWon === 0 && (
+            <span className="rounded-full bg-emerald-50 dark:bg-emerald-950/30 px-2.5 py-1 text-[10px] font-semibold text-emerald-600">No chargebacks</span>
+          )}
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div className={`rounded-xl border p-4 ${chargebackLoss > 0 ? 'border-red-200 bg-red-50/60 dark:border-red-800 dark:bg-red-950/30' : 'border-border bg-surface-hover'}`}>
+            <p className="text-xs font-semibold uppercase tracking-widest text-text-secondary mb-1">Lost</p>
+            <p className={`text-2xl font-bold tabular-nums ${chargebackLoss > 0 ? 'text-red-600' : 'text-text-dimmed'}`}>
+              {chargebackLoss > 0 ? formatCurrency(chargebackLoss) : '$0.00'}
+            </p>
+            <p className="text-sm text-text-secondary mt-1">{chargebackLoss > 0 ? 'Disputed & lost' : 'No lost chargebacks'}</p>
+          </div>
+          <div className={`rounded-xl border p-4 ${chargebackWon > 0 ? 'border-emerald-200 bg-emerald-50/60 dark:border-emerald-800 dark:bg-emerald-950/30' : 'border-border bg-surface-hover'}`}>
+            <p className="text-xs font-semibold uppercase tracking-widest text-text-secondary mb-1">Recovered</p>
+            <p className={`text-2xl font-bold tabular-nums ${chargebackWon > 0 ? 'text-emerald-600' : 'text-text-dimmed'}`}>
+              {chargebackWon > 0 ? formatCurrency(chargebackWon) : '$0.00'}
+            </p>
+            <p className="text-sm text-text-secondary mt-1">{chargebackWon > 0 ? 'Disputed & won' : 'No recoveries'}</p>
           </div>
         </div>
-      )}
+        {chargebackLoss === 0 && chargebackWon === 0 && (
+          <p className="mt-3 text-sm text-text-secondary">
+            Chargebacks are tracked automatically via Shopify webhooks. Data will appear here if any disputes are filed.
+          </p>
+        )}
+      </div>
+
+      {/* SECTION E: Product Performance & COGS */}
+      <COGSManager onSave={handleCogsSave} />
+
     </div>
   );
 }

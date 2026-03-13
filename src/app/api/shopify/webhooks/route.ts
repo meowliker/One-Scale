@@ -11,7 +11,7 @@ import {
 } from '@/app/api/lib/db';
 import { forwardToMetaCapi } from '@/app/api/lib/meta-capi';
 import { resolveMetaEntityIdsFromUtms } from '@/app/api/lib/meta-attribution-lookup';
-import { isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
+import { isSupabasePersistenceEnabled, rest } from '@/app/api/lib/supabase-persistence';
 import {
   getPersistentStoreByDomain,
   getPersistentTrackingConfig,
@@ -603,6 +603,20 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Async P&L snapshot update — fire and forget
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL ?? '';
+    if (baseUrl) {
+      fetch(`${baseUrl}/api/pnl/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storeId: store.id,
+          secret: process.env.PNL_SYNC_SECRET,
+          daysBack: 1,
+        }),
+      }).catch(() => {});
+    }
+
     return NextResponse.json({ ok: true });
   }
 
@@ -687,6 +701,99 @@ export async function POST(request: NextRequest) {
     } else {
       insertTrackingEvent(refundEventData);
     }
+    return NextResponse.json({ ok: true });
+  }
+
+  // ------ Shopify Payments payout/transaction webhook ------
+  if (topic === 'shopify_payments/payouts') {
+    const payout = payload as {
+      id: number;
+      status: string;
+      transactions?: Array<{
+        id: number;
+        source_order_id?: number;
+        type: string;
+        amount: string;
+        fee: string;
+        net: string;
+        processed_at: string;
+      }>;
+    };
+
+    const orderTransactions = (payout.transactions || []).filter(
+      t => t.source_order_id
+    );
+
+    if (sb && orderTransactions.length > 0) {
+      const rows = orderTransactions.map(t => ({
+        store_id: store.id,
+        order_id: String(t.source_order_id),
+        transaction_type: t.type,
+        amount: parseFloat(t.amount),
+        fee: parseFloat(t.fee),
+        net: parseFloat(t.net),
+        processed_at: t.processed_at,
+        raw: t,
+      }));
+
+      try {
+        await rest(
+          '/shopify_transaction_fees?on_conflict=store_id,order_id,transaction_type',
+          {
+            method: 'POST',
+            headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+            body: JSON.stringify(rows),
+          }
+        );
+        console.log(`[Webhook] Saved ${rows.length} fee rows for store ${store.id}`);
+      } catch (err) {
+        console.error('[Webhook] Failed to save transaction fees:', err instanceof Error ? err.message : err);
+      }
+    } else {
+      console.log(`[Webhook] Payout received for store ${store.id}: ${orderTransactions.length} order-linked transactions (persistence ${sb ? 'empty' : 'disabled'})`);
+    }
+
+    return NextResponse.json({ ok: true });
+  }
+
+  // ------ Chargeback webhook ------
+  if (topic === 'orders/chargebacks') {
+    const cb = payload as {
+      order_id: number;
+      amount: string;
+      currency: string;
+      reason: string;
+      status: string;
+      created_at: string;
+      updated_at: string;
+    };
+
+    if (sb) {
+      try {
+        await rest(
+          '/shopify_chargebacks?on_conflict=store_id,order_id',
+          {
+            method: 'POST',
+            headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+            body: JSON.stringify([{
+              store_id: store.id,
+              order_id: String(cb.order_id),
+              amount: parseFloat(cb.amount),
+              currency: cb.currency,
+              reason: cb.reason,
+              status: cb.status,
+              created_at: cb.created_at,
+              updated_at: cb.updated_at,
+            }]),
+          }
+        );
+      } catch (err) {
+        console.error('[Webhook] Chargeback save failed:', err instanceof Error ? err.message : err);
+      }
+    } else {
+      console.log(`[Webhook] Chargeback received for order ${cb.order_id} store ${store.id}: status=${cb.status} amount=${cb.amount}`);
+    }
+
     return NextResponse.json({ ok: true });
   }
 

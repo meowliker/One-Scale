@@ -3,9 +3,9 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, RefreshCw } from 'lucide-react';
-import type { PnLSummary, PnLEntry, ProductCOGS } from '@/types/pnl';
+import type { PnLSummary, PnLEntry, HourlyPnLEntry } from '@/types/pnl';
 import type { ProductPnLData } from '@/types/productPnL';
-import { getPnLSummary, getDailyPnL, getProducts, clearPnLCaches } from '@/services/pnl';
+import { getPnLSummary, getDailyPnL, getHourlyPnL, clearPnLCaches } from '@/services/pnl';
 import { getProductPnL } from '@/services/productPnL';
 import dynamic from 'next/dynamic';
 
@@ -38,9 +38,9 @@ function formatLastRefreshed(date: Date | null): string {
 
 interface PnLData {
   summary: PnLSummary;
-  products: ProductCOGS[];
   dailyPnL: PnLEntry[];
   productPnL: ProductPnLData[];
+  hourlyPnL: HourlyPnLEntry[];
 }
 
 function readPnLWarmCache(storeId: string | null): PnLData | null {
@@ -64,13 +64,13 @@ function writePnLWarmCache(storeId: string, payload: PnLData): void {
 }
 
 async function fetchPnLData(): Promise<PnLData> {
-  const [summary, products, dailyPnL, productPnL] = await Promise.all([
+  const [summary, dailyPnL, productPnL, hourlyPnL] = await Promise.all([
     getPnLSummary(),
-    getProducts(),
     getDailyPnL(),
     getProductPnL(),
+    getHourlyPnL(),
   ]);
-  return { summary, products, dailyPnL, productPnL };
+  return { summary, dailyPnL, productPnL, hourlyPnL };
 }
 
 export default function PnLPage() {
@@ -125,8 +125,8 @@ export default function PnLPage() {
     today: emptyPnLEntry, thisWeek: emptyPnLEntry, thisMonth: emptyPnLEntry, allTime: emptyPnLEntry,
   };
   const dailyPnL = data?.dailyPnL ?? [];
-  const products = data?.products ?? [];
   const productPnL = data?.productPnL ?? [];
+  const hourlyPnL = data?.hourlyPnL ?? [];
 
   const emptyReason = error instanceof NotConnectedError
     ? error.reason
@@ -161,12 +161,10 @@ export default function PnLPage() {
     <div className="space-y-6">
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">P&amp;L Tracking</h1>
-          <p className="text-gray-500 mt-1">
-            Track your live profit and loss across all channels
-          </p>
+          <h1 className="text-2xl font-bold tracking-tight text-text-primary">P&amp;L</h1>
+          <p className="text-sm text-text-secondary mt-0.5">Live profit &amp; loss</p>
           {lastRefreshedLabel && (
-            <p className="text-xs text-gray-400 mt-1">
+            <p className="text-xs text-text-secondary mt-1">
               Last refreshed: {lastRefreshedLabel}
             </p>
           )}
@@ -174,7 +172,7 @@ export default function PnLPage() {
         <button
           onClick={handleRefresh}
           disabled={refreshing}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-xl border border-gray-200 bg-white text-gray-600 hover:text-gray-900 hover:bg-gray-50 shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-xl border border-border bg-surface text-text-secondary hover:text-text-primary hover:bg-surface-hover shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
           {refreshing ? 'Refreshing...' : 'Refresh'}
@@ -184,9 +182,9 @@ export default function PnLPage() {
       <PnLDashboardClient
         summary={summary}
         dailyPnL={dailyPnL}
-        products={products}
         productPnL={productPnL}
         productType={summary.productType || 'physical'}
+        hourlyPnL={hourlyPnL}
       />
     </div>
   );

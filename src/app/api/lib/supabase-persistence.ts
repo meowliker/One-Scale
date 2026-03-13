@@ -39,7 +39,7 @@ function headers(extra?: Record<string, string>): Record<string, string> {
   return out;
 }
 
-async function rest<T>(path: string, init?: RequestInit): Promise<T> {
+export async function rest<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
     ...init,
     headers: {

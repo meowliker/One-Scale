@@ -1,0 +1,194 @@
+<h2>P&L Chart Section Layout</h2>
+<p class="subtitle">How should the charts be organized in the dashboard?</p>
+
+<div class="cards">
+  <!-- Option A: Tabbed Single Panel (current, improved) -->
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding: 20px; background: #f8fafc;">
+      <div style="background: white; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; font-family: system-ui;">
+        <!-- Tab bar -->
+        <div style="display: flex; gap: 4px; padding: 12px 16px; border-bottom: 1px solid #f1f5f9;">
+          <div style="padding: 6px 14px; border-radius: 8px; background: #eef2ff; color: #4f46e5; font-size: 11px; font-weight: 600;">Trend</div>
+          <div style="padding: 6px 14px; border-radius: 8px; color: #94a3b8; font-size: 11px; font-weight: 600;">Waterfall</div>
+          <div style="padding: 6px 14px; border-radius: 8px; color: #94a3b8; font-size: 11px; font-weight: 600;">Daily</div>
+          <div style="padding: 6px 14px; border-radius: 8px; color: #94a3b8; font-size: 11px; font-weight: 600;">Hourly</div>
+          <div style="padding: 6px 14px; border-radius: 8px; color: #94a3b8; font-size: 11px; font-weight: 600;">Breakdown</div>
+        </div>
+        <!-- Chart area -->
+        <div style="height: 220px; padding: 20px; display: flex; align-items: flex-end; gap: 3px;">
+          <!-- Simulated area chart -->
+          <svg width="100%" height="180" viewBox="0 0 500 180" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="g1a" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#10b981" stop-opacity="0.3"/>
+                <stop offset="100%" stop-color="#10b981" stop-opacity="0.02"/>
+              </linearGradient>
+            </defs>
+            <path d="M0,120 Q50,100 100,80 T200,60 T300,40 T400,70 T500,30" fill="none" stroke="#10b981" stroke-width="2.5"/>
+            <path d="M0,120 Q50,100 100,80 T200,60 T300,40 T400,70 T500,30 L500,180 L0,180 Z" fill="url(#g1a)"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. Enhanced Tabbed Panel</h3>
+      <p>Keep current single-panel layout but add more tabs (Waterfall, Breakdown). Simplest upgrade — familiar pattern, just more content.</p>
+    </div>
+  </div>
+
+  <!-- Option B: Dashboard Grid -->
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding: 20px; background: #f8fafc;">
+      <div style="font-family: system-ui; display: grid; grid-template-columns: 2fr 1fr; gap: 12px;">
+        <!-- Main chart -->
+        <div style="background: white; border-radius: 16px; border: 1px solid #e2e8f0; grid-row: span 2;">
+          <div style="display: flex; gap: 4px; padding: 10px 14px; border-bottom: 1px solid #f1f5f9;">
+            <div style="padding: 5px 12px; border-radius: 8px; background: #eef2ff; color: #4f46e5; font-size: 10px; font-weight: 600;">Trend</div>
+            <div style="padding: 5px 12px; border-radius: 8px; color: #94a3b8; font-size: 10px; font-weight: 600;">Daily</div>
+            <div style="padding: 5px 12px; border-radius: 8px; color: #94a3b8; font-size: 10px; font-weight: 600;">Hourly</div>
+          </div>
+          <div style="height: 160px; padding: 14px;">
+            <svg width="100%" height="130" viewBox="0 0 400 130" preserveAspectRatio="none">
+              <defs><linearGradient id="g1b" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#10b981" stop-opacity="0.25"/><stop offset="100%" stop-color="#10b981" stop-opacity="0.02"/></linearGradient></defs>
+              <path d="M0,90 Q40,70 100,55 T200,40 T300,25 T400,20" fill="none" stroke="#10b981" stroke-width="2"/>
+              <path d="M0,90 Q40,70 100,55 T200,40 T300,25 T400,20 L400,130 L0,130 Z" fill="url(#g1b)"/>
+            </svg>
+          </div>
+        </div>
+        <!-- Waterfall (side) -->
+        <div style="background: white; border-radius: 16px; border: 1px solid #e2e8f0; padding: 12px;">
+          <div style="font-size: 9px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">Waterfall</div>
+          <div style="display: flex; align-items: flex-end; gap: 6px; height: 60px;">
+            <div style="width: 20%; height: 90%; background: linear-gradient(to top, #10b981, #34d399); border-radius: 4px;"></div>
+            <div style="width: 20%; height: 40%; background: linear-gradient(to top, #ef4444, #f87171); border-radius: 4px;"></div>
+            <div style="width: 20%; height: 30%; background: linear-gradient(to top, #f97316, #fb923c); border-radius: 4px;"></div>
+            <div style="width: 20%; height: 15%; background: linear-gradient(to top, #f59e0b, #fbbf24); border-radius: 4px;"></div>
+            <div style="width: 20%; height: 55%; background: linear-gradient(to top, #6366f1, #818cf8); border-radius: 4px;"></div>
+          </div>
+        </div>
+        <!-- Margin ring (side) -->
+        <div style="background: white; border-radius: 16px; border: 1px solid #e2e8f0; padding: 12px; display: flex; align-items: center; gap: 12px;">
+          <svg width="50" height="50" viewBox="0 0 50 50">
+            <circle cx="25" cy="25" r="20" fill="none" stroke="#f1f5f9" stroke-width="5"/>
+            <circle cx="25" cy="25" r="20" fill="none" stroke="#10b981" stroke-width="5" stroke-dasharray="88 126" stroke-dashoffset="-31.4" stroke-linecap="round" transform="rotate(-90 25 25)"/>
+            <text x="25" y="28" text-anchor="middle" font-size="10" font-weight="700" fill="#10b981">42%</text>
+          </svg>
+          <div>
+            <div style="font-size: 9px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em;">Margin</div>
+            <div style="font-size: 16px; font-weight: 800; color: #10b981;">42.1%</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. Dashboard Grid</h3>
+      <p>Main chart (tabbed) takes 2/3 width. Waterfall + Margin Ring sit alongside. Everything visible at once — no tab-switching to see key metrics.</p>
+    </div>
+  </div>
+
+  <!-- Option C: Stacked Panels -->
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding: 20px; background: #f8fafc;">
+      <div style="font-family: system-ui; display: flex; flex-direction: column; gap: 10px;">
+        <!-- Top row: Trend + Waterfall side by side -->
+        <div style="display: grid; grid-template-columns: 3fr 2fr; gap: 10px;">
+          <div style="background: white; border-radius: 14px; border: 1px solid #e2e8f0; padding: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <div style="font-size: 9px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em;">Net Profit Trend</div>
+              <div style="display: flex; gap: 3px;">
+                <div style="padding: 3px 8px; border-radius: 6px; background: #eef2ff; color: #4f46e5; font-size: 9px; font-weight: 600;">7D</div>
+                <div style="padding: 3px 8px; border-radius: 6px; color: #94a3b8; font-size: 9px;">30D</div>
+                <div style="padding: 3px 8px; border-radius: 6px; color: #94a3b8; font-size: 9px;">90D</div>
+              </div>
+            </div>
+            <svg width="100%" height="80" viewBox="0 0 300 80" preserveAspectRatio="none">
+              <defs><linearGradient id="g1c" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#10b981" stop-opacity="0.25"/><stop offset="100%" stop-color="#10b981" stop-opacity="0.02"/></linearGradient></defs>
+              <path d="M0,60 Q30,45 80,35 T160,25 T240,20 T300,15" fill="none" stroke="#10b981" stroke-width="2"/>
+              <path d="M0,60 Q30,45 80,35 T160,25 T240,20 T300,15 L300,80 L0,80 Z" fill="url(#g1c)"/>
+            </svg>
+          </div>
+          <div style="background: white; border-radius: 14px; border: 1px solid #e2e8f0; padding: 12px;">
+            <div style="font-size: 9px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">P&L Waterfall</div>
+            <div style="display: flex; align-items: flex-end; justify-content: space-around; gap: 4px; height: 70px;">
+              <div style="text-align: center;">
+                <div style="width: 28px; height: 60px; background: linear-gradient(to top, #10b981, #34d399); border-radius: 4px 4px 0 0;"></div>
+                <div style="font-size: 7px; color: #94a3b8; margin-top: 2px;">Rev</div>
+              </div>
+              <div style="text-align: center;">
+                <div style="width: 28px; height: 25px; background: linear-gradient(to top, #ef4444, #f87171); border-radius: 4px 4px 0 0;"></div>
+                <div style="font-size: 7px; color: #94a3b8; margin-top: 2px;">COGS</div>
+              </div>
+              <div style="text-align: center;">
+                <div style="width: 28px; height: 20px; background: linear-gradient(to top, #f97316, #fb923c); border-radius: 4px 4px 0 0;"></div>
+                <div style="font-size: 7px; color: #94a3b8; margin-top: 2px;">Ads</div>
+              </div>
+              <div style="text-align: center;">
+                <div style="width: 28px; height: 10px; background: linear-gradient(to top, #f59e0b, #fbbf24); border-radius: 4px 4px 0 0;"></div>
+                <div style="font-size: 7px; color: #94a3b8; margin-top: 2px;">Fees</div>
+              </div>
+              <div style="text-align: center;">
+                <div style="width: 28px; height: 38px; background: linear-gradient(to top, #6366f1, #818cf8); border-radius: 4px 4px 0 0;"></div>
+                <div style="font-size: 7px; color: #94a3b8; margin-top: 2px;">Profit</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- Bottom row: Daily + Hourly Heatmap -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+          <div style="background: white; border-radius: 14px; border: 1px solid #e2e8f0; padding: 12px;">
+            <div style="font-size: 9px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">Daily Breakdown</div>
+            <div style="display: flex; align-items: flex-end; gap: 3px; height: 50px;">
+              <div style="flex:1; height: 80%; background: #10b981; border-radius: 3px 3px 0 0; opacity: 0.7;"></div>
+              <div style="flex:1; height: 60%; background: #10b981; border-radius: 3px 3px 0 0; opacity: 0.8;"></div>
+              <div style="flex:1; height: 90%; background: #10b981; border-radius: 3px 3px 0 0;"></div>
+              <div style="flex:1; height: 40%; background: #ef4444; border-radius: 3px 3px 0 0; opacity: 0.6;"></div>
+              <div style="flex:1; height: 70%; background: #10b981; border-radius: 3px 3px 0 0; opacity: 0.9;"></div>
+              <div style="flex:1; height: 50%; background: #10b981; border-radius: 3px 3px 0 0; opacity: 0.7;"></div>
+              <div style="flex:1; height: 85%; background: #10b981; border-radius: 3px 3px 0 0;"></div>
+            </div>
+          </div>
+          <div style="background: white; border-radius: 14px; border: 1px solid #e2e8f0; padding: 12px;">
+            <div style="font-size: 9px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;">Hourly Heatmap</div>
+            <div style="display: grid; grid-template-columns: repeat(12, 1fr); gap: 2px; height: 50px;">
+              <div style="background: #f1f5f9; border-radius: 3px;"></div>
+              <div style="background: #f1f5f9; border-radius: 3px;"></div>
+              <div style="background: #f1f5f9; border-radius: 3px;"></div>
+              <div style="background: #d1fae5; border-radius: 3px;"></div>
+              <div style="background: #a7f3d0; border-radius: 3px;"></div>
+              <div style="background: #6ee7b7; border-radius: 3px;"></div>
+              <div style="background: #34d399; border-radius: 3px;"></div>
+              <div style="background: #10b981; border-radius: 3px;"></div>
+              <div style="background: #059669; border-radius: 3px;"></div>
+              <div style="background: #10b981; border-radius: 3px;"></div>
+              <div style="background: #6ee7b7; border-radius: 3px;"></div>
+              <div style="background: #d1fae5; border-radius: 3px;"></div>
+              <div style="background: #f1f5f9; border-radius: 3px;"></div>
+              <div style="background: #d1fae5; border-radius: 3px;"></div>
+              <div style="background: #a7f3d0; border-radius: 3px;"></div>
+              <div style="background: #34d399; border-radius: 3px;"></div>
+              <div style="background: #10b981; border-radius: 3px;"></div>
+              <div style="background: #059669; border-radius: 3px;"></div>
+              <div style="background: #047857; border-radius: 3px;"></div>
+              <div style="background: #059669; border-radius: 3px;"></div>
+              <div style="background: #34d399; border-radius: 3px;"></div>
+              <div style="background: #a7f3d0; border-radius: 3px;"></div>
+              <div style="background: #d1fae5; border-radius: 3px;"></div>
+              <div style="background: #f1f5f9; border-radius: 3px;"></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-top: 4px;">
+              <span style="font-size: 7px; color: #94a3b8;">12am</span>
+              <span style="font-size: 7px; color: #94a3b8;">6am</span>
+              <span style="font-size: 7px; color: #94a3b8;">12pm</span>
+              <span style="font-size: 7px; color: #94a3b8;">6pm</span>
+              <span style="font-size: 7px; color: #94a3b8;">11pm</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. Multi-Panel Dashboard</h3>
+      <p>All charts visible simultaneously in a 2x2 grid. Trend + Waterfall on top, Daily + Hourly Heatmap on bottom. No tabs — full data density. Premium SaaS feel.</p>
+    </div>
+  </div>
+</div>

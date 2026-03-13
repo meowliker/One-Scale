@@ -13,15 +13,22 @@ export interface PnLEntry {
   partialRefundCount?: number;
   fullRefundAmount?: number;
   partialRefundAmount?: number;
+  chargebackLoss?: number;
+  chargebackWon?: number;
 }
 
 export interface ProductCOGS {
-  productId: string;
-  productName: string;
-  sku: string;
-  costPerUnit: number;
-  sellingPrice: number;
-  margin: number;
+  id: string;
+  title: string;
+  image?: string | null;
+  product_type?: string | null;
+  requires_shipping: boolean;
+  vendor?: string | null;
+  status?: string | null;
+  variant_count?: number;
+  cost: number;
+  price: number;
+  currency?: string;
 }
 
 export interface PnLSummary {

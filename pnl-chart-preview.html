@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>P&L Chart Section — Design Preview</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f8fafc;
+    padding: 32px;
+    color: #334155;
+  }
+  .page-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #94a3b8;
+    margin-bottom: 6px;
+  }
+  .page-subtitle {
+    font-size: 13px;
+    color: #94a3b8;
+    margin-bottom: 24px;
+  }
+
+  /* ── Grid ── */
+  .chart-grid {
+    display: grid;
+    grid-template-columns: 3fr 2fr;
+    gap: 16px;
+    max-width: 1200px;
+  }
+  @media (max-width: 900px) {
+    .chart-grid { grid-template-columns: 1fr; }
+  }
+
+  /* ── Card ── */
+  .chart-card {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    overflow: hidden;
+  }
+  .chart-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px 12px;
+  }
+  .chart-header-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .chart-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #94a3b8;
+  }
+  .chart-value {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .chart-value.positive { color: #10b981; }
+  .chart-value.negative { color: #ef4444; }
+  .chart-value.neutral { color: #334155; }
+  .chart-sub {
+    font-size: 11px;
+    color: #94a3b8;
+    margin-top: 1px;
+  }
+  .chart-sub .up { color: #10b981; font-weight: 600; }
+  .chart-sub .down { color: #ef4444; font-weight: 600; }
+
+  /* Sparkline in header */
+  .sparkline-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* Range pills */
+  .range-pills {
+    display: flex;
+    gap: 4px;
+  }
+  .range-pill {
+    padding: 4px 10px;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 600;
+    color: #94a3b8;
+    cursor: pointer;
+    border: none;
+    background: none;
+    transition: all 0.15s;
+  }
+  .range-pill.active {
+    background: #eef2ff;
+    color: #4f46e5;
+  }
+
+  .chart-body {
+    padding: 4px 20px 20px;
+  }
+
+  /* ── Trend Chart ── */
+  .trend-chart-area { position: relative; }
+
+  /* ── Waterfall ── */
+  .waterfall-bars {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-around;
+    height: 200px;
+    padding: 0 8px;
+    position: relative;
+  }
+  .waterfall-bars::before {
+    content: '';
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: 28px;
+    height: 1px;
+    background: #f1f5f9;
+  }
+  .wf-bar-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    flex: 1;
+  }
+  .wf-bar-value {
+    font-size: 10px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .wf-bar {
+    width: 36px;
+    border-radius: 6px 6px 2px 2px;
+    position: relative;
+    transition: opacity 0.15s;
+  }
+  .wf-bar:hover { opacity: 0.85; }
+  .wf-bar-label {
+    font-size: 9px;
+    font-weight: 600;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-top: 2px;
+  }
+
+  /* ── Daily Bars ── */
+  .daily-chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    height: 180px;
+    padding-bottom: 24px;
+    position: relative;
+  }
+  .daily-chart::after {
+    content: '';
+    position: absolute;
+    bottom: 24px;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: #f1f5f9;
+  }
+  .daily-group {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    position: relative;
+    z-index: 1;
+  }
+  .daily-bars {
+    display: flex;
+    gap: 2px;
+    align-items: flex-end;
+    height: 140px;
+  }
+  .daily-bar {
+    width: 14px;
+    border-radius: 4px 4px 1px 1px;
+    transition: opacity 0.15s;
+  }
+  .daily-bar:hover { opacity: 0.8; }
+  .daily-label {
+    font-size: 9px;
+    color: #94a3b8;
+    font-weight: 500;
+  }
+  /* Profit dot overlay */
+  .daily-group .profit-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #6366f1;
+    border: 1.5px solid #fff;
+    box-shadow: 0 0 0 1px #6366f1;
+    position: absolute;
+    z-index: 2;
+  }
+
+  /* ── Heatmap ── */
+  .heatmap-grid {
+    display: grid;
+    grid-template-columns: 36px repeat(24, 1fr);
+    gap: 2px;
+  }
+  .heatmap-day-label {
+    font-size: 9px;
+    font-weight: 600;
+    color: #94a3b8;
+    display: flex;
+    align-items: center;
+    padding-right: 6px;
+    justify-content: flex-end;
+  }
+  .heatmap-cell {
+    aspect-ratio: 1;
+    border-radius: 3px;
+    min-height: 14px;
+    transition: transform 0.1s, box-shadow 0.1s;
+    cursor: default;
+  }
+  .heatmap-cell:hover {
+    transform: scale(1.3);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    z-index: 2;
+    position: relative;
+  }
+  .heatmap-hour-labels {
+    display: grid;
+    grid-template-columns: 36px repeat(24, 1fr);
+    gap: 2px;
+    margin-top: 4px;
+  }
+  .heatmap-hour-label {
+    font-size: 7px;
+    color: #b0b8c4;
+    text-align: center;
+  }
+  .heatmap-legend {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 12px;
+    justify-content: flex-end;
+  }
+  .heatmap-legend span {
+    font-size: 9px;
+    color: #94a3b8;
+  }
+  .heatmap-legend-cell {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+  }
+
+  /* ── Chart Legend ── */
+  .chart-legend {
+    display: flex;
+    gap: 16px;
+    padding: 12px 20px;
+    border-top: 1px solid #f8fafc;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    font-weight: 500;
+    color: #64748b;
+  }
+  .legend-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+  .legend-line {
+    width: 16px;
+    height: 0;
+    border-top: 2px dashed;
+  }
+
+  /* ── Animate counter ── */
+  @keyframes countUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .chart-value {
+    animation: countUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .chart-grid > :nth-child(2) .chart-value { animation-delay: 0.1s; }
+  .chart-grid > :nth-child(3) .chart-value { animation-delay: 0.2s; }
+  .chart-grid > :nth-child(4) .chart-value { animation-delay: 0.3s; }
+
+  /* ── Comparison badge ── */
+  .comparison-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 6px;
+  }
+  .comparison-badge.up {
+    background: #ecfdf5;
+    color: #059669;
+  }
+  .comparison-badge.down {
+    background: #fef2f2;
+    color: #dc2626;
+  }
+</style>
+</head>
+<body>
+
+<div class="page-title">P&L Dashboard — Chart Section Redesign</div>
+<div class="page-subtitle">Multi-Panel Dashboard &middot; Clean Minimal Style &middot; All Enhancements</div>
+
+<div class="chart-grid">
+
+  <!-- ════════════════════════════════════════════ -->
+  <!-- PANEL 1: Net Profit Trend (top-left, 3/5)   -->
+  <!-- ════════════════════════════════════════════ -->
+  <div class="chart-card">
+    <div class="chart-header">
+      <div class="chart-header-left">
+        <div>
+          <div class="chart-label">Net Profit</div>
+          <div style="display:flex; align-items:baseline; gap:10px;">
+            <div class="chart-value positive">$4,827</div>
+            <span class="comparison-badge up">&#9650; 18.2%</span>
+          </div>
+          <div class="chart-sub">vs previous period <span class="up">+$745</span></div>
+        </div>
+        <!-- Mini sparkline -->
+        <svg width="64" height="28" viewBox="0 0 64 28" style="margin-left:8px;">
+          <polyline points="0,22 8,18 16,20 24,14 32,16 40,10 48,8 56,12 64,4"
+            fill="none" stroke="#10b981" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="64" cy="4" r="2.5" fill="#10b981"/>
+        </svg>
+      </div>
+      <div class="range-pills">
+        <button class="range-pill active">7D</button>
+        <button class="range-pill">30D</button>
+        <button class="range-pill">90D</button>
+      </div>
+    </div>
+    <div class="chart-body">
+      <svg width="100%" height="220" viewBox="0 0 600 220" preserveAspectRatio="none" style="display:block;">
+        <defs>
+          <linearGradient id="trendGradPos" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#10b981" stop-opacity="0.18"/>
+            <stop offset="100%" stop-color="#10b981" stop-opacity="0.01"/>
+          </linearGradient>
+          <linearGradient id="trendGradNeg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#ef4444" stop-opacity="0.01"/>
+            <stop offset="100%" stop-color="#ef4444" stop-opacity="0.15"/>
+          </linearGradient>
+        </defs>
+        <!-- Grid lines -->
+        <line x1="0" y1="55" x2="600" y2="55" stroke="#f1f5f9" stroke-width="1"/>
+        <line x1="0" y1="110" x2="600" y2="110" stroke="#f1f5f9" stroke-width="1"/>
+        <line x1="0" y1="165" x2="600" y2="165" stroke="#f1f5f9" stroke-width="1"/>
+        <!-- Zero line -->
+        <line x1="0" y1="145" x2="600" y2="145" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4 4"/>
+        <text x="4" y="142" font-size="9" fill="#94a3b8">$0</text>
+
+        <!-- Previous period (dashed) -->
+        <path d="M0,130 Q60,125 120,120 T240,115 T360,110 T480,100 T600,105"
+          fill="none" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="6 4" stroke-linecap="round"/>
+
+        <!-- Current period positive area -->
+        <path d="M0,120 Q60,110 120,95 T240,80 T360,60 T480,75 T600,40 L600,145 L0,145 Z"
+          fill="url(#trendGradPos)"/>
+        <!-- Current period line -->
+        <path d="M0,120 Q60,110 120,95 T240,80 T360,60 T480,75 T600,40"
+          fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+        <!-- Active dot -->
+        <circle cx="600" cy="40" r="4" fill="#10b981" stroke="#fff" stroke-width="2"/>
+
+        <!-- Negative example area (small dip on day 5) -->
+        <path d="M380,145 Q400,150 420,158 T460,155 Q470,150 480,145"
+          fill="url(#trendGradNeg)" opacity="0.6"/>
+
+        <!-- X-axis labels -->
+        <text x="0" y="215" font-size="10" fill="#94a3b8" font-weight="500">Mar 6</text>
+        <text x="120" y="215" font-size="10" fill="#94a3b8" font-weight="500">Mar 7</text>
+        <text x="240" y="215" font-size="10" fill="#94a3b8" font-weight="500">Mar 8</text>
+        <text x="360" y="215" font-size="10" fill="#94a3b8" font-weight="500">Mar 9</text>
+        <text x="480" y="215" font-size="10" fill="#94a3b8" font-weight="500">Mar 10</text>
+        <text x="570" y="215" font-size="10" fill="#94a3b8" font-weight="500">Mar 12</text>
+
+        <!-- Y-axis labels -->
+        <text x="570" y="52" font-size="9" fill="#94a3b8" text-anchor="end">$2k</text>
+        <text x="570" y="107" font-size="9" fill="#94a3b8" text-anchor="end">$1k</text>
+        <text x="570" y="162" font-size="9" fill="#94a3b8" text-anchor="end">-$500</text>
+      </svg>
+    </div>
+    <div class="chart-legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#10b981;"></div> Current Period</div>
+      <div class="legend-item"><div class="legend-line" style="border-color:#cbd5e1;"></div> Previous Period</div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════ -->
+  <!-- PANEL 2: P&L Waterfall (top-right, 2/5)     -->
+  <!-- ════════════════════════════════════════════ -->
+  <div class="chart-card">
+    <div class="chart-header">
+      <div>
+        <div class="chart-label">P&L Flow</div>
+        <div style="display:flex; align-items:baseline; gap:10px;">
+          <div class="chart-value positive">$4,827</div>
+          <svg width="48" height="22" viewBox="0 0 48 22" style="margin-left:4px;">
+            <polyline points="0,18 8,14 16,16 24,10 32,12 40,6 48,4"
+              fill="none" stroke="#10b981" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div class="chart-sub">from $12,450 revenue</div>
+      </div>
+    </div>
+    <div class="chart-body">
+      <div class="waterfall-bars">
+        <div class="wf-bar-group">
+          <div class="wf-bar-value" style="color:#10b981;">$12.4k</div>
+          <div class="wf-bar" style="height:160px; background: linear-gradient(to top, #10b981, #34d399);"></div>
+          <div class="wf-bar-label">Revenue</div>
+        </div>
+        <div class="wf-bar-group">
+          <div class="wf-bar-value" style="color:#ef4444;">-$3.7k</div>
+          <div class="wf-bar" style="height:48px; background: linear-gradient(to top, #ef4444, #f87171); margin-top: auto;"></div>
+          <div class="wf-bar-label">COGS</div>
+        </div>
+        <div class="wf-bar-group">
+          <div class="wf-bar-value" style="color:#f97316;">-$2.1k</div>
+          <div class="wf-bar" style="height:28px; background: linear-gradient(to top, #f97316, #fb923c);"></div>
+          <div class="wf-bar-label">Ad Spend</div>
+        </div>
+        <div class="wf-bar-group">
+          <div class="wf-bar-value" style="color:#f59e0b;">-$890</div>
+          <div class="wf-bar" style="height:14px; background: linear-gradient(to top, #f59e0b, #fbbf24);"></div>
+          <div class="wf-bar-label">Fees</div>
+        </div>
+        <div class="wf-bar-group">
+          <div class="wf-bar-value" style="color:#8b5cf6;">-$430</div>
+          <div class="wf-bar" style="height:8px; background: linear-gradient(to top, #8b5cf6, #a78bfa);"></div>
+          <div class="wf-bar-label">Refunds</div>
+        </div>
+        <div class="wf-bar-group">
+          <div class="wf-bar-value" style="color:#6366f1; font-weight:800;">$4.8k</div>
+          <div class="wf-bar" style="height:64px; background: linear-gradient(to top, #4f46e5, #818cf8); box-shadow: 0 2px 12px rgba(99,102,241,0.2);"></div>
+          <div class="wf-bar-label" style="color:#4f46e5; font-weight:700;">Profit</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════ -->
+  <!-- PANEL 3: Daily Breakdown (bottom-left, 3/5)  -->
+  <!-- ════════════════════════════════════════════ -->
+  <div class="chart-card">
+    <div class="chart-header">
+      <div class="chart-header-left">
+        <div>
+          <div class="chart-label">Daily P&L</div>
+          <div style="display:flex; align-items:baseline; gap:10px;">
+            <div class="chart-value neutral">$12,450</div>
+            <span class="comparison-badge up">&#9650; 12.4%</span>
+          </div>
+          <div class="chart-sub">total revenue &middot; 7 days</div>
+        </div>
+        <svg width="56" height="24" viewBox="0 0 56 24" style="margin-left:8px;">
+          <polyline points="0,20 8,16 16,18 24,12 32,14 40,8 48,10 56,6"
+            fill="none" stroke="#334155" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+    </div>
+    <div class="chart-body">
+      <div class="daily-chart">
+        <!-- Each day group: revenue bar + ad spend bar -->
+        <div class="daily-group">
+          <div class="daily-bars">
+            <div class="daily-bar" style="height:75%; background: linear-gradient(to top, #10b981, #34d399);"></div>
+            <div class="daily-bar" style="height:30%; background: linear-gradient(to top, #f97316, #fb923c);"></div>
+          </div>
+          <div style="position:absolute; top: 28px; width:6px; height:6px; border-radius:50%; background:#6366f1; border:1.5px solid #fff; box-shadow: 0 0 0 1px #6366f1;"></div>
+          <div class="daily-label">Mon</div>
+        </div>
+        <div class="daily-group">
+          <div class="daily-bars">
+            <div class="daily-bar" style="height:60%; background: linear-gradient(to top, #10b981, #34d399);"></div>
+            <div class="daily-bar" style="height:35%; background: linear-gradient(to top, #f97316, #fb923c);"></div>
+          </div>
+          <div style="position:absolute; top: 45px; width:6px; height:6px; border-radius:50%; background:#6366f1; border:1.5px solid #fff; box-shadow: 0 0 0 1px #6366f1;"></div>
+          <div class="daily-label">Tue</div>
+        </div>
+        <div class="daily-group">
+          <div class="daily-bars">
+            <div class="daily-bar" style="height:90%; background: linear-gradient(to top, #10b981, #34d399);"></div>
+            <div class="daily-bar" style="height:25%; background: linear-gradient(to top, #f97316, #fb923c);"></div>
+          </div>
+          <div style="position:absolute; top: 10px; width:6px; height:6px; border-radius:50%; background:#6366f1; border:1.5px solid #fff; box-shadow: 0 0 0 1px #6366f1;"></div>
+          <div class="daily-label">Wed</div>
+        </div>
+        <div class="daily-group">
+          <div class="daily-bars">
+            <div class="daily-bar" style="height:45%; background: linear-gradient(to top, #10b981, #34d399);"></div>
+            <div class="daily-bar" style="height:40%; background: linear-gradient(to top, #f97316, #fb923c);"></div>
+          </div>
+          <div style="position:absolute; top: 70px; width:6px; height:6px; border-radius:50%; background:#ef4444; border:1.5px solid #fff; box-shadow: 0 0 0 1px #ef4444;"></div>
+          <div class="daily-label">Thu</div>
+        </div>
+        <div class="daily-group">
+          <div class="daily-bars">
+            <div class="daily-bar" style="height:80%; background: linear-gradient(to top, #10b981, #34d399);"></div>
+            <div class="daily-bar" style="height:28%; background: linear-gradient(to top, #f97316, #fb923c);"></div>
+          </div>
+          <div style="position:absolute; top: 20px; width:6px; height:6px; border-radius:50%; background:#6366f1; border:1.5px solid #fff; box-shadow: 0 0 0 1px #6366f1;"></div>
+          <div class="daily-label">Fri</div>
+        </div>
+        <div class="daily-group">
+          <div class="daily-bars">
+            <div class="daily-bar" style="height:70%; background: linear-gradient(to top, #10b981, #34d399);"></div>
+            <div class="daily-bar" style="height:22%; background: linear-gradient(to top, #f97316, #fb923c);"></div>
+          </div>
+          <div style="position:absolute; top: 32px; width:6px; height:6px; border-radius:50%; background:#6366f1; border:1.5px solid #fff; box-shadow: 0 0 0 1px #6366f1;"></div>
+          <div class="daily-label">Sat</div>
+        </div>
+        <div class="daily-group">
+          <div class="daily-bars">
+            <div class="daily-bar" style="height:55%; background: linear-gradient(to top, #10b981, #34d399);"></div>
+            <div class="daily-bar" style="height:20%; background: linear-gradient(to top, #f97316, #fb923c);"></div>
+          </div>
+          <div style="position:absolute; top: 48px; width:6px; height:6px; border-radius:50%; background:#6366f1; border:1.5px solid #fff; box-shadow: 0 0 0 1px #6366f1;"></div>
+          <div class="daily-label">Sun</div>
+        </div>
+      </div>
+    </div>
+    <div class="chart-legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#10b981;"></div> Revenue</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#f97316;"></div> Ad Spend</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#6366f1;"></div> Net Profit</div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════ -->
+  <!-- PANEL 4: Hourly Heatmap (bottom-right, 2/5)  -->
+  <!-- ════════════════════════════════════════════ -->
+  <div class="chart-card">
+    <div class="chart-header">
+      <div>
+        <div class="chart-label">Peak Hours</div>
+        <div style="display:flex; align-items:baseline; gap:10px;">
+          <div class="chart-value neutral">6–9 PM</div>
+        </div>
+        <div class="chart-sub">highest profit window</div>
+      </div>
+    </div>
+    <div class="chart-body">
+      <div class="heatmap-grid">
+        <!-- Row: Mon -->
+        <div class="heatmap-day-label">Mon</div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f1f5f9;"></div>
+        <div class="heatmap-cell" style="background:#f1f5f9;"></div>
+        <div class="heatmap-cell" style="background:#ecfdf5;"></div>
+        <div class="heatmap-cell" style="background:#d1fae5;"></div>
+        <div class="heatmap-cell" style="background:#a7f3d0;"></div>
+        <div class="heatmap-cell" style="background:#6ee7b7;"></div>
+        <div class="heatmap-cell" style="background:#34d399;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#059669;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#34d399;"></div>
+        <div class="heatmap-cell" style="background:#6ee7b7;"></div>
+        <div class="heatmap-cell" style="background:#a7f3d0;"></div>
+        <div class="heatmap-cell" style="background:#34d399;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#059669;"></div>
+        <div class="heatmap-cell" style="background:#047857;"></div>
+        <div class="heatmap-cell" style="background:#059669;"></div>
+        <div class="heatmap-cell" style="background:#34d399;"></div>
+        <div class="heatmap-cell" style="background:#d1fae5;"></div>
+
+        <!-- Row: Tue -->
+        <div class="heatmap-day-label">Tue</div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f1f5f9;"></div>
+        <div class="heatmap-cell" style="background:#ecfdf5;"></div>
+        <div class="heatmap-cell" style="background:#d1fae5;"></div>
+        <div class="heatmap-cell" style="background:#a7f3d0;"></div>
+        <div class="heatmap-cell" style="background:#6ee7b7;"></div>
+        <div class="heatmap-cell" style="background:#34d399;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#059669;"></div>
+        <div class="heatmap-cell" style="background:#047857;"></div>
+        <div class="heatmap-cell" style="background:#059669;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#34d399;"></div>
+        <div class="heatmap-cell" style="background:#6ee7b7;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#059669;"></div>
+        <div class="heatmap-cell" style="background:#047857;"></div>
+        <div class="heatmap-cell" style="background:#065f46;"></div>
+        <div class="heatmap-cell" style="background:#047857;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#a7f3d0;"></div>
+
+        <!-- Row: Wed -->
+        <div class="heatmap-day-label">Wed</div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f1f5f9;"></div>
+        <div class="heatmap-cell" style="background:#f1f5f9;"></div>
+        <div class="heatmap-cell" style="background:#ecfdf5;"></div>
+        <div class="heatmap-cell" style="background:#a7f3d0;"></div>
+        <div class="heatmap-cell" style="background:#6ee7b7;"></div>
+        <div class="heatmap-cell" style="background:#34d399;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#059669;"></div>
+        <div class="heatmap-cell" style="background:#047857;"></div>
+        <div class="heatmap-cell" style="background:#065f46;"></div>
+        <div class="heatmap-cell" style="background:#047857;"></div>
+        <div class="heatmap-cell" style="background:#059669;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#34d399;"></div>
+        <div class="heatmap-cell" style="background:#059669;"></div>
+        <div class="heatmap-cell" style="background:#047857;"></div>
+        <div class="heatmap-cell" style="background:#065f46;"></div>
+        <div class="heatmap-cell" style="background:#047857;"></div>
+        <div class="heatmap-cell" style="background:#059669;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#ecfdf5;"></div>
+
+        <!-- Row: Thu -->
+        <div class="heatmap-day-label">Thu</div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f1f5f9;"></div>
+        <div class="heatmap-cell" style="background:#f1f5f9;"></div>
+        <div class="heatmap-cell" style="background:#ecfdf5;"></div>
+        <div class="heatmap-cell" style="background:#d1fae5;"></div>
+        <div class="heatmap-cell" style="background:#fef2f2;"></div>
+        <div class="heatmap-cell" style="background:#fecaca;"></div>
+        <div class="heatmap-cell" style="background:#fca5a5;"></div>
+        <div class="heatmap-cell" style="background:#d1fae5;"></div>
+        <div class="heatmap-cell" style="background:#a7f3d0;"></div>
+        <div class="heatmap-cell" style="background:#6ee7b7;"></div>
+        <div class="heatmap-cell" style="background:#34d399;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#6ee7b7;"></div>
+        <div class="heatmap-cell" style="background:#34d399;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#059669;"></div>
+        <div class="heatmap-cell" style="background:#047857;"></div>
+        <div class="heatmap-cell" style="background:#059669;"></div>
+        <div class="heatmap-cell" style="background:#34d399;"></div>
+        <div class="heatmap-cell" style="background:#ecfdf5;"></div>
+
+        <!-- Row: Fri -->
+        <div class="heatmap-day-label">Fri</div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f1f5f9;"></div>
+        <div class="heatmap-cell" style="background:#f1f5f9;"></div>
+        <div class="heatmap-cell" style="background:#ecfdf5;"></div>
+        <div class="heatmap-cell" style="background:#d1fae5;"></div>
+        <div class="heatmap-cell" style="background:#a7f3d0;"></div>
+        <div class="heatmap-cell" style="background:#6ee7b7;"></div>
+        <div class="heatmap-cell" style="background:#34d399;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#059669;"></div>
+        <div class="heatmap-cell" style="background:#047857;"></div>
+        <div class="heatmap-cell" style="background:#059669;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#34d399;"></div>
+        <div class="heatmap-cell" style="background:#a7f3d0;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#059669;"></div>
+        <div class="heatmap-cell" style="background:#047857;"></div>
+        <div class="heatmap-cell" style="background:#065f46;"></div>
+        <div class="heatmap-cell" style="background:#047857;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#d1fae5;"></div>
+
+        <!-- Row: Sat -->
+        <div class="heatmap-day-label">Sat</div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f1f5f9;"></div>
+        <div class="heatmap-cell" style="background:#ecfdf5;"></div>
+        <div class="heatmap-cell" style="background:#d1fae5;"></div>
+        <div class="heatmap-cell" style="background:#a7f3d0;"></div>
+        <div class="heatmap-cell" style="background:#6ee7b7;"></div>
+        <div class="heatmap-cell" style="background:#34d399;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#34d399;"></div>
+        <div class="heatmap-cell" style="background:#6ee7b7;"></div>
+        <div class="heatmap-cell" style="background:#a7f3d0;"></div>
+        <div class="heatmap-cell" style="background:#d1fae5;"></div>
+        <div class="heatmap-cell" style="background:#6ee7b7;"></div>
+        <div class="heatmap-cell" style="background:#34d399;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#059669;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#6ee7b7;"></div>
+        <div class="heatmap-cell" style="background:#ecfdf5;"></div>
+
+        <!-- Row: Sun -->
+        <div class="heatmap-day-label">Sun</div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f8fafc;"></div>
+        <div class="heatmap-cell" style="background:#f1f5f9;"></div>
+        <div class="heatmap-cell" style="background:#ecfdf5;"></div>
+        <div class="heatmap-cell" style="background:#d1fae5;"></div>
+        <div class="heatmap-cell" style="background:#a7f3d0;"></div>
+        <div class="heatmap-cell" style="background:#6ee7b7;"></div>
+        <div class="heatmap-cell" style="background:#34d399;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#059669;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#34d399;"></div>
+        <div class="heatmap-cell" style="background:#6ee7b7;"></div>
+        <div class="heatmap-cell" style="background:#a7f3d0;"></div>
+        <div class="heatmap-cell" style="background:#34d399;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#059669;"></div>
+        <div class="heatmap-cell" style="background:#047857;"></div>
+        <div class="heatmap-cell" style="background:#059669;"></div>
+        <div class="heatmap-cell" style="background:#10b981;"></div>
+        <div class="heatmap-cell" style="background:#d1fae5;"></div>
+      </div>
+
+      <!-- Hour labels -->
+      <div class="heatmap-hour-labels">
+        <div></div>
+        <div class="heatmap-hour-label">12a</div>
+        <div class="heatmap-hour-label"></div>
+        <div class="heatmap-hour-label"></div>
+        <div class="heatmap-hour-label">3a</div>
+        <div class="heatmap-hour-label"></div>
+        <div class="heatmap-hour-label"></div>
+        <div class="heatmap-hour-label">6a</div>
+        <div class="heatmap-hour-label"></div>
+        <div class="heatmap-hour-label"></div>
+        <div class="heatmap-hour-label">9a</div>
+        <div class="heatmap-hour-label"></div>
+        <div class="heatmap-hour-label"></div>
+        <div class="heatmap-hour-label">12p</div>
+        <div class="heatmap-hour-label"></div>
+        <div class="heatmap-hour-label"></div>
+        <div class="heatmap-hour-label">3p</div>
+        <div class="heatmap-hour-label"></div>
+        <div class="heatmap-hour-label"></div>
+        <div class="heatmap-hour-label">6p</div>
+        <div class="heatmap-hour-label"></div>
+        <div class="heatmap-hour-label"></div>
+        <div class="heatmap-hour-label">9p</div>
+        <div class="heatmap-hour-label"></div>
+        <div class="heatmap-hour-label"></div>
+      </div>
+
+      <!-- Legend -->
+      <div class="heatmap-legend">
+        <span>Less</span>
+        <div class="heatmap-legend-cell" style="background:#f1f5f9;"></div>
+        <div class="heatmap-legend-cell" style="background:#d1fae5;"></div>
+        <div class="heatmap-legend-cell" style="background:#6ee7b7;"></div>
+        <div class="heatmap-legend-cell" style="background:#10b981;"></div>
+        <div class="heatmap-legend-cell" style="background:#047857;"></div>
+        <span>More</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

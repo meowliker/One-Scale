@@ -616,8 +616,10 @@ async function realGetPnLSummaryUncached(): Promise<PnLSummary> {
       fallbackFeeTotal += paymentFee;
     }
 
+    // Digital stores have zero COGS; physical uses stored percentage or 30% default
     const isDigital = pnlSettings?.productType === 'digital';
-    const cogs = isDigital ? 0 : revenue * 0.3;
+    const cogsRate = isDigital ? 0 : (pnlSettings?.cogsPercentage ?? 0.3);
+    const cogs = isDigital ? 0 : revenue * cogsRate;
 
     todayAcc.revenue += revenue;
     todayAcc.shipping += shippingCost;
@@ -683,6 +685,40 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
   const storeId = await getActiveStoreId();
   const tz = getStoreTimezone();
   const todayStr = todayInTimezone(tz);
+
+  // ── FAST PATH: read from pre-aggregated DB snapshots ──────────────────────
+  // Falls through to live API fetch if DB has no data yet
+  const _baseUrl = typeof window !== 'undefined'
+    ? window.location.origin
+    : (process.env.NEXT_PUBLIC_BASE_URL ?? '');
+
+  if (storeId && _baseUrl) {
+    try {
+      const _res = await fetch(
+        `${_baseUrl}/api/pnl/sync?storeId=${encodeURIComponent(storeId)}&days=31`
+      );
+      if (_res.ok) {
+        const _json = await _res.json() as {
+          data: PnLEntry[];
+          meta: { count: number; staleSec: number; isStale: boolean };
+        };
+        if (_json.data?.length > 0) {
+          if (_json.meta.isStale) {
+            // Trigger background resync, don't await
+            fetch(`${_baseUrl}/api/pnl/sync`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ storeId, daysBack: 3 }),
+            }).catch(() => {});
+          }
+          return _json.data;
+        }
+      }
+    } catch {
+      // DB unavailable — fall through to live API path below
+    }
+  }
+  // ── END FAST PATH ──────────────────────────────────────────────────────────
 
   const SHOPIFY_DAYS = 8;
   const dayDates: string[] = [];
@@ -843,8 +879,10 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
     const fullRefundAmount = dayRefunds?.fullRefundAmount || 0;
     const partialRefundAmount = dayRefunds?.partialRefundAmount || 0;
 
+    // Digital stores have zero COGS; physical uses stored percentage or 30% default
     const isDigital = pnlSettings?.productType === 'digital';
-    const cogs = isDigital ? 0 : revenue * 0.3;
+    const cogsRate = isDigital ? 0 : (pnlSettings?.cogsPercentage ?? 0.3);
+    const cogs = isDigital ? 0 : revenue * cogsRate;
     const netProfit = revenue - cogs - adSpend - shipping - fees - refunds;
     const margin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
 
@@ -891,22 +929,50 @@ async function mockGetProducts(): Promise<ProductCOGS[]> {
 
 async function realGetProductsUncached(): Promise<ProductCOGS[]> {
   const response = await apiClient<{
-    data: { id: number; title: string; variants: { sku: string; price: string; compareAtPrice: string | null }[] }[];
+    data: {
+      id: number;
+      title: string;
+      vendor: string;
+      productType: string;
+      status: string;
+      images: { src: string }[];
+      variants: {
+        sku: string;
+        price: string;
+        compareAtPrice: string | null;
+        requiresShipping: boolean;
+      }[];
+    }[];
   }>('/api/shopify/products');
 
   return response.data.map((product) => {
-    const variant = product.variants[0];
-    const sellingPrice = parseFloat(variant?.price || '0');
-    const costPerUnit = sellingPrice * 0.3;
-    const margin = sellingPrice > 0 ? ((sellingPrice - costPerUnit) / sellingPrice) * 100 : 0;
+    // requires_shipping lives on variants, not the product root
+    // A product is physical if ANY variant requires shipping
+    // Default to TRUE (physical) if variants missing or field absent
+    const requiresShipping: boolean =
+      Array.isArray(product.variants) && product.variants.length > 0
+        ? product.variants.some(
+            (v) => v.requiresShipping !== false
+          )
+        : true;
+
+    const firstVariant = product.variants?.[0];
+    const price = parseFloat(firstVariant?.price ?? '0') || 0;
+    // Digital products always have zero COGS
+    const cost = requiresShipping ? price * 0.3 : 0;
 
     return {
-      productId: String(product.id),
-      productName: product.title,
-      sku: variant?.sku || '',
-      costPerUnit,
-      sellingPrice,
-      margin,
+      id: String(product.id),
+      title: product.title,
+      image: product.images?.[0]?.src ?? null,
+      product_type: product.productType ?? null,
+      requires_shipping: requiresShipping,
+      vendor: product.vendor ?? null,
+      status: product.status ?? 'active',
+      variant_count: product.variants?.length ?? 1,
+      cost,
+      price,
+      currency: 'USD',
     };
   });
 }
