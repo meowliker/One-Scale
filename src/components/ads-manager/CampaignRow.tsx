@@ -39,6 +39,7 @@ export interface CampaignRowProps {
   /** Shopify-attributed ROAS for this campaign (Real ROAS) */
   shopifyRoas?: number;
   storeId?: string;
+  metaAccountId?: string;
   onDuplicateSuccess?: () => void;
 }
 
@@ -81,6 +82,7 @@ export function CampaignRow({
   flashType,
   shopifyRoas,
   storeId,
+  metaAccountId,
   onDuplicateSuccess,
 }: CampaignRowProps) {
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
@@ -184,7 +186,7 @@ export function CampaignRow({
           )}
           {/* Open in Meta Ads Manager */}
           <a
-            href={`https://adsmanager.facebook.com/adsmanager/manage/campaigns?filter_set=SEARCH_BY_CAMPAIGN_GROUP_ID-STRING%1EEQUAL%1E%22${campaign.id}%22`}
+            href={`https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=${metaAccountId?.replace('act_', '')}&filter_set=SEARCH_BY_CAMPAIGN_GROUP_ID-STRING%1EEQUAL%1E%22${campaign.id}%22`}
             target="_blank"
             rel="noopener noreferrer"
             className="shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-surface-hover text-text-dimmed hover:text-primary transition-all duration-150"
