@@ -1,6 +1,7 @@
 'use client';
 
-import { ChevronRight, ChevronDown, AlertTriangle, Lock } from 'lucide-react';
+import { useState } from 'react';
+import { ChevronRight, ChevronDown, AlertTriangle, Lock, ExternalLink, Copy } from 'lucide-react';
 import type { Campaign, EntityStatus } from '@/types/campaign';
 import type { MetricKey } from '@/types/metrics';
 import type { SparklineDataPoint } from '@/data/mockSparklineData';
@@ -14,6 +15,7 @@ import { InlineEdit } from '@/components/ui/InlineEdit';
 import { MetricCell } from './MetricCell';
 import { PerformanceSparkline } from './PerformanceSparkline';
 import { LatestActionsCell } from './LatestActionsCell';
+import { DuplicateCampaignModal } from './DuplicateCampaignModal';
 
 export interface CampaignRowProps {
   campaign: Campaign;
@@ -36,6 +38,8 @@ export interface CampaignRowProps {
   flashType?: 'success' | 'error';
   /** Shopify-attributed ROAS for this campaign (Real ROAS) */
   shopifyRoas?: number;
+  storeId?: string;
+  onDuplicateSuccess?: () => void;
 }
 
 const objectiveLabels: Record<string, { label: string; variant: 'success' | 'warning' | 'danger' | 'info' | 'default' }> = {
@@ -76,7 +80,10 @@ export function CampaignRow({
   isToggling = false,
   flashType,
   shopifyRoas,
+  storeId,
+  onDuplicateSuccess,
 }: CampaignRowProps) {
+  const [showDuplicateModal, setShowDuplicateModal] = useState(false);
   const isActive = campaign.status === 'ACTIVE';
   const isABO = !(campaign.dailyBudget > 0) && !(campaign.lifetimeBudget && campaign.lifetimeBudget > 0);
   const isLifetimeBudget = !isABO && campaign.lifetimeBudget && campaign.lifetimeBudget > 0;
@@ -165,6 +172,27 @@ export function CampaignRow({
               {issueCount} issue{issueCount > 1 ? 's' : ''}
             </button>
           )}
+          {/* Duplicate button */}
+          {storeId && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowDuplicateModal(true); }}
+              className="shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-surface-hover text-text-dimmed hover:text-primary transition-all duration-150"
+              title="Duplicate campaign"
+            >
+              <Copy className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {/* Open in Meta Ads Manager */}
+          <a
+            href={`https://adsmanager.facebook.com/adsmanager/manage/campaigns?filter_set=SEARCH_BY_CAMPAIGN_GROUP_ID-STRING%1EEQUAL%1E%22${campaign.id}%22`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-surface-hover text-text-dimmed hover:text-primary transition-all duration-150"
+            title="Open in Meta Ads Manager"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </a>
         </div>
       </td>
 
@@ -208,6 +236,17 @@ export function CampaignRow({
           shopifyRoas={key === 'roas' ? shopifyRoas : undefined}
         />
       ))}
+
+      {/* Duplicate Modal */}
+      {showDuplicateModal && storeId && (
+        <DuplicateCampaignModal
+          campaignId={campaign.id}
+          campaignName={campaign.name}
+          storeId={storeId}
+          onClose={() => setShowDuplicateModal(false)}
+          onSuccess={() => onDuplicateSuccess?.()}
+        />
+      )}
     </tr>
   );
 }

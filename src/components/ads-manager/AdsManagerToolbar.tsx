@@ -167,7 +167,13 @@ export function AdsManagerToolbar({
         {filterButtons.map((btn) => (
           <button
             key={btn.value}
-            onClick={() => onStatusFilterChange(btn.value)}
+            onClick={() => {
+              onStatusFilterChange(btn.value);
+              // Close error center when switching tabs
+              if (showErrorCenter && onToggleErrorCenter) {
+                onToggleErrorCenter();
+              }
+            }}
             className={cn(
               'px-3 py-1 text-[13px] font-medium rounded-md transition-all duration-200',
               statusFilter === btn.value

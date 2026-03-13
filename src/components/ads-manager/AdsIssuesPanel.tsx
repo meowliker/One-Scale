@@ -95,6 +95,7 @@ function extractIssues(campaigns: Campaign[]): AdIssue[] {
         campaignName: campaign.name,
         reason: 'Campaign has delivery/policy issues',
         details: campaignReview || campaignIssues || campaign.policyInfo?.effectiveStatus,
+        lastUpdatedAt: campaign.updatedTime,
         suggestion: 'Review campaign setup and destination compliance. Pause if budget is leaking.',
         actionLabel: campaign.status === 'ACTIVE' ? 'Pause Campaign' : 'Enable Campaign',
       });
@@ -125,6 +126,7 @@ function extractIssues(campaigns: Campaign[]): AdIssue[] {
           campaignName: campaign.name,
           reason: 'Ad set has delivery/policy issues',
           details: adSetReview || adSetIssues || adSet.policyInfo?.effectiveStatus,
+          lastUpdatedAt: adSet.updatedTime || campaign.updatedTime,
           suggestion: 'Review targeting/placements and associated ads. Pause ad set if needed.',
           actionLabel: adSet.status === 'ACTIVE' ? 'Pause Ad Set' : 'Enable Ad Set',
         });
@@ -145,6 +147,7 @@ function extractIssues(campaigns: Campaign[]): AdIssue[] {
           adName: ad.name,
           adSetName: adSet.name,
           campaignName: campaign.name,
+          lastUpdatedAt: adSet.updatedTime || campaign.updatedTime,
         };
 
         if (effective.includes('DISAPPROVED') || effective.includes('REJECTED')) {
@@ -235,7 +238,16 @@ export function AdsIssuesPanel({
 }: AdsIssuesPanelProps) {
   const [workingId, setWorkingId] = useState<string | null>(null);
   const [showOnlyActiveCampaigns, setShowOnlyActiveCampaigns] = useState(false);
-  const [showRecent12hOnly, setShowRecent12hOnly] = useState(true); // Default to showing last 12h
+  const [timeWindowHours, setTimeWindowHours] = useState<number | null>(12); // null = any time
+
+  const timeWindowOptions = [
+    { label: '6h', value: 6 },
+    { label: '12h', value: 12 },
+    { label: '24h', value: 24 },
+    { label: '48h', value: 48 },
+    { label: '7d', value: 168 },
+    { label: 'All', value: null },
+  ];
 
   const localIssues = useMemo(() => extractIssues(campaigns), [campaigns]);
   const issues = useMemo(() => {
@@ -246,14 +258,16 @@ export function AdsIssuesPanel({
 
   const visibleIssues = useMemo(() => {
     const now = Date.now();
-    const twelveHoursMs = 12 * 60 * 60 * 1000;
     return issues.filter((i) => {
       if (showOnlyActiveCampaigns && i.campaignStatus !== 'ACTIVE') return false;
-      if (!showRecent12hOnly) return true;
+      if (timeWindowHours === null) return true; // Show all
+      const windowMs = timeWindowHours * 60 * 60 * 1000;
       const issueTs = i.lastUpdatedAt ? Date.parse(i.lastUpdatedAt) : NaN;
-      return Number.isFinite(issueTs) && now - issueTs <= twelveHoursMs;
+      // If no timestamp available, include the issue (it's a current issue)
+      if (!Number.isFinite(issueTs)) return true;
+      return now - issueTs <= windowMs;
     });
-  }, [issues, showOnlyActiveCampaigns, showRecent12hOnly]);
+  }, [issues, showOnlyActiveCampaigns, timeWindowHours]);
 
   useEffect(() => {
     if (!focusedIssueId) return;
@@ -263,12 +277,15 @@ export function AdsIssuesPanel({
     if (target.lastUpdatedAt) {
       const ts = Date.parse(target.lastUpdatedAt);
       const now = Date.now();
-      const twelveHoursMs = 12 * 60 * 60 * 1000;
-      if (!Number.isFinite(ts) || now - ts > twelveHoursMs) setShowRecent12hOnly(false);
+      // If issue is older than current window, expand to show all
+      if (timeWindowHours !== null) {
+        const windowMs = timeWindowHours * 60 * 60 * 1000;
+        if (!Number.isFinite(ts) || now - ts > windowMs) setTimeWindowHours(null);
+      }
     } else {
-      setShowRecent12hOnly(false);
+      setTimeWindowHours(null);
     }
-  }, [focusedIssueId, issues]);
+  }, [focusedIssueId, issues, timeWindowHours]);
 
   useEffect(() => {
     if (!focusedIssueId) return;
@@ -347,17 +364,22 @@ export function AdsIssuesPanel({
           >
             {showOnlyActiveCampaigns ? 'Showing: Active Campaigns' : 'Showing: All Campaigns'}
           </button>
-          <button
-            onClick={() => setShowRecent12hOnly((v) => !v)}
-            className={cn(
-              'rounded-md px-2 py-1 text-xs font-medium transition-colors',
-              showRecent12hOnly
-                ? 'bg-amber-500/20 text-amber-300'
-                : 'bg-surface text-text-secondary hover:bg-surface-hover'
-            )}
-          >
-            {showRecent12hOnly ? 'Window: Last 12h' : 'Window: Any time'}
-          </button>
+          <div className="flex items-center gap-1 rounded-md bg-surface p-0.5">
+            {timeWindowOptions.map((opt) => (
+              <button
+                key={opt.label}
+                onClick={() => setTimeWindowHours(opt.value)}
+                className={cn(
+                  'rounded px-2 py-1 text-xs font-medium transition-colors',
+                  timeWindowHours === opt.value
+                    ? 'bg-amber-500/20 text-amber-300'
+                    : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
           <span className="rounded-full bg-blue-500/15 px-2 py-0.5 text-xs font-medium text-blue-300">
             {totals.recent12h} in last 12h
           </span>

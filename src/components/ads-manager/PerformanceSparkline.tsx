@@ -53,14 +53,9 @@ export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: 
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cellRef = useRef<HTMLTableCellElement>(null);
 
-  const handleMouseEnter = useCallback(() => {
+  const handleClick = useCallback(() => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => setShowTooltip(true), 200);
-  }, []);
-
-  const handleMouseLeave = useCallback(() => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => setShowTooltip(false), 150);
+    setShowTooltip((prev) => !prev); // Toggle on click
   }, []);
 
   const handleClose = useCallback(() => {
@@ -95,11 +90,13 @@ export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: 
       ref={cellRef}
       className="relative whitespace-nowrap px-3 py-2"
       style={{ width: 130, minWidth: 130, maxWidth: 130 }}
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
     >
       {/* Mini inline sparkline */}
-      <div className="flex items-center justify-center" style={{ width: 100, height: 28 }}>
+      <div 
+        className="flex items-center justify-center cursor-pointer"
+        style={{ width: 100, height: 28 }}
+        onClick={handleClick}
+      >
         <AreaChart
           width={100}
           height={28}
@@ -125,13 +122,11 @@ export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: 
         </AreaChart>
       </div>
 
-      {/* Hover tooltip (rendered via portal to avoid overflow clipping) */}
+      {/* Click tooltip (rendered via portal to avoid overflow clipping) */}
       <PortalTooltip anchorRef={cellRef} visible={showTooltip} onClose={handleClose}>
         <div
           className="rounded-xl border border-[rgba(0,0,0,0.08)] bg-white shadow-lg"
           style={{ width: 280, padding: 16 }}
-          onMouseEnter={handleMouseEnter}
-          onMouseLeave={handleMouseLeave}
         >
           {/* Title + close button */}
           <div className="mb-2 flex items-center justify-between">

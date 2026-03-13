@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 
-import { ChevronRight, ChevronDown } from 'lucide-react';
+import { ChevronRight, ChevronDown, Copy } from 'lucide-react';
 import type { AdSet, EntityStatus } from '@/types/campaign';
 import type { MetricKey } from '@/types/metrics';
 import type { SparklineDataPoint } from '@/data/mockSparklineData';
@@ -16,6 +16,8 @@ import { InlineEdit } from '@/components/ui/InlineEdit';
 import { MetricCell } from './MetricCell';
 import { PerformanceSparkline } from './PerformanceSparkline';
 import { LatestActionsCell } from './LatestActionsCell';
+import { DuplicateAdSetModal } from './DuplicateAdSetModal';
+import type { Campaign } from '@/types/campaign';
 
 export interface AdSetRowProps {
   adSet: AdSet;
@@ -39,6 +41,12 @@ export interface AdSetRowProps {
   nameColWidth?: number;
   isToggling?: boolean;
   flashType?: 'success' | 'error';
+  storeId?: string;
+  accountId?: string;
+  campaignId?: string;
+  campaignName?: string;
+  campaigns?: Campaign[];
+  onDuplicateSuccess?: () => void;
 }
 
 function formatTargetingSummary(adSet: AdSet): string {
@@ -86,9 +94,16 @@ export function AdSetRow({
   nameColWidth,
   isToggling = false,
   flashType,
+  storeId,
+  accountId,
+  campaignId,
+  campaignName,
+  campaigns = [],
+  onDuplicateSuccess,
 }: AdSetRowProps) {
   const isActive = adSet.status === 'ACTIVE';
   const [showIssueDetails, setShowIssueDetails] = useState(false);
+  const [showDuplicateModal, setShowDuplicateModal] = useState(false);
   const primaryIssue = useMemo(() => {
     if (issues.length === 0) return null;
     return [...issues].sort((a, b) => (a.severity === b.severity ? 0 : a.severity === 'critical' ? -1 : 1))[0];
@@ -155,19 +170,23 @@ export function AdSetRow({
             )}
           </button>
           <div className="flex flex-col min-w-0 flex-1">
-            <div className="relative group/tooltip min-w-0">
+            <div className="min-w-0 flex items-center gap-1.5">
               <button
                 onClick={onToggleExpand}
-                className="block w-full truncate text-[13px] font-semibold text-text-primary hover:text-primary-light transition-colors text-left"
-                title={adSet.name || `Ad Set ${adSet.id}`}
+                className="block truncate text-[13px] font-semibold text-text-primary hover:text-primary-light transition-colors text-left"
               >
                 {adSet.name || `Ad Set ${adSet.id}`}
               </button>
-              <div className="absolute left-0 top-full mt-1 z-50 pointer-events-none opacity-0 group-hover/tooltip:opacity-100 translate-y-1 group-hover/tooltip:translate-y-0 transition-all duration-150 ease-out">
-                <div className="onescale-tooltip whitespace-nowrap max-w-xs">
-                  {adSet.name || adSet.id}
-                </div>
-              </div>
+              {/* Duplicate button */}
+              {storeId && campaignId && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); setShowDuplicateModal(true); }}
+                  className="shrink-0 opacity-0 group-hover:opacity-100 p-1.5 rounded hover:bg-surface-hover text-text-dimmed hover:text-primary transition-all duration-150"
+                  title="Duplicate ad set"
+                >
+                  <Copy className="h-4 w-4" />
+                </button>
+              )}
             </div>
             <span className="text-[11px] text-text-dimmed truncate">
               {formatTargetingSummary(adSet)}
@@ -274,6 +293,21 @@ export function AdSetRow({
           </div>
         </td>
       </tr>
+    )}
+
+    {/* Duplicate Modal */}
+    {showDuplicateModal && storeId && campaignId && (
+      <DuplicateAdSetModal
+        adSetId={adSet.id}
+        adSetName={adSet.name || `Ad Set ${adSet.id}`}
+        campaignId={campaignId}
+        campaignName={campaignName || 'Campaign'}
+        storeId={storeId}
+        accountId={accountId || ''}
+        campaigns={campaigns}
+        onClose={() => setShowDuplicateModal(false)}
+        onSuccess={() => onDuplicateSuccess?.()}
+      />
     )}
     </>
   );

@@ -3,6 +3,7 @@ import { isSupabasePersistenceEnabled, listPersistentStoreAdAccounts } from '@/a
 import {
   getPersistentMetaEndpointSnapshot,
   getLatestPersistentMetaEndpointSnapshot,
+  getBatchPersistentMetaEndpointSnapshots,
 } from '@/app/api/lib/supabase-tracking';
 import { getMetaEndpointSnapshot, getLatestMetaEndpointSnapshot, getStoreAdAccounts } from '@/app/api/lib/db';
 import type { Campaign, AdSet, Ad } from '@/types/campaign';
@@ -69,40 +70,65 @@ export async function GET(request: NextRequest) {
   const campaigns = campaignsSnapshot?.data || [];
   let snapshotAt = campaignsSnapshot?.updatedAt || null;
 
-  // For each ACTIVE campaign, load ad sets from cache
-  const enrichedCampaigns = await Promise.all(
-    campaigns.map(async (campaign) => {
+  // Batch load all ad sets and ads in parallel (much faster than sequential)
+  if (useSupabase) {
+    // Load all ad sets and ads snapshots in 2 parallel batch queries
+    const [allAdSetsMap, allAdsMap] = await Promise.all([
+      getBatchPersistentMetaEndpointSnapshots<AdSet[]>(storeId, 'adsets', 'latest'),
+      getBatchPersistentMetaEndpointSnapshots<Ad[]>(storeId, 'ads', 'latest'),
+    ]);
+
+    const enrichedCampaigns = campaigns.map((campaign) => {
       if (campaign.status !== 'ACTIVE') {
         return { ...campaign, adSets: [] };
       }
 
-      // Get ad sets from cache
-      const adSetsSnapshot = useSupabase
-        ? await getPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaign.id, 'latest')
-        : getMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaign.id, 'latest');
-
+      const adSetsSnapshot = allAdSetsMap.get(campaign.id);
       const adSets = adSetsSnapshot?.data || [];
 
-      // For each ad set, load ads from cache
-      const enrichedAdSets = await Promise.all(
-        adSets.map(async (adSet) => {
-          const adsSnapshot = useSupabase
-            ? await getPersistentMetaEndpointSnapshot<Ad[]>(storeId, 'ads', adSet.id, 'latest')
-            : getMetaEndpointSnapshot<Ad[]>(storeId, 'ads', adSet.id, 'latest');
-
-          return {
-            ...adSet,
-            ads: adsSnapshot?.data || [],
-          };
-        })
-      );
+      const enrichedAdSets = adSets.map((adSet) => {
+        const adsSnapshot = allAdsMap.get(adSet.id);
+        return {
+          ...adSet,
+          ads: adsSnapshot?.data || [],
+        };
+      });
 
       return {
         ...campaign,
         adSets: enrichedAdSets,
       };
-    })
-  );
+    });
+
+    return NextResponse.json({
+      campaigns: enrichedCampaigns,
+      cached: true,
+      snapshotAt,
+    });
+  }
+
+  // SQLite fallback - sequential loading (local dev)
+  const enrichedCampaigns = campaigns.map((campaign) => {
+    if (campaign.status !== 'ACTIVE') {
+      return { ...campaign, adSets: [] };
+    }
+
+    const adSetsSnapshot = getMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaign.id, 'latest');
+    const adSets = adSetsSnapshot?.data || [];
+
+    const enrichedAdSets = adSets.map((adSet) => {
+      const adsSnapshot = getMetaEndpointSnapshot<Ad[]>(storeId, 'ads', adSet.id, 'latest');
+      return {
+        ...adSet,
+        ads: adsSnapshot?.data || [],
+      };
+    });
+
+    return {
+      ...campaign,
+      adSets: enrichedAdSets,
+    };
+  });
 
   return NextResponse.json({
     campaigns: enrichedCampaigns,

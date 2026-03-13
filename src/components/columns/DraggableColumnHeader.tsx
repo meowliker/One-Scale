@@ -78,23 +78,23 @@ export function DraggableColumnHeader({ metricKey, sortKey, sortDirection, onSor
       ref={(node) => { setNodeRef(node); thRef.current = node; }}
       style={{ ...style, width: columnWidth, minWidth: columnWidth, maxWidth: columnWidth }}
       className={cn(
-        'relative whitespace-nowrap px-3 py-2 text-center text-[11px] font-bold uppercase tracking-[0.05em] text-text-secondary select-none transition-colors duration-150 hover:text-text-primary',
-        isDragging && 'z-50 bg-[#e8f0fe] opacity-90 shadow-md rounded-lg'
+        'relative px-2 py-2 text-center text-[11px] font-bold uppercase tracking-[0.05em] text-[#6b7280] dark:text-[#9ca3af] select-none transition-colors duration-150 hover:text-text-primary bg-[var(--apple-table-header-bg)]',
+        isDragging && 'z-50 opacity-90 shadow-md'
       )}
     >
-      <div className="flex items-center justify-center gap-1.5">
+      <div className="flex items-center justify-center gap-1">
         <button
           onClick={() => onSort?.(metricKey)}
-          className="group/sort flex items-center gap-1 cursor-pointer hover:text-[#0071e3] transition-colors duration-150"
+          className="group/sort flex items-center gap-0.5 cursor-pointer hover:text-[#374151] dark:hover:text-[#e5e7eb] transition-colors duration-150"
           title={`Sort by ${label}`}
         >
-          <span className="text-[11px]">{label}</span>
+          <span className="text-[10px] leading-tight text-center break-words">{label}</span>
           <SortIndicator active={sortKey === metricKey} direction={sortKey === metricKey ? (sortDirection ?? null) : null} />
         </button>
         <button
           {...attributes}
           {...listeners}
-          className="cursor-grab active:cursor-grabbing text-[#aeaeb2] hover:text-[#86868b] transition-colors duration-150"
+          className="cursor-grab active:cursor-grabbing text-[#aeaeb2] hover:text-[#86868b] transition-colors duration-150 shrink-0"
           title={`Drag to reorder ${label}`}
         >
           <GripVertical className="h-3 w-3" />

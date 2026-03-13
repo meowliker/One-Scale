@@ -855,7 +855,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       console.log('[Activities] Fetching activities...');
       apiClient<{ data: Record<string, EntityAction[]> }>(
         '/api/meta/activities',
-        { params: { since: '30', limit: '500' }, timeoutMs: 15000, maxRetries: 0 }
+        { params: { storeId: activeStoreId, since: '30', limit: '500' }, timeoutMs: 15000, maxRetries: 0 }
       )
         .then((res) => {
           if (cancelled) return;
@@ -881,12 +881,12 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   // Phase 2: On-demand full history load (90 days) — triggered by user clicking
   // "Load full history" button in the column header.
   const loadFullActivityHistory = useCallback(() => {
-    if (activitiesFullyLoaded || activitiesFullLoading) return;
+    if (activitiesFullyLoaded || activitiesFullLoading || !activeStoreId) return;
     setActivitiesFullLoading(true);
 
     apiClient<{ data: Record<string, EntityAction[]> }>(
       '/api/meta/activities',
-      { params: { since: '90', limit: '500' } }
+      { params: { storeId: activeStoreId, since: '90', limit: '500' } }
     ).then((res) => {
       setActivityData((prev) => ({ ...prev, ...res.data }));
       setActivitiesFullyLoaded(true);
@@ -895,7 +895,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     }).finally(() => {
       setActivitiesFullLoading(false);
     });
-  }, [activitiesFullyLoaded, activitiesFullLoading]);
+  }, [activeStoreId, activitiesFullyLoaded, activitiesFullLoading]);
 
   const {
     selectedIds,
@@ -1268,7 +1268,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     try {
       const activitiesRes = await apiClient<{ data: Record<string, EntityAction[]> }>(
         '/api/meta/activities',
-        { params: { since: '30', limit: '500' }, timeoutMs: 15000, maxRetries: 0 }
+        { params: { storeId: activeStoreId, since: '30', limit: '500' }, timeoutMs: 15000, maxRetries: 0 }
       );
       setActivityData((prev) => ({ ...prev, ...(activitiesRes.data || {}) }));
       if (includeIssues) {
@@ -1289,15 +1289,19 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     }
   }, [activeStoreId]);
 
-  const preloadActiveHierarchy = useCallback(async (force = false) => {
+  const preloadActiveHierarchy = useCallback(async (force = false, showSyncingUI = false) => {
     if (!activeStoreId) return;
     if (hierarchySyncInFlightRef.current) return;
 
     hierarchySyncInFlightRef.current = true;
     preloadingCoreRef.current = true;
     setCorePreloadDone(false);
-    setSyncStatus((prev) => ({ ...prev, core: 'loading' }));
-    setCoreProgress({ loaded: 0, total: 3 });
+    
+    // Only show syncing UI if explicitly requested (e.g., manual refresh)
+    if (showSyncingUI) {
+      setSyncStatus((prev) => ({ ...prev, core: 'loading' }));
+      setCoreProgress({ loaded: 0, total: 3 });
+    }
 
     try {
       // Try to load full hierarchy from cache in a single request (instant)
@@ -1306,6 +1310,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         cached: boolean;
         snapshotAt: string | null;
       }>('/api/meta/hierarchy', {
+        params: { storeId: activeStoreId },
         timeoutMs: 10_000,
         maxRetries: 1,
       });
@@ -1313,6 +1318,11 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       if (hierarchyRes.campaigns && hierarchyRes.campaigns.length > 0) {
         // Full hierarchy loaded from cache - update state instantly
         setCampaigns(hierarchyRes.campaigns);
+        
+        // Update last synced time from cache snapshot
+        if (hierarchyRes.snapshotAt) {
+          setLastSyncedAt(hierarchyRes.snapshotAt);
+        }
         
         // Mark all campaigns and ad sets as fetched
         for (const campaign of hierarchyRes.campaigns) {
@@ -1326,7 +1336,9 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
           }
         }
 
-        setCoreProgress({ loaded: 3, total: 3 });
+        if (showSyncingUI) {
+          setCoreProgress({ loaded: 3, total: 3 });
+        }
         setCorePreloadDone(true);
         setSyncStatus((prev) => ({ ...prev, core: 'done' }));
         actionsLoadedRef.current = true;
@@ -1338,6 +1350,11 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     }
 
     // Fallback: load hierarchy with individual API calls
+    // Only show syncing UI for fallback if explicitly requested
+    if (showSyncingUI) {
+      setSyncStatus((prev) => ({ ...prev, core: 'loading' }));
+    }
+    
     const activeCampaigns = campaigns.filter((c) => c.status === 'ACTIVE');
     if (activeCampaigns.length === 0) {
       setCorePreloadDone(true);
@@ -1348,12 +1365,16 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     }
 
     try {
-      // Step 1/3: campaign list already loaded.
-      setCoreProgress({ loaded: 1, total: 3 });
+      if (showSyncingUI) {
+        setCoreProgress({ loaded: 1, total: 3 });
+      }
 
       const campaignIds = activeCampaigns.map((c) => c.id);
       const adSetMap = await batchLoadAdSets(campaignIds, force);
-      setCoreProgress({ loaded: 2, total: 3 });
+      
+      if (showSyncingUI) {
+        setCoreProgress({ loaded: 2, total: 3 });
+      }
 
       // Step 3/3: preload ads for active campaigns' ad sets with controlled concurrency.
       const adSetIds = Object.values(adSetMap).flat().map((adSet) => adSet.id);
@@ -1369,7 +1390,9 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       });
       await Promise.all(workers);
 
-      setCoreProgress({ loaded: 3, total: 3 });
+      if (showSyncingUI) {
+        setCoreProgress({ loaded: 3, total: 3 });
+      }
       setCorePreloadDone(true);
       setSyncStatus((prev) => ({ ...prev, core: 'done' }));
 
@@ -1402,8 +1425,8 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     }).catch(() => {});
   }, [activeStoreId, showErrorCenter]);
 
-  // Keep hierarchy fresh for newly created ad sets/ads every 5 minutes.
-  // Queue backend refresh, then hydrate from cache snapshots.
+  // Keep hierarchy fresh for newly created ad sets/ads every 10 minutes.
+  // Queue backend refresh silently, then hydrate from cache snapshots without showing syncing UI.
   useEffect(() => {
     if (!activeStoreId || showErrorCenter) return;
     const id = window.setInterval(() => {
@@ -1414,10 +1437,11 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         timeoutMs: 20_000,
         maxRetries: 0,
       }).catch(() => {});
+      // After backend sync completes, silently reload from cache (no syncing UI)
       window.setTimeout(() => {
-        void preloadActiveHierarchy(false);
+        void preloadActiveHierarchy(false, false);
       }, 1200);
-    }, 5 * 60 * 1000);
+    }, 10 * 60 * 1000); // 10 minutes
     return () => window.clearInterval(id);
   }, [activeStoreId, preloadActiveHierarchy, showErrorCenter]);
 
@@ -2291,7 +2315,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
           }))
         );
       }
-      await preloadActiveHierarchy(false);
+      await preloadActiveHierarchy(true, true);
       await refreshRecentOperationalData({ includeIssues: true });
       await fetchAttributionCoverage();
       toast.success('Ads Manager refreshed');
@@ -2560,6 +2584,9 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                           ? Math.round((shopifyRevMap[campaign.id].shopifyRevenue / campaign.metrics.spend) * 100) / 100
                           : undefined}
                         activeEntityFilters={activeEntityFilters}
+                        storeId={activeStoreId}
+                        allCampaigns={sortedCampaigns}
+                        onDuplicateSuccess={() => preloadActiveHierarchy(true, false)}
                       />
                     </tbody>
                   );
@@ -2679,6 +2706,9 @@ interface CampaignGroupProps {
   rowFlash: Record<string, 'success' | 'error'>;
   shopifyRoas?: number;
   activeEntityFilters: ActiveEntityFilters;
+  storeId: string;
+  allCampaigns: Campaign[];
+  onDuplicateSuccess: () => void;
 }
 
 function CampaignGroup({
@@ -2723,6 +2753,9 @@ function CampaignGroup({
   rowFlash,
   shopifyRoas,
   activeEntityFilters,
+  storeId,
+  allCampaigns,
+  onDuplicateSuccess,
 }: CampaignGroupProps) {
   // Defensive: always ensure adSets is an array, then filter and sort
   const adSetsRaw = campaign.adSets || [];
@@ -2841,6 +2874,8 @@ function CampaignGroup({
         isToggling={togglingEntities.has(campaign.id)}
         flashType={rowFlash[campaign.id]}
         shopifyRoas={shopifyRoas}
+        storeId={storeId}
+        onDuplicateSuccess={onDuplicateSuccess}
       />
       {isExpanded && loadingAdSets && (
         <tr className="border-b border-border bg-surface">
@@ -2916,6 +2951,12 @@ function CampaignGroup({
               togglingEntities={togglingEntities}
               rowFlash={rowFlash}
               activeEntityFilters={activeEntityFilters}
+              storeId={storeId}
+              accountId=""
+              campaignId={campaign.id}
+              campaignName={campaign.name}
+              allCampaigns={allCampaigns}
+              onDuplicateSuccess={onDuplicateSuccess}
             />
           );
         })}
@@ -2957,6 +2998,12 @@ interface AdSetGroupProps {
   togglingEntities: Set<string>;
   rowFlash: Record<string, 'success' | 'error'>;
   activeEntityFilters: ActiveEntityFilters;
+  storeId: string;
+  accountId: string;
+  campaignId: string;
+  campaignName: string;
+  allCampaigns: Campaign[];
+  onDuplicateSuccess: () => void;
 }
 
 function AdSetGroup({
@@ -2991,6 +3038,12 @@ function AdSetGroup({
   togglingEntities,
   rowFlash,
   activeEntityFilters,
+  storeId,
+  accountId,
+  campaignId,
+  campaignName,
+  allCampaigns,
+  onDuplicateSuccess,
 }: AdSetGroupProps) {
   // Defensive: always ensure ads is an array, then filter and sort
   const adsRaw = adSet.ads || [];
@@ -3028,6 +3081,12 @@ function AdSetGroup({
         nameColWidth={nameColWidth}
         isToggling={togglingEntities.has(adSet.id)}
         flashType={rowFlash[adSet.id]}
+        storeId={storeId}
+        accountId={accountId}
+        campaignId={campaignId}
+        campaignName={campaignName}
+        campaigns={allCampaigns}
+        onDuplicateSuccess={onDuplicateSuccess}
       />
       {isExpanded && loadingAds && (
         <tr className="border-b border-border bg-surface">
@@ -3086,6 +3145,14 @@ function AdSetGroup({
             nameColWidth={nameColWidth}
             isToggling={togglingEntities.has(ad.id)}
             flashType={rowFlash[ad.id]}
+            storeId={storeId}
+            accountId={accountId}
+            adSetId={adSet.id}
+            adSetName={adSet.name}
+            campaignId={campaignId}
+            campaignName={campaignName}
+            campaigns={allCampaigns}
+            onDuplicateSuccess={onDuplicateSuccess}
           />
         ))}
     </>
