@@ -204,20 +204,21 @@ export function IntegrationsClient() {
     if (activeStoreId) {
       try {
         const res = await fetch(`/api/integrations/clickup/tasks?storeId=${encodeURIComponent(activeStoreId)}`);
-        const data = await res.json() as { tasks?: Array<{ id: string; name: string; status: string; taskId: string }> };
-        if (data.tasks) {
-          // Map to ClickUpTask format for display
-          setClickUpTasks(data.tasks.map((t) => ({
-            id: t.id,
-            name: t.name,
-            status: 'open' as const,
-            assignee: '',
-            dueDate: '',
-            priority: 'normal' as const,
-            creativeType: 'video' as const,
-            description: '',
-            tags: [],
-          })));
+        if (res.ok) {
+          const data = await res.json() as { tasks?: Array<{ id: string; name: string; format: 'video' | 'image' | 'carousel'; notes: string }> };
+          if (data.tasks) {
+            setClickUpTasks(data.tasks.map((t) => ({
+              id: t.id,
+              name: t.name,
+              status: 'open' as const,
+              assignee: '',
+              dueDate: '',
+              priority: 'normal' as const,
+              creativeType: (t.format || 'video') as 'video' | 'image' | 'carousel',
+              description: t.notes || '',
+              tags: [],
+            })));
+          }
         }
       } catch {
         // non-fatal
@@ -242,7 +243,7 @@ export function IntegrationsClient() {
         setSlackChannels(channels);
         setSlackRules(rules);
 
-        // Check real ClickUp connection status
+        // Check real ClickUp connection status and load real tasks if connected
         if (activeStoreId) {
           const statusRes = await fetch(`/api/integrations/clickup/connect?storeId=${encodeURIComponent(activeStoreId)}`);
           if (statusRes.ok) {
@@ -253,6 +254,24 @@ export function IntegrationsClient() {
                   intg.platform === 'clickup' ? { ...intg, status: 'connected' as const } : intg
                 )
               );
+              // Fetch real tasks from ClickUp
+              const tasksRes = await fetch(`/api/integrations/clickup/tasks?storeId=${encodeURIComponent(activeStoreId)}`);
+              if (tasksRes.ok) {
+                const tasksData = await tasksRes.json() as { tasks?: Array<{ id: string; name: string; format: 'video' | 'image' | 'carousel'; notes: string }> };
+                if (tasksData.tasks) {
+                  setClickUpTasks(tasksData.tasks.map((t) => ({
+                    id: t.id,
+                    name: t.name,
+                    status: 'open' as const,
+                    assignee: '',
+                    dueDate: '',
+                    priority: 'normal' as const,
+                    creativeType: (t.format || 'video') as 'video' | 'image' | 'carousel',
+                    description: t.notes || '',
+                    tags: [],
+                  })));
+                }
+              }
             }
           }
         }

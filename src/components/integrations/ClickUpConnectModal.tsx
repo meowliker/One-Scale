@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { X, CheckSquare, Loader2, ExternalLink, ChevronDown, Check } from 'lucide-react';
+import { X, CheckSquare, Loader2, ExternalLink, Check, ChevronRight, Folder, List } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface Workspace {
@@ -9,11 +9,22 @@ interface Workspace {
   name: string;
 }
 
-interface ClickUpList {
+interface TreeItem {
+  type: 'space' | 'folder' | 'list';
   id: string;
   name: string;
-  taskCount: number | null;
+  taskCount?: number | null;
+  spaceName?: string;
+  folderId?: string;
+  folderName?: string;
+  children?: TreeItem[];
+}
+
+interface SelectedList {
+  id: string;
+  name: string;
   spaceName: string;
+  folderName?: string;
 }
 
 interface Props {
@@ -24,16 +35,137 @@ interface Props {
 
 type Step = 'token' | 'workspace' | 'list' | 'status';
 
+// ── Tree node renderer ────────────────────────────────────────────────────────
+function TreeNode({
+  item,
+  depth = 0,
+  onSelectList,
+  selectedId,
+  expandedFolders,
+  toggleFolder,
+}: {
+  item: TreeItem;
+  depth?: number;
+  onSelectList: (list: SelectedList) => void;
+  selectedId: string;
+  expandedFolders: Set<string>;
+  toggleFolder: (id: string) => void;
+}) {
+  if (item.type === 'space') {
+    return (
+      <div>
+        <div className="flex items-center gap-1.5 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
+          <span>{item.name}</span>
+        </div>
+        <div>
+          {(item.children || []).map((child) => (
+            <TreeNode
+              key={child.id}
+              item={child}
+              depth={depth + 1}
+              onSelectList={onSelectList}
+              selectedId={selectedId}
+              expandedFolders={expandedFolders}
+              toggleFolder={toggleFolder}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (item.type === 'folder') {
+    const isExpanded = expandedFolders.has(item.id);
+    const hasLists = (item.children || []).length > 0;
+    return (
+      <div>
+        <button
+          onClick={() => toggleFolder(item.id)}
+          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-surface-hover transition-colors"
+          style={{ paddingLeft: `${depth * 12 + 8}px` }}
+        >
+          <ChevronRight
+            className={cn('h-3.5 w-3.5 text-text-muted shrink-0 transition-transform', isExpanded && 'rotate-90')}
+          />
+          <Folder className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+          <span className="flex-1 text-left font-medium text-text-primary truncate">{item.name}</span>
+          {hasLists && (
+            <span className="text-[10px] text-text-muted shrink-0">{item.children!.length} lists</span>
+          )}
+        </button>
+        {isExpanded && (
+          <div>
+            {(item.children || []).map((list) => (
+              <TreeNode
+                key={list.id}
+                item={list}
+                depth={depth + 1}
+                onSelectList={onSelectList}
+                selectedId={selectedId}
+                expandedFolders={expandedFolders}
+                toggleFolder={toggleFolder}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // List item
+  const isSelected = item.id === selectedId;
+  return (
+    <button
+      onClick={() =>
+        onSelectList({
+          id: item.id,
+          name: item.name,
+          spaceName: item.spaceName || '',
+          folderName: item.folderName,
+        })
+      }
+      className={cn(
+        'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
+        isSelected
+          ? 'bg-primary/10 text-primary'
+          : 'hover:bg-surface-hover text-text-secondary hover:text-text-primary'
+      )}
+      style={{ paddingLeft: `${depth * 12 + 8}px` }}
+    >
+      {isSelected ? (
+        <Check className="h-3.5 w-3.5 shrink-0 text-primary" />
+      ) : (
+        <List className="h-3.5 w-3.5 shrink-0 text-text-muted" />
+      )}
+      <span className="flex-1 text-left truncate">{item.name}</span>
+      {item.taskCount != null && (
+        <span className="text-[10px] text-text-muted shrink-0">{item.taskCount}</span>
+      )}
+    </button>
+  );
+}
+
+// ── Main modal ────────────────────────────────────────────────────────────────
 export function ClickUpConnectModal({ storeId, onSuccess, onClose }: Props) {
   const [step, setStep] = useState<Step>('token');
   const [apiToken, setApiToken] = useState('');
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(null);
-  const [lists, setLists] = useState<ClickUpList[]>([]);
-  const [selectedList, setSelectedList] = useState<ClickUpList | null>(null);
+  const [tree, setTree] = useState<TreeItem[]>([]);
+  const [selectedList, setSelectedList] = useState<SelectedList | null>(null);
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const [readyStatus, setReadyStatus] = useState('ready to launch');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  const toggleFolder = (id: string) => {
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const handleVerifyToken = async () => {
     if (!apiToken.trim()) { setError('Please enter your API token'); return; }
@@ -47,8 +179,9 @@ export function ClickUpConnectModal({ storeId, onSuccess, onClose }: Props) {
       if (!res.ok || data.error) throw new Error(data.error || 'Failed to connect');
       setWorkspaces(data.workspaces || []);
       if (data.workspaces?.length === 1) {
-        setSelectedWorkspace(data.workspaces[0]);
-        await fetchLists(data.workspaces[0].id);
+        const ws = data.workspaces[0];
+        setSelectedWorkspace(ws);
+        await fetchTree(ws.id);
         setStep('list');
       } else {
         setStep('workspace');
@@ -60,16 +193,24 @@ export function ClickUpConnectModal({ storeId, onSuccess, onClose }: Props) {
     }
   };
 
-  const fetchLists = async (workspaceId: string) => {
+  const fetchTree = async (workspaceId: string) => {
     setLoading(true);
     setError('');
     try {
       const res = await fetch(
         `/api/integrations/clickup/lists?apiToken=${encodeURIComponent(apiToken.trim())}&workspaceId=${workspaceId}`
       );
-      const data = await res.json() as { lists?: ClickUpList[]; error?: string };
+      const data = await res.json() as { tree?: TreeItem[]; error?: string };
       if (!res.ok || data.error) throw new Error(data.error || 'Failed to fetch lists');
-      setLists(data.lists || []);
+      setTree(data.tree || []);
+      // Auto-expand first folder if there's only one space with one folder
+      const spaceItems = data.tree || [];
+      if (spaceItems.length === 1 && spaceItems[0].children?.length) {
+        const firstChild = spaceItems[0].children[0];
+        if (firstChild.type === 'folder') {
+          setExpandedFolders(new Set([firstChild.id]));
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch lists');
     } finally {
@@ -79,13 +220,8 @@ export function ClickUpConnectModal({ storeId, onSuccess, onClose }: Props) {
 
   const handleSelectWorkspace = async (ws: Workspace) => {
     setSelectedWorkspace(ws);
-    await fetchLists(ws.id);
+    await fetchTree(ws.id);
     setStep('list');
-  };
-
-  const handleSelectList = (list: ClickUpList) => {
-    setSelectedList(list);
-    setStep('status');
   };
 
   const handleSave = async () => {
@@ -116,6 +252,9 @@ export function ClickUpConnectModal({ storeId, onSuccess, onClose }: Props) {
     }
   };
 
+  const steps: Step[] = ['token', 'workspace', 'list', 'status'];
+  const stepIdx = steps.indexOf(step);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
@@ -132,7 +271,7 @@ export function ClickUpConnectModal({ storeId, onSuccess, onClose }: Props) {
                 {step === 'token' && 'Enter your personal API token'}
                 {step === 'workspace' && 'Select your workspace'}
                 {step === 'list' && 'Choose the task list'}
-                {step === 'status' && 'Configure status name'}
+                {step === 'status' && 'Configure ready status'}
               </p>
             </div>
           </div>
@@ -144,14 +283,14 @@ export function ClickUpConnectModal({ storeId, onSuccess, onClose }: Props) {
           </button>
         </div>
 
-        {/* Step indicator */}
+        {/* Step progress */}
         <div className="flex gap-1.5 px-5 pt-4">
-          {(['token', 'workspace', 'list', 'status'] as Step[]).map((s, i) => (
+          {steps.map((s, i) => (
             <div
               key={s}
               className={cn(
                 'h-1 flex-1 rounded-full transition-colors',
-                step === s ? 'bg-primary' : i < (['token', 'workspace', 'list', 'status'] as Step[]).indexOf(step) ? 'bg-primary/40' : 'bg-border'
+                step === s ? 'bg-primary' : i < stepIdx ? 'bg-primary/40' : 'bg-border'
               )}
             />
           ))}
@@ -191,16 +330,16 @@ export function ClickUpConnectModal({ storeId, onSuccess, onClose }: Props) {
                 disabled={loading || !apiToken.trim()}
                 className="w-full flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50 transition-colors"
               >
-                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {loading && <Loader2 className="h-4 w-4 animate-spin" />}
                 {loading ? 'Verifying...' : 'Connect & Fetch Workspaces'}
               </button>
             </>
           )}
 
-          {/* Step 2: Workspace selection */}
+          {/* Step 2: Workspace */}
           {step === 'workspace' && (
             <>
-              <p className="text-xs text-text-secondary">Choose the ClickUp workspace that contains your creative tasks:</p>
+              <p className="text-xs text-text-secondary">Choose your ClickUp workspace:</p>
               <div className="space-y-2 max-h-60 overflow-y-auto">
                 {workspaces.map((ws) => (
                   <button
@@ -213,7 +352,7 @@ export function ClickUpConnectModal({ storeId, onSuccess, onClose }: Props) {
                     {loading && selectedWorkspace?.id === ws.id ? (
                       <Loader2 className="h-4 w-4 animate-spin text-primary" />
                     ) : (
-                      <ChevronDown className="h-4 w-4 text-text-secondary rotate-[-90deg]" />
+                      <ChevronRight className="h-4 w-4 text-text-secondary" />
                     )}
                   </button>
                 ))}
@@ -222,33 +361,39 @@ export function ClickUpConnectModal({ storeId, onSuccess, onClose }: Props) {
             </>
           )}
 
-          {/* Step 3: List selection */}
+          {/* Step 3: List tree */}
           {step === 'list' && (
             <>
-              <p className="text-xs text-text-secondary">
-                Select the list that contains your &ldquo;Ready to Launch&rdquo; creative tasks:
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-text-secondary">
+                  Select the list with your &ldquo;Ready to Launch&rdquo; tasks:
+                </p>
+                {selectedList && (
+                  <span className="text-[10px] text-primary font-medium truncate max-w-[120px]">{selectedList.name}</span>
+                )}
+              </div>
               {loading ? (
                 <div className="flex items-center justify-center py-8">
                   <Loader2 className="h-6 w-6 animate-spin text-primary" />
                 </div>
               ) : (
-                <div className="space-y-2 max-h-60 overflow-y-auto">
-                  {lists.length === 0 && (
-                    <p className="text-xs text-text-muted text-center py-4">No lists found in this workspace.</p>
+                <div className="max-h-72 overflow-y-auto rounded-lg border border-border bg-surface p-1 space-y-0.5">
+                  {tree.length === 0 && (
+                    <p className="text-xs text-text-muted text-center py-4">No lists found.</p>
                   )}
-                  {lists.map((list) => (
-                    <button
-                      key={list.id}
-                      onClick={() => handleSelectList(list)}
-                      className="w-full flex items-center justify-between rounded-lg border border-border bg-surface px-4 py-3 text-sm hover:border-primary hover:bg-primary/5 transition-colors"
-                    >
-                      <div className="text-left">
-                        <div className="font-medium text-text-primary">{list.name}</div>
-                        <div className="text-xs text-text-muted">{list.spaceName}</div>
-                      </div>
-                      <ChevronDown className="h-4 w-4 text-text-secondary rotate-[-90deg]" />
-                    </button>
+                  {tree.map((space) => (
+                    <TreeNode
+                      key={space.id}
+                      item={space}
+                      depth={0}
+                      onSelectList={(list) => {
+                        setSelectedList(list);
+                        setStep('status');
+                      }}
+                      selectedId={selectedList?.id || ''}
+                      expandedFolders={expandedFolders}
+                      toggleFolder={toggleFolder}
+                    />
                   ))}
                 </div>
               )}
@@ -259,10 +404,10 @@ export function ClickUpConnectModal({ storeId, onSuccess, onClose }: Props) {
             </>
           )}
 
-          {/* Step 4: Status config */}
+          {/* Step 4: Status */}
           {step === 'status' && (
             <>
-              <div className="rounded-lg border border-border bg-surface p-3 text-xs text-text-secondary space-y-1">
+              <div className="rounded-lg border border-border bg-surface p-3 text-xs space-y-1.5">
                 <div className="flex justify-between">
                   <span className="text-text-muted">Workspace</span>
                   <span className="font-medium text-text-primary">{selectedWorkspace?.name}</span>
@@ -271,13 +416,19 @@ export function ClickUpConnectModal({ storeId, onSuccess, onClose }: Props) {
                   <span className="text-text-muted">List</span>
                   <span className="font-medium text-text-primary">{selectedList?.name}</span>
                 </div>
+                {selectedList?.folderName && (
+                  <div className="flex justify-between">
+                    <span className="text-text-muted">Folder</span>
+                    <span className="font-medium text-text-primary">{selectedList.folderName}</span>
+                  </div>
+                )}
               </div>
               <div>
-                <label className="block text-xs font-medium text-text-primary mb-1.5">
+                <label className="block text-xs font-medium text-text-primary mb-1">
                   &ldquo;Ready to Launch&rdquo; Status Name
                 </label>
-                <p className="text-xs text-text-muted mb-2">
-                  Tasks with this status will appear in Creative Launch. Must match exactly.
+                <p className="text-[11px] text-text-muted mb-2">
+                  Tasks with this status will appear in Creative Launch. Must match exactly (case-insensitive).
                 </p>
                 <input
                   type="text"
