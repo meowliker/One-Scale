@@ -317,6 +317,15 @@ function issueKey(issue: AdIssue): string {
 
 export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClientProps) {
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
+  const stores = useStoreStore((s) => s.stores);
+  
+  // Get the active Meta ad account ID for the current store
+  const activeMetaAccountId = useMemo(() => {
+    const store = stores.find((s) => s.id === activeStoreId);
+    if (!store) return '';
+    const metaAccount = store.adAccounts.find((a) => a.platform === 'meta' && a.isActive);
+    return metaAccount?.accountId || '';
+  }, [stores, activeStoreId]);
   const [campaigns, setCampaigns] = useState<Campaign[]>(initialCampaigns);
   const [appPixelMetrics, setAppPixelMetrics] = useState<AppPixelEntityMetricsPayload>({
     campaigns: {},
@@ -2585,6 +2594,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                           : undefined}
                         activeEntityFilters={activeEntityFilters}
                         storeId={activeStoreId}
+                        metaAccountId={activeMetaAccountId}
                         allCampaigns={sortedCampaigns}
                         onDuplicateSuccess={() => preloadActiveHierarchy(true, false)}
                       />
@@ -2707,6 +2717,7 @@ interface CampaignGroupProps {
   shopifyRoas?: number;
   activeEntityFilters: ActiveEntityFilters;
   storeId: string;
+  metaAccountId: string;
   allCampaigns: Campaign[];
   onDuplicateSuccess: () => void;
 }
@@ -2754,6 +2765,7 @@ function CampaignGroup({
   shopifyRoas,
   activeEntityFilters,
   storeId,
+  metaAccountId,
   allCampaigns,
   onDuplicateSuccess,
 }: CampaignGroupProps) {
@@ -2875,6 +2887,7 @@ function CampaignGroup({
         flashType={rowFlash[campaign.id]}
         shopifyRoas={shopifyRoas}
         storeId={storeId}
+        metaAccountId={metaAccountId}
         onDuplicateSuccess={onDuplicateSuccess}
       />
       {isExpanded && loadingAdSets && (
