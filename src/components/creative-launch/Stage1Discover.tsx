@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { RefreshCw, Zap, ArrowRight } from 'lucide-react';
+import { RefreshCw, Zap, ArrowRight, AlertCircle, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ProductProfile, ClickUpCreativeSet } from '@/types/creativeLaunch';
 
@@ -11,6 +11,9 @@ interface Stage1DiscoverProps {
   clickupCreatives: ClickUpCreativeSet[];
   isLoading: boolean;
   onProceed: () => void;
+  discoverError?: string | null;
+  notConnected?: boolean;
+  notConfigured?: boolean;
 }
 
 // ── Skeleton card ───────────────────────────────────────────────────────────
@@ -123,13 +126,18 @@ export function Stage1Discover({
   clickupCreatives,
   isLoading,
   onProceed,
+  discoverError,
+  notConnected,
+  notConfigured,
 }: Stage1DiscoverProps) {
   const [isSyncing, setIsSyncing] = useState(true);
 
   useEffect(() => {
-    const timer = setTimeout(() => setIsSyncing(false), 1500);
-    return () => clearTimeout(timer);
-  }, []);
+    if (!isLoading) {
+      const timer = setTimeout(() => setIsSyncing(false), 800);
+      return () => clearTimeout(timer);
+    }
+  }, [isLoading]);
 
   const showSkeleton = isLoading || isSyncing;
   const productsWithCreatives = products.filter((p) => p.readyCreativesCount > 0);
@@ -138,6 +146,37 @@ export function Stage1Discover({
 
   return (
     <div className="flex flex-col gap-6">
+      {/* ClickUp not-connected / not-configured banner */}
+      {(notConnected || notConfigured || discoverError) && !showSkeleton && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className={cn(
+            'flex items-start gap-3 rounded-xl border px-4 py-3',
+            notConnected || notConfigured
+              ? 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+              : 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400'
+          )}
+        >
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div className="flex-1 text-sm">
+            <p className="font-medium">
+              {notConnected ? 'ClickUp not connected' : notConfigured ? 'ClickUp list not configured' : 'Error loading data'}
+            </p>
+            <p className="mt-0.5 text-[12px] opacity-80">{discoverError}</p>
+            {(notConnected || notConfigured) && (
+              <a
+                href="/dashboard/settings/integrations"
+                className="mt-1.5 inline-flex items-center gap-1 text-[12px] font-medium underline underline-offset-2 hover:opacity-80"
+              >
+                <Settings className="h-3 w-3" />
+                Go to Settings → Integrations
+              </a>
+            )}
+          </div>
+        </motion.div>
+      )}
+
       {/* ClickUp sync status bar */}
       <motion.div
         initial={{ opacity: 0, y: -8 }}
@@ -152,13 +191,15 @@ export function Stage1Discover({
           <RefreshCw
             className={cn(
               'h-4 w-4 transition-colors duration-300',
-              isSyncing ? 'text-blue-500 dark:text-purple-400' : 'text-emerald-500'
+              isSyncing ? 'text-blue-500 dark:text-purple-400' : notConnected ? 'text-amber-500' : 'text-emerald-500'
             )}
           />
         </motion.div>
         <span className="text-sm text-text-secondary">
           {isSyncing ? (
             <span className="text-blue-600 dark:text-purple-400">Syncing with ClickUp...</span>
+          ) : notConnected ? (
+            <span className="text-amber-600 dark:text-amber-400">ClickUp not connected</span>
           ) : (
             <>
               <span className="font-medium text-emerald-600 dark:text-emerald-400">ClickUp synced</span>

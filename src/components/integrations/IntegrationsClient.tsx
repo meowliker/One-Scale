@@ -29,6 +29,7 @@ import { SlackConfig } from '@/components/integrations/SlackConfig';
 import { ImportCreativeModal } from '@/components/integrations/ImportCreativeModal';
 import { ShopifyConnectModal } from '@/components/integrations/ShopifyConnectModal';
 import { MetaConnectionDetails } from '@/components/integrations/MetaConnectionDetails';
+import { ClickUpConnectModal } from '@/components/integrations/ClickUpConnectModal';
 
 type PanelTab = 'clickup' | 'google_drive' | 'slack';
 
@@ -58,6 +59,7 @@ export function IntegrationsClient() {
 
   // Modal states
   const [shopifyModalOpen, setShopifyModalOpen] = useState(false);
+  const [clickupModalOpen, setClickupModalOpen] = useState(false);
   const [importModal, setImportModal] = useState<{
     isOpen: boolean;
     source: { type: 'clickup'; data: ClickUpTask } | { type: 'drive'; data: GoogleDriveFile } | null;
@@ -186,6 +188,43 @@ export function IntegrationsClient() {
     }
   };
 
+  // Handler: ClickUp connected successfully
+  const handleClickUpConnected = async () => {
+    setClickupModalOpen(false);
+    toast.success('ClickUp connected successfully!');
+    // Update integration card to show connected
+    setIntegrations((prev) =>
+      prev.map((intg) =>
+        intg.platform === 'clickup'
+          ? { ...intg, status: 'connected' as const, lastSynced: new Date().toISOString() }
+          : intg
+      )
+    );
+    // Reload tasks from real API
+    if (activeStoreId) {
+      try {
+        const res = await fetch(`/api/integrations/clickup/tasks?storeId=${encodeURIComponent(activeStoreId)}`);
+        const data = await res.json() as { tasks?: Array<{ id: string; name: string; status: string; taskId: string }> };
+        if (data.tasks) {
+          // Map to ClickUpTask format for display
+          setClickUpTasks(data.tasks.map((t) => ({
+            id: t.id,
+            name: t.name,
+            status: 'open' as const,
+            assignee: '',
+            dueDate: '',
+            priority: 'normal' as const,
+            creativeType: 'video' as const,
+            description: '',
+            tags: [],
+          })));
+        }
+      } catch {
+        // non-fatal
+      }
+    }
+  };
+
   useEffect(() => {
     async function loadData() {
       try {
@@ -202,6 +241,21 @@ export function IntegrationsClient() {
         setDriveFiles(files);
         setSlackChannels(channels);
         setSlackRules(rules);
+
+        // Check real ClickUp connection status
+        if (activeStoreId) {
+          const statusRes = await fetch(`/api/integrations/clickup/connect?storeId=${encodeURIComponent(activeStoreId)}`);
+          if (statusRes.ok) {
+            const statusData = await statusRes.json() as { connected: boolean };
+            if (statusData.connected) {
+              setIntegrations((prev) =>
+                prev.map((intg) =>
+                  intg.platform === 'clickup' ? { ...intg, status: 'connected' as const } : intg
+                )
+              );
+            }
+          }
+        }
       } catch {
         toast.error('Failed to load integrations');
       } finally {
@@ -210,7 +264,7 @@ export function IntegrationsClient() {
     }
 
     loadData();
-  }, []);
+  }, [activeStoreId]);
 
   const handleSelectIntegration = (id: string) => {
     const integration = integrations.find((i) => i.id === id);
@@ -307,6 +361,33 @@ export function IntegrationsClient() {
       }
       // Connect — open shop domain modal first
       setShopifyModalOpen(true);
+      return;
+    }
+
+    // Handle ClickUp connect/disconnect
+    if (integration.platform === 'clickup') {
+      if (isConnected) {
+        // Disconnect
+        try {
+          await fetch('/api/integrations/clickup/connect', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ storeId: activeStoreId }),
+          });
+          toast.success('ClickUp disconnected');
+          setIntegrations((prev) =>
+            prev.map((intg) =>
+              intg.id === id ? { ...intg, status: 'disconnected' as const, lastSynced: null } : intg
+            )
+          );
+          if (activeIntegration === id) setActiveIntegration(null);
+        } catch {
+          toast.error('Failed to disconnect ClickUp');
+        }
+        return;
+      }
+      // Connect — open ClickUp token modal
+      setClickupModalOpen(true);
       return;
     }
 
@@ -501,6 +582,14 @@ export function IntegrationsClient() {
         storeId={activeStoreId}
         workspaceId={workspaceId}
       />
+
+      {clickupModalOpen && (
+        <ClickUpConnectModal
+          storeId={activeStoreId}
+          onSuccess={handleClickUpConnected}
+          onClose={() => setClickupModalOpen(false)}
+        />
+      )}
 
     </div>
   );

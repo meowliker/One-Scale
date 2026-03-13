@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useCreativeLaunchStore } from '@/stores/creativeLaunchStore';
-import { mockCampaigns, mockAdsets } from '@/data/mockCreativeLaunch';
+import { useStoreStore } from '@/stores/storeStore';
 import { StageIndicator } from './StageIndicator';
 import { Stage1Discover } from './Stage1Discover';
 import { Stage2Select } from './Stage2Select';
@@ -46,10 +46,19 @@ function LoadingSkeleton() {
 export function CreativeLaunchClient() {
   const [mounted, setMounted] = useState(false);
   const store = useCreativeLaunchStore();
+  const activeStoreId = useStoreStore((s) => s.activeStoreId);
 
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // Fetch real data when mounted and storeId is available
+  useEffect(() => {
+    if (mounted && activeStoreId) {
+      store.fetchData(activeStoreId);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted, activeStoreId]);
 
   if (!mounted) {
     return <LoadingSkeleton />;
@@ -67,10 +76,12 @@ export function CreativeLaunchClient() {
 
   const handleProceedToStage4 = () => store.setStage(4);
 
-  const handleLaunch = () => store.simulateLaunch();
+  const handleLaunch = () => store.performLaunch(activeStoreId);
 
   const handleReset = () => {
     store.resetFlow();
+    // Re-fetch data after reset
+    if (activeStoreId) store.fetchData(activeStoreId);
   };
 
   return (
@@ -107,6 +118,9 @@ export function CreativeLaunchClient() {
               clickupCreatives={store.clickupCreatives}
               isLoading={store.isLoading}
               onProceed={handleProceedToStage2}
+              discoverError={store.discoverError}
+              notConnected={store.notConnected}
+              notConfigured={store.notConfigured}
             />
           )}
 
@@ -128,8 +142,8 @@ export function CreativeLaunchClient() {
               batches={store.batches}
               products={store.products}
               clickupCreatives={store.clickupCreatives}
-              availableCampaigns={mockCampaigns}
-              availableAdsets={mockAdsets}
+              availableCampaigns={[]}
+              availableAdsets={[]}
               onUpdateBatch={store.updateBatch}
               onBack={() => store.setStage(2)}
               onProceed={handleProceedToStage4}

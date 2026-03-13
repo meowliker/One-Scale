@@ -6,7 +6,14 @@ import type {
   LaunchBatch,
   ActiveTest,
 } from '@/types/creativeLaunch';
-import { mockProducts, mockClickUpCreatives, mockActiveTests } from '@/data/mockCreativeLaunch';
+
+interface DiscoverResult {
+  products: ProductProfile[];
+  clickupCreatives: ClickUpCreativeSet[];
+  notConnected?: boolean;
+  notConfigured?: boolean;
+  message?: string;
+}
 
 interface CreativeLaunchState {
   stage: LaunchStage;
@@ -17,29 +24,60 @@ interface CreativeLaunchState {
   activeTests: ActiveTest[];
   isLoading: boolean;
   launchSuccess: boolean;
+  discoverError: string | null;
+  notConnected: boolean;
+  notConfigured: boolean;
 
   setStage: (stage: LaunchStage) => void;
+  fetchData: (storeId: string) => Promise<void>;
   toggleCreativeSelection: (id: string) => void;
   selectAllForProduct: (productId: string) => void;
   clearSelectionForProduct: (productId: string) => void;
   updateBatch: (productId: string, updates: Partial<LaunchBatch>) => void;
   initBatchesFromSelection: () => void;
-  simulateLaunch: () => Promise<void>;
+  performLaunch: (storeId: string) => Promise<void>;
   resetFlow: () => void;
   setIsLoading: (v: boolean) => void;
 }
 
 export const useCreativeLaunchStore = create<CreativeLaunchState>()((set, get) => ({
   stage: 1,
-  products: mockProducts,
-  clickupCreatives: mockClickUpCreatives,
+  products: [],
+  clickupCreatives: [],
   selectedCreativeIds: [],
   batches: [],
-  activeTests: mockActiveTests,
+  activeTests: [],
   isLoading: false,
   launchSuccess: false,
+  discoverError: null,
+  notConnected: false,
+  notConfigured: false,
 
   setStage: (stage) => set({ stage }),
+
+  fetchData: async (storeId: string) => {
+    set({ isLoading: true, discoverError: null });
+    try {
+      const res = await fetch(`/api/creative-launch/discover?storeId=${encodeURIComponent(storeId)}`);
+      const data = await res.json() as DiscoverResult & { error?: string };
+
+      if (!res.ok) throw new Error(data.error || 'Failed to fetch data');
+
+      set({
+        products: data.products || [],
+        clickupCreatives: data.clickupCreatives || [],
+        notConnected: !!data.notConnected,
+        notConfigured: !!data.notConfigured,
+        discoverError: data.message && (data.notConnected || data.notConfigured) ? data.message : null,
+        isLoading: false,
+      });
+    } catch (err) {
+      set({
+        isLoading: false,
+        discoverError: err instanceof Error ? err.message : 'Failed to load data',
+      });
+    }
+  },
 
   toggleCreativeSelection: (id) => {
     const { selectedCreativeIds } = get();
@@ -129,12 +167,40 @@ export const useCreativeLaunchStore = create<CreativeLaunchState>()((set, get) =
     set({ batches });
   },
 
-  simulateLaunch: async () => {
+  performLaunch: async (storeId: string) => {
     set({ isLoading: true });
-    await new Promise<void>((resolve) => setTimeout(resolve, 2000));
-    set({ isLoading: false, launchSuccess: true, stage: 5 });
+    const { batches, clickupCreatives } = get();
+
+    try {
+      // Update ClickUp task statuses to "testing" for all selected creatives
+      const taskIds = new Set<string>();
+      for (const batch of batches) {
+        for (const creativeId of batch.creativeIds) {
+          const creative = clickupCreatives.find((c) => c.id === creativeId);
+          if (creative?.taskId) taskIds.add(creative.taskId);
+        }
+      }
+
+      await Promise.allSettled(
+        [...taskIds].map((taskId) =>
+          fetch(`/api/integrations/clickup/tasks/${taskId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ storeId, status: 'testing' }),
+          })
+        )
+      );
+
+      // Simulate a brief delay then advance to monitor stage
+      await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+      set({ isLoading: false, launchSuccess: true, stage: 5 });
+    } catch {
+      // Even if ClickUp update fails, advance to stage 5
+      set({ isLoading: false, launchSuccess: true, stage: 5 });
+    }
   },
 
+  // Legacy name kept for compatibility with Stage4Review
   resetFlow: () => {
     set({
       stage: 1,
@@ -142,6 +208,7 @@ export const useCreativeLaunchStore = create<CreativeLaunchState>()((set, get) =
       batches: [],
       launchSuccess: false,
       isLoading: false,
+      discoverError: null,
     });
   },
 
