@@ -117,12 +117,16 @@ export async function GET(request: NextRequest) {
   const token = clickupRow.access_token;
   const meta = clickupRow.metadata ? JSON.parse(clickupRow.metadata) as {
     listId?: string;
+    listIds?: string[];
     readyStatus?: string;
     workspaceId?: string;
     workspaceName?: string;
   } : {};
 
-  if (!meta.listId) {
+  // Support both old single listId and new listIds[]
+  const listIds: string[] = meta.listIds?.length ? meta.listIds : (meta.listId ? [meta.listId] : []);
+
+  if (listIds.length === 0) {
     return NextResponse.json({
       notConfigured: true,
       products: [],
@@ -131,20 +135,30 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  // --- Fetch ClickUp tasks ---
+  // --- Fetch ClickUp tasks from all configured lists in parallel ---
   const status = meta.readyStatus || 'ready to launch';
   const params = new URLSearchParams({ include_closed: 'false', subtasks: 'true', page: '0' });
   params.append('statuses[]', status);
 
-  const tasksRes = await fetch(
-    `https://api.clickup.com/api/v2/list/${meta.listId}/task?${params.toString()}`,
-    { headers: { Authorization: token } }
+  const allTaskArrays = await Promise.all(
+    listIds.map(async (listId) => {
+      const res = await fetch(
+        `https://api.clickup.com/api/v2/list/${listId}/task?${params.toString()}`,
+        { headers: { Authorization: token } }
+      );
+      if (!res.ok) return [];
+      const data = await res.json() as { tasks: ClickUpTask[] };
+      return data.tasks || [];
+    })
   );
 
+  // Deduplicate by task id
+  const seenIds = new Set<string>();
   let tasks: ClickUpTask[] = [];
-  if (tasksRes.ok) {
-    const data = await tasksRes.json() as { tasks: ClickUpTask[] };
-    tasks = data.tasks || [];
+  for (const arr of allTaskArrays) {
+    for (const t of arr) {
+      if (!seenIds.has(t.id)) { seenIds.add(t.id); tasks.push(t); }
+    }
   }
 
   // --- Get Meta ad account info for this store ---
@@ -209,7 +223,7 @@ export async function GET(request: NextRequest) {
       defaultBudget: 50,
       defaultDuration: 7,
       winnerCopyLibrary,
-      clickupListId: meta.listId,
+      clickupListId: listIds[0],
       readyCreativesCount: creatives.length,
       confidence: hasMetaConnection ? 90 : 60,
       store: storeId,

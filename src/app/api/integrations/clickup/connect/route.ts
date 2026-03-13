@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { readSessionFromRequest } from '@/lib/auth/request-session';
 import { getThirdPartyToken, upsertThirdPartyToken, deleteThirdPartyToken } from '@/app/api/lib/db';
-import { useStoreStore } from '@/stores/storeStore';
 
 // GET — check ClickUp connection status for a store
 export async function GET(request: NextRequest) {
@@ -13,12 +12,14 @@ export async function GET(request: NextRequest) {
   if (!row) return NextResponse.json({ connected: false });
 
   const meta = row.metadata ? JSON.parse(row.metadata) as Record<string, unknown> : {};
+  // Support both old listId and new listIds[]
+  const listIds: string[] = (meta.listIds as string[]) || (meta.listId ? [meta.listId as string] : []);
   return NextResponse.json({
     connected: true,
     workspaceId: meta.workspaceId ?? null,
     workspaceName: meta.workspaceName ?? null,
-    listId: meta.listId ?? null,
-    listName: meta.listName ?? null,
+    listIds,
+    listNames: meta.listNames ?? [],
     readyStatus: meta.readyStatus ?? 'ready to launch',
     connectedAt: row.connected_at,
   });
@@ -33,8 +34,8 @@ export async function POST(request: NextRequest) {
       apiToken: string;
       workspaceId?: string;
       workspaceName?: string;
-      listId?: string;
-      listName?: string;
+      listIds?: string[];
+      listNames?: string[];
       readyStatus?: string;
     };
 
@@ -42,8 +43,11 @@ export async function POST(request: NextRequest) {
     if (!storeId || !apiToken) {
       return NextResponse.json({ error: 'storeId and apiToken are required' }, { status: 400 });
     }
+    if (!body.listIds || body.listIds.length === 0) {
+      return NextResponse.json({ error: 'At least one list must be selected' }, { status: 400 });
+    }
 
-    // Verify the token works by calling ClickUp API
+    // Verify the token works
     const verifyRes = await fetch('https://api.clickup.com/api/v2/user', {
       headers: { Authorization: apiToken },
     });
@@ -58,8 +62,8 @@ export async function POST(request: NextRequest) {
       metadata: {
         workspaceId: body.workspaceId,
         workspaceName: body.workspaceName,
-        listId: body.listId,
-        listName: body.listName,
+        listIds: body.listIds,
+        listNames: body.listNames || [],
         readyStatus: body.readyStatus || 'ready to launch',
       },
     });

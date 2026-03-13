@@ -29,11 +29,9 @@ function extractFieldValue(fields: ClickUpCustomField[], ...nameParts: string[])
       if (field.value == null) continue;
       if (typeof field.value === 'string') return field.value;
       if (typeof field.value === 'object') {
-        // URL field type
         const v = field.value as Record<string, unknown>;
         if (v.url) return String(v.url);
         if (v.value) return String(v.value);
-        // Option field type
         if (v.name) return String(v.name);
       }
       return String(field.value);
@@ -47,23 +45,31 @@ function detectFormat(fields: ClickUpCustomField[], name: string, tags: Array<{ 
   if (formatVal.includes('video')) return 'video';
   if (formatVal.includes('carousel')) return 'carousel';
   if (formatVal.includes('image') || formatVal.includes('photo') || formatVal.includes('static')) return 'image';
-
-  // Check tags
   for (const tag of tags) {
     const t = tag.name.toLowerCase();
-    if (t.includes('video')) return 'video';
+    if (t.includes('video') || t.includes('ugc') || t.includes('reel')) return 'video';
     if (t.includes('carousel')) return 'carousel';
     if (t.includes('image') || t.includes('static')) return 'image';
   }
-
-  // Check task name
-  const nameLower = name.toLowerCase();
-  if (nameLower.includes('video') || nameLower.includes('ugc') || nameLower.includes('reel')) return 'video';
-  if (nameLower.includes('carousel')) return 'carousel';
+  const n = name.toLowerCase();
+  if (n.includes('video') || n.includes('ugc') || n.includes('reel')) return 'video';
+  if (n.includes('carousel')) return 'carousel';
   return 'image';
 }
 
-// GET — fetch ClickUp tasks by status
+async function fetchTasksFromList(token: string, listId: string, status: string): Promise<ClickUpTask[]> {
+  const params = new URLSearchParams({ include_closed: 'false', subtasks: 'true', page: '0' });
+  params.append('statuses[]', status);
+  const res = await fetch(
+    `https://api.clickup.com/api/v2/list/${listId}/task?${params.toString()}`,
+    { headers: { Authorization: token } }
+  );
+  if (!res.ok) return [];
+  const data = await res.json() as { tasks: ClickUpTask[] };
+  return data.tasks || [];
+}
+
+// GET — fetch ClickUp tasks by status from all configured lists
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const storeId = searchParams.get('storeId') || '';
@@ -77,39 +83,35 @@ export async function GET(request: NextRequest) {
   const token = row.access_token;
   const meta = row.metadata ? JSON.parse(row.metadata) as {
     listId?: string;
+    listIds?: string[];
     readyStatus?: string;
     workspaceId?: string;
   } : {};
 
-  const listId = meta.listId;
-  if (!listId) {
-    return NextResponse.json({ error: 'No ClickUp list configured. Please configure in Settings → Integrations.', notConfigured: true }, { status: 200 });
+  // Support both old single listId and new listIds[]
+  const listIds: string[] = meta.listIds?.length ? meta.listIds : (meta.listId ? [meta.listId] : []);
+  if (listIds.length === 0) {
+    return NextResponse.json({
+      error: 'No ClickUp list configured. Go to Settings → Integrations to set up.',
+      notConfigured: true,
+    }, { status: 200 });
   }
 
   const status = statusFilter || meta.readyStatus || 'ready to launch';
 
-  // Fetch tasks from the configured list with the given status
-  const params = new URLSearchParams({
-    include_closed: 'false',
-    subtasks: 'true',
-    page: '0',
-  });
-  params.append('statuses[]', status);
-
-  const res = await fetch(
-    `https://api.clickup.com/api/v2/list/${listId}/task?${params.toString()}`,
-    { headers: { Authorization: token } }
-  );
-
-  if (!res.ok) {
-    const text = await res.text();
-    return NextResponse.json({ error: `ClickUp API error: ${text}` }, { status: res.status });
+  // Fetch from all lists in parallel, deduplicate by task id
+  const allTaskArrays = await Promise.all(listIds.map((id) => fetchTasksFromList(token, id, status)));
+  const seenIds = new Set<string>();
+  const tasks: ClickUpTask[] = [];
+  for (const arr of allTaskArrays) {
+    for (const t of arr) {
+      if (!seenIds.has(t.id)) {
+        seenIds.add(t.id);
+        tasks.push(t);
+      }
+    }
   }
 
-  const data = await res.json() as { tasks: ClickUpTask[] };
-  const tasks = data.tasks || [];
-
-  // Transform tasks into ClickUpCreativeSet format
   const creatives = tasks.map((task) => {
     const hook = extractFieldValue(task.custom_fields, 'hook', 'headline', 'angle');
     const angle = extractFieldValue(task.custom_fields, 'angle', 'concept', 'theme', 'strategy');
@@ -117,11 +119,8 @@ export async function GET(request: NextRequest) {
     const productName = extractFieldValue(task.custom_fields, 'product', 'sku', 'item');
     const thumbnailUrl = extractFieldValue(task.custom_fields, 'thumbnail', 'preview', 'cover');
     const format = detectFormat(task.custom_fields, task.name, task.tags);
-
-    // Use list name as product if no product field
     const product = productName || task.list.name;
     const productId = `product_${product.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
-
     return {
       id: task.id,
       taskId: task.id,
