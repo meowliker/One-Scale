@@ -46,7 +46,7 @@ import { cn } from '@/lib/utils';
 import { getMetricValue } from '@/lib/metrics';
 import { useStoreStore } from '@/stores/storeStore';
 import { todayInTimezone } from '@/lib/timezone';
-import { AdsManagerToolbar, type StatusFilter } from './AdsManagerToolbar';
+import { AdsManagerToolbar, type StatusFilter, type ActiveEntityFilters } from './AdsManagerToolbar';
 import { CampaignRow } from './CampaignRow';
 import { AdSetRow } from './AdSetRow';
 import { AdRow } from './AdRow';
@@ -349,6 +349,11 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     setStatusFilterRaw(f);
     try { window.sessionStorage.setItem('onescale_status_filter', f); } catch { /* ignore */ }
   }, []);
+  // Active entity filters for filtering adsets/ads when Active tab is selected
+  const [activeEntityFilters, setActiveEntityFilters] = useState<ActiveEntityFilters>({
+    activeAdsetsOnly: false,
+    activeAdsOnly: false,
+  });
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc' | null>(null);
   // Scroll container ref for virtual scrolling
@@ -2357,6 +2362,8 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         onSearchChange={setSearch}
         statusFilter={statusFilter}
         onStatusFilterChange={setStatusFilter}
+        activeEntityFilters={activeEntityFilters}
+        onActiveEntityFiltersChange={setActiveEntityFilters}
         campaignCount={filteredCampaigns.length}
         showErrorCenter={showErrorCenter}
         onToggleErrorCenter={() => {
@@ -2413,11 +2420,11 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         onDragEnd={handleDragEnd}
       >
         <div ref={tableContainerRef} className="apple-table-container ads-manager-table-container apple-scroll">
-          <table className="min-w-[1600px] apple-table table-fixed">
+          <table className="min-w-[1600px] apple-table">
             <thead>
-              <tr className="sticky top-0 z-20 border-b-2 border-[var(--apple-table-header-border)] bg-[var(--apple-table-header-bg)]" style={{ height: 44 }}>
+              <tr className="border-b-2 border-[var(--apple-table-header-border)] bg-[var(--apple-table-header-bg)]" style={{ height: 44 }}>
                 {/* Checkbox — 40px */}
-                <th className="whitespace-nowrap px-1 py-2 text-center sticky left-0 z-20 bg-[var(--apple-table-header-bg)]" style={{ width: 40, minWidth: 40, maxWidth: 40 }}>
+                <th className="whitespace-nowrap px-1 py-2 text-center bg-[var(--apple-table-header-bg)]" style={{ width: 40, minWidth: 40, maxWidth: 40 }}>
                   <Checkbox
                     checked={allSelected}
                     onChange={handleSelectAll}
@@ -2425,12 +2432,12 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                   />
                 </th>
                 {/* ON/OFF — 70px */}
-                <th className="whitespace-nowrap px-1 py-2 text-center text-[11px] font-bold uppercase tracking-[0.05em] text-[#6b7280] dark:text-[#9ca3af] z-20 bg-[var(--apple-table-header-bg)]" style={{ width: 70, minWidth: 70, maxWidth: 70 }}>
+                <th className="whitespace-nowrap px-1 py-2 text-center text-[11px] font-bold uppercase tracking-[0.05em] text-[#6b7280] dark:text-[#9ca3af] bg-[var(--apple-table-header-bg)]" style={{ width: 70, minWidth: 70, maxWidth: 70 }}>
                   On/Off
                 </th>
                 {/* Name — fixed width matching rows */}
                 <th
-                  className="relative whitespace-nowrap px-2 py-2 text-left text-[11px] font-bold uppercase tracking-[0.05em] text-[#6b7280] dark:text-[#9ca3af] z-20 bg-[var(--apple-table-header-bg)] border-r border-[var(--apple-table-header-border)]"
+                  className="relative whitespace-nowrap px-2 py-2 text-left text-[11px] font-bold uppercase tracking-[0.05em] text-[#6b7280] dark:text-[#9ca3af] bg-[var(--apple-table-header-bg)] border-r border-[var(--apple-table-header-border)]"
                   style={{ width: nameColWidth, minWidth: nameColWidth, maxWidth: nameColWidth }}
                 >
                   <button
@@ -2446,11 +2453,11 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                     className="absolute right-0 top-0 h-full w-2 cursor-col-resize hover:bg-[#0071e3]/20 transition-colors"
                   />
                 </th>
-                <SortableFixedHeader label="Budget" sortKeyName="budget" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} width={120} align="right" />
-                <SortableFixedHeader label="Bid Strategy" sortKeyName="bidStrategy" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} width={140} />
+                <SortableFixedHeader label="Budget" sortKeyName="budget" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} width={120} align="center" />
+                <SortableFixedHeader label="Bid Strategy" sortKeyName="bidStrategy" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} width={140} align="center" />
                 <SortableFixedHeader label="Performance" sortKeyName="performance" sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} width={130} align="center" />
                 {/* Latest Actions — 150px, no History icon */}
-                <th className="whitespace-nowrap px-3 py-2 text-left text-[11px] font-bold uppercase tracking-[0.05em] text-[#6b7280] dark:text-[#9ca3af]" style={{ width: 160, minWidth: 160, maxWidth: 160 }}>
+                <th className="whitespace-nowrap px-3 py-2 text-center text-[11px] font-bold uppercase tracking-[0.05em] text-[#6b7280] dark:text-[#9ca3af]" style={{ width: 160, minWidth: 160, maxWidth: 160 }}>
                   Latest Actions
                 </th>
                 {/* Dynamic metric columns with drag-to-reorder */}
@@ -2552,6 +2559,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
                         shopifyRoas={shopifyRevMap[campaign.id] && campaign.metrics.spend > 0
                           ? Math.round((shopifyRevMap[campaign.id].shopifyRevenue / campaign.metrics.spend) * 100) / 100
                           : undefined}
+                        activeEntityFilters={activeEntityFilters}
                       />
                     </tbody>
                   );
@@ -2574,15 +2582,22 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
             )}
             {sortedCampaigns.length > 0 && (
               <tfoot>
-                <tr className="totals-row sticky bottom-0 z-20">
-                  <td colSpan={3} className="whitespace-nowrap px-3 py-3 text-[15px] sticky left-0 z-30">
+                <tr className="totals-row bg-[#f8fafc] dark:bg-[#1e293b] border-t-2 border-[var(--apple-table-header-border)]">
+                  {/* Checkbox cell - empty but needed for alignment */}
+                  <td className="whitespace-nowrap px-1 py-3 bg-[#f8fafc] dark:bg-[#1e293b]" style={{ width: 40, minWidth: 40, maxWidth: 40 }}></td>
+                  {/* ON/OFF cell - empty but needed for alignment */}
+                  <td className="whitespace-nowrap px-1 py-3 bg-[#f8fafc] dark:bg-[#1e293b]" style={{ width: 70, minWidth: 70, maxWidth: 70 }}></td>
+                  {/* Name cell with total label */}
+                  <td 
+                    className="whitespace-nowrap px-2 py-3 text-[14px] font-semibold text-[#111827] dark:text-[#f1f5f9] bg-[#f8fafc] dark:bg-[#1e293b] border-r border-[var(--apple-table-header-border)]"
+                    style={{ width: nameColWidth, minWidth: nameColWidth, maxWidth: nameColWidth }}
+                  >
                     Total — {totals.activeCampaigns} active
                   </td>
-                  <td className="whitespace-nowrap px-3 py-3 text-[13px]">&mdash;</td>
-                  <td className="whitespace-nowrap px-3 py-3 text-[13px]">&mdash;</td>
-                  <td className="whitespace-nowrap px-3 py-3 text-[13px]">&mdash;</td>
-                  <td className="whitespace-nowrap px-3 py-3 text-[13px]">&mdash;</td>
-                  <td className="whitespace-nowrap px-3 py-3 text-[13px]">&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-[13px] text-center" style={{ width: 120, minWidth: 120, maxWidth: 120 }}>&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-[13px] text-center" style={{ width: 140, minWidth: 140, maxWidth: 140 }}>&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-[13px] text-center" style={{ width: 130, minWidth: 130, maxWidth: 130 }}>&mdash;</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-[13px] text-center" style={{ width: 160, minWidth: 160, maxWidth: 160 }}>&mdash;</td>
                   {columnOrder.map((key) => (
                     <MetricCell
                       key={`totals-${key}`}
@@ -2663,6 +2678,7 @@ interface CampaignGroupProps {
   togglingEntities: Set<string>;
   rowFlash: Record<string, 'success' | 'error'>;
   shopifyRoas?: number;
+  activeEntityFilters: ActiveEntityFilters;
 }
 
 function CampaignGroup({
@@ -2706,11 +2722,17 @@ function CampaignGroup({
   togglingEntities,
   rowFlash,
   shopifyRoas,
+  activeEntityFilters,
 }: CampaignGroupProps) {
-  // Defensive: always ensure adSets is an array, then sort
+  // Defensive: always ensure adSets is an array, then filter and sort
   const adSetsRaw = campaign.adSets || [];
   const adSets = useMemo(() => {
-    return [...adSetsRaw].sort((a, b) => {
+    // Apply active entity filter for adsets
+    let filtered = adSetsRaw;
+    if (activeEntityFilters.activeAdsetsOnly) {
+      filtered = adSetsRaw.filter((as) => as.status === 'ACTIVE');
+    }
+    return [...filtered].sort((a, b) => {
       // Active ad sets always float to top
       const aActive = a.status === 'ACTIVE' ? 0 : 1;
       const bActive = b.status === 'ACTIVE' ? 0 : 1;
@@ -2719,7 +2741,7 @@ function CampaignGroup({
       if (sortKey && sortDirection) return compareEntities(a, b);
       return 0;
     });
-  }, [adSetsRaw, sortKey, sortDirection, compareEntities]);
+  }, [adSetsRaw, sortKey, sortDirection, compareEntities, activeEntityFilters.activeAdsetsOnly]);
 
   // Determine if this campaign uses Campaign Budget Optimization (CBO)
   const isCBO = campaign.dailyBudget > 0 || (campaign.lifetimeBudget != null && campaign.lifetimeBudget > 0);
@@ -2893,6 +2915,7 @@ function CampaignGroup({
               nameColWidth={nameColWidth}
               togglingEntities={togglingEntities}
               rowFlash={rowFlash}
+              activeEntityFilters={activeEntityFilters}
             />
           );
         })}
@@ -2933,6 +2956,7 @@ interface AdSetGroupProps {
   nameColWidth: number;
   togglingEntities: Set<string>;
   rowFlash: Record<string, 'success' | 'error'>;
+  activeEntityFilters: ActiveEntityFilters;
 }
 
 function AdSetGroup({
@@ -2966,13 +2990,19 @@ function AdSetGroup({
   nameColWidth,
   togglingEntities,
   rowFlash,
+  activeEntityFilters,
 }: AdSetGroupProps) {
-  // Defensive: always ensure ads is an array, then sort
+  // Defensive: always ensure ads is an array, then filter and sort
   const adsRaw = adSet.ads || [];
   const ads = useMemo(() => {
-    if (!sortKey || !sortDirection) return adsRaw;
-    return [...adsRaw].sort(compareEntities);
-  }, [adsRaw, sortKey, sortDirection, compareEntities]);
+    // Apply active entity filter for ads
+    let filtered = adsRaw;
+    if (activeEntityFilters.activeAdsOnly) {
+      filtered = adsRaw.filter((ad) => ad.status === 'ACTIVE');
+    }
+    if (!sortKey || !sortDirection) return filtered;
+    return [...filtered].sort(compareEntities);
+  }, [adsRaw, sortKey, sortDirection, compareEntities, activeEntityFilters.activeAdsOnly]);
 
   return (
     <>

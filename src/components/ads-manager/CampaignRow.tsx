@@ -102,12 +102,12 @@ export function CampaignRow({
       )}
     >
       {/* Checkbox */}
-      <td className={cn("whitespace-nowrap px-1 py-2 text-center sticky left-0 z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)} style={{ width: 40, minWidth: 40, maxWidth: 40 }}>
+      <td className={cn("whitespace-nowrap px-1 py-2 text-center group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)} style={{ width: 40, minWidth: 40, maxWidth: 40 }}>
         <Checkbox checked={isSelected} onChange={onToggleSelect} />
       </td>
 
       {/* Toggle — 70px */}
-      <td className={cn("whitespace-nowrap px-1 py-2 text-center z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)} style={{ width: 70, minWidth: 70, maxWidth: 70 }}>
+      <td className={cn("whitespace-nowrap px-1 py-2 text-center group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)} style={{ width: 70, minWidth: 70, maxWidth: 70 }}>
         <Toggle
           checked={isActive}
           onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
@@ -118,7 +118,7 @@ export function CampaignRow({
 
       {/* Name + Objective + CBO/ABO */}
       <td
-        className={cn("whitespace-nowrap overflow-hidden px-2 py-2 z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
+        className={cn("whitespace-nowrap overflow-hidden px-2 py-2 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
         style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth, maxWidth: nameColWidth } : undefined}
       >
         <div className="flex items-center gap-2 min-w-0 overflow-hidden">
@@ -169,7 +169,7 @@ export function CampaignRow({
       </td>
 
       {/* Budget — ABO has no campaign-level budget (it lives on each ad set) */}
-      <td className="whitespace-nowrap px-3 py-2 text-right" style={{ width: 120, minWidth: 120, maxWidth: 120 }}>
+      <td className="whitespace-nowrap px-3 py-2 text-center" style={{ width: 120, minWidth: 120, maxWidth: 120 }}>
         {isABO ? (
           <span className="inline-flex items-center gap-1 text-[13px] text-text-dimmed">
             <Lock className="h-3 w-3" />
@@ -189,7 +189,7 @@ export function CampaignRow({
       </td>
 
       {/* Bid Strategy */}
-      <td className="whitespace-nowrap px-3 py-2 text-[13px] text-text-secondary" style={{ width: 140, minWidth: 140, maxWidth: 140 }}>
+      <td className="whitespace-nowrap px-3 py-2 text-[13px] text-text-secondary" style={{ width: 140, minWidth: 140, maxWidth: 140, textAlign: 'center' }}>
         <span>{bidStrategyLabels[campaign.bidStrategy] ?? campaign.bidStrategy}</span>
       </td>
 

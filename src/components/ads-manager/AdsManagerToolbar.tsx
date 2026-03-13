@@ -21,11 +21,18 @@ function formatTimeAgo(iso: string): string {
   return `${hr}h ago`;
 }
 
+export interface ActiveEntityFilters {
+  activeAdsetsOnly: boolean;
+  activeAdsOnly: boolean;
+}
+
 export interface AdsManagerToolbarProps {
   search: string;
   onSearchChange: (value: string) => void;
   statusFilter: StatusFilter;
   onStatusFilterChange: (filter: StatusFilter) => void;
+  activeEntityFilters?: ActiveEntityFilters;
+  onActiveEntityFiltersChange?: (filters: ActiveEntityFilters) => void;
   campaignCount: number;
   showErrorCenter?: boolean;
   onToggleErrorCenter?: () => void;
@@ -101,6 +108,8 @@ export function AdsManagerToolbar({
   onSearchChange,
   statusFilter,
   onStatusFilterChange,
+  activeEntityFilters,
+  onActiveEntityFiltersChange,
   campaignCount,
   showErrorCenter = false,
   onToggleErrorCenter,
@@ -175,6 +184,40 @@ export function AdsManagerToolbar({
       <span className="text-[13px] font-medium text-[#6b7280] dark:text-[var(--color-text-muted)] whitespace-nowrap shrink-0">
         {campaignCount} campaign{campaignCount !== 1 ? 's' : ''}
       </span>
+
+      {/* ── Active Entity Filters (only show when Active tab is selected) ── */}
+      {statusFilter === 'ACTIVE' && activeEntityFilters && onActiveEntityFiltersChange && (
+        <div className="flex items-center gap-3 shrink-0">
+          <label className="flex items-center gap-1.5 cursor-pointer group">
+            <input
+              type="checkbox"
+              checked={activeEntityFilters.activeAdsetsOnly}
+              onChange={(e) => onActiveEntityFiltersChange({
+                ...activeEntityFilters,
+                activeAdsetsOnly: e.target.checked,
+              })}
+              className="h-3.5 w-3.5 rounded border-gray-300 text-blue-500 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
+            />
+            <span className="text-[12px] font-medium text-[#6e6e73] dark:text-[var(--color-text-muted)] group-hover:text-[#1d1d1f] dark:group-hover:text-[var(--color-text-primary)] transition-colors">
+              Adsets
+            </span>
+          </label>
+          <label className="flex items-center gap-1.5 cursor-pointer group">
+            <input
+              type="checkbox"
+              checked={activeEntityFilters.activeAdsOnly}
+              onChange={(e) => onActiveEntityFiltersChange({
+                ...activeEntityFilters,
+                activeAdsOnly: e.target.checked,
+              })}
+              className="h-3.5 w-3.5 rounded border-gray-300 text-blue-500 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
+            />
+            <span className="text-[12px] font-medium text-[#6e6e73] dark:text-[var(--color-text-muted)] group-hover:text-[#1d1d1f] dark:group-hover:text-[var(--color-text-primary)] transition-colors">
+              Ads
+            </span>
+          </label>
+        </div>
+      )}
 
       {/* ── Spacer ── */}
       <div className="flex-1" />

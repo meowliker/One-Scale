@@ -78,11 +78,11 @@ export function DraggableColumnHeader({ metricKey, sortKey, sortDirection, onSor
       ref={(node) => { setNodeRef(node); thRef.current = node; }}
       style={{ ...style, width: columnWidth, minWidth: columnWidth, maxWidth: columnWidth }}
       className={cn(
-        'relative whitespace-nowrap px-3 py-2 text-right text-[11px] font-bold uppercase tracking-[0.05em] text-text-secondary select-none transition-colors duration-150 hover:text-text-primary',
+        'relative whitespace-nowrap px-3 py-2 text-center text-[11px] font-bold uppercase tracking-[0.05em] text-text-secondary select-none transition-colors duration-150 hover:text-text-primary',
         isDragging && 'z-50 bg-[#e8f0fe] opacity-90 shadow-md rounded-lg'
       )}
     >
-      <div className="flex items-center justify-end gap-1.5">
+      <div className="flex items-center justify-center gap-1.5">
         <button
           onClick={() => onSort?.(metricKey)}
           className="group/sort flex items-center gap-1 cursor-pointer hover:text-[#0071e3] transition-colors duration-150"

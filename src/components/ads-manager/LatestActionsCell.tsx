@@ -283,7 +283,7 @@ export function LatestActionsCell({ entityId, actions: actionsProp, activitiesFu
   // Empty state — simple dash
   if (actions.length === 0) {
     return (
-      <td className="px-3 py-2" style={{ width: 160, minWidth: 160, maxWidth: 160 }}>
+      <td className="px-3 py-2 text-center" style={{ width: 160, minWidth: 160, maxWidth: 160 }}>
         <span className="text-[11px] text-text-dimmed">&mdash;</span>
       </td>
     );
@@ -300,7 +300,7 @@ export function LatestActionsCell({ entityId, actions: actionsProp, activitiesFu
         onClick={handleClick}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
-        className="flex items-center gap-1.5 text-[12px] text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 cursor-pointer transition-colors"
+        className="flex items-center justify-center gap-1.5 w-full text-[12px] text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 cursor-pointer transition-colors"
       >
         <div className="flex h-4 w-4 items-center justify-center rounded-full bg-blue-500/10 dark:bg-blue-400/10">
           <Activity className="h-2.5 w-2.5 text-blue-500 dark:text-blue-400" />
