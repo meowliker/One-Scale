@@ -46,20 +46,16 @@ function formatRoasChange(first: number, last: number): { text: string; arrow: s
 }
 
 export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: PerformanceSparklineProps) {
-  const fullData = (dataProp && dataProp.length >= 2) ? dataProp : getSparklineData(entityId);
-  const data = fullData.slice(-8); // last 7 days + today when available
+  // Only use real data - don't fall back to mock data for accuracy
+  const fullData = (dataProp && dataProp.length >= 2) ? dataProp : null;
+  const data = fullData ? fullData.slice(-8) : null; // last 7 days + today when available
   const [showTooltip, setShowTooltip] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cellRef = useRef<HTMLTableCellElement>(null);
 
-  const handleMouseEnter = useCallback(() => {
+  const handleClick = useCallback(() => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => setShowTooltip(true), 200);
-  }, []);
-
-  const handleMouseLeave = useCallback(() => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => setShowTooltip(false), 150);
+    setShowTooltip((prev) => !prev); // Toggle on click
   }, []);
 
   const handleClose = useCallback(() => {
@@ -69,7 +65,7 @@ export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: 
 
   if (!data || data.length === 0) {
     return (
-      <td className="whitespace-nowrap px-3 py-2 text-center text-xs text-[#aeaeb2]">
+      <td className="whitespace-nowrap px-3 py-2 text-center text-xs text-[#aeaeb2]" style={{ width: 130, minWidth: 130, maxWidth: 130 }}>
         --
       </td>
     );
@@ -93,11 +89,14 @@ export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: 
     <td
       ref={cellRef}
       className="relative whitespace-nowrap px-3 py-2"
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
+      style={{ width: 130, minWidth: 130, maxWidth: 130 }}
     >
       {/* Mini inline sparkline */}
-      <div className="flex items-center justify-center" style={{ width: 100, height: 28 }}>
+      <div 
+        className="flex items-center justify-center cursor-pointer"
+        style={{ width: 100, height: 28 }}
+        onClick={handleClick}
+      >
         <AreaChart
           width={100}
           height={28}
@@ -123,13 +122,11 @@ export function PerformanceSparkline({ entityId, data: dataProp, currentRoas }: 
         </AreaChart>
       </div>
 
-      {/* Hover tooltip (rendered via portal to avoid overflow clipping) */}
+      {/* Click tooltip (rendered via portal to avoid overflow clipping) */}
       <PortalTooltip anchorRef={cellRef} visible={showTooltip} onClose={handleClose}>
         <div
           className="rounded-xl border border-[rgba(0,0,0,0.08)] bg-white shadow-lg"
           style={{ width: 280, padding: 16 }}
-          onMouseEnter={handleMouseEnter}
-          onMouseLeave={handleMouseLeave}
         >
           {/* Title + close button */}
           <div className="mb-2 flex items-center justify-between">

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronRight, ChevronDown, AlertTriangle, Lock } from 'lucide-react';
+import { ChevronRight, ChevronDown, AlertTriangle, Lock, ExternalLink, Copy } from 'lucide-react';
 import type { Campaign, EntityStatus } from '@/types/campaign';
 import type { MetricKey } from '@/types/metrics';
 import type { SparklineDataPoint } from '@/data/mockSparklineData';
@@ -15,6 +15,7 @@ import { InlineEdit } from '@/components/ui/InlineEdit';
 import { MetricCell } from './MetricCell';
 import { PerformanceSparkline } from './PerformanceSparkline';
 import { LatestActionsCell } from './LatestActionsCell';
+import { DuplicateCampaignModal } from './DuplicateCampaignModal';
 
 export interface CampaignRowProps {
   campaign: Campaign;
@@ -37,6 +38,8 @@ export interface CampaignRowProps {
   flashType?: 'success' | 'error';
   /** Shopify-attributed ROAS for this campaign (Real ROAS) */
   shopifyRoas?: number;
+  storeId?: string;
+  onDuplicateSuccess?: () => void;
 }
 
 const objectiveLabels: Record<string, { label: string; variant: 'success' | 'warning' | 'danger' | 'info' | 'default' }> = {
@@ -77,10 +80,11 @@ export function CampaignRow({
   isToggling = false,
   flashType,
   shopifyRoas,
+  storeId,
+  onDuplicateSuccess,
 }: CampaignRowProps) {
+  const [showDuplicateModal, setShowDuplicateModal] = useState(false);
   const isActive = campaign.status === 'ACTIVE';
-  const [showStatusTooltip, setShowStatusTooltip] = useState(false);
-  const activeAdSetsCount = campaign.adSets.filter((a) => a.status === 'ACTIVE').length;
   const isABO = !(campaign.dailyBudget > 0) && !(campaign.lifetimeBudget && campaign.lifetimeBudget > 0);
   const isLifetimeBudget = !isABO && campaign.lifetimeBudget && campaign.lifetimeBudget > 0;
   const objective = objectiveLabels[campaign.objective] ?? { label: campaign.objective, variant: 'default' as const };
@@ -105,12 +109,12 @@ export function CampaignRow({
       )}
     >
       {/* Checkbox */}
-      <td className={cn("w-10 min-w-[40px] max-w-[40px] whitespace-nowrap px-3 py-2 sticky left-0 z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)}>
+      <td className={cn("whitespace-nowrap px-1 py-2 text-center group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)} style={{ width: 40, minWidth: 40, maxWidth: 40 }}>
         <Checkbox checked={isSelected} onChange={onToggleSelect} />
       </td>
 
       {/* Toggle — 70px */}
-      <td className={cn("min-w-[70px] max-w-[70px] whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)} style={{ width: 70 }}>
+      <td className={cn("whitespace-nowrap px-1 py-2 text-center group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)} style={{ width: 70, minWidth: 70, maxWidth: 70 }}>
         <Toggle
           checked={isActive}
           onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
@@ -121,7 +125,7 @@ export function CampaignRow({
 
       {/* Name + Objective + CBO/ABO */}
       <td
-        className={cn("whitespace-nowrap overflow-hidden px-2 py-2 sticky left-[110px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
+        className={cn("whitespace-nowrap overflow-hidden px-2 py-2 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
         style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth, maxWidth: nameColWidth } : undefined}
       >
         <div className="flex items-center gap-2 min-w-0 overflow-hidden">
@@ -168,58 +172,32 @@ export function CampaignRow({
               {issueCount} issue{issueCount > 1 ? 's' : ''}
             </button>
           )}
-        </div>
-      </td>
-
-      {/* Status */}
-      <td className="whitespace-nowrap px-3 py-2">
-        <div className="relative">
-          {isActive ? (
+          {/* Duplicate button */}
+          {storeId && (
             <button
-              type="button"
-              onMouseEnter={() => setShowStatusTooltip(true)}
-              onMouseLeave={() => setShowStatusTooltip(false)}
-              onClick={() => { if (!isExpanded) onToggleExpand(); }}
-              className={cn(
-                  'inline-flex items-center gap-1.5 text-[12px] font-semibold apple-status-active cursor-pointer',
-                'hover:bg-[#bbf7d0] dark:hover:bg-emerald-900/60 transition-all duration-150 hover:scale-[1.02]'
-              )}
+              onClick={(e) => { e.stopPropagation(); setShowDuplicateModal(true); }}
+              className="shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-surface-hover text-text-dimmed hover:text-primary transition-all duration-150"
+              title="Duplicate campaign"
             >
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-              Active
+              <Copy className="h-3.5 w-3.5" />
             </button>
-          ) : (
-            <span
-              className="inline-flex items-center gap-1.5 text-[12px] font-semibold apple-status-paused cursor-not-allowed"
-              title="Campaign is paused"
-            >
-              <span className="h-1.5 w-1.5 rounded-full bg-[#aeaeb2]" />
-              Paused
-            </span>
           )}
-          {showStatusTooltip && isActive && (
-            <div className="onescale-tooltip absolute left-0 top-full mt-1.5 z-50 min-w-[200px] p-3 px-4 animate-tooltip-in">
-              <div className="space-y-2 text-[12px]">
-                <div className="flex justify-between gap-6">
-                  <span className="text-[11px] text-text-muted">Status</span>
-                  <span className="font-bold text-emerald-600 dark:text-emerald-400">Active</span>
-                </div>
-                <div className="flex justify-between gap-6">
-                  <span className="text-[11px] text-text-muted">Running since</span>
-                  <span className="font-medium text-text-primary">{new Date(campaign.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
-                </div>
-                <div className="flex justify-between gap-6">
-                  <span className="text-[11px] text-text-muted">Active ad sets</span>
-                  <span className="font-bold text-text-primary">{campaign.adSets.length > 0 ? activeAdSetsCount : '\u2014'}</span>
-                </div>
-              </div>
-            </div>
-          )}
+          {/* Open in Meta Ads Manager */}
+          <a
+            href={`https://adsmanager.facebook.com/adsmanager/manage/campaigns?filter_set=SEARCH_BY_CAMPAIGN_GROUP_ID-STRING%1EEQUAL%1E%22${campaign.id}%22`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-surface-hover text-text-dimmed hover:text-primary transition-all duration-150"
+            title="Open in Meta Ads Manager"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </a>
         </div>
       </td>
 
       {/* Budget — ABO has no campaign-level budget (it lives on each ad set) */}
-      <td className="whitespace-nowrap px-3 py-2">
+      <td className="whitespace-nowrap px-3 py-2 text-center" style={{ width: 120, minWidth: 120, maxWidth: 120 }}>
         {isABO ? (
           <span className="inline-flex items-center gap-1 text-[13px] text-text-dimmed">
             <Lock className="h-3 w-3" />
@@ -239,7 +217,7 @@ export function CampaignRow({
       </td>
 
       {/* Bid Strategy */}
-      <td className="whitespace-nowrap px-3 py-2 text-[13px] text-text-secondary">
+      <td className="whitespace-nowrap px-3 py-2 text-[13px] text-text-secondary" style={{ width: 140, minWidth: 140, maxWidth: 140, textAlign: 'center' }}>
         <span>{bidStrategyLabels[campaign.bidStrategy] ?? campaign.bidStrategy}</span>
       </td>
 
@@ -258,6 +236,17 @@ export function CampaignRow({
           shopifyRoas={key === 'roas' ? shopifyRoas : undefined}
         />
       ))}
+
+      {/* Duplicate Modal */}
+      {showDuplicateModal && storeId && (
+        <DuplicateCampaignModal
+          campaignId={campaign.id}
+          campaignName={campaign.name}
+          storeId={storeId}
+          onClose={() => setShowDuplicateModal(false)}
+          onSuccess={() => onDuplicateSuccess?.()}
+        />
+      )}
     </tr>
   );
 }

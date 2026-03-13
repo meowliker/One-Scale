@@ -78,6 +78,7 @@ async function readCachedSnapshot(
   exactVariant: string,
   mode: string
 ): Promise<{ data: Ad[]; updatedAt?: string } | null> {
+  // First try exact variant match
   const exactSnapshot = useSupabase
     ? await getPersistentMetaEndpointSnapshot<Ad[]>(storeId, 'ads', adSetId, exactVariant)
     : getMetaEndpointSnapshot<Ad[]>(storeId, 'ads', adSetId, exactVariant);
@@ -85,6 +86,15 @@ async function readCachedSnapshot(
     return { data: exactSnapshot.data, updatedAt: exactSnapshot.updatedAt };
   }
 
+  // Always check 'latest' variant (populated by cron sync)
+  const latestSnapshot = useSupabase
+    ? await getPersistentMetaEndpointSnapshot<Ad[]>(storeId, 'ads', adSetId, 'latest')
+    : getMetaEndpointSnapshot<Ad[]>(storeId, 'ads', adSetId, 'latest');
+  if (latestSnapshot && latestSnapshot.data.length > 0) {
+    return { data: latestSnapshot.data, updatedAt: latestSnapshot.updatedAt };
+  }
+
+  // Try mode-specific snapshot
   const modeSnapshot = useSupabase
     ? await getPersistentMetaEndpointSnapshot<Ad[]>(storeId, 'ads', adSetId, `mode:${mode}`)
     : getMetaEndpointSnapshot<Ad[]>(storeId, 'ads', adSetId, `mode:${mode}`);
@@ -92,11 +102,12 @@ async function readCachedSnapshot(
     return { data: modeSnapshot.data, updatedAt: modeSnapshot.updatedAt };
   }
 
-  const latestSnapshot = useSupabase
+  // Try any available snapshot
+  const anySnapshot = useSupabase
     ? await getLatestPersistentMetaEndpointSnapshot<Ad[]>(storeId, 'ads', adSetId)
     : getLatestMetaEndpointSnapshot<Ad[]>(storeId, 'ads', adSetId);
-  if (latestSnapshot && latestSnapshot.data.length > 0) {
-    return { data: latestSnapshot.data, updatedAt: latestSnapshot.updatedAt };
+  if (anySnapshot && anySnapshot.data.length > 0) {
+    return { data: anySnapshot.data, updatedAt: anySnapshot.updatedAt };
   }
 
   return null;
@@ -206,6 +217,8 @@ export async function GET(request: NextRequest) {
       });
     }
   }
+
+  // No cache available - fetch live data (user is actively expanding this ad set)
 
   if (isMetaCallBlocked(storeId)) {
     if (cached || cachedByAdSet) {

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 
 import {
   Play,
@@ -30,6 +31,8 @@ import { InlineEdit } from '@/components/ui/InlineEdit';
 import { MetricCell } from './MetricCell';
 import { PerformanceSparkline } from './PerformanceSparkline';
 import { LatestActionsCell } from './LatestActionsCell';
+import { DuplicateAdModal } from './DuplicateAdModal';
+import type { Campaign } from '@/types/campaign';
 
 export interface AdRowProps {
   ad: Ad;
@@ -48,6 +51,14 @@ export interface AdRowProps {
   nameColWidth?: number;
   isToggling?: boolean;
   flashType?: 'success' | 'error';
+  storeId?: string;
+  accountId?: string;
+  adSetId?: string;
+  adSetName?: string;
+  campaignId?: string;
+  campaignName?: string;
+  campaigns?: Campaign[];
+  onDuplicateSuccess?: () => void;
 }
 
 const creativeTypeVariant: Record<string, 'info' | 'warning' | 'default'> = {
@@ -73,9 +84,18 @@ export function AdRow({
   nameColWidth,
   isToggling = false,
   flashType,
+  storeId,
+  accountId,
+  adSetId,
+  adSetName,
+  campaignId,
+  campaignName,
+  campaigns = [],
+  onDuplicateSuccess,
 }: AdRowProps) {
   const isActive = ad.status === 'ACTIVE';
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [showDuplicateModal, setShowDuplicateModal] = useState(false);
   const [showIssueDetails, setShowIssueDetails] = useState(false);
   const hasMedia = !!ad.creative.mediaUrl || !!ad.creative.thumbnailUrl;
   const isVideo = ad.creative.type === 'video';
@@ -95,10 +115,9 @@ export function AdRow({
     effectiveStatus.includes('REJECTED') ||
     effectiveStatus.includes('WITH_ISSUES') ||
     effectiveStatus.includes('PENDING');
+  const creativeTypeLabel = ad.creative.type === 'video' ? 'Video' : ad.creative.type === 'image' ? 'Image' : ad.creative.type === 'carousel' ? 'Carousel' : ad.creative.type;
   const statusLabel = !isActive ? ad.status : deliveryBlocked ? 'NOT DELIVERING' : 'ACTIVE';
   const statusVariant: 'success' | 'default' | 'danger' = !isActive ? 'default' : deliveryBlocked ? 'danger' : 'success';
-  const [showStatusTooltip, setShowStatusTooltip] = useState(false);
-  const creativeTypeLabel = ad.creative.type === 'video' ? 'Video' : ad.creative.type === 'image' ? 'Image' : ad.creative.type === 'carousel' ? 'Carousel' : ad.creative.type;
   const stickyBg = cn(
     'bg-[var(--apple-table-row-bg)]',
     isSelected && 'bg-[var(--apple-table-row-selected)]',
@@ -121,12 +140,12 @@ export function AdRow({
         )}
       >
         {/* Checkbox */}
-        <td className={cn("w-10 min-w-[40px] max-w-[40px] whitespace-nowrap py-2 pl-4 pr-3 sticky left-0 z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)}>
+        <td className={cn("whitespace-nowrap px-1 py-2 text-center group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)} style={{ width: 40, minWidth: 40, maxWidth: 40 }}>
           <Checkbox checked={isSelected} onChange={onToggleSelect} />
         </td>
 
         {/* Toggle */}
-        <td className={cn("min-w-[70px] max-w-[70px] whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)} style={{ width: 70 }}>
+        <td className={cn("whitespace-nowrap px-1 py-2 text-center group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150", stickyBg)} style={{ width: 70, minWidth: 70, maxWidth: 70 }}>
           <Toggle
             checked={isActive}
             onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
@@ -137,7 +156,7 @@ export function AdRow({
 
         {/* Name + Creative Thumbnail */}
         <td
-          className={cn("whitespace-nowrap overflow-hidden px-2 py-2 sticky left-[110px] z-10 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
+          className={cn("whitespace-nowrap overflow-hidden px-2 py-2 group-hover:!bg-[var(--apple-table-row-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
           style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth, maxWidth: nameColWidth } : undefined}
         >
           <div className="flex items-center gap-2 pl-1 min-w-0 overflow-hidden">
@@ -190,24 +209,28 @@ export function AdRow({
             </button>
 
             <div className="group flex flex-col gap-0.5 min-w-0 flex-1">
-              {/* Editable ad name */}
-              <div className="relative group/tooltip min-w-0">
+              {/* Editable ad name with duplicate button */}
+              <div className="min-w-0 flex items-center gap-1.5">
                 {onNameChange ? (
-                  <div className="truncate block">
+                  <div className="truncate block flex-1">
                     <InlineEdit
                       value={ad.name}
-                      onSave={onNameChange}
-                      type="text"
+                      onSave={(v) => onNameChange(v)}
                     />
                   </div>
                 ) : (
-                    <span className="block w-full truncate text-[14px] font-semibold text-text-primary" title={ad.name}>{ad.name}</span>
+                    <span className="block truncate text-[14px] font-semibold text-text-primary flex-1">{ad.name}</span>
                 )}
-                <div className="absolute left-0 top-full mt-1 z-50 pointer-events-none opacity-0 group-hover/tooltip:opacity-100 translate-y-1 group-hover/tooltip:translate-y-0 transition-all duration-150 ease-out">
-                  <div className="onescale-tooltip whitespace-nowrap max-w-xs">
-                    {ad.name}
-                  </div>
-                </div>
+                {/* Duplicate button - in front of name */}
+                {storeId && adSetId && campaignId && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setShowDuplicateModal(true); }}
+                    className="shrink-0 opacity-0 group-hover:opacity-100 p-1.5 rounded hover:bg-surface-hover text-text-dimmed hover:text-primary transition-all duration-150"
+                    title="Duplicate ad"
+                  >
+                    <Copy className="h-4 w-4" />
+                  </button>
+                )}
               </div>
               <div className="flex items-center gap-1.5">
                 <Badge variant={creativeTypeVariant[ad.creative.type] ?? 'default'}>
@@ -264,75 +287,13 @@ export function AdRow({
           </div>
         </td>
 
-        {/* Status */}
-      <td className="whitespace-nowrap px-3 py-3">
-          <div className="relative flex items-center gap-2">
-            {isActive && !deliveryBlocked ? (
-              <button
-                type="button"
-                onMouseEnter={() => setShowStatusTooltip(true)}
-                onMouseLeave={() => setShowStatusTooltip(false)}
-                className={cn(
-                  'inline-flex items-center gap-1.5 text-[12px] font-semibold apple-status-active cursor-pointer',
-                  'hover:bg-[#bbf7d0] dark:hover:bg-emerald-900/60 transition-all duration-150 hover:scale-[1.02]'
-                )}
-              >
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                Active
-              </button>
-            ) : (
-              <span
-                className={cn(
-                  'inline-flex items-center gap-1.5 text-[12px] font-semibold apple-status-paused',
-                  deliveryBlocked ? 'cursor-default' : 'cursor-not-allowed'
-                )}
-                title={deliveryBlocked ? 'Delivery is blocked' : 'Ad is paused'}
-              >
-                <span className="h-1.5 w-1.5 rounded-full bg-[#aeaeb2]" />
-                {deliveryBlocked ? 'Not Delivering' : 'Paused'}
-              </span>
-            )}
-            {showStatusTooltip && isActive && !deliveryBlocked && (
-              <div className="absolute left-0 top-full mt-1.5 z-50 min-w-[200px] rounded-[10px] border border-[#e5e7eb] dark:border-[#334155] bg-white dark:bg-[#1e293b] p-3 px-4 shadow-[0_8px_24px_rgba(0,0,0,0.12)] animate-tooltip-in">
-                <div className="space-y-2 text-[12px]">
-                  <div className="flex justify-between gap-6">
-                    <span className="text-[11px] text-text-muted">Status</span>
-                    <span className="font-bold text-emerald-600 dark:text-emerald-400">Active</span>
-                  </div>
-                  <div className="flex justify-between gap-6">
-                    <span className="text-[11px] text-text-muted">Creative</span>
-                    <span className="font-medium text-text-primary">{creativeTypeLabel}</span>
-                  </div>
-                  <div className="flex justify-between gap-6">
-                    <span className="text-[11px] text-text-muted">Spend</span>
-                    <span className="font-bold text-text-primary">${ad.metrics.spend.toFixed(2)}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-            {issues.length > 0 && (
-              <button
-                onClick={() => setShowIssueDetails(true)}
-                className={cn(
-                  'rounded-full border px-2 py-0.5 text-[11px] font-semibold',
-                  hasRejected
-                    ? 'border-red-400/60 bg-red-500/20 text-red-300'
-                    : 'border-amber-400/50 bg-amber-500/20 text-amber-300'
-                )}
-              >
-                {hasRejected ? 'Rejected' : `Issues ${issues.length}`}
-              </button>
-            )}
-          </div>
-        </td>
-
         {/* Budget — N/A for ads */}
-        <td className="whitespace-nowrap px-3 py-3 text-[14px] text-text-dimmed">
+        <td className="whitespace-nowrap px-3 py-3 text-[14px] text-text-dimmed text-center" style={{ width: 120, minWidth: 120, maxWidth: 120 }}>
           &mdash;
         </td>
 
         {/* Bid Strategy — N/A for ads */}
-        <td className="whitespace-nowrap px-3 py-3 text-[14px] text-text-dimmed">
+        <td className="whitespace-nowrap px-3 py-3 text-[14px] text-text-dimmed text-center" style={{ width: 140, minWidth: 140, maxWidth: 140 }}>
           &mdash;
         </td>
 
@@ -352,23 +313,20 @@ export function AdRow({
         ))}
       </tr>
 
-      {/* Creative Preview Modal */}
-      {previewOpen && (
-        <tr>
-          <td colSpan={8 + columnOrder.length}>
-            <CreativePreviewModal
-              ad={ad}
-              isVideo={isVideo}
-              hasMedia={hasMedia}
-              hasVideoId={hasVideoId}
-              videoProxyUrl={videoProxyUrl}
-              isActive={isActive}
-              statusLabel={statusLabel}
-              statusVariant={statusVariant}
-              onClose={() => setPreviewOpen(false)}
-            />
-          </td>
-        </tr>
+      {/* Creative Preview Modal - rendered via portal to avoid table layout issues */}
+      {previewOpen && typeof document !== 'undefined' && createPortal(
+        <CreativePreviewModal
+          ad={ad}
+          isVideo={isVideo}
+          hasMedia={hasMedia}
+          hasVideoId={hasVideoId}
+          videoProxyUrl={videoProxyUrl}
+          isActive={isActive}
+          statusLabel={statusLabel}
+          statusVariant={statusVariant}
+          onClose={() => setPreviewOpen(false)}
+        />,
+        document.body
       )}
 
       {showIssueDetails && primaryIssue && (
@@ -407,6 +365,23 @@ export function AdRow({
           </td>
         </tr>
       )}
+
+      {/* Duplicate Modal */}
+      {showDuplicateModal && storeId && adSetId && campaignId && (
+        <DuplicateAdModal
+          adId={ad.id}
+          adName={ad.name}
+          adSetId={adSetId}
+          adSetName={adSetName || 'Ad Set'}
+          campaignId={campaignId}
+          campaignName={campaignName || 'Campaign'}
+          storeId={storeId}
+          accountId={accountId || ''}
+          campaigns={campaigns}
+          onClose={() => setShowDuplicateModal(false)}
+          onSuccess={() => onDuplicateSuccess?.()}
+        />
+      )}
     </>
   );
 }
@@ -436,48 +411,15 @@ function CreativePreviewModal({
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoError, setVideoError] = useState(false);
-  const [videoLoading, setVideoLoading] = useState(isVideo);
+  const [videoLoading, setVideoLoading] = useState(false);
   const [iframePreviewSrc, setIframePreviewSrc] = useState<string | null>(null);
   const [iframeLoading, setIframeLoading] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
 
-  // Handle video events + abort on unmount (modal close)
+  // For videos, load iframe preview (more reliable than video proxy)
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    const handleCanPlay = () => setVideoLoading(false);
-    const handleError = () => {
-      console.warn('[video-preview] Video failed to load:', videoProxyUrl);
-      setVideoError(true);
-      setVideoLoading(false);
-    };
-
-    video.addEventListener('canplay', handleCanPlay);
-    video.addEventListener('error', handleError);
-
-    return () => {
-      video.removeEventListener('canplay', handleCanPlay);
-      video.removeEventListener('error', handleError);
-      // Abort any in-flight video download on modal close
-      video.pause();
-      video.removeAttribute('src');
-      video.load();
-    };
-  }, [videoProxyUrl]);
-
-  // Retry video playback
-  const handleRetryVideo = useCallback(() => {
-    setVideoError(false);
-    setVideoLoading(true);
-    setIframePreviewSrc(null);
-    setRetryCount((c) => c + 1);
-  }, []);
-
-  // When video proxy fails, fetch an iframe preview from Meta
-  useEffect(() => {
-    if (videoError && isVideo && !iframePreviewSrc && !iframeLoading) {
+    if (isVideo && !iframePreviewSrc && !iframeLoading) {
       setIframeLoading(true);
       const controller = new AbortController();
       fetch(`/api/meta/ad-preview?storeId=${encodeURIComponent(activeStoreId)}&adId=${encodeURIComponent(ad.id)}`, {
@@ -491,13 +433,20 @@ function CreativePreviewModal({
         })
         .catch((err) => {
           if (err.name !== 'AbortError') {
-            // Iframe preview also failed — silent
+            setVideoError(true);
           }
         })
         .finally(() => setIframeLoading(false));
       return () => controller.abort();
     }
-  }, [videoError, isVideo, iframePreviewSrc, iframeLoading, activeStoreId, ad.id]);
+  }, [isVideo, iframePreviewSrc, iframeLoading, activeStoreId, ad.id]);
+
+  // Retry video playback
+  const handleRetryVideo = useCallback(() => {
+    setVideoError(false);
+    setIframePreviewSrc(null);
+    setRetryCount((c) => c + 1);
+  }, []);
 
   const canPlayVideo = (isVideo && (hasVideoId || !!ad.creative.mediaUrl)) && !videoError;
 
@@ -507,7 +456,7 @@ function CreativePreviewModal({
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-4xl max-h-[85vh] overflow-hidden rounded-2xl bg-surface-elevated shadow-2xl flex flex-col"
+        className="relative w-full max-w-3xl max-h-[80vh] overflow-hidden rounded-2xl bg-surface-elevated shadow-2xl flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Close button — prominent */}
@@ -533,84 +482,48 @@ function CreativePreviewModal({
         </div>
 
         {/* Body — Media + Details side by side */}
-        <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2">
+        <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
           {/* Media Preview — clean, bounded container */}
-          <div className="bg-black flex flex-col items-center justify-center overflow-hidden max-h-[60vh] lg:max-h-none">
-            {/* Ad body text overlay */}
-            {ad.creative.body && (
-              <div className="w-full flex-shrink-0 bg-surface-elevated/95 px-4 py-2 border-b border-border">
-                <p className="text-xs text-text-secondary line-clamp-2">{ad.creative.body}</p>
-              </div>
-            )}
-
-            {/* Media area — fills available space, no aspect-square */}
-            <div className="relative flex-1 w-full flex items-center justify-center overflow-hidden min-h-[200px]">
-              {canPlayVideo ? (
-                <>
-                  {videoLoading && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/40 z-10">
-                      <div className="flex flex-col items-center gap-2">
-                        <div className="h-8 w-8 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        <span className="text-xs text-white font-medium">Loading video...</span>
-                      </div>
+          <div className="bg-black flex flex-col overflow-hidden lg:w-1/2 flex-shrink-0">
+            {/* Media area — fixed height container */}
+            <div className="relative flex-1 w-full flex items-center justify-center overflow-hidden bg-black" style={{ height: 400 }}>
+              {/* Video: use iframe preview */}
+              {isVideo && iframePreviewSrc ? (
+                <iframe
+                  src={iframePreviewSrc}
+                  className="w-full h-full border-0"
+                  allow="autoplay; encrypted-media"
+                  sandbox="allow-scripts allow-same-origin allow-popups"
+                />
+              ) : isVideo && iframeLoading ? (
+                <div className="flex flex-col items-center gap-2 p-4">
+                  <div className="h-8 w-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                  <span className="text-xs text-text-muted">Loading preview...</span>
+                </div>
+              ) : isVideo && videoError ? (
+                <div className="flex flex-col items-center gap-3 text-text-dimmed p-6">
+                  <AlertCircle className="h-10 w-10 text-amber-400" />
+                  <span className="text-sm font-medium text-text-secondary">Video unavailable</span>
+                  <span className="text-xs text-text-dimmed text-center max-w-[240px]">
+                    The video source could not be loaded. This can happen with older or restricted creatives.
+                  </span>
+                  <button
+                    onClick={handleRetryVideo}
+                    className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface-hover px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
+                  >
+                    Retry
+                  </button>
+                  {ad.creative.thumbnailUrl && (
+                    <div className="mt-2 rounded-lg overflow-hidden border border-border">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={ad.creative.thumbnailUrl}
+                        alt={ad.name}
+                        className="max-h-32 object-contain"
+                      />
                     </div>
                   )}
-                  <video
-                    key={retryCount}
-                    ref={videoRef}
-                    src={videoProxyUrl}
-                    poster={ad.creative.thumbnailUrl || undefined}
-                    controls
-                    autoPlay
-                    muted
-                    loop
-                    playsInline
-                    preload="none"
-                    crossOrigin="anonymous"
-                    className="w-full h-full object-contain"
-                  >
-                    Your browser does not support video playback.
-                  </video>
-                </>
-              ) : isVideo && videoError ? (
-                iframePreviewSrc ? (
-                  <iframe
-                    src={iframePreviewSrc}
-                    className="w-full h-full border-0"
-                    style={{ minHeight: 300 }}
-                    allow="autoplay; encrypted-media"
-                    sandbox="allow-scripts allow-same-origin allow-popups"
-                  />
-                ) : iframeLoading ? (
-                  <div className="flex flex-col items-center gap-2 p-4">
-                    <div className="h-8 w-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                    <span className="text-xs text-text-muted">Loading preview...</span>
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center gap-3 text-text-dimmed p-6">
-                    <AlertCircle className="h-10 w-10 text-amber-400" />
-                    <span className="text-sm font-medium text-text-secondary">Video unavailable</span>
-                    <span className="text-xs text-text-dimmed text-center max-w-[240px]">
-                      The video source could not be loaded. This can happen with older or restricted creatives.
-                    </span>
-                    <button
-                      onClick={handleRetryVideo}
-                      className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface-hover px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
-                    >
-                      Retry
-                    </button>
-                    {ad.creative.thumbnailUrl && (
-                      <div className="mt-2 rounded-lg overflow-hidden border border-border">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={ad.creative.thumbnailUrl}
-                          alt={ad.name}
-                          className="max-h-32 object-contain"
-                        />
-                      </div>
-                    )}
-                  </div>
-                )
+                </div>
               ) : hasMedia ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
@@ -647,7 +560,7 @@ function CreativePreviewModal({
           </div>
 
           {/* Performance Details — scrollable if needed */}
-          <div className="overflow-y-auto max-h-[60vh] lg:max-h-none p-4 space-y-4 border-l border-border">
+          <div className="overflow-y-auto lg:w-1/2 p-4 space-y-4 border-l border-border">
             {/* Key Metrics */}
             <div>
               <h4 className="text-xs font-semibold uppercase tracking-wider text-text-dimmed mb-2">Performance</h4>

@@ -3,7 +3,6 @@
 
 import { useState, useMemo } from 'react';
 import { useSmartFilterStore, type SmartSegmentId } from '@/stores/smartFilterStore';
-import { useColumnPresetStore } from '@/stores/columnPresetStore';
 import type { Campaign } from '@/types/campaign';
 import type { SparklineDataPoint } from '@/data/mockSparklineData';
 import { cn } from '@/lib/utils';
@@ -123,10 +122,12 @@ interface Props {
 }
 
 export function SmartSegmentsBar({ campaigns, sparklineData = {} }: Props) {
-  const { activeSegment, setActiveSegment, savedFilters, activeSavedFilterId,
+  const { activeSegment, setActiveSegment, segmentDays, setSegmentDays, savedFilters, activeSavedFilterId,
     setActiveSavedFilter, deleteSavedFilter } = useSmartFilterStore();
-  const { setPreset } = useColumnPresetStore();
   const [showFilterBuilder, setShowFilterBuilder] = useState(false);
+  
+  // Segments that support 3d/7d toggle
+  const supportsTimeToggle = activeSegment === 'kill-list' || activeSegment === 'needs-review' || activeSegment === 'scale-now';
 
   // Compute 7-day trend (% change in ROAS from first half to second half of 7-day window)
   const getTrend = (campaignId: string): number | null => {
@@ -156,7 +157,7 @@ export function SmartSegmentsBar({ campaigns, sparklineData = {} }: Props) {
       setActiveSegment(null);
     } else {
       setActiveSegment(seg.id);
-      setPreset(seg.presetId);
+      // Don't change column preset - keep user's selected columns
     }
   };
 
@@ -198,6 +199,34 @@ export function SmartSegmentsBar({ campaigns, sparklineData = {} }: Props) {
           </button>
         );
       })}
+
+      {/* 3d/7d Toggle - only show when Kill, Review, or Scale is active */}
+      {supportsTimeToggle && (
+        <div className="inline-flex items-center rounded-md border border-[rgba(0,0,0,0.1)] bg-white overflow-hidden ml-1">
+          <button
+            onClick={() => setSegmentDays(3)}
+            className={cn(
+              'px-2 py-0.5 text-[10px] font-semibold transition-all duration-150',
+              segmentDays === 3
+                ? 'bg-[#1d1d1f] text-white'
+                : 'text-[#6e6e73] hover:bg-[#f5f5f7]'
+            )}
+          >
+            3d
+          </button>
+          <button
+            onClick={() => setSegmentDays(7)}
+            className={cn(
+              'px-2 py-0.5 text-[10px] font-semibold transition-all duration-150',
+              segmentDays === 7
+                ? 'bg-[#1d1d1f] text-white'
+                : 'text-[#6e6e73] hover:bg-[#f5f5f7]'
+            )}
+          >
+            7d
+          </button>
+        </div>
+      )}
 
       {/* Divider */}
       <span className="mx-1 h-3.5 w-px bg-[rgba(0,0,0,0.08)]" />
