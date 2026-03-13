@@ -18,6 +18,7 @@ import {
   BarChart3,
   FileText,
   Shield,
+  Rocket,
 } from 'lucide-react';
 import type { SidebarConfig } from '@/types/navigation';
 
@@ -32,6 +33,7 @@ export const sidebarConfig: SidebarConfig = {
     { label: 'Ads Manager', href: '/dashboard/ads-manager', icon: Megaphone },
     { label: 'P&L Tracking', href: '/dashboard/pnl', icon: DollarSign },
     { label: 'Creative Testing', href: '/dashboard/creative-testing', icon: FlaskConical },
+    { label: 'Creative Launch', href: '/dashboard/creative-launch', icon: Rocket },
     { label: 'Automation', href: '/dashboard/automation', icon: Workflow },
     { label: 'Tracking', href: '/dashboard/tracking', icon: Crosshair },
     { label: 'Attribution', href: '/dashboard/attribution', icon: BarChart3 },
