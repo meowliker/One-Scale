@@ -1,0 +1,35 @@
+name: PRISM Full Backfill
+on:
+  schedule:
+    - cron: '0 */6 * * *' # Every 6 hours
+  workflow_dispatch:
+    inputs:
+      store_id:
+        description: 'Specific store ID (leave empty for all)'
+        required: false
+      job_type:
+        description: 'Job type: all | orders | balance_transactions | classify | snapshots'
+        required: false
+        default: 'all'
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run PRISM Backfill
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          APP_URL: ${{ secrets.APP_URL }}
+          STORE_ID: ${{ inputs.store_id }}
+          JOB_TYPE: ${{ inputs.job_type || 'all' }}
+        run: node scripts/prism-backfill.js
