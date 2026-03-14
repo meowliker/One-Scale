@@ -176,7 +176,7 @@ export interface CampaignMappingRow {
 
 export interface PnLWarning {
   type: 'missing_cogs' | 'estimated_fees' | 'no_fee_data' | 'unattributed_spend'
-    | 'no_products' | 'stale_data' | 'missing_shipping' | 'currency_mismatch';
+    | 'no_products' | 'stale_data' | 'missing_shipping' | 'currency_mismatch' | 'high_expense_ratio';
   message: string;
   severity: 'info' | 'warning' | 'error';
   productIds?: string[];
@@ -219,6 +219,8 @@ export interface PnLResult {
   totalChargebackPending: number;
   totalNetProfit: number;
   totalMargin: number;
+  totalCustomExpenses: number;
+  expenseBreakdown: { name: string; amount: number }[];
   orderCount: number;
 
   // Breakdowns
