@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  rest,
   isSupabasePersistenceEnabled,
   listPersistentStores,
 } from '@/app/api/lib/supabase-persistence';
@@ -69,4 +70,40 @@ export async function POST(request: NextRequest) {
     daysBack,
     results,
   });
+}
+
+/**
+ * DELETE /api/admin/recompute-pnl
+ *
+ * Deletes all daily_pnl_snapshots for all stores.
+ * Use this to reset bad data so the dashboard falls back to live computation.
+ */
+export async function DELETE(request: NextRequest) {
+  if (request.headers.get('authorization') !== `Bearer ${process.env.CRON_SECRET}`) {
+    return new Response('Unauthorized', { status: 401 });
+  }
+
+  if (!isSupabasePersistenceEnabled()) {
+    return NextResponse.json({ error: 'Supabase not configured' }, { status: 503 });
+  }
+
+  const stores = await listPersistentStores();
+  let totalDeleted = 0;
+
+  for (const store of stores) {
+    try {
+      const rows = await rest<Array<{ date: string }>>(
+        `/daily_pnl_snapshots?store_id=eq.${encodeURIComponent(store.id)}&select=date`
+      );
+      if (rows && rows.length > 0) {
+        await rest(
+          `/daily_pnl_snapshots?store_id=eq.${encodeURIComponent(store.id)}`,
+          { method: 'DELETE' }
+        );
+        totalDeleted += rows.length;
+      }
+    } catch { /* ignore */ }
+  }
+
+  return NextResponse.json({ ok: true, totalDeleted, storesCleared: stores.length });
 }
