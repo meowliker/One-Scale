@@ -2,11 +2,11 @@
  * PRISM — Pattern Recognition & Intelligence for Store Metrics
  * OneScale's behavioral intelligence and data infrastructure engine
  *
- * Classification Router
+ * Universal Classification Router
  *
- * Routes each store through the correct classification path based on store type.
- * Never runs unnecessary classification — single_product and general stores skip
- * the signal stack entirely.
+ * One path for every store: behavioral signals → relative comparison → classification.
+ * No store type detection. No assumptions about what the store sells.
+ * Classification emerges from the data, not from guessing the store model.
  *
  * Manual overrides are permanent and never overwritten during re-runs.
  * One store's classification never affects another.
@@ -14,11 +14,9 @@
 
 import { rest } from '@/app/api/lib/supabase-persistence';
 import { PRISM } from '@/lib/prism';
-import { detectStoreType } from './storeTypeDetector';
 import { analyzeOrderPatterns, partitionByDataSufficiency } from './orderPatternAnalyzer';
 import { computeSignals, classifyProduct, computeMedianPrice, checkShopifyTags } from './signalStackClassifier';
-import { getStoreIntelligence } from './storeIntelligence';
-import type { StoreType, SignalStackResult, ProductOrderPattern } from './types';
+import type { SignalStackResult } from './types';
 
 // ── Interfaces ───────────────────────────────────────────────
 
@@ -41,37 +39,23 @@ export async function classifyAllProducts(storeId: string): Promise<ClassifyResu
   const enc = (v: string) => encodeURIComponent(v);
 
   // ── Bootstrap path: stores with < 30 recent orders ──────────────────
-  // Provides best-guess classifications with low confidence instead of
-  // showing everything as 'pending'. Automatically upgraded when more
-  // data arrives via the weekly cron or next onboarding run.
   const recentCutoff = new Date(Date.now() - PRISM.dataWindows.behavioralAnalysisDays * 86400000).toISOString();
   const recentOrders = await rest<Array<{ shopify_order_id: string; line_items: string; total_price: number }>>(
     `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${enc(recentCutoff)}&order_status=neq.cancelled&financial_status=neq.refunded&select=shopify_order_id,line_items,total_price&limit=500`
   ).catch(() => []);
 
   if (recentOrders.length < PRISM.classification.minOrdersForBehavioral) {
-    console.log(`[PRISM:Classify] ${storeId}: ${recentOrders.length} recent orders — using bootstrap classifier`);
+    console.log(`[PRISM:Classify] ${storeId}: ${recentOrders.length} recent orders — using bootstrap`);
     return bootstrapClassify(storeId, recentOrders);
   }
 
-  // 1. Always re-detect store type — cached values may be stale
-  await detectStoreType(storeId);
-  const intel = await getStoreIntelligence(storeId);
-
-  // Determine effective store type (merchant override takes priority)
-  const rawIntel = intel as Record<string, unknown> | null;
-  const merchantConfirmed = rawIntel?.merchant_confirmed_type as StoreType | null;
-  const detectedType = (rawIntel?.store_type as StoreType) || 'mixed';
-  const storeType: StoreType = merchantConfirmed || detectedType;
-
-  // 2. Load existing manual overrides — NEVER overwrite these
+  // 1. Load manual overrides — NEVER overwrite
   const existingOverrides = await rest<StoredClassification[]>(
     `/product_classifications?store_id=eq.${enc(storeId)}&manual_override=eq.true&select=product_id,classification,manual_override,confidence`
   ).catch(() => [] as StoredClassification[]);
-
   const manualOverrideIds = new Set(existingOverrides.map(o => o.product_id));
 
-  // 2b. Tag-first pass — check Shopify tags before signal stack
+  // 2. Tag-first pass — Shopify tags are merchant intent (confidence 100)
   const allPatterns = await analyzeOrderPatterns(storeId);
   const tagMatchedResults: SignalStackResult[] = [];
   const tagMatchedIds = new Set<string>();
@@ -100,194 +84,27 @@ export async function classifyAllProducts(storeId: string): Promise<ClassifyResu
     }
   }
 
-  // 3. Route by store type (skip tag-matched products)
-  let results: SignalStackResult[];
-
-  switch (storeType) {
-    case 'single_product':
-      // Only truly single-product stores (≤3 products or 85%+ revenue share)
-      results = await markAllAsMain(storeId, storeType, manualOverrideIds, tagMatchedIds);
-      break;
-    case 'subscription':
-      results = await classifyWithSubscriptionPriority(storeId, manualOverrideIds, tagMatchedIds);
-      break;
-    case 'general':
-      // General stores run behavioral classifier — never markAllAsMain
-      // 'general' only triggers for true catalogs (50+ product types)
-      // which still need behavioral signals to find upsells
-    case 'funnel':
-    case 'mixed':
-    default:
-      results = await runFullSignalStack(storeId, manualOverrideIds, tagMatchedIds);
-      break;
-  }
-
-  // Merge tag-matched results
-  results = [...tagMatchedResults, ...results];
-
-  // 4. Apply edge cases to ALL results regardless of store type
-  results = applyEdgeCases(results);
-
-  // 5. Enforce: low-confidence non-tag/non-store-rule → pending
-  results = enforceConfidenceFloor(results);
-
-  // 6. Persist to product_classifications table (skip manual overrides)
-  await persistClassifications(storeId, results, manualOverrideIds);
-
-  // 7. Validate — flag and auto-correct suspicious distributions
-  await validateClassifications(storeId);
-
-  // 8. Update store_intelligence timestamp
-  await rest(
-    `/store_intelligence?store_id=eq.${enc(storeId)}`,
-    {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-      body: JSON.stringify({
-        store_type_detected_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      }),
-    }
-  ).catch(() => { /* table might not exist */ });
-
-  const needsReview = results.filter(r => r.needs_review).length;
-  return { classified: results.length, needsReview, results };
-}
-
-// ── Store-Type-Specific Paths ────────────────────────────────
-
-/**
- * single_product & general: mark ALL products as MAIN.
- * No signal stack needed. Every product is independent/hero.
- */
-async function markAllAsMain(
-  storeId: string,
-  reason: string,
-  skipIds: Set<string>,
-  tagMatchedIds: Set<string> = new Set(),
-): Promise<SignalStackResult[]> {
-  const patterns = await analyzeOrderPatterns(storeId);
-  return patterns
-    .filter(p => !skipIds.has(p.product_id) && !tagMatchedIds.has(p.product_id))
-    .map(p => ({
-      product_id: p.product_id,
-      product_title: p.product_title,
-      product_type: p.product_type,
-      classification: 'main' as const,
-      confidence: 90,
-      method: 'store_type_rule' as const,
-      signals: null,
-      alone_pct: p.alone_pct,
-      first_position_pct: p.first_position_pct,
-      avg_position: p.avg_position,
-      revenue_share: p.revenue_share,
-      total_orders_analyzed: p.total_orders,
-      needs_review: false,
-    }));
-}
-
-/**
- * subscription: subscription products → MAIN always.
- * Non-subscription products → run signal stack.
- */
-async function classifyWithSubscriptionPriority(
-  storeId: string,
-  skipIds: Set<string>,
-  tagMatchedIds: Set<string> = new Set(),
-): Promise<SignalStackResult[]> {
-  const patterns = await analyzeOrderPatterns(storeId);
-  const results: SignalStackResult[] = [];
-
-  const subscriptionPatterns: ProductOrderPattern[] = [];
-  const nonSubscriptionPatterns: ProductOrderPattern[] = [];
-
-  for (const p of patterns) {
-    if (skipIds.has(p.product_id) || tagMatchedIds.has(p.product_id)) continue;
-    if (p.requires_selling_plan) {
-      subscriptionPatterns.push(p);
-    } else {
-      nonSubscriptionPatterns.push(p);
-    }
-  }
-
-  // Subscription products → MAIN
-  for (const p of subscriptionPatterns) {
-    results.push({
-      product_id: p.product_id,
-      product_title: p.product_title,
-      product_type: p.product_type,
-      classification: 'main',
-      confidence: 95,
-      method: 'store_type_rule',
-      signals: null,
-      alone_pct: p.alone_pct,
-      first_position_pct: p.first_position_pct,
-      avg_position: p.avg_position,
-      revenue_share: p.revenue_share,
-      total_orders_analyzed: p.total_orders,
-      needs_review: false,
-    });
-  }
-
-  // Non-subscription → signal stack
-  const { sufficient, pending } = partitionByDataSufficiency(nonSubscriptionPatterns);
-  const medianPrice = computeMedianPrice(sufficient);
-
-  for (const p of sufficient) {
-    const signals = computeSignals(p, medianPrice);
-    results.push(classifyProduct(p, signals));
-  }
-
-  // Pending products (< 10 orders)
-  for (const p of pending) {
-    results.push({
-      product_id: p.product_id,
-      product_title: p.product_title,
-      product_type: p.product_type,
-      classification: 'pending',
-      confidence: 0,
-      method: 'edge_case',
-      signals: null,
-      alone_pct: p.alone_pct,
-      first_position_pct: p.first_position_pct,
-      avg_position: p.avg_position,
-      revenue_share: p.revenue_share,
-      total_orders_analyzed: p.total_orders,
-      needs_review: false,
-    });
-  }
-
-  return results;
-}
-
-/**
- * funnel & mixed: run full signal stack for all products.
- */
-async function runFullSignalStack(
-  storeId: string,
-  skipIds: Set<string>,
-  tagMatchedIds: Set<string> = new Set(),
-): Promise<SignalStackResult[]> {
-  const patterns = await analyzeOrderPatterns(storeId);
-  const filtered = patterns.filter(p => !skipIds.has(p.product_id) && !tagMatchedIds.has(p.product_id));
+  // 3. ONE UNIVERSAL PATH — behavioral signal stack for all products
+  //    No store type routing. No markAllAsMain. No assumptions.
+  const filtered = allPatterns.filter(p => !manualOverrideIds.has(p.product_id) && !tagMatchedIds.has(p.product_id));
   const { sufficient, pending } = partitionByDataSufficiency(filtered);
   const medianPrice = computeMedianPrice(sufficient);
 
-  const results: SignalStackResult[] = [];
+  const behavioralResults: SignalStackResult[] = [];
 
   for (const p of sufficient) {
     const signals = computeSignals(p, medianPrice);
-    results.push(classifyProduct(p, signals));
+    behavioralResults.push(classifyProduct(p, signals));
   }
 
   for (const p of pending) {
-    results.push({
+    behavioralResults.push({
       product_id: p.product_id,
       product_title: p.product_title,
       product_type: p.product_type,
       classification: 'pending',
       confidence: 0,
-      method: 'edge_case',
+      method: 'insufficient_data',
       signals: null,
       alone_pct: p.alone_pct,
       first_position_pct: p.first_position_pct,
@@ -298,15 +115,29 @@ async function runFullSignalStack(
     });
   }
 
-  return results;
+  // Merge tag results + behavioral results
+  let results = [...tagMatchedResults, ...behavioralResults];
+
+  // 4. Edge cases (gift cards → excluded)
+  results = applyEdgeCases(results);
+
+  // 5. Confidence floor — low confidence → pending
+  results = enforceConfidenceFloor(results);
+
+  // 6. Persist
+  await persistClassifications(storeId, results, manualOverrideIds);
+
+  // 7. Validate distribution
+  await validateClassifications(storeId);
+
+  const needsReview = results.filter(r => r.needs_review).length;
+  console.log(`[PRISM:Classify] ${storeId}: ${results.length} classified, ${needsReview} need review`);
+  return { classified: results.length, needsReview, results };
 }
 
-// ── Edge Cases ───────────────────────────────────────────────
-
 // ── Bootstrap Classifier ──────────────────────────────────────
-// For stores with < 30 recent orders. Uses alone-rate, Shopify tags,
-// and title hints to produce best-guess classifications with low
-// confidence. Automatically superseded once enough data exists.
+// For stores with < 30 recent orders. Uses alone-rate and title hints.
+// Ambiguous = pending. Never guesses main.
 
 async function bootstrapClassify(
   storeId: string,
@@ -314,13 +145,11 @@ async function bootstrapClassify(
 ): Promise<ClassifyResult> {
   const enc = (v: string) => encodeURIComponent(v);
 
-  // Load manual overrides — NEVER overwrite
   const existingOverrides = await rest<StoredClassification[]>(
     `/product_classifications?store_id=eq.${enc(storeId)}&manual_override=eq.true&select=product_id,classification,manual_override,confidence`
   ).catch(() => [] as StoredClassification[]);
   const manualOverrideIds = new Set(existingOverrides.map(o => o.product_id));
 
-  // Aggregate per-product stats from the available orders
   const stats = new Map<string, { title: string; productType: string; total: number; alone: number; revenue: number }>();
   for (const order of orders) {
     let items: Array<{ product_id?: string | number; title?: string; price?: string; quantity?: number; product_type?: string }>;
@@ -338,55 +167,42 @@ async function bootstrapClassify(
   }
 
   const results: SignalStackResult[] = [];
-  const UPSELL_TITLE_HINTS = ['upsell', 'upgrade', 'bundle', 'bonus', 'add-on', 'addon', 'extra', 'premium', 'vip', 'rush'];
+  const UPSELL_HINTS = ['upsell', 'upgrade', 'bundle', 'bonus', 'add-on', 'addon', 'extra', 'premium', 'vip', 'rush'];
 
   for (const [pid, s] of stats) {
     if (manualOverrideIds.has(pid)) continue;
 
-    // Check Shopify tags via any tag overrides in the order data
-    const tagResult = checkShopifyTags(''); // Tags not available from line_items — handled by full classifier later
     let classification: string;
     let confidence: number;
     let method: string;
-
     const aloneRate = s.total > 0 ? s.alone / s.total : 0;
     const titleLower = s.title.toLowerCase();
 
     if (s.total >= 3) {
-      // Enough orders for alone-rate signal
       if (aloneRate >= 0.7) {
         classification = 'main'; confidence = Math.min(35 + s.total * 3, 65); method = 'bootstrap_alone_rate';
       } else if (aloneRate <= 0.1) {
         classification = 'upsell'; confidence = Math.min(35 + s.total * 3, 65); method = 'bootstrap_alone_rate';
       } else {
-        // Ambiguous alone rate — honest uncertainty, not a guess
         classification = 'pending'; confidence = 25; method = 'bootstrap_ambiguous';
       }
-    } else if (UPSELL_TITLE_HINTS.some(kw => titleLower.includes(kw))) {
+    } else if (UPSELL_HINTS.some(kw => titleLower.includes(kw))) {
       classification = 'upsell'; confidence = 20; method = 'bootstrap_title_hint';
     } else {
-      // Too few orders and no title signal — pending, not main
       classification = 'pending'; confidence = 15; method = 'bootstrap_insufficient';
     }
 
-    // Gift cards always excluded
+    // Gift cards → excluded
     if (s.productType.toLowerCase() === 'gift card' || s.productType.toLowerCase() === 'gift_card') {
       classification = 'excluded'; confidence = 100; method = 'edge_case';
     }
 
     results.push({
-      product_id: pid,
-      product_title: s.title,
-      product_type: s.productType,
+      product_id: pid, product_title: s.title, product_type: s.productType,
       classification: classification as SignalStackResult['classification'],
-      confidence,
-      method: method as SignalStackResult['method'],
-      signals: null,
-      alone_pct: aloneRate * 100,
-      first_position_pct: 0,
-      avg_position: 0,
-      revenue_share: 0,
-      total_orders_analyzed: s.total,
+      confidence, method: method as SignalStackResult['method'],
+      signals: null, alone_pct: aloneRate * 100, first_position_pct: 0,
+      avg_position: 0, revenue_share: 0, total_orders_analyzed: s.total,
       needs_review: confidence < 50,
     });
   }
@@ -402,31 +218,21 @@ async function bootstrapClassify(
 function applyEdgeCases(results: SignalStackResult[]): SignalStackResult[] {
   return results.map(r => {
     const typeLower = (r.product_type || '').toLowerCase();
-
-    // Gift cards → EXCLUDE always
     if (typeLower === 'gift card' || typeLower === 'gift_card') {
       return { ...r, classification: 'excluded', confidence: 100, method: 'edge_case', needs_review: false };
     }
-
-    // $0 product with alone_pct < 2% → EXCLUDE (free gift with purchase)
-    // NOTE: we don't have price in SignalStackResult directly, so this is handled
-    // in the classifier itself via pattern.price
-
-    // $0 product with alone_pct > 30% → MAIN (free lead magnet)
-    // Also handled in classifier
-
     return r;
   });
 }
 
-// ── Confidence Floor Enforcement ─────────────────────────────
-// Products with low confidence that aren't from trusted sources
-// (shopify_tag, store_type_rule, manual) get downgraded to pending.
+// ── Confidence Floor ─────────────────────────────────────────
+// Only shopify_tag and manual_override are trusted. Everything else
+// must meet the confidence threshold or gets downgraded to pending.
 
 function enforceConfidenceFloor(results: SignalStackResult[]): SignalStackResult[] {
-  const TRUSTED_METHODS = new Set(['shopify_tag', 'store_type_rule', 'manual_override', 'edge_case']);
+  const TRUSTED = new Set(['shopify_tag', 'manual_override', 'edge_case']);
   return results.map(r => {
-    if (TRUSTED_METHODS.has(r.method)) return r;
+    if (TRUSTED.has(r.method)) return r;
     if (r.classification === 'pending' || r.classification === 'excluded') return r;
     if (r.confidence < PRISM.classification.lowConfidenceThreshold) {
       return { ...r, classification: 'pending' as const, needs_review: true };
@@ -436,7 +242,6 @@ function enforceConfidenceFloor(results: SignalStackResult[]): SignalStackResult
 }
 
 // ── Post-Classification Validation ──────────────────────────
-// Flags and auto-corrects suspicious distributions.
 
 async function validateClassifications(storeId: string): Promise<void> {
   const enc = (v: string) => encodeURIComponent(v);
@@ -448,16 +253,13 @@ async function validateClassifications(storeId: string): Promise<void> {
 
   const nonManual = rows.filter(r => !r.manual_override);
   const total = nonManual.length;
-  if (total === 0) return;
+  if (total <= 5) return;
 
   const mainCount = nonManual.filter(r => r.classification === 'main').length;
   const mainRate = mainCount / total;
 
-  if (mainRate > 0.5 && total > 5) {
-    console.warn(
-      `[PRISM:Classify] WARNING — Store ${storeId}: ${Math.round(mainRate * 100)}% MAIN (${mainCount}/${total}). Auto-correcting low-confidence.`
-    );
-    // Downgrade low-confidence MAINs to pending
+  if (mainRate > 0.4) {
+    console.warn(`[PRISM:Classify] WARNING — ${storeId}: ${Math.round(mainRate * 100)}% MAIN (${mainCount}/${total}). Auto-correcting.`);
     await rest(
       `/product_classifications?store_id=eq.${enc(storeId)}&classification=eq.main&manual_override=eq.false&confidence=lt.${PRISM.classification.lowConfidenceThreshold}`,
       {
@@ -468,10 +270,9 @@ async function validateClassifications(storeId: string): Promise<void> {
     ).catch(() => null);
   }
 
-  // Log final distribution
   const dist: Record<string, number> = {};
   for (const r of rows) dist[r.classification] = (dist[r.classification] || 0) + 1;
-  console.log(`[PRISM:Classify] Final distribution for ${storeId}: ${JSON.stringify(dist)}`);
+  console.log(`[PRISM:Classify] Final: ${storeId} → ${JSON.stringify(dist)}`);
 }
 
 // ── Persistence ──────────────────────────────────────────────
@@ -492,7 +293,7 @@ async function persistClassifications(
       classification: r.classification,
       confidence: r.confidence,
       classification_method: r.method,
-      detection_method: r.method, // backward compat with existing column
+      detection_method: r.method,
       signals_used: r.signals || {},
       alone_pct: r.alone_pct,
       first_position_pct: r.first_position_pct,
@@ -507,19 +308,15 @@ async function persistClassifications(
 
   if (rows.length === 0) return;
 
-  // Batch upsert in chunks of 50
   for (let i = 0; i < rows.length; i += 50) {
     const chunk = rows.slice(i, i + 50);
     await rest(
       '/product_classifications?on_conflict=store_id,product_id',
       {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Prefer: 'resolution=merge-duplicates,return=minimal',
-        },
+        headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
         body: JSON.stringify(chunk),
       }
-    ).catch(() => { /* table might not exist yet */ });
+    ).catch(() => null);
   }
 }

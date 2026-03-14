@@ -242,7 +242,7 @@ export interface PnLResult {
 
 // ── Signal Stack Classifier ─────────────────────────────────
 
-export type SignalStackMethod = 'signal_stack' | 'store_type_rule' | 'manual' | 'edge_case' | 'shopify_tag';
+export type SignalStackMethod = 'signal_stack' | 'store_type_rule' | 'manual' | 'edge_case' | 'shopify_tag' | 'insufficient_data' | 'bootstrap_alone_rate' | 'bootstrap_ambiguous' | 'bootstrap_insufficient' | 'bootstrap_title_hint';
 
 export interface ClassificationSignals {
   alone_pct_score: number;
