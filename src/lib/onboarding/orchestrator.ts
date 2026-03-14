@@ -784,49 +784,12 @@ export async function fastTrackOnboarding(
     console.warn('[PRISM:FastTrack] Classification failed:', e instanceof Error ? e.message : e);
   }
 
-  // 5. Build P&L snapshots for last 30 days — pure math — ~1s
-  let pnlDays = 0;
-  try {
-    const { calculatePnL } = await import('@/lib/pnl/universalCalculator');
-    const today = new Date().toISOString().split('T')[0];
-    const startDate = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
-    let currentDate = startDate;
+  // P&L snapshots are NOT built during fast-track — too slow for synchronous flow.
+  // The full onboarding pipeline (fire-and-forget) builds them in background.
+  // Dashboard P&L routes already compute from raw data when snapshots are missing.
 
-    while (currentDate <= today) {
-      try {
-        const pnl = await calculatePnL(storeId, currentDate, currentDate, { includeProductBreakdown: true });
-        if (pnl.orderCount > 0 || pnl.totalAdSpend > 0) {
-          await rest('/daily_pnl_snapshots?on_conflict=store_id,date', {
-            method: 'POST',
-            headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-            body: JSON.stringify([{
-              store_id: storeId, date: currentDate,
-              revenue: pnl.totalRevenue, order_count: pnl.orderCount,
-              cogs: pnl.totalCogs, ad_spend: pnl.totalAdSpend,
-              shipping_cost: pnl.totalShipping, transaction_fees: pnl.totalFees,
-              refunds: pnl.totalRefunds, full_refund_count: 0, partial_refund_count: 0,
-              full_refund_amount: 0, partial_refund_amount: 0,
-              chargeback_loss: pnl.totalChargebackLoss, chargeback_won: pnl.totalChargebackWon,
-              net_profit: pnl.totalNetProfit, margin: pnl.totalMargin,
-              attribution_rate: 0, warnings: JSON.stringify(pnl.warnings),
-              product_breakdown: JSON.stringify(pnl.products), fee_method: pnl.feeMethod,
-              synced_at: new Date().toISOString(), shopify_synced: pnl.orderCount > 0, meta_synced: pnl.totalAdSpend > 0,
-            }]),
-          }).catch(() => null);
-          pnlDays++;
-        }
-      } catch { /* skip individual day failures */ }
-      const next = new Date(currentDate);
-      next.setDate(next.getDate() + 1);
-      currentDate = next.toISOString().split('T')[0];
-    }
-    console.log(`[PRISM:FastTrack] Built ${pnlDays} P&L snapshots in ${Date.now() - start}ms`);
-  } catch (e) {
-    console.warn('[PRISM:FastTrack] P&L build failed:', e instanceof Error ? e.message : e);
-  }
-
-  console.log(`[PRISM:FastTrack] Complete in ${Date.now() - start}ms — ${totalOrders} orders, ${classified} classified, ${pnlDays} P&L days`);
-  return { orders: totalOrders, classified, pnlDays };
+  console.log(`[PRISM:FastTrack] Complete in ${Date.now() - start}ms — ${totalOrders} orders, ${classified} classified`);
+  return { orders: totalOrders, classified, pnlDays: 0 };
 }
 
 // ── Main Entry Point ─────────────────────────────────────────
