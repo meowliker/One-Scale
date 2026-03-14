@@ -34,6 +34,9 @@ export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChar
     addCost(isDigital ? 'Txn Fees' : 'Fees', entry.fees);
     addCost('Refunds', entry.refunds);
     addCost('Chargebacks', entry.chargebackLoss || 0);
+    if ((entry.customExpenses || 0) > 0) {
+      result.push({ name: 'Custom Expenses', amount: entry.customExpenses!, pct: (entry.customExpenses! / rev) * 100, type: 'cost' });
+    }
 
     const np = entry.netProfit;
     result.push({

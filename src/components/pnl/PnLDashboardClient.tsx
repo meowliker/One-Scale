@@ -9,6 +9,8 @@ import { DateRangePicker } from '@/components/ui/DateRangePicker';
 import { getDateRange } from '@/lib/dateUtils';
 import { formatDateInTimezone } from '@/lib/timezone';
 import { formatCurrency } from '@/lib/utils';
+import { calculateExpenses } from '@/lib/pnl/expenseEngine';
+import type { CustomExpense } from '@/types/pnlSettings';
 import { useStoreStore } from '@/stores/storeStore';
 import { PnLSummaryCards } from '@/components/pnl/PnLSummaryCards';
 import { PnLWaterfallChart } from '@/components/pnl/PnLWaterfallChart';
@@ -38,14 +40,14 @@ const allBottomTabs = [
   { id: 'breakdown', label: 'Breakdown', digital: true },
 ];
 
-function computeEntryFromDaily(dailyPnL: PnLEntry[], range: DateRange): PnLEntry {
+function computeEntryFromDaily(dailyPnL: PnLEntry[], range: DateRange, expenses?: CustomExpense[]): PnLEntry {
   const startStr = formatDateInTimezone(range.start);
   const endStr = formatDateInTimezone(range.end);
 
   const filtered = dailyPnL.filter((day) => day.date >= startStr && day.date <= endStr);
 
   if (filtered.length === 0) {
-    return { date: startStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0, fullRefundCount: 0, partialRefundCount: 0, fullRefundAmount: 0, partialRefundAmount: 0, chargebackLoss: 0, chargebackWon: 0 };
+    return { date: startStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0, fullRefundCount: 0, partialRefundCount: 0, fullRefundAmount: 0, partialRefundAmount: 0, chargebackLoss: 0, chargebackWon: 0, customExpenses: 0, expenseBreakdown: [] };
   }
 
   const totals = filtered.reduce(
@@ -67,7 +69,15 @@ function computeEntryFromDaily(dailyPnL: PnLEntry[], range: DateRange): PnLEntry
     { revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, orderCount: 0, fullRefundCount: 0, partialRefundCount: 0, fullRefundAmount: 0, partialRefundAmount: 0, chargebackLoss: 0, chargebackWon: 0 },
   );
 
-  const netProfit = totals.revenue - totals.cogs - totals.adSpend - totals.shipping - totals.fees - totals.refunds - totals.chargebackLoss + totals.chargebackWon;
+  let customExpensesTotal = 0;
+  let expenseBreakdown: { name: string; amount: number }[] = [];
+  if (expenses && expenses.length > 0) {
+    const result = calculateExpenses(expenses, { start: startStr, end: endStr });
+    customExpensesTotal = result.totalExpenses;
+    expenseBreakdown = result.breakdown.map(b => ({ name: b.name, amount: b.allocated }));
+  }
+
+  const netProfit = totals.revenue - totals.cogs - totals.adSpend - totals.shipping - totals.fees - totals.refunds - totals.chargebackLoss + totals.chargebackWon - customExpensesTotal;
   const margin = totals.revenue > 0 ? (netProfit / totals.revenue) * 100 : 0;
 
   return {
@@ -75,6 +85,8 @@ function computeEntryFromDaily(dailyPnL: PnLEntry[], range: DateRange): PnLEntry
     ...totals,
     netProfit,
     margin,
+    customExpenses: customExpensesTotal,
+    expenseBreakdown,
   };
 }
 
@@ -112,14 +124,14 @@ export function PnLDashboardClient({
   };
 
   const activeEntry = useMemo(() => {
-    const entry = computeEntryFromDaily(dailyPnL, dateRange);
+    const entry = computeEntryFromDaily(dailyPnL, dateRange, customExpensesList);
     return entry;
-  }, [dailyPnL, dateRange]);
+  }, [dailyPnL, dateRange, customExpensesList]);
 
   const todayEntry = useMemo(() => {
     const todayRange = getDateRange('today');
-    return computeEntryFromDaily(dailyPnL, todayRange);
-  }, [dailyPnL]);
+    return computeEntryFromDaily(dailyPnL, todayRange, customExpensesList);
+  }, [dailyPnL, customExpensesList]);
 
   // Filter dailyPnL and hourlyPnL by the global date range
   const filteredDailyPnL = useMemo(() => {
@@ -149,8 +161,8 @@ export function PnLDashboardClient({
   }, [dailyPnL, prevStart, prevEnd]);
 
   const previousEntry = useMemo(() => {
-    return computeEntryFromDaily(dailyPnL, { start: prevStart, end: prevEnd });
-  }, [dailyPnL, prevStart, prevEnd]);
+    return computeEntryFromDaily(dailyPnL, { start: prevStart, end: prevEnd }, customExpensesList);
+  }, [dailyPnL, prevStart, prevEnd, customExpensesList]);
 
   const comparisonDateLabel = useMemo(() => {
     const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -175,6 +187,24 @@ export function PnLDashboardClient({
   const [productLoading, setProductLoading] = useState(false);
   const [productError, setProductError] = useState<string | null>(null);
   const productAbortRef = useRef<AbortController | null>(null);
+
+  const [customExpensesList, setCustomExpensesList] = useState<CustomExpense[]>([]);
+
+  useEffect(() => {
+    if (!activeStoreId) return;
+    fetch(`/api/pnl/expenses?storeId=${encodeURIComponent(activeStoreId)}`)
+      .then(r => r.json())
+      .then(json => {
+        if (json.ok && json.data) {
+          setCustomExpensesList(json.data.filter((e: any) => e.is_active).map((e: any) => ({
+            id: e.id, name: e.name, category: e.category, amount: Number(e.amount),
+            frequency: e.frequency, distribution: e.distribution,
+            startDate: e.start_date, endDate: e.end_date, isActive: e.is_active,
+          })));
+        }
+      })
+      .catch(() => {});
+  }, [activeStoreId]);
 
   const fetchProductsForRange = useCallback(async (from: string, to: string) => {
     if (!activeStoreId) return;
