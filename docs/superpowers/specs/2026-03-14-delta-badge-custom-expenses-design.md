@@ -78,9 +78,11 @@ const PNL_METRICS: Record<PnLMetricKey, PnLMetricDef> = {
 
 ## Part 3 — DeltaBadge Integration into PnLSummaryCards
 
-**File:** `src/components/pnl/PnLSummaryCards.tsx`
+**Files:**
+- `src/components/pnl/PnLSummaryCards.tsx` — add comparison prop + DeltaBadge rendering
+- `src/components/pnl/PnLDashboardClient.tsx` — compute previous period entry + pass as prop
 
-**Changes:**
+**PnLSummaryCards Changes:**
 - Add `comparison?: PnLEntry` prop to `PnLSummaryCardsProps`
 - Import `DeltaBadge` and `PNL_METRICS`
 - Below each card's main value, render `<DeltaBadge>` using:
@@ -89,7 +91,14 @@ const PNL_METRICS: Record<PnLMetricKey, PnLMetricDef> = {
   - `polarity` and `format` from `PNL_METRICS[metricKey]`
 - If no `comparison` prop, DeltaBadges don't render
 
-**Source of comparison data:** `PnLDashboardClient` already computes `previousPeriodData` for trend charts. Pass the aggregated previous period entry down as the `comparison` prop.
+**PnLDashboardClient Changes:**
+The client already computes `previousDailyPnL` (filtered array) for trend charts, but does NOT aggregate it into a single `PnLEntry`. Add:
+```typescript
+const previousEntry = useMemo(() => {
+  return computeEntryFromDaily(dailyPnL, { start: prevStart, end: prevEnd });
+}, [dailyPnL, prevStart, prevEnd]);
+```
+Pass `previousEntry` as the `comparison` prop to `<PnLSummaryCards>`.
 
 ---
 
@@ -103,7 +112,7 @@ Pure function module — no side effects, no database calls, no state.
 ```typescript
 interface ExpenseResult {
   totalExpenses: number;
-  breakdown: { expenseId: number; name: string; category: 'fixed' | 'variable'; allocated: number }[];
+  breakdown: { expenseId?: number; name: string; category: 'fixed' | 'variable'; allocated: number }[];
   dailyDistribution: { date: string; amount: number }[];
 }
 
@@ -144,22 +153,34 @@ function calculateExpenses(
 
 ## Part 5 — Universal Calculator Integration
 
-**File:** `src/lib/pnl/universalCalculator.ts`
+**Architecture Decision: Custom expenses are computed dynamically at display time, NOT baked into snapshots.** This ensures changing an expense retroactively updates all historical views. The daily snapshot cron stores raw P&L data (revenue, COGS, etc.) without custom expenses. The client-side `computeEntryFromDaily()` and server-side calculator both apply expenses dynamically.
 
-**Changes:**
+**Files:**
+- `src/lib/pnl/universalCalculator.ts` — add expense calculation to the formula
+- `src/lib/intelligence/types.ts` — extend `PnLResult` and `PnLWarning` types
+- `src/types/pnl.ts` — extend `PnLEntry` type
+- `src/components/pnl/PnLDashboardClient.tsx` — update `computeEntryFromDaily()` to include `customExpenses`
+
+**universalCalculator.ts Changes:**
 1. Import `calculateExpenses` from `expenseEngine.ts`
 2. Fetch custom expenses from `pnl_custom_expenses` table (add to parallel data fetch)
 3. Call `calculateExpenses(expenses, dateRange)` after existing calculations
 4. Subtract `totalExpenses` from net profit
-5. Add fields to `PnLResult`:
-   - `customExpenses: number`
-   - `expenseBreakdown: { name: string; amount: number }[]`
-6. Add warning if expenses > 20% of revenue
+5. Add warning if expenses > 20% of revenue
 
-**Updated Formula:**
+**PnLResult Type Extension** (`src/lib/intelligence/types.ts`):
+```typescript
+// Add to PnLResult interface:
+totalCustomExpenses: number;
+expenseBreakdown: { name: string; amount: number }[];
 ```
-Net Profit = Revenue - COGS - Ad Spend - Shipping - Fees - Refunds
-             - Chargebacks(lost) + Chargebacks(won) - Custom Expenses
+
+**PnLWarning Type Extension** (`src/lib/intelligence/types.ts`):
+```typescript
+// Add 'high_expense_ratio' to PnLWarning.type union:
+type: 'missing_cogs' | 'estimated_fees' | 'no_fee_data' | 'unattributed_spend'
+  | 'no_products' | 'stale_data' | 'missing_shipping' | 'currency_mismatch'
+  | 'high_expense_ratio';
 ```
 
 **PnLEntry Type Extension** (`src/types/pnl.ts`):
@@ -167,6 +188,17 @@ Net Profit = Revenue - COGS - Ad Spend - Shipping - Fees - Refunds
 // Add to PnLEntry interface:
 customExpenses?: number;
 expenseBreakdown?: { name: string; amount: number }[];
+```
+
+**computeEntryFromDaily() Update** (`src/components/pnl/PnLDashboardClient.tsx`):
+- Add `customExpenses` to the reduce accumulator
+- Subtract `customExpenses` from `netProfit` calculation
+- The expenses per day come from the daily entries which are enriched by the P&L service
+
+**Updated Formula:**
+```
+Net Profit = Revenue - COGS - Ad Spend - Shipping - Fees - Refunds
+             - Chargebacks(lost) + Chargebacks(won) - Custom Expenses
 ```
 
 ---
@@ -182,11 +214,7 @@ Add `customExpenses` bar between Fees/Refunds and Net Profit.
 - Shows negative contribution to profit
 
 ### Summary Cards
-Add a 7th card (or replace the existing Shipping+Fees card layout) to show Custom Expenses when they exist:
-- Icon: `Receipt` from Lucide
-- Color: purple accent
-- Shows total custom expenses for the period
-- Includes DeltaBadge like other cards
+Keep the existing 6-card grid layout (`grid-cols-6` on lg). Do NOT add a 7th card — it would break the grid. Instead, the Custom Expenses total is shown in the expandable breakdown below the cards and in the waterfall chart.
 
 ### Expandable Expenses Breakdown
 In the P&L breakdown area (below summary cards), add an expandable "Custom Expenses" line:
@@ -228,7 +256,7 @@ Full-featured expense management page at `/dashboard/pnl/expenses/`.
 
 **Empty State:** Illustration + "No expenses yet. Add your first expense to get accurate P&L calculations." + CTA button.
 
-**Navigation:** Add "Expenses" sub-item under P&L in sidebar (`src/data/navigation.ts`). Icon: `Receipt` from Lucide.
+**Navigation:** The sidebar (`src/data/navigation.ts`) uses a flat `topItems` array with no sub-item support. Add "Expenses" as a standalone item in `topItems` directly below the P&L entry. Icon: `Receipt` from Lucide. Label: "Expenses". Href: `/dashboard/pnl/expenses`.
 
 ---
 
@@ -247,10 +275,9 @@ Slide-over panel from the right side (400px width). Used for both creating and e
 - **Active** — toggle, default true
 
 **Impact Preview** (bottom of panel):
-- Shows estimated daily/monthly/yearly cost based on inputs
-- Shows projected impact: "This will reduce today's profit by ~$33.33"
+- Shows estimated daily/monthly/yearly cost based on inputs (computed client-side from the form values using the same frequency normalization as `expenseEngine.ts`)
+- No live P&L data needed — the preview shows the expense's own projected cost breakdown, not its impact on net profit. This avoids needing to fetch P&L data into the expenses page.
 - Updates in real-time as user changes inputs
-- Uses current period's net profit from P&L data for context
 
 **Validation:**
 - Name: required, max 100 chars
@@ -279,7 +306,7 @@ Shopify Subscription,fixed,79,monthly,daily,,
 1. Click "Import CSV" → drag-drop zone appears (or file picker)
 2. Parse CSV client-side, show preview table with validation status per row
 3. Green checkmark = valid, red X = error with message
-4. "Import N expenses" button (disabled if any errors)
+4. "Import N valid expenses" button — imports only valid rows, skips invalid ones. Shows count of valid/invalid. Disabled if zero valid rows.
 5. POST to `/api/pnl/expenses/import`
 
 **Idempotent Import:**
@@ -311,6 +338,12 @@ After computing yesterday's P&L, compute an hourly sales profile:
 
 **DB Change:** Add `hourly_sales_profile JSONB` column to `pnl_store_settings` table.
 
+**Migration File:** `supabase/migrations/009_hourly_sales_profile.sql`
+```sql
+ALTER TABLE pnl_store_settings
+ADD COLUMN IF NOT EXISTS hourly_sales_profile JSONB DEFAULT NULL;
+```
+
 ---
 
 ## Part 11 — API Routes
@@ -337,6 +370,13 @@ After computing yesterday's P&L, compute an hourly sales profile:
 - Body: `{ id }`
 - Validates id belongs to store
 - Uses: `rest('/pnl_custom_expenses?id=eq.${id}&store_id=eq.${storeId}', { method: 'DELETE' })`
+
+**Note on existing helpers:** The existing `updatePersistentCustomExpense()` and `deletePersistentCustomExpense()` in `supabase-persistence.ts` filter only by `id`, not `store_id`. The API routes MUST use raw `rest()` calls with `store_id` filtering for multi-tenant security (as shown in the URL patterns above), NOT the existing helper functions.
+
+**Error Response Format:** All routes return `{ error: string }` with appropriate HTTP status on failure:
+- 400: validation error
+- 404: expense not found or doesn't belong to store
+- 500: server error
 
 ### POST `/api/pnl/expenses/import`
 - Body: CSV text or multipart form with file
