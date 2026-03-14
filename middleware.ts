@@ -17,6 +17,7 @@ const PUBLIC_API_PREFIXES = [
   '/api/tracking/pixel',
   '/api/tracking/collect',
   '/api/admin/',
+  '/api/prism/',
   '/api/pnl/sync',
   '/api/cron/',
   '/api/debug/',
