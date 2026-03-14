@@ -125,14 +125,18 @@ export async function POST(request: NextRequest) {
           }
 
           // Persist behavioral classifications (skip manual overrides)
+          // Remap 'unknown' → 'pending' — unknown is not a valid display classification
+          const VALID_CLS = new Set(['main', 'upsell', 'downsell', 'bundle', 'pending', 'excluded']);
           for (const r of behavioralResults) {
             if (r.method === 'manual_override') continue;
+            const cls = VALID_CLS.has(r.classification) ? r.classification : 'pending';
+            const needsReview = cls === 'pending' ? true : r.needs_review;
             await rest('/product_classifications?on_conflict=store_id,product_id', {
               method: 'POST',
               headers: { Prefer: 'resolution=merge-duplicates' },
               body: JSON.stringify({
                 store_id: store.id, product_id: r.product_id, product_title: r.product_title,
-                classification: r.classification, confidence: r.confidence,
+                classification: cls, confidence: r.confidence,
                 classification_method: r.method, behavioral_signals: r.signals,
                 parent_product: r.parent_product, downsell_of: r.downsell_of,
                 needs_review: r.needs_review,

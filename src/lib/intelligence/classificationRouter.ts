@@ -231,7 +231,12 @@ function applyEdgeCases(results: SignalStackResult[]): SignalStackResult[] {
 
 function enforceConfidenceFloor(results: SignalStackResult[]): SignalStackResult[] {
   const TRUSTED = new Set(['shopify_tag', 'manual_override', 'edge_case']);
+  const VALID_CLASSIFICATIONS = new Set(['main', 'upsell', 'downsell', 'bundle', 'pending', 'excluded']);
   return results.map(r => {
+    // Invalid/unknown classification → pending (never show 'unknown' or 'other')
+    if (!VALID_CLASSIFICATIONS.has(r.classification)) {
+      return { ...r, classification: 'pending' as const, needs_review: true };
+    }
     if (TRUSTED.has(r.method)) return r;
     if (r.classification === 'pending' || r.classification === 'excluded') return r;
     if (r.confidence < PRISM.classification.lowConfidenceThreshold) {
