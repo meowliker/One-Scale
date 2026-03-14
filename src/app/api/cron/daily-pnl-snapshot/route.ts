@@ -128,6 +128,35 @@ export async function GET(req: NextRequest) {
         }]),
       });
 
+      // Compute hourly sales profile from last 30 days of orders
+      try {
+        const thirtyDaysAgo = daysAgoInTimezone(30, tz);
+        const orderHours = await rest<Array<{ created_at: string }>>(
+          `/shopify_orders_cache?store_id=eq.${encodeURIComponent(store.id)}&created_at=gte.${encodeURIComponent(thirtyDaysAgo)}&select=created_at`
+        );
+
+        if (orderHours.length > 0) {
+          const hourBuckets = new Array(24).fill(0);
+          for (const o of orderHours) {
+            const hour = new Date(o.created_at).getUTCHours();
+            hourBuckets[hour]++;
+          }
+          const total = hourBuckets.reduce((a: number, b: number) => a + b, 0);
+          if (total > 0) {
+            const profile = hourBuckets.map((count: number) => Math.round((count / total) * 10000) / 10000);
+            await rest(
+              `/pnl_store_settings?store_id=eq.${encodeURIComponent(store.id)}`,
+              {
+                method: 'PATCH',
+                body: JSON.stringify({ hourly_sales_profile: profile }),
+              }
+            );
+          }
+        }
+      } catch {
+        // Non-critical — profile computation failure doesn't block snapshot
+      }
+
       const elapsed = Date.now() - start;
       await logCron('daily-pnl-snapshot', store.id, 'success', 1, null, elapsed);
       results.push({ storeId: store.id, status: 'success', date: yesterday, warnings: pnl.warnings.length });
