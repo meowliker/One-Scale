@@ -517,6 +517,55 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // ── REFINE MAIN-PRODUCT SPEND via pixel-attributed order counts ─────
+    // When pixel data is available, count how many attributed orders each
+    // MAIN product drove. Redistribute total MAIN spend proportionally by
+    // attributed order count instead of revenue share.
+    if (useVisitorAttribution) {
+      const mainProductIds = new Set<string>();
+      for (const [pid] of productAgg) {
+        const sc = classificationMap.get(pid)?.classification;
+        if (!sc || sc === 'main' || sc === 'pending' || sc === 'unknown') {
+          mainProductIds.add(pid);
+        }
+      }
+
+      if (mainProductIds.size > 1) {
+        // Count pixel-attributed orders per MAIN product
+        const mainAttrCounts = new Map<string, number>();
+        for (const order of orders ?? []) {
+          if (order.financial_status === 'refunded') continue;
+          const attr = orderAttrMap.get(order.shopify_order_id);
+          if (!attr?.utm_campaign) continue;
+
+          let lineItems;
+          try {
+            lineItems = typeof order.line_items === 'string' ? JSON.parse(order.line_items) : order.line_items || [];
+          } catch { continue; }
+
+          for (const item of lineItems) {
+            const pid = item.product_id ? String(item.product_id) : `unknown_${item.title}`;
+            if (mainProductIds.has(pid)) {
+              mainAttrCounts.set(pid, (mainAttrCounts.get(pid) || 0) + 1);
+            }
+          }
+        }
+
+        const totalMainAttr = [...mainAttrCounts.values()].reduce((s, c) => s + c, 0);
+        if (totalMainAttr > 0) {
+          // Sum total MAIN spend then redistribute by attributed order count
+          let totalMainSpend = 0;
+          for (const pid of mainProductIds) {
+            totalMainSpend += productSpendMap.get(pid) || 0;
+          }
+          for (const pid of mainProductIds) {
+            const attrCount = mainAttrCounts.get(pid) || 0;
+            productSpendMap.set(pid, round2(totalMainSpend * (attrCount / totalMainAttr)));
+          }
+        }
+      }
+    }
+
     // Build response
     const products = [];
     for (const [productId, agg] of productAgg.entries()) {

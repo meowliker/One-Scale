@@ -3,6 +3,7 @@ import { rest } from '@/app/api/lib/supabase-persistence';
 export type OnboardingStage =
   | 'store_metadata'
   | 'shopify_products'
+  | 'shopify_orders_recent'
   | 'shopify_orders'
   | 'shopify_transactions'
   | 'balance_transactions'
@@ -32,6 +33,7 @@ export interface OnboardingProgress {
 const DEFAULT_STAGES: Record<OnboardingStage, StageStatus> = {
   store_metadata: 'pending',
   shopify_products: 'pending',
+  shopify_orders_recent: 'pending',
   shopify_orders: 'pending',
   shopify_transactions: 'pending',
   balance_transactions: 'pending',
@@ -145,7 +147,101 @@ async function discoverFirstOrderDate(
   return { firstOrderDate, totalOrders };
 }
 
+// ── Stage: Backfill RECENT Orders (last 90 days) ──────────────
+// Track 1: Fetches newest orders first using created_at_min.
+// Completes in seconds — unblocks classification immediately.
+
+async function backfillRecentOrders(
+  storeId: string,
+  accessToken: string,
+  shopDomain: string,
+): Promise<void> {
+  const { fetchFromShopify } = await import('@/app/api/lib/shopify-client');
+
+  const ninetyDaysAgo = new Date(Date.now() - 90 * 86400000).toISOString();
+  let totalFetched = 0;
+  let hasMore = true;
+  let sinceId = '0';
+
+  while (hasMore) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = await fetchFromShopify<{ orders: any[] }>(
+      accessToken, shopDomain, '/orders.json', {
+        limit: '250',
+        status: 'any',
+        created_at_min: ninetyDaysAgo,
+        since_id: sinceId,
+      },
+    );
+
+    const orders = data.orders || [];
+    if (orders.length === 0) break;
+
+    for (const order of orders) {
+      let refundTotal = 0;
+      if (order.refunds?.length > 0) {
+        for (const refund of order.refunds) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          for (const transaction of refund.transactions || []) {
+            refundTotal += parseFloat(transaction.amount || '0');
+          }
+        }
+      }
+
+      let orderStatus = 'open';
+      if (order.cancelled_at) orderStatus = 'cancelled';
+      else if (order.financial_status === 'refunded') orderStatus = 'refunded';
+      else if (order.financial_status === 'partially_refunded') orderStatus = 'partially_refunded';
+      else if (order.closed_at) orderStatus = 'closed';
+
+      const totalShipping = (order.shipping_lines || []).reduce(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (sum: number, line: any) => sum + parseFloat(line.price || '0'), 0,
+      );
+
+      await rest('/shopify_orders_cache', {
+        method: 'POST',
+        headers: { Prefer: 'resolution=merge-duplicates' },
+        body: JSON.stringify({
+          store_id: storeId,
+          shopify_order_id: String(order.id),
+          order_name: order.name,
+          email: order.email,
+          created_at: order.created_at,
+          updated_at: order.updated_at,
+          cancelled_at: order.cancelled_at,
+          financial_status: order.financial_status,
+          fulfillment_status: order.fulfillment_status,
+          total_price: parseFloat(order.total_price) || 0,
+          subtotal_price: parseFloat(order.subtotal_price) || 0,
+          total_tax: parseFloat(order.total_tax) || 0,
+          total_discounts: parseFloat(order.total_discounts) || 0,
+          refund_total: refundTotal,
+          currency: order.currency,
+          line_items: JSON.stringify(order.line_items),
+          customer_id: order.customer?.id ? String(order.customer.id) : null,
+          customer_email: order.customer?.email || order.email,
+          order_status: orderStatus,
+          tags: order.tags || '',
+          landing_site: order.landing_site,
+          referring_site: order.referring_site,
+          discount_codes: JSON.stringify(order.discount_codes || []),
+          total_shipping_price: totalShipping,
+          synced_at: new Date().toISOString(),
+        }),
+      }).catch(() => null);
+    }
+
+    totalFetched += orders.length;
+    sinceId = String(orders[orders.length - 1].id);
+    hasMore = orders.length === 250;
+  }
+
+  console.log(`[Onboarding] Recent orders (90d): ${totalFetched} fetched for ${storeId}`);
+}
+
 // ── Stage: Backfill ALL Historical Orders ────────────────────
+// Track 2: Continues the existing since_id cursor-based full history.
 
 async function backfillOrders(
   storeId: string,
@@ -622,38 +718,14 @@ export async function onStoreConnected(storeId: string): Promise<void> {
       }).catch(() => null);
     }
 
-    // Stage 2: Backfill ALL historical orders
-    await runStage(storeId, 'shopify_orders', () =>
-      backfillOrders(storeId, accessToken, shopDomain),
+    // Stage 2: TRACK 1 — Recent orders only (last 90 days, fast)
+    // Unblocks classification immediately without waiting for full history
+    await runStage(storeId, 'shopify_orders_recent', () =>
+      backfillRecentOrders(storeId, accessToken, shopDomain),
     );
 
-    // Stage 3: Backfill ALL balance transactions (fees + refunds + chargebacks)
-    await runStage(storeId, 'balance_transactions', () =>
-      backfillBalanceTransactions(storeId, accessToken, shopDomain, firstOrderDate!),
-    );
-
-    // Stage 4: Transactions — populated by balance_transactions
-    const txnCheck = await rest<Array<{ id: string }>>(
-      `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}&type=eq.charge&select=id&limit=1`,
-    ).catch(() => []);
-    await updateStageStatus(storeId, 'shopify_transactions', txnCheck.length > 0 ? 'complete' : 'skipped');
-
-    // Stage 5: Chargebacks — populated by balance_transactions
-    const cbCheck = await rest<Array<{ id: string }>>(
-      `/shopify_chargebacks?store_id=eq.${encodeURIComponent(storeId)}&select=id&limit=1`,
-    ).catch(() => []);
-    await updateStageStatus(storeId, 'shopify_chargebacks', cbCheck.length > 0 ? 'complete' : 'skipped');
-
-    // Stage 6: Meta ads (37-month backfill)
-    await runStage(storeId, 'meta_ads', () => backfillMetaAds(storeId));
-
-    // Stage 7: Fee learning
-    await runStage(storeId, 'fee_learning', async () => {
-      const { learnFeeRates } = await import('@/lib/pnl/feeIntelligence');
-      await learnFeeRates(storeId);
-    });
-
-    // Stage 8: Classification — signal-stack classifier + behavioral enrichment
+    // Stage 3: Classification — runs on recent orders (does NOT wait for full history)
+    // Bootstrap classifier handles <30 orders; full signal stack for 30+
     await runStage(storeId, 'classification', async () => {
       // 1. Run the real classifier (detects store type → signal stack → persists to product_classifications)
       const { classifyAllProducts } = await import('@/lib/intelligence/classificationRouter');
@@ -736,13 +808,45 @@ export async function onStoreConnected(storeId: string): Promise<void> {
       }
     });
 
-    // Stage 9: Products — populated by classification above
+    // Stage 4: Products — populated by classification above
     const productCheck = await rest<Array<{ product_id: string }>>(
       `/product_behaviors?store_id=eq.${encodeURIComponent(storeId)}&select=product_id&limit=1`,
     ).catch(() => []);
     await updateStageStatus(storeId, 'shopify_products', productCheck.length > 0 ? 'complete' : 'skipped');
 
-    // Stage 10: P&L snapshots — compute for every historical day
+    // Stage 5: TRACK 2 — Full historical orders (slow, cursor-based)
+    // Classification already ran on recent data — this fills the rest
+    await runStage(storeId, 'shopify_orders', () =>
+      backfillOrders(storeId, accessToken, shopDomain),
+    );
+
+    // Stage 6: Backfill ALL balance transactions (fees + refunds + chargebacks)
+    await runStage(storeId, 'balance_transactions', () =>
+      backfillBalanceTransactions(storeId, accessToken, shopDomain, firstOrderDate!),
+    );
+
+    // Stage 7: Transactions — populated by balance_transactions
+    const txnCheck = await rest<Array<{ id: string }>>(
+      `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}&type=eq.charge&select=id&limit=1`,
+    ).catch(() => []);
+    await updateStageStatus(storeId, 'shopify_transactions', txnCheck.length > 0 ? 'complete' : 'skipped');
+
+    // Stage 8: Chargebacks — populated by balance_transactions
+    const cbCheck = await rest<Array<{ id: string }>>(
+      `/shopify_chargebacks?store_id=eq.${encodeURIComponent(storeId)}&select=id&limit=1`,
+    ).catch(() => []);
+    await updateStageStatus(storeId, 'shopify_chargebacks', cbCheck.length > 0 ? 'complete' : 'skipped');
+
+    // Stage 9: Meta ads (37-month backfill)
+    await runStage(storeId, 'meta_ads', () => backfillMetaAds(storeId));
+
+    // Stage 10: Fee learning
+    await runStage(storeId, 'fee_learning', async () => {
+      const { learnFeeRates } = await import('@/lib/pnl/feeIntelligence');
+      await learnFeeRates(storeId);
+    });
+
+    // Stage 11: P&L snapshots — compute for every historical day
     await runStage(storeId, 'pnl_snapshots', () =>
       backfillPnlSnapshots(storeId, firstOrderDate!),
     );

@@ -36,6 +36,20 @@ export interface ClassifyResult {
 export async function classifyAllProducts(storeId: string): Promise<ClassifyResult> {
   const enc = (v: string) => encodeURIComponent(v);
 
+  // ── Bootstrap path: stores with < 30 recent orders ──────────────────
+  // Provides best-guess classifications with low confidence instead of
+  // showing everything as 'pending'. Automatically upgraded when more
+  // data arrives via the weekly cron or next onboarding run.
+  const recentCutoff = new Date(Date.now() - 60 * 86400000).toISOString();
+  const recentOrders = await rest<Array<{ shopify_order_id: string; line_items: string; total_price: number }>>(
+    `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${enc(recentCutoff)}&order_status=neq.cancelled&financial_status=neq.refunded&select=shopify_order_id,line_items,total_price&limit=500`
+  ).catch(() => []);
+
+  if (recentOrders.length < 30) {
+    console.log(`[Classification] ${storeId}: ${recentOrders.length} recent orders — using bootstrap classifier`);
+    return bootstrapClassify(storeId, recentOrders);
+  }
+
   // 1. Get or detect store intelligence
   let intel = await getStoreIntelligence(storeId);
   if (!intel || !('store_type' in intel)) {
@@ -274,6 +288,100 @@ async function runFullSignalStack(
   }
 
   return results;
+}
+
+// ── Edge Cases ───────────────────────────────────────────────
+
+// ── Bootstrap Classifier ──────────────────────────────────────
+// For stores with < 30 recent orders. Uses alone-rate, Shopify tags,
+// and title hints to produce best-guess classifications with low
+// confidence. Automatically superseded once enough data exists.
+
+async function bootstrapClassify(
+  storeId: string,
+  orders: Array<{ shopify_order_id: string; line_items: string; total_price: number }>,
+): Promise<ClassifyResult> {
+  const enc = (v: string) => encodeURIComponent(v);
+
+  // Load manual overrides — NEVER overwrite
+  const existingOverrides = await rest<StoredClassification[]>(
+    `/product_classifications?store_id=eq.${enc(storeId)}&manual_override=eq.true&select=product_id,classification,manual_override,confidence`
+  ).catch(() => [] as StoredClassification[]);
+  const manualOverrideIds = new Set(existingOverrides.map(o => o.product_id));
+
+  // Aggregate per-product stats from the available orders
+  const stats = new Map<string, { title: string; productType: string; total: number; alone: number; revenue: number }>();
+  for (const order of orders) {
+    let items: Array<{ product_id?: string | number; title?: string; price?: string; quantity?: number; product_type?: string }>;
+    try { items = typeof order.line_items === 'string' ? JSON.parse(order.line_items) : order.line_items || []; } catch { continue; }
+    const validItems = items.filter(i => i.product_id);
+    const isAlone = validItems.length === 1;
+    for (const item of validItems) {
+      const pid = String(item.product_id);
+      const existing = stats.get(pid) ?? { title: item.title || '', productType: item.product_type || '', total: 0, alone: 0, revenue: 0 };
+      existing.total++;
+      if (isAlone) existing.alone++;
+      existing.revenue += parseFloat(item.price || '0') * (item.quantity || 1);
+      stats.set(pid, existing);
+    }
+  }
+
+  const results: SignalStackResult[] = [];
+  const UPSELL_TITLE_HINTS = ['upsell', 'upgrade', 'bundle', 'bonus', 'add-on', 'addon', 'extra', 'premium', 'vip', 'rush'];
+
+  for (const [pid, s] of stats) {
+    if (manualOverrideIds.has(pid)) continue;
+
+    // Check Shopify tags via any tag overrides in the order data
+    const tagResult = checkShopifyTags(''); // Tags not available from line_items — handled by full classifier later
+    let classification: string;
+    let confidence: number;
+    let method: string;
+
+    const aloneRate = s.total > 0 ? s.alone / s.total : 0;
+    const titleLower = s.title.toLowerCase();
+
+    if (s.total >= 3) {
+      // Enough orders for alone-rate signal
+      if (aloneRate >= 0.7) {
+        classification = 'main'; confidence = Math.min(35 + s.total * 3, 65); method = 'bootstrap_alone_rate';
+      } else if (aloneRate <= 0.1) {
+        classification = 'upsell'; confidence = Math.min(35 + s.total * 3, 65); method = 'bootstrap_alone_rate';
+      } else {
+        classification = 'main'; confidence = 25; method = 'bootstrap_default';
+      }
+    } else if (UPSELL_TITLE_HINTS.some(kw => titleLower.includes(kw))) {
+      classification = 'upsell'; confidence = 20; method = 'bootstrap_title_hint';
+    } else {
+      classification = 'main'; confidence = 20; method = 'bootstrap_default';
+    }
+
+    // Gift cards always excluded
+    if (s.productType.toLowerCase() === 'gift card' || s.productType.toLowerCase() === 'gift_card') {
+      classification = 'excluded'; confidence = 100; method = 'edge_case';
+    }
+
+    results.push({
+      product_id: pid,
+      product_title: s.title,
+      product_type: s.productType,
+      classification: classification as SignalStackResult['classification'],
+      confidence,
+      method: method as SignalStackResult['method'],
+      signals: null,
+      alone_pct: aloneRate * 100,
+      first_position_pct: 0,
+      avg_position: 0,
+      revenue_share: 0,
+      total_orders_analyzed: s.total,
+      needs_review: confidence < 50,
+    });
+  }
+
+  await persistClassifications(storeId, results, manualOverrideIds);
+  const needsReview = results.filter(r => r.needs_review).length;
+  console.log(`[Classification] Bootstrap: ${results.length} classified (${needsReview} need review)`);
+  return { classified: results.length, needsReview, results };
 }
 
 // ── Edge Cases ───────────────────────────────────────────────
