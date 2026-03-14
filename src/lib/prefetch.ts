@@ -4,8 +4,8 @@ import { getQueryClient } from './queryClient';
 import { getCreatives } from '@/services/creativeAnalysis';
 import { getPnLSummary, getDailyPnL, getProducts } from '@/services/pnl';
 // Dynamic import to avoid pulling server-only deps (better-sqlite3/fs) into client bundle
-const getProductPnL = (...args: Parameters<typeof import('@/services/productPnL').getProductPnL>) =>
-  import('@/services/productPnL').then(m => m.getProductPnL(...args));
+const getProductPnL = (...args: Parameters<typeof import('@/services/productPnl').getProductPnL>) =>
+  import('@/services/productPnl').then(m => m.getProductPnL(...args));
 import {
   getBlendedMetricsForRange,
   getTimeSeriesForRange,

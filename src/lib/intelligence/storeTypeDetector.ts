@@ -9,19 +9,9 @@
 
 import { rest } from '@/app/api/lib/supabase-persistence';
 import type { StoreType } from './types';
+import { DIGITAL_KEYWORDS, BUNDLE_KEYWORDS } from './constants';
 
-// ── Constants ────────────────────────────────────────────────
-
-export const DIGITAL_KEYWORDS = [
-  'digital', 'download', 'ebook', 'e-book', 'course', 'pdf',
-  'template', 'printable', 'software', 'instant-download',
-  'membership', 'access', 'license',
-];
-
-export const BUNDLE_KEYWORDS = [
-  'bundle', 'pack', 'kit', 'set', 'combo', 'duo', 'trio',
-  'collection', 'variety',
-];
+export { DIGITAL_KEYWORDS, BUNDLE_KEYWORDS };
 
 const UPSELL_APP_INDICATORS = [
   'reconvert', 'zipify', 'carthook', 'aftersell', 'honeycomb',

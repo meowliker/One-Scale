@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { AlertTriangle, Loader2, ExternalLink, ChevronDown, Zap, Tag, Check } from 'lucide-react';
-import { REVIEW_CONFIDENCE_THRESHOLD } from '@/lib/intelligence/signalStackClassifier';
+import { REVIEW_CONFIDENCE_THRESHOLD } from '@/lib/intelligence/constants';
 import type { ProductCategory } from '@/types/productPnl';
 
 interface ClassificationBadgeProps {

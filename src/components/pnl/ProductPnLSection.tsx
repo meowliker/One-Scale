@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import type { ProductPnLData, ProductSortKey, ProductViewMode, ProductCategory } from '@/types/productPnl';
-import { REVIEW_CONFIDENCE_THRESHOLD } from '@/lib/intelligence/signalStackClassifier';
+import { REVIEW_CONFIDENCE_THRESHOLD } from '@/lib/intelligence/constants';
 import { useStoreStore } from '@/stores/storeStore';
 import { ProductPnLCard } from '@/components/pnl/ProductPnLCard';
 import { ProductPnLListRow } from '@/components/pnl/ProductPnLListRow';

@@ -103,6 +103,7 @@ export function PnLDashboardClient({
   const [customRange, setCustomRange] = useState<DateRange | null>(null);
   const [bottomTab, setBottomTab] = useState<string>(productType === 'digital' ? 'breakdown' : 'cogs');
   const [lastUpdated, setLastUpdated] = useState<Date>(() => new Date());
+  const [customExpensesList, setCustomExpensesList] = useState<CustomExpense[]>([]);
 
   // Update the timestamp whenever new data props arrive
   useEffect(() => {
@@ -188,8 +189,6 @@ export function PnLDashboardClient({
   const [productLoading, setProductLoading] = useState(false);
   const [productError, setProductError] = useState<string | null>(null);
   const productAbortRef = useRef<AbortController | null>(null);
-
-  const [customExpensesList, setCustomExpensesList] = useState<CustomExpense[]>([]);
 
   useEffect(() => {
     if (!activeStoreId) return;

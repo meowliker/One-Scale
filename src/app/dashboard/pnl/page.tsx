@@ -5,7 +5,7 @@ import { Loader2, RefreshCw } from 'lucide-react';
 import type { PnLSummary, PnLEntry, ProductCOGS, HourlyPnLEntry } from '@/types/pnl';
 import type { ProductPnLData } from '@/types/productPnl';
 import { getPnLSummary, getDailyPnL, getProducts, getHourlyPnL, clearPnLCaches } from '@/services/pnl';
-import { getProductPnL } from '@/services/productPnL';
+import { getProductPnL } from '@/services/productPnl';
 import { PnLDashboardClient } from '@/components/pnl/PnLDashboardClient';
 import { useConnectionStore } from '@/stores/connectionStore';
 import { useStoreStore } from '@/stores/storeStore';

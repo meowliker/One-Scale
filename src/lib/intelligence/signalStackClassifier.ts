@@ -12,7 +12,7 @@ import type {
   SignalStackResult,
   ProductClassificationType,
 } from './types';
-import { DIGITAL_KEYWORDS, BUNDLE_KEYWORDS } from './storeTypeDetector';
+import { DIGITAL_KEYWORDS, BUNDLE_KEYWORDS, REVIEW_CONFIDENCE_THRESHOLD } from './constants';
 
 // ── Shopify Tag Priority Map ────────────────────────────────
 const TAG_MAP: Record<string, string> = {
@@ -33,7 +33,7 @@ export function checkShopifyTags(tags: string): string | null {
   return null;
 }
 
-export const REVIEW_CONFIDENCE_THRESHOLD = 65;
+export { REVIEW_CONFIDENCE_THRESHOLD };
 
 // ── Tag/Title Keywords ──────────────────────────────────────
 
