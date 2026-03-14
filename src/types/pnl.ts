@@ -1,6 +1,9 @@
 export interface PnLEntry {
   date: string;
   revenue: number;
+  grossRevenue?: number;
+  settledRevenue?: number;
+  revenueSource?: 'settled' | 'orders_api';
   cogs: number;
   adSpend: number;
   shipping: number;

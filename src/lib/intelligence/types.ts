@@ -209,6 +209,9 @@ export interface PnLResult {
 
   // Totals
   totalRevenue: number;
+  grossRevenue?: number;
+  settledRevenue?: number;
+  revenueSource?: 'settled' | 'orders_api';
   totalCogs: number;
   totalAdSpend: number;
   totalFees: number;

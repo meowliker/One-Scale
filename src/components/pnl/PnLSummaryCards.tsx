@@ -154,10 +154,19 @@ export function PnLSummaryCards({ entry, comparison, isDigital = false, lastUpda
                 />
               </div>
             )}
-            {card.key === 'revenue' && entry.orderCount != null && entry.orderCount > 0 && (
-              <div className="mt-1.5 flex items-center gap-1 text-xs text-text-secondary/50">
-                <ShoppingCart className="h-3 w-3" />
-                <span>{entry.orderCount.toLocaleString()} orders</span>
+            {card.key === 'revenue' && (
+              <div className="mt-1.5 space-y-0.5">
+                {entry.orderCount != null && entry.orderCount > 0 && (
+                  <div className="flex items-center gap-1 text-xs text-text-secondary/50">
+                    <ShoppingCart className="h-3 w-3" />
+                    <span>{entry.orderCount.toLocaleString()} orders</span>
+                  </div>
+                )}
+                {entry.grossRevenue != null && entry.settledRevenue != null && entry.settledRevenue > 0 && entry.grossRevenue !== entry.settledRevenue && (
+                  <div className="text-[10px] text-text-secondary/40">
+                    Gross: {formatCurrency(entry.grossRevenue, currency)}
+                  </div>
+                )}
               </div>
             )}
             {card.key === 'refunds' && ((entry.fullRefundCount || 0) > 0 || (entry.partialRefundCount || 0) > 0) && (
