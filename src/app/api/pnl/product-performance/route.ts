@@ -291,17 +291,14 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // ── ORDER OWNERSHIP MODEL (V4.4 approach) ──────────────────────────
-    // Each order is "owned" by exactly one MAIN product.
-    // The MAIN product gets the full order revenue + fees.
-    // Other products in the order (upsells) get their own line item revenue only.
+    // ── LINE-ITEM REVENUE MODEL (universal) ────────────────────────────
+    // Each product's revenue = sum of its own line item prices.
+    // Fees distributed proportionally by revenue share.
+    // Works for every store model without configuration.
 
     const productAgg = new Map<string, ProductAgg>();
     let totalRevenue = 0;
     let totalOrders = 0;
-
-    // Track which orders are owned by which MAIN product
-    const orderOwner = new Map<string, string>(); // orderId → productId
 
     for (const order of orders ?? []) {
       if (order.financial_status === 'refunded') continue;
@@ -323,100 +320,42 @@ export async function GET(request: NextRequest) {
         continue;
       }
 
-      const orderTotal = Number(order.total_price) || 0;
+      // Per-order shipping distributed proportionally by revenue share
       const orderShipping = order.total_shipping_price || 0;
-
-      // Find the MAIN product for this order using stored classifications
-      // Priority: classified 'main' → highest-price item (fallback)
-      let ownerProductId = '';
-      let ownerSku = '';
-      let ownerTitle = '';
-      let maxPrice = 0;
-      let fallbackProductId = '';
-      let fallbackTitle = '';
-      let fallbackSku = '';
+      let orderLineItemRevenueSum = 0;
+      for (const item of lineItems) {
+        orderLineItemRevenueSum += parseFloat(item.price || '0') * (item.quantity || 1);
+      }
 
       for (const item of lineItems) {
-        const pid = item.product_id ? String(item.product_id) : `unknown_${item.title}`;
-        const price = parseFloat(item.price || '0');
-
-        // Track highest-price item as fallback owner
-        if (price > maxPrice) {
-          maxPrice = price;
-          fallbackProductId = pid;
-          fallbackTitle = item.title || 'Unknown';
-          fallbackSku = item.sku || '';
-        }
-
-        // Check stored classification
-        const storedClass = classificationMap.get(pid)?.classification;
-        if (storedClass === 'main' && !ownerProductId) {
-          ownerProductId = pid;
-          ownerTitle = item.title || 'Unknown';
-          ownerSku = item.sku || '';
-        }
-      }
-
-      // Use fallback if no classified main found
-      if (!ownerProductId) {
-        ownerProductId = fallbackProductId || `unknown_order_${order.shopify_order_id}`;
-        ownerTitle = fallbackTitle;
-        ownerSku = fallbackSku;
-      }
-
-      orderOwner.set(order.shopify_order_id, ownerProductId);
-
-      // MAIN product gets the full order revenue
-      totalRevenue += orderTotal;
-      const ownerAgg = productAgg.get(ownerProductId);
-      if (ownerAgg) {
-        ownerAgg.revenue += orderTotal;
-        ownerAgg.shipping += orderShipping;
-        ownerAgg.orderCount++;
-        ownerAgg.orderIds.add(order.shopify_order_id);
-        ownerAgg.categoryCounts['main'] = (ownerAgg.categoryCounts['main'] || 0) + 1;
-      } else {
-        productAgg.set(ownerProductId, {
-          productName: ownerTitle,
-          sku: ownerSku,
-          unitsSold: 1,
-          revenue: orderTotal,
-          shipping: orderShipping,
-          orderCount: 1,
-          orderIds: new Set([order.shopify_order_id]),
-          categoryCounts: { main: 1, upsell: 0, downsell: 0, addon: 0 },
-          multiItemCategoryCounts: { main: 0, upsell: 0, downsell: 0, addon: 0 },
-        });
-      }
-
-      // Other products in the order get line item revenue only (upsells)
-      for (const item of lineItems) {
-        const pid = item.product_id ? String(item.product_id) : `unknown_${item.title}`;
-        if (pid === ownerProductId) continue; // Skip owner — already got full order
+        const productId = item.product_id ? String(item.product_id) : `unknown_${item.title}`;
         const price = parseFloat(item.price || '0');
         const quantity = item.quantity || 1;
         const lineRevenue = price * quantity;
-        if (lineRevenue <= 0) continue; // Skip free items
+        totalRevenue += lineRevenue;
 
-        const category = price === 0 ? 'addon' : 'upsell';
-        const existing = productAgg.get(pid);
+        // Distribute shipping proportionally across line items
+        const lineRevenueShare = orderLineItemRevenueSum > 0 ? lineRevenue / orderLineItemRevenueSum : 0;
+        const lineShipping = round2(orderShipping * lineRevenueShare);
+
+        const existing = productAgg.get(productId);
         if (existing) {
           existing.unitsSold += quantity;
           existing.revenue += lineRevenue;
+          existing.shipping += lineShipping;
           existing.orderCount++;
           existing.orderIds.add(order.shopify_order_id);
-          existing.categoryCounts[category] = (existing.categoryCounts[category] || 0) + 1;
         } else {
-          productAgg.set(pid, {
+          productAgg.set(productId, {
             productName: item.title || 'Unknown',
             sku: item.sku || '',
             unitsSold: quantity,
             revenue: lineRevenue,
-            shipping: 0, // Upsells don't own shipping
+            shipping: lineShipping,
             orderCount: 1,
             orderIds: new Set([order.shopify_order_id]),
-            categoryCounts: { main: 0, upsell: 0, downsell: 0, addon: 0, [category]: 1 },
-            multiItemCategoryCounts: { main: 0, upsell: 0, downsell: 0, addon: 0, [category]: 1 },
+            categoryCounts: { main: 0, upsell: 0, downsell: 0, addon: 0 },
+            multiItemCategoryCounts: { main: 0, upsell: 0, downsell: 0, addon: 0 },
           });
         }
       }
@@ -641,23 +580,8 @@ export async function GET(request: NextRequest) {
 
       const revenueShare = totalRevenue > 0 ? agg.revenue / totalRevenue : 0;
 
-      // V4.4: Fees attributed to the order owner (MAIN product) via balance txn source_order_id
-      // Build per-product fee total from actual transaction fees matched to owned orders
-      let fees = 0;
-      const isOwner = (agg.categoryCounts['main'] || 0) > 0;
-      if (isOwner && balanceTxnFees) {
-        for (const txn of balanceTxnFees) {
-          const orderId = txn.source_order_id;
-          if (orderId && orderOwner.get(orderId) === productId) {
-            fees += Number(txn.fee) || 0;
-          }
-        }
-        fees = round2(fees);
-      }
-      // Fallback: if no balance txn fees matched, use estimated rate
-      if (fees === 0 && isOwner) {
-        fees = round2((agg.revenue * feePercentage / 100) + (feeFixed * agg.orderCount));
-      }
+      // Fees: proportional by revenue share (universal, works for every store)
+      const fees = round2((agg.revenue * feePercentage / 100) + (feeFixed * agg.orderCount));
       const shipping = round2(agg.shipping);
 
       // Use stored classification from adaptive intelligence if available
@@ -704,7 +628,13 @@ export async function GET(request: NextRequest) {
         productCbWon += cbWonByOrder.get(oid) || 0;
       }
 
-      const netProfit = round2(agg.revenue - cogs - adSpend - fees - shipping - productRefunds - productCbLoss + productCbWon);
+      // Bug fix: free products ($0 revenue) get $0 for everything — never negative
+      const effectiveFees = agg.revenue > 0 ? fees : 0;
+      const effectiveCogs = agg.revenue > 0 ? cogs : 0;
+      const effectiveAdSpend = agg.revenue > 0 ? adSpend : 0;
+      const effectiveShipping = agg.revenue > 0 ? shipping : 0;
+
+      const netProfit = round2(agg.revenue - effectiveCogs - effectiveAdSpend - effectiveFees - effectiveShipping - productRefunds - productCbLoss + productCbWon);
       const margin = agg.revenue > 0 ? round2((netProfit / agg.revenue) * 100) : 0;
 
       // Per-product FB metrics
@@ -769,6 +699,20 @@ export async function GET(request: NextRequest) {
 
     products.sort((a, b) => b.revenue - a.revenue);
 
+    // If no products found, find the latest date range that has orders
+    // so the frontend can suggest a valid range
+    let lastOrderRange: { from: string; to: string } | null = null;
+    if (products.length === 0) {
+      const latestOrder = await rest<Array<{ created_at: string }>>(
+        `/shopify_orders_cache?store_id=eq.${enc(storeId)}&select=created_at&order=created_at.desc&limit=1`
+      ).catch(() => []);
+      if (latestOrder.length > 0) {
+        const latestDate = latestOrder[0].created_at.split('T')[0];
+        const rangeStart = new Date(new Date(latestDate).getTime() - 30 * 86400000).toISOString().split('T')[0];
+        lastOrderRange = { from: rangeStart, to: latestDate };
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       data: products,
@@ -783,6 +727,7 @@ export async function GET(request: NextRequest) {
         feeSource: useActualBtFees ? 'balance_transactions' : (feeStructures.length > 0 ? 'fee_structures' : (activeGateways.length > 0 ? 'configured' : 'none')),
         attributionMethod,
         pixelCoverage: round2(coverageRate * 100),
+        ...(lastOrderRange ? { lastOrderRange } : {}),
       },
     });
   } catch (err) {

@@ -86,9 +86,10 @@ export function ProductPnLSection({ products, isDigital = false, currency = 'USD
     let filtered = withOverrides;
     switch (filterMode) {
       case 'main':
+        // Bug fix: only MAIN — never bundle, never upsell
         filtered = filtered.filter((p) => {
-          const cat = (p.category || 'main').toLowerCase();
-          return cat === 'main' || cat === 'bundle';
+          const cat = (p.category || '').toLowerCase();
+          return cat === 'main';
         });
         break;
       case 'upsells':
