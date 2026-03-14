@@ -18,6 +18,10 @@
     {
       "path": "/api/cron/resume-onboarding",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/sync-store-configs",
+      "schedule": "0 1 * * *"
     }
   ],
   "headers": [

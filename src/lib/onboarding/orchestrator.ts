@@ -580,8 +580,11 @@ export async function onStoreConnected(storeId: string): Promise<void> {
     }
     const { accessToken, shopDomain } = token;
 
-    // Stage 1: Store metadata (already saved during OAuth)
-    await updateStageStatus(storeId, 'store_metadata', 'complete');
+    // Stage 1: Detect and save full store config (currency, timezone, tax, etc.)
+    await runStage(storeId, 'store_metadata', async () => {
+      const { detectAndSaveStoreConfig } = await import('@/lib/onboarding/stages/detectStoreConfig');
+      await detectAndSaveStoreConfig(storeId, accessToken, shopDomain);
+    });
 
     // Discover first order date from Shopify API (not cache)
     const progress = await getOnboardingProgress(storeId);

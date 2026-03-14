@@ -101,34 +101,13 @@ export async function GET(request: NextRequest) {
       shopDomain: shop,
     });
 
-    // Auto-detect store config (timezone, currency, plan) from Shopify
+    // Auto-detect full store config (currency, timezone, tax, locale, plan)
     if (isSupabasePersistenceEnabled()) {
       try {
-        const shopRes = await fetch(
-          `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/shop.json`,
-          {
-            headers: {
-              'X-Shopify-Access-Token': tokenData.access_token,
-              'Content-Type': 'application/json',
-            },
-          }
-        );
-        if (shopRes.ok) {
-          const { shop: shopData } = await shopRes.json();
-          await rest('/store_config', {
-            method: 'POST',
-            headers: { Prefer: 'resolution=merge-duplicates' },
-            body: JSON.stringify({
-              store_id: storeId,
-              shopify_domain: shop,
-              iana_timezone: shopData.iana_timezone || 'America/New_York',
-              shopify_plan: shopData.plan_name || null,
-              reporting_currency: shopData.currency || 'USD',
-            }),
-          });
-        }
+        const { detectAndSaveStoreConfig } = await import('@/lib/onboarding/stages/detectStoreConfig');
+        await detectAndSaveStoreConfig(storeId, tokenData.access_token, shop);
       } catch {
-        // Non-critical — store config can be set up later
+        // Non-critical — onboarding pipeline will retry
       }
     }
 
