@@ -187,7 +187,8 @@ export async function POST(request: NextRequest) {
   }
 
   const results: Array<{ date: string; success: boolean; error?: string }> = [];
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL ?? '';
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL
+    || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
 
   for (const dateStr of dates) {
     try {
