@@ -653,16 +653,86 @@ export async function onStoreConnected(storeId: string): Promise<void> {
       await learnFeeRates(storeId);
     });
 
-    // Stage 8: Classification (creates product_behaviors + classifications)
+    // Stage 8: Classification — signal-stack classifier + behavioral enrichment
     await runStage(storeId, 'classification', async () => {
-      const { extractAllProductBehaviors } = await import('@/lib/intelligence/behaviorExtractor');
-      const { buildStoreProfile } = await import('@/lib/intelligence/storeProfiler');
-      const { classifyAllProducts } = await import('@/lib/intelligence/relativeClassifier');
+      // 1. Run the real classifier (detects store type → signal stack → persists to product_classifications)
+      const { classifyAllProducts } = await import('@/lib/intelligence/classificationRouter');
+      const result = await classifyAllProducts(storeId);
+      console.log(`[Onboarding] Signal-stack: ${result.classified} classified, ${result.needsReview} need review`);
 
-      const behaviors = await extractAllProductBehaviors(storeId);
-      if (behaviors.length > 0) {
-        const profile = await buildStoreProfile(storeId, behaviors);
-        classifyAllProducts(behaviors, profile, new Map(), new Map());
+      // 2. Run behavioral analysis on top (same pattern as cron/classify-products)
+      try {
+        const { extractAllProductBehaviors } = await import('@/lib/intelligence/behaviorExtractor');
+        const { buildStoreProfile } = await import('@/lib/intelligence/storeProfiler');
+        const { classifyAllProducts: behavioralClassify } = await import('@/lib/intelligence/relativeClassifier');
+
+        const behaviors = await extractAllProductBehaviors(storeId);
+        if (behaviors.length > 0) {
+          const profile = await buildStoreProfile(storeId, behaviors);
+
+          // Load manual overrides — never overwrite these
+          const stored = await rest<Array<{ product_id: string; classification: string; manual_override: boolean }>>(
+            `/product_classifications?store_id=eq.${encodeURIComponent(storeId)}&select=product_id,classification,manual_override`
+          ).catch(() => [] as Array<{ product_id: string; classification: string; manual_override: boolean }>);
+          const manualOverrides = new Map<string, string>();
+          for (const sc of stored) {
+            if (sc.manual_override) manualOverrides.set(sc.product_id, sc.classification);
+          }
+
+          const behavioralResults = behavioralClassify(behaviors, profile, manualOverrides, new Map());
+
+          // Persist store profile
+          await rest('/store_behavior_profiles?on_conflict=store_id', {
+            method: 'POST',
+            headers: { Prefer: 'resolution=merge-duplicates' },
+            body: JSON.stringify({ ...profile }),
+          }).catch(() => null);
+
+          // Persist product behaviors
+          for (const b of behaviors) {
+            await rest('/product_behaviors?on_conflict=store_id,product_id', {
+              method: 'POST',
+              headers: { Prefer: 'resolution=merge-duplicates' },
+              body: JSON.stringify({
+                store_id: b.store_id, product_id: b.product_id, product_title: b.product_title,
+                total_orders: b.total_orders, alone_orders: b.alone_orders, alone_rate: b.alone_rate,
+                first_position_orders: b.first_position_orders, first_rate: b.first_rate,
+                avg_position: b.avg_position, total_revenue: b.total_revenue,
+                revenue_share: b.revenue_share, avg_order_value_with: b.avg_order_value_with,
+                avg_order_value_without: b.avg_order_value_without, co_occurrence_rate: b.co_occurrence_rate,
+                value_lift: b.value_lift, top_companions: b.top_companions,
+                mutual_exclusions: b.mutual_exclusions,
+                first_seen: b.first_seen, last_seen: b.last_seen, active_days: b.active_days,
+                computed_at: new Date().toISOString(),
+              }),
+            }).catch(() => null);
+          }
+
+          // Persist behavioral classifications (skip manual overrides)
+          for (const r of behavioralResults) {
+            if (r.method === 'manual_override') continue;
+            await rest('/product_classifications?on_conflict=store_id,product_id', {
+              method: 'POST',
+              headers: { Prefer: 'resolution=merge-duplicates' },
+              body: JSON.stringify({
+                store_id: storeId, product_id: r.product_id, product_title: r.product_title,
+                classification: r.classification, confidence: r.confidence,
+                classification_method: r.method, behavioral_signals: r.signals,
+                parent_product: r.parent_product, downsell_of: r.downsell_of,
+                needs_review: r.needs_review,
+                manual_override: false, last_analyzed: new Date().toISOString(),
+              }),
+            }).catch(() => null);
+          }
+
+          console.log(`[Onboarding] Behavioral: ${behavioralResults.length} products enriched`);
+        }
+      } catch (e) {
+        console.warn('[Onboarding] Behavioral analysis failed (non-critical):', e instanceof Error ? e.message : e);
+      }
+
+      if (result.classified === 0) {
+        throw new Error('skip:No products with enough order data to classify');
       }
     });
 

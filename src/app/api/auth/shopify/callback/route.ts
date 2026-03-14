@@ -131,6 +131,17 @@ export async function GET(request: NextRequest) {
       // Non-critical — intelligence can be initialized later
     });
 
+    // Trigger behavioral classification (fire-and-forget)
+    // Will gracefully skip if orders haven't been backfilled yet —
+    // the onboarding pipeline's classification stage handles the primary run
+    fetch(`${baseUrl}/api/intelligence/run-classification`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ storeId }),
+    }).catch((err) => {
+      console.error('[OAuth] Classification trigger failed:', err);
+    });
+
     // Redirect to popup callback page (closes popup and notifies parent)
     return NextResponse.redirect(
       `${appUrl}/auth/callback?platform=shopify&status=connected`
