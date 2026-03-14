@@ -82,51 +82,33 @@ export async function POST(request: NextRequest) {
             includeProductBreakdown: false,
           });
 
-          const baseRow = {
-            store_id: storeId,
-            date: dateStr,
-            revenue: pnl.totalRevenue,
-            order_count: pnl.orderCount,
-            cogs: pnl.totalCogs,
-            ad_spend: pnl.totalAdSpend,
-            shipping_cost: pnl.totalShipping,
-            transaction_fees: pnl.totalFees,
-            refunds: pnl.totalRefunds,
-            full_refund_count: 0,
-            partial_refund_count: 0,
-            full_refund_amount: 0,
-            partial_refund_amount: 0,
-            chargeback_loss: pnl.totalChargebackLoss,
-            chargeback_won: pnl.totalChargebackWon,
-            net_profit: pnl.totalNetProfit,
-            margin: pnl.totalMargin,
-            fee_method: pnl.feeMethod,
-            synced_at: new Date().toISOString(),
-            shopify_synced: pnl.orderCount > 0,
-            meta_synced: pnl.totalAdSpend > 0,
-          };
-          const upsertOpts = {
-            method: 'POST' as const,
+          await rest('/daily_pnl_snapshots?on_conflict=store_id,date', {
+            method: 'POST',
             headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-          };
-          try {
-            // Try with settled revenue columns
-            await rest('/daily_pnl_snapshots?on_conflict=store_id,date', {
-              ...upsertOpts,
-              body: JSON.stringify([{
-                ...baseRow,
-                gross_revenue: pnl.grossRevenue ?? pnl.totalRevenue,
-                settled_revenue: pnl.settledRevenue ?? 0,
-                revenue_source: pnl.revenueSource ?? 'orders_api',
-              }]),
-            });
-          } catch {
-            // Columns may not exist yet — upsert without them
-            await rest('/daily_pnl_snapshots?on_conflict=store_id,date', {
-              ...upsertOpts,
-              body: JSON.stringify([baseRow]),
-            });
-          }
+            body: JSON.stringify([{
+              store_id: storeId,
+              date: dateStr,
+              revenue: pnl.totalRevenue,
+              order_count: pnl.orderCount,
+              cogs: pnl.totalCogs,
+              ad_spend: pnl.totalAdSpend,
+              shipping_cost: pnl.totalShipping,
+              transaction_fees: pnl.totalFees,
+              refunds: pnl.totalRefunds,
+              full_refund_count: 0,
+              partial_refund_count: 0,
+              full_refund_amount: 0,
+              partial_refund_amount: 0,
+              chargeback_loss: pnl.totalChargebackLoss,
+              chargeback_won: pnl.totalChargebackWon,
+              net_profit: pnl.totalNetProfit,
+              margin: pnl.totalMargin,
+              fee_method: pnl.feeMethod,
+              synced_at: new Date().toISOString(),
+              shopify_synced: pnl.orderCount > 0,
+              meta_synced: pnl.totalAdSpend > 0,
+            }]),
+          });
 
           daysComputed++;
         } catch (err) {
