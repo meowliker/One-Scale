@@ -108,12 +108,16 @@ export async function classifyAllProducts(storeId: string): Promise<ClassifyResu
 
   switch (storeType) {
     case 'single_product':
-    case 'general':
+      // Only truly single-product stores (≤3 products or 85%+ revenue share)
       results = await markAllAsMain(storeId, storeType, manualOverrideIds, tagMatchedIds);
       break;
     case 'subscription':
       results = await classifyWithSubscriptionPriority(storeId, manualOverrideIds, tagMatchedIds);
       break;
+    case 'general':
+      // General stores run behavioral classifier — never markAllAsMain
+      // 'general' only triggers for true catalogs (50+ product types)
+      // which still need behavioral signals to find upsells
     case 'funnel':
     case 'mixed':
     default:
