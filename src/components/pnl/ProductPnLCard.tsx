@@ -82,7 +82,7 @@ export function ProductPnLCard({ product, isDigital = false, storeId, onClassifi
       )}
       {product.parentProduct && (
         <div className="mt-1 text-[10px] text-text-muted">
-          Upsell for: <span className="text-text-secondary font-medium">{product.parentProduct}</span>
+          {product.category === 'downsell' ? 'Downsell of' : 'Upsell for'}: <span className="text-text-secondary font-medium">{product.parentProduct}</span>
         </div>
       )}
 

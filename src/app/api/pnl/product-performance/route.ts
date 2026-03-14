@@ -106,7 +106,7 @@ export async function GET(request: NextRequest) {
     ]);
 
     // Build stored classification lookup (from adaptive intelligence system)
-    type StoredClassEntry = { classification: string; manual_override: boolean; confidence: number; classification_method: string; signals_used: Record<string, number> | null; behavioral_signals?: string[]; parent_product?: string | null; needs_review: boolean; last_analyzed: string };
+    type StoredClassEntry = { classification: string; manual_override: boolean; confidence: number; classification_method: string; signals_used: Record<string, number> | null; behavioral_signals?: string[]; parent_product?: string | null; downsell_of?: string | null; needs_review: boolean; last_analyzed: string };
     const classificationMap = new Map<string, StoredClassEntry>();
     for (const sc of storedClassifications) {
       classificationMap.set(sc.product_id, sc);
@@ -134,6 +134,7 @@ export async function GET(request: NextRequest) {
               signals_used: null,
               behavioral_signals: r.signals,
               parent_product: r.parent_product,
+              downsell_of: r.downsell_of,
               needs_review: r.needs_review,
               last_analyzed: new Date().toISOString(),
             });
@@ -338,8 +339,6 @@ export async function GET(request: NextRequest) {
           : round2(agg.revenue * (costData.costPerUnit / 100));
       }
 
-      // GAP 3: Use attributed spend instead of proportional distribution
-      const adSpend = round2(productSpendMap.get(productId) || 0);
       const revenueShare = totalRevenue > 0 ? agg.revenue / totalRevenue : 0;
 
       // GAP 1: Use configured payment fee rate instead of hardcoded 3%
@@ -347,9 +346,6 @@ export async function GET(request: NextRequest) {
 
       // GAP 4: Use actual shipping from orders
       const shipping = round2(agg.shipping);
-
-      const netProfit = round2(agg.revenue - cogs - adSpend - fees - shipping);
-      const margin = agg.revenue > 0 ? round2((netProfit / agg.revenue) * 100) : 0;
 
       // Use stored classification from adaptive intelligence if available
       const storedClassObj = classificationMap.get(productId);
@@ -386,6 +382,14 @@ export async function GET(request: NextRequest) {
           }
         }
       }
+
+      // GAP 3: Use attributed spend instead of proportional distribution
+      // Downsells get $0 ad spend — they're alternatives to the main product
+      const isDownsell = mostCommonCategory === 'downsell';
+      const adSpend = isDownsell ? 0 : round2(productSpendMap.get(productId) || 0);
+
+      const netProfit = round2(agg.revenue - cogs - adSpend - fees - shipping);
+      const margin = agg.revenue > 0 ? round2((netProfit / agg.revenue) * 100) : 0;
 
       // Per-product FB metrics
       const roas = adSpend > 0 ? round2(agg.revenue / adSpend) : 0;
@@ -433,6 +437,7 @@ export async function GET(request: NextRequest) {
         classificationSignals: storedClassObj?.signals_used ?? null,
         behavioralSignals: (storedClassObj as StoredClassEntry)?.behavioral_signals ?? [],
         parentProduct: (storedClassObj as StoredClassEntry)?.parent_product ?? null,
+        downsellOf: (storedClassObj as StoredClassEntry)?.downsell_of ?? null,
         needsReview: storedClassObj?.needs_review ?? false,
         manualOverride: storedClassObj?.manual_override ?? false,
         lastAnalyzed: storedClassObj?.last_analyzed ?? '',

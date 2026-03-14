@@ -98,7 +98,7 @@ export async function GET(req: NextRequest) {
             body: JSON.stringify({ ...storeProfile }),
           }).catch(() => null);
 
-          // Persist product behaviors
+          // Persist product behaviors (including mutual exclusions)
           for (const b of behaviors) {
             await rest(`/product_behaviors?on_conflict=store_id,product_id`, {
               method: 'POST',
@@ -111,6 +111,7 @@ export async function GET(req: NextRequest) {
                 revenue_share: b.revenue_share, avg_order_value_with: b.avg_order_value_with,
                 avg_order_value_without: b.avg_order_value_without, co_occurrence_rate: b.co_occurrence_rate,
                 value_lift: b.value_lift, top_companions: b.top_companions,
+                mutual_exclusions: b.mutual_exclusions,
                 first_seen: b.first_seen, last_seen: b.last_seen, active_days: b.active_days,
                 computed_at: new Date().toISOString(),
               }),
@@ -127,7 +128,8 @@ export async function GET(req: NextRequest) {
                 store_id: store.id, product_id: r.product_id, product_title: r.product_title,
                 classification: r.classification, confidence: r.confidence,
                 classification_method: r.method, behavioral_signals: r.signals,
-                parent_product: r.parent_product, needs_review: r.needs_review,
+                parent_product: r.parent_product, downsell_of: r.downsell_of,
+                needs_review: r.needs_review,
                 manual_override: false, last_analyzed: new Date().toISOString(),
               }),
             }).catch(() => null);

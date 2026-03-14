@@ -25,6 +25,7 @@ interface ClassificationBadgeProps {
 const BADGE_CONFIG: Record<string, { color: string; dotClass: string; label: string }> = {
   main: { color: 'text-emerald-600', dotClass: 'bg-emerald-500', label: 'MAIN' },
   upsell: { color: 'text-blue-600', dotClass: 'bg-blue-500', label: 'UPSELL' },
+  downsell: { color: 'text-orange-600', dotClass: 'bg-orange-500', label: 'DOWNSELL' },
   bundle: { color: 'text-violet-600', dotClass: 'bg-violet-500', label: 'BUNDLE' },
   excluded: { color: 'text-zinc-400', dotClass: 'bg-zinc-300 border border-zinc-400', label: 'EXCLUDED' },
   pending: { color: 'text-zinc-400', dotClass: '', label: 'PENDING' },
@@ -34,6 +35,7 @@ const BADGE_CONFIG: Record<string, { color: string; dotClass: string; label: str
 const DROPDOWN_OPTIONS: { key: ProductCategory; label: string; dotClass: string }[] = [
   { key: 'main', label: 'MAIN', dotClass: 'bg-emerald-500' },
   { key: 'upsell', label: 'UPSELL', dotClass: 'bg-blue-500' },
+  { key: 'downsell', label: 'DOWNSELL', dotClass: 'bg-orange-500' },
   { key: 'bundle', label: 'BUNDLE', dotClass: 'bg-violet-500' },
   { key: 'excluded', label: 'EXCLUDE', dotClass: 'bg-zinc-300 border border-zinc-400' },
 ];
@@ -68,7 +70,7 @@ export function ClassificationBadge({
 
   const isPending = classification === 'pending';
   const isLowConfidence = !isPending && !manualOverride && confidence < REVIEW_CONFIDENCE_THRESHOLD && confidence > 0;
-  const effectiveClassification = classification === 'downsell' || classification === 'addon' ? 'upsell' : classification;
+  const effectiveClassification = classification === 'addon' ? 'upsell' : classification;
   const config = BADGE_CONFIG[effectiveClassification] || BADGE_CONFIG.unknown;
 
   if (isPending) {
@@ -158,11 +160,12 @@ export function ClassificationBadge({
                   {behavioralSignals.map((signal, i) => {
                     const isMain = signal.toLowerCase().includes('main signal') || signal.toLowerCase().includes('decision: main');
                     const isUpsell = signal.toLowerCase().includes('upsell signal') || signal.toLowerCase().includes('decision: upsell');
+                    const isDownsell = signal.toLowerCase().includes('downsell signal') || signal.toLowerCase().includes('decision: downsell');
                     const isNeutral = signal.toLowerCase().includes('neutral') || signal.toLowerCase().includes('decision: unknown');
                     return (
                       <div key={i} className="text-[10px] leading-relaxed">
                         <span className={cn(
-                          isMain ? 'text-emerald-600' : isUpsell ? 'text-blue-600' : 'text-text-secondary',
+                          isMain ? 'text-emerald-600' : isDownsell ? 'text-orange-600' : isUpsell ? 'text-blue-600' : 'text-text-secondary',
                         )}>
                           {signal}
                         </span>
@@ -198,7 +201,7 @@ export function ClassificationBadge({
               )}
               <div className="flex gap-3 pt-1.5 mt-1.5 border-t border-border text-[10px] text-text-muted">
                 <span>Confidence: <strong className={confidence >= REVIEW_CONFIDENCE_THRESHOLD ? 'text-emerald-500' : 'text-amber-500'}>{confidence}%</strong></span>
-                <span>Method: <strong>{method === 'relative_signals' ? 'Behavioral' : method === 'store_structure' ? 'Store Type' : method === 'manual_override' ? 'Manual' : method === 'shopify_tag' ? 'Shopify Tag' : method || 'Auto'}</strong></span>
+                <span>Method: <strong>{method === 'relative_signals' ? 'Behavioral' : method === 'downsell_detection' ? 'Downsell Detection' : method === 'store_structure' ? 'Store Type' : method === 'manual_override' ? 'Manual' : method === 'shopify_tag' ? 'Shopify Tag' : method || 'Auto'}</strong></span>
               </div>
               {lastAnalyzed && (
                 <div className="text-[10px] text-text-muted">

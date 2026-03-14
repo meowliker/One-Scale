@@ -14,11 +14,12 @@ import type { StoreBehaviorProfile } from './storeProfiler';
 export interface ClassificationResult {
   product_id: string;
   product_title: string;
-  classification: 'main' | 'upsell' | 'addon' | 'bundle' | 'excluded' | 'pending' | 'unknown';
+  classification: 'main' | 'upsell' | 'downsell' | 'addon' | 'bundle' | 'excluded' | 'pending' | 'unknown';
   confidence: number; // 0-100
   method: string;
   signals: string[];
-  parent_product: string | null; // title of the main product this upsell belongs to
+  parent_product: string | null; // title of the main product this upsell/downsell belongs to
+  downsell_of: string | null; // product_id of the main product (for downsells)
   needs_review: boolean;
 }
 
@@ -124,7 +125,7 @@ export function classifyAllProducts(
     behaviorMap.set(b.product_id, b);
   }
 
-  return behaviors.map(behavior =>
+  const results = behaviors.map(behavior =>
     classifySingleProduct(
       behavior,
       storeProfile,
@@ -135,6 +136,12 @@ export function classifyAllProducts(
       behaviorMap,
     ),
   );
+
+  // Post-processing: detect downsells and reconcile symmetric pairs
+  detectDownsells(results, behaviorMap);
+  reconcileDownsellPairs(results, behaviorMap);
+
+  return results;
 }
 
 function classifySingleProduct(
@@ -150,6 +157,7 @@ function classifySingleProduct(
     product_id: behavior.product_id,
     product_title: behavior.product_title,
     parent_product: null as string | null,
+    downsell_of: null as string | null,
   };
 
   // ── 1. Insufficient data ────────────────────────────────
@@ -385,6 +393,7 @@ function classifyByRelativeSignals(
     method: 'relative_signals',
     signals,
     parent_product: parentProduct,
+    downsell_of: null,
     needs_review: needsReview,
   };
 }
@@ -427,4 +436,234 @@ function findParentTitle(
 
   // Fallback: return the top companion regardless
   return behavior.top_companions[0]?.product_title ?? null;
+}
+
+// ── Downsell Detection ──────────────────────────────────────
+
+/**
+ * Jaccard similarity on lowercased word sets from product titles.
+ */
+const DS_STOP_WORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'of', 'for', 'in', 'on', 'to', 'with',
+]);
+
+function dsTokenize(title: string): Set<string> {
+  const words = new Set<string>();
+  for (const w of title.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)) {
+    if (w.length > 1 && !DS_STOP_WORDS.has(w)) words.add(w);
+  }
+  return words;
+}
+
+function dsJaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 0;
+  let intersection = 0;
+  for (const w of a) { if (b.has(w)) intersection++; }
+  const union = a.size + b.size - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
+/**
+ * Checks each classified product for downsell potential.
+ *
+ * A downsell is a cheaper alternative to a main product that customers buy
+ * INSTEAD OF (not in addition to) the main product. Key signals:
+ *
+ * 1. **Exclusivity** (35pts): High mutual exclusion rate — they don't appear
+ *    in the same order, suggesting they're alternatives.
+ * 2. **Title Similarity** (25pts): Similar product names suggest variants
+ *    (e.g., "Premium Widget" vs "Basic Widget").
+ * 3. **Price Ratio** (25pts): Downsell must be cheaper than the main product.
+ *    Ideal range: 30%-80% of the main product's price.
+ * 4. **Behavioral Asymmetry** (15pts): Main product has higher alone_rate,
+ *    meaning customers prefer the main but some opt for the cheaper version.
+ */
+function detectDownsells(
+  results: ClassificationResult[],
+  behaviorMap: Map<string, ProductBehavior>,
+): void {
+  const resultMap = new Map<string, ClassificationResult>();
+  for (const r of results) resultMap.set(r.product_id, r);
+
+  for (const result of results) {
+    // Only check products not already manually classified or with strong classifications
+    if (result.method === 'manual_override' || result.method === 'shopify_tag') continue;
+    if (result.classification === 'excluded' || result.classification === 'bundle') continue;
+    if (result.classification === 'pending') continue;
+
+    const behavior = behaviorMap.get(result.product_id);
+    if (!behavior || !behavior.mutual_exclusions || behavior.mutual_exclusions.length === 0) continue;
+    if (behavior.total_orders < 5) continue;
+
+    // Check each mutual exclusion candidate
+    for (const excl of behavior.mutual_exclusions) {
+      const mainBehavior = behaviorMap.get(excl.product_id);
+      if (!mainBehavior) continue;
+
+      const mainResult = resultMap.get(excl.product_id);
+      if (!mainResult) continue;
+
+      // The potential "main" product must be classified as main or unknown
+      if (mainResult.classification !== 'main' && mainResult.classification !== 'unknown') continue;
+
+      const score = computeDownsellScore(behavior, mainBehavior, excl);
+
+      if (score.total >= 55) {
+        result.classification = 'downsell';
+        result.downsell_of = excl.product_id;
+        result.parent_product = excl.product_title;
+        result.confidence = Math.min(95, Math.round(score.total));
+        result.method = 'downsell_detection';
+        result.needs_review = score.total < 70;
+        result.signals.push(
+          ...score.signals,
+          `Decision: DOWNSELL of "${excl.product_title}" (score ${Math.round(score.total)}, confidence ${result.confidence}%)`,
+        );
+        break; // Found a downsell match, stop checking
+      }
+    }
+  }
+}
+
+interface DownsellScore {
+  total: number;
+  signals: string[];
+}
+
+function computeDownsellScore(
+  candidate: ProductBehavior,
+  mainProduct: ProductBehavior,
+  exclusion: { exclusion_rate: number; price: number },
+): DownsellScore {
+  let total = 0;
+  const signals: string[] = [];
+
+  // Signal 1: Exclusivity (max 35 points)
+  // High exclusion rate means they rarely appear in the same order
+  if (exclusion.exclusion_rate > 0.7) {
+    const points = 35 * Math.min(1, exclusion.exclusion_rate);
+    total += points;
+    signals.push(
+      `Exclusivity: ${pct(exclusion.exclusion_rate * 100)} mutual exclusion rate — rarely bought together (downsell signal +${Math.round(points)})`,
+    );
+  } else if (exclusion.exclusion_rate > 0.5) {
+    const points = 20 * exclusion.exclusion_rate;
+    total += points;
+    signals.push(
+      `Exclusivity: ${pct(exclusion.exclusion_rate * 100)} mutual exclusion — moderate alternative behavior (downsell signal +${Math.round(points)})`,
+    );
+  }
+
+  // Signal 2: Title Similarity (max 25 points)
+  const titleSim = dsJaccard(
+    dsTokenize(candidate.product_title),
+    dsTokenize(mainProduct.product_title),
+  );
+  if (titleSim > 0.3) {
+    const points = 25 * Math.min(1, titleSim / 0.7);
+    total += points;
+    signals.push(
+      `Title similarity: ${pct(titleSim * 100)} Jaccard overlap — likely variant (downsell signal +${Math.round(points)})`,
+    );
+  }
+
+  // Signal 3: Price Ratio (max 25 points)
+  // Downsell should be cheaper. Ideal range: 30%-80% of main price.
+  if (mainProduct.avg_unit_price > 0 && candidate.avg_unit_price > 0) {
+    const priceRatio = candidate.avg_unit_price / mainProduct.avg_unit_price;
+    if (priceRatio > 0.1 && priceRatio < 0.85) {
+      // Sweet spot: 30%-70% of main price gets max points
+      let points: number;
+      if (priceRatio >= 0.3 && priceRatio <= 0.7) {
+        points = 25;
+      } else if (priceRatio < 0.3) {
+        points = 15; // Very cheap — might be an accessory, not downsell
+      } else {
+        points = 20; // 70-85% — close in price, weaker signal
+      }
+      total += points;
+      signals.push(
+        `Price ratio: ${pct(priceRatio * 100)} of main product price ($${candidate.avg_unit_price.toFixed(2)} vs $${mainProduct.avg_unit_price.toFixed(2)}) (downsell signal +${points})`,
+      );
+    }
+  }
+
+  // Signal 4: Behavioral Asymmetry (max 15 points)
+  // Main product should have higher alone_rate (bought independently more often)
+  if (mainProduct.alone_rate > candidate.alone_rate * 1.2) {
+    const ratio = mainProduct.alone_rate / Math.max(candidate.alone_rate, 0.01);
+    const points = Math.min(15, 10 * Math.min(ratio, 3) / 3 + 5);
+    total += points;
+    signals.push(
+      `Behavioral asymmetry: main product alone rate ${pct(mainProduct.alone_rate * 100)} vs this product ${pct(candidate.alone_rate * 100)} — main is more independent (downsell signal +${Math.round(points)})`,
+    );
+  }
+
+  return { total, signals };
+}
+
+/**
+ * Reconciles symmetric downsell pairs.
+ *
+ * If product A is classified as downsell of B, and B is also classified
+ * as downsell of A, keep only the cheaper product as the downsell.
+ * The more expensive product becomes (or stays) 'main'.
+ */
+function reconcileDownsellPairs(
+  results: ClassificationResult[],
+  behaviorMap: Map<string, ProductBehavior>,
+): void {
+  const downsells = results.filter(r => r.classification === 'downsell' && r.downsell_of);
+  const resultMap = new Map<string, ClassificationResult>();
+  for (const r of results) resultMap.set(r.product_id, r);
+
+  // Find symmetric pairs
+  const processed = new Set<string>();
+
+  for (const ds of downsells) {
+    if (processed.has(ds.product_id)) continue;
+
+    const counterpart = resultMap.get(ds.downsell_of!);
+    if (!counterpart || counterpart.classification !== 'downsell') continue;
+    if (counterpart.downsell_of !== ds.product_id) continue;
+
+    // Symmetric pair found: both are downsells of each other
+    processed.add(ds.product_id);
+    processed.add(counterpart.product_id);
+
+    const dsBehavior = behaviorMap.get(ds.product_id);
+    const counterBehavior = behaviorMap.get(counterpart.product_id);
+
+    if (!dsBehavior || !counterBehavior) continue;
+
+    // The cheaper one stays as downsell, the more expensive becomes main
+    const dsPrice = dsBehavior.avg_unit_price;
+    const counterPrice = counterBehavior.avg_unit_price;
+
+    let downsellResult: ClassificationResult;
+    let mainResult: ClassificationResult;
+
+    if (dsPrice <= counterPrice) {
+      downsellResult = ds;
+      mainResult = counterpart;
+    } else {
+      downsellResult = counterpart;
+      mainResult = ds;
+    }
+
+    // Promote the expensive one to main
+    mainResult.classification = 'main';
+    mainResult.downsell_of = null;
+    mainResult.parent_product = null;
+    mainResult.signals.push(
+      `Reconciled: promoted to MAIN (more expensive in symmetric pair with "${downsellResult.product_title}")`,
+    );
+
+    // Ensure the cheap one points to the correct main
+    downsellResult.downsell_of = mainResult.product_id;
+    downsellResult.parent_product = mainResult.product_title;
+    downsellResult.signals.push(
+      `Reconciled: confirmed as DOWNSELL of "${mainResult.product_title}" (cheaper variant in symmetric pair)`,
+    );
+  }
 }

@@ -32,6 +32,7 @@ export interface ProductPnLData {
   classificationSignals?: Record<string, number> | null;
   behavioralSignals?: string[];
   parentProduct?: string | null;
+  downsellOf?: string | null;
   needsReview?: boolean;
   manualOverride?: boolean;
   lastAnalyzed?: string;

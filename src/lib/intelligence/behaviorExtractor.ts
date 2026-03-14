@@ -30,6 +30,16 @@ interface CompanionProduct {
   co_rate: number;
 }
 
+/** Product pair that rarely appears together despite being ordered in similar periods. */
+export interface MutualExclusion {
+  product_id: string;
+  product_title: string;
+  exclusion_rate: number; // 0-1: how often they DON'T appear together vs expected
+  shared_order_count: number;
+  expected_overlap: number;
+  price: number; // avg unit price of the other product
+}
+
 /** Full behavioral signal profile for a single product. */
 export interface ProductBehavior {
   product_id: string;
@@ -52,6 +62,8 @@ export interface ProductBehavior {
   first_seen: string;
   last_seen: string;
   active_days: number;
+  mutual_exclusions: MutualExclusion[];
+  avg_unit_price: number;
 }
 
 /** Internal accumulator for building per-product stats. */
@@ -63,6 +75,7 @@ interface ProductAccumulator {
   first_position_orders: number;
   position_sum: number;
   total_revenue: number;
+  total_quantity: number;
   order_values: number[];
   co_occurrences: Map<string, { title: string; count: number }>;
   dates: Set<string>;
@@ -178,6 +191,7 @@ export async function extractAllProductBehaviors(
         first_position_orders: 0,
         position_sum: 0,
         total_revenue: 0,
+        total_quantity: 0,
         order_values: [],
         co_occurrences: new Map(),
         dates: new Set(),
@@ -205,6 +219,7 @@ export async function extractAllProductBehaviors(
       acc.order_values.push(order.total_price);
       acc.position_sum += pos + 1; // 1-based
       acc.total_revenue += item.price * item.quantity;
+      acc.total_quantity += item.quantity;
       acc.dates.add(order.date_key);
 
       if (!acc.first_seen || order.created_at < acc.first_seen) {
@@ -303,6 +318,8 @@ export async function extractAllProductBehaviors(
 
     const valueLift = avgOrderValueWith - avgOrderValueWithout;
 
+    const avgUnitPrice = acc.total_quantity > 0 ? acc.total_revenue / acc.total_quantity : 0;
+
     behaviors.push({
       product_id: acc.product_id,
       product_title: acc.product_title,
@@ -324,11 +341,124 @@ export async function extractAllProductBehaviors(
       first_seen: acc.first_seen,
       last_seen: acc.last_seen,
       active_days: acc.dates.size,
+      mutual_exclusions: [], // computed below
+      avg_unit_price: avgUnitPrice,
     });
   }
+
+  // Compute mutual exclusions between products with similar titles
+  computeMutualExclusions(behaviors, productOrderSets, parsedOrders.length);
 
   // Sort by total revenue descending for convenience
   behaviors.sort((a, b) => b.total_revenue - a.total_revenue);
 
   return behaviors;
+}
+
+/**
+ * Jaccard similarity on lowercased word sets from product titles.
+ * Ignores common filler words.
+ */
+const STOP_WORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'of', 'for', 'in', 'on', 'to', 'with', '-', '&', '|',
+]);
+
+function titleWords(title: string): Set<string> {
+  const words = new Set<string>();
+  for (const w of title.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)) {
+    if (w.length > 1 && !STOP_WORDS.has(w)) words.add(w);
+  }
+  return words;
+}
+
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 0;
+  let intersection = 0;
+  for (const w of a) {
+    if (b.has(w)) intersection++;
+  }
+  const union = a.size + b.size - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
+/**
+ * Computes mutual exclusion rates between product pairs that share
+ * similar titles. Two products are "mutually exclusive" when they
+ * rarely appear in the same order despite being ordered in similar
+ * time periods — a strong indicator of downsell/alternative relationships.
+ */
+function computeMutualExclusions(
+  behaviors: ProductBehavior[],
+  productOrderSets: Map<string, Set<number>>,
+  totalOrderCount: number,
+): void {
+  if (behaviors.length < 2 || totalOrderCount === 0) return;
+
+  // Only consider products with enough data (≥5 orders)
+  const significant = behaviors.filter(b => b.total_orders >= 5);
+  if (significant.length < 2) return;
+
+  // Pre-compute title word sets
+  const titleWordSets = new Map<string, Set<string>>();
+  for (const b of significant) {
+    titleWordSets.set(b.product_id, titleWords(b.product_title));
+  }
+
+  // Build a behavior lookup for price data
+  const behaviorLookup = new Map<string, ProductBehavior>();
+  for (const b of significant) {
+    behaviorLookup.set(b.product_id, b);
+  }
+
+  // For each pair with title similarity > 0.25, compute mutual exclusion
+  for (let i = 0; i < significant.length; i++) {
+    const a = significant[i];
+    const aWords = titleWordSets.get(a.product_id)!;
+    const aOrders = productOrderSets.get(a.product_id);
+    if (!aOrders || aOrders.size === 0) continue;
+
+    const exclusions: MutualExclusion[] = [];
+
+    for (let j = 0; j < significant.length; j++) {
+      if (i === j) continue;
+      const b = significant[j];
+      const bWords = titleWordSets.get(b.product_id)!;
+
+      // Title similarity gate — only compute exclusion for similar-titled products
+      const similarity = jaccardSimilarity(aWords, bWords);
+      if (similarity < 0.25) continue;
+
+      const bOrders = productOrderSets.get(b.product_id);
+      if (!bOrders || bOrders.size === 0) continue;
+
+      // Count shared orders
+      let sharedCount = 0;
+      for (const ordIdx of aOrders) {
+        if (bOrders.has(ordIdx)) sharedCount++;
+      }
+
+      // Expected overlap if products were independently distributed
+      const expectedOverlap = (aOrders.size * bOrders.size) / totalOrderCount;
+
+      // Exclusion rate: 1 means they NEVER appear together, 0 means they appear as expected
+      const exclusionRate = expectedOverlap > 0
+        ? Math.max(0, 1 - (sharedCount / expectedOverlap))
+        : 0;
+
+      if (exclusionRate > 0.5) {
+        exclusions.push({
+          product_id: b.product_id,
+          product_title: b.product_title,
+          exclusion_rate: Math.round(exclusionRate * 1000) / 1000,
+          shared_order_count: sharedCount,
+          expected_overlap: Math.round(expectedOverlap * 100) / 100,
+          price: b.avg_unit_price,
+        });
+      }
+    }
+
+    // Keep top 5 exclusions sorted by exclusion_rate desc
+    exclusions.sort((x, y) => y.exclusion_rate - x.exclusion_rate);
+    a.mutual_exclusions = exclusions.slice(0, 5);
+  }
 }
