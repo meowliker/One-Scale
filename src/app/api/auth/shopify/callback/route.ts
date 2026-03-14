@@ -132,8 +132,18 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Trigger store intelligence initialization (fire-and-forget)
+    // Trigger full onboarding pipeline (fire-and-forget)
+    // This backfills ALL historical data: orders, fees, refunds, chargebacks, ads, P&L
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || appUrl;
+    fetch(`${baseUrl}/api/onboarding/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ storeId }),
+    }).catch(() => {
+      // Non-critical — resume cron will pick up stalled onboarding
+    });
+
+    // Also trigger intelligence initialization (fire-and-forget)
     fetch(`${baseUrl}/api/intelligence/init`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
