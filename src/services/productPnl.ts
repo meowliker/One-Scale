@@ -142,21 +142,20 @@ async function buildClassificationMap(
 ): Promise<Map<string, ProductCategory>> {
   const map = new Map<string, ProductCategory>();
 
-  // Priority 1: Stored classifications from adaptive intelligence system
+  // Priority 1: Stored classifications from adaptive intelligence system (via API to avoid server-only deps in client bundle)
   try {
-    const { rest: restFn, isSupabasePersistenceEnabled } = await import('@/app/api/lib/supabase-persistence');
-    if (isSupabasePersistenceEnabled()) {
-      const stored = await restFn<Array<{ product_id: string; classification: string; manual_override: boolean }>>(
-        `/product_classifications?store_id=eq.${encodeURIComponent(storeId)}&select=product_id,classification,manual_override`
-      ).catch(() => []);
+    const res = await fetch(`/api/intelligence/classifications?storeId=${encodeURIComponent(storeId)}`);
+    if (res.ok) {
+      const json = await res.json();
+      const stored = (json.classifications || json.data || []) as Array<{ product_id: string; classification: string; manual_override?: boolean }>;
       for (const s of stored) {
         if (s.classification && s.classification !== 'pending' && s.classification !== 'unknown') {
           map.set(s.product_id, s.classification as ProductCategory);
         }
       }
-      if (map.size > 0) return map; // Use stored classifications if available
+      if (map.size > 0) return map;
     }
-  } catch { /* Supabase not available, fall through */ }
+  } catch { /* API not available, fall through */ }
 
   // Priority 2: Legacy library classification
   try {
