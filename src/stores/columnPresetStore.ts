@@ -4,11 +4,12 @@ import type { MetricKey, ColumnPreset } from '@/types/metrics';
 import { defaultColumnPresets } from '@/data/metricDefinitions';
 
 interface ColumnPresetState {
-  activePresetId: string;
+  activePresetId: string | null;
   customPresets: ColumnPreset[];
   visibleColumns: MetricKey[];
   columnOrder: MetricKey[];
   setPreset: (presetId: string) => void;
+  setColumnsWithoutPreset: (columns: MetricKey[]) => void;
   addColumn: (key: MetricKey) => void;
   removeColumn: (key: MetricKey) => void;
   reorderColumns: (columns: MetricKey[]) => void;
@@ -34,6 +35,14 @@ export const useColumnPresetStore = create<ColumnPresetState>()(
             columnOrder: preset.columns,
           });
         }
+      },
+
+      setColumnsWithoutPreset: (columns) => {
+        set({
+          activePresetId: null,
+          visibleColumns: columns,
+          columnOrder: columns,
+        });
       },
 
       addColumn: (key) => {

@@ -520,6 +520,68 @@ body {
   scrollbar-gutter: stable both-edges;
 }
 
+/* Sticky columns for horizontal scroll - ensure proper stacking */
+.ads-manager-table-container table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+/* Sticky header row for vertical scroll */
+.ads-manager-table-container thead {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+}
+
+/* Ensure all header cells have solid background */
+.ads-manager-table-container thead th {
+  background: var(--apple-table-header-bg);
+}
+
+/* Sticky footer row for vertical scroll */
+.ads-manager-table-container tfoot {
+  position: sticky;
+  bottom: 0;
+  z-index: 40;
+}
+
+/* Sticky first 3 columns for horizontal scroll */
+.ads-manager-table-container th:nth-child(1),
+.ads-manager-table-container td:nth-child(1) {
+  position: sticky;
+  left: 0;
+  z-index: 20;
+}
+
+.ads-manager-table-container th:nth-child(2),
+.ads-manager-table-container td:nth-child(2) {
+  position: sticky;
+  left: 40px;
+  z-index: 20;
+}
+
+.ads-manager-table-container th:nth-child(3),
+.ads-manager-table-container td:nth-child(3) {
+  position: sticky;
+  left: 110px;
+  z-index: 20;
+  box-shadow: 4px 0 8px -4px rgba(0, 0, 0, 0.1);
+}
+
+/* Header sticky cells need higher z-index */
+.ads-manager-table-container thead th:nth-child(1),
+.ads-manager-table-container thead th:nth-child(2),
+.ads-manager-table-container thead th:nth-child(3) {
+  z-index: 50;
+}
+
+/* Footer sticky cells need higher z-index */
+.ads-manager-table-container tfoot td:nth-child(1),
+.ads-manager-table-container tfoot td:nth-child(2),
+.ads-manager-table-container tfoot td:nth-child(3) {
+  z-index: 50;
+}
+
 /* ===== Dark table styles ===== */
 .dark-table {
   border-collapse: collapse;

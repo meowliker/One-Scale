@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useCallback, useEffect } from 'react';
-import { X, GripVertical, Save, RotateCcw, Trash2, Check } from 'lucide-react';
+import { X, GripVertical, RotateCcw, Trash2, Check, Plus, Pencil } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   DndContext,
@@ -128,7 +128,6 @@ function SortableColumnItem({
 /* ─── Main Drawer ─── */
 export function ColumnPicker({ isOpen, onClose }: ColumnPickerProps) {
   const [search, setSearch] = useState('');
-  const [activeTab, setActiveTab] = useState<MetricCategory | 'all'>('all');
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
 
   const {
@@ -140,13 +139,33 @@ export function ColumnPicker({ isOpen, onClose }: ColumnPickerProps) {
     removeColumn,
     reorderColumns,
     setPreset,
+    setColumnsWithoutPreset,
     deletePreset,
   } = useColumnPresetStore();
 
-  // Reset search when opening
+  // Pending state - changes are only applied when user clicks OK
+  const [pendingColumns, setPendingColumns] = useState<MetricKey[]>(visibleColumns);
+  const [pendingOrder, setPendingOrder] = useState<MetricKey[]>(columnOrder);
+  const [pendingPresetId, setPendingPresetId] = useState<string | null>(activePresetId);
+  
+  // Store columns before preset selection so we can restore them on deselect
+  const [columnsBeforePreset, setColumnsBeforePreset] = useState<MetricKey[] | null>(null);
+  const [orderBeforePreset, setOrderBeforePreset] = useState<MetricKey[] | null>(null);
+
+  // All presets (default + custom)
+  const allPresets = useMemo(() => [...defaultColumnPresets, ...customPresets], [customPresets]);
+
+  // Reset pending state when opening
   useEffect(() => {
-    if (isOpen) setSearch('');
-  }, [isOpen]);
+    if (isOpen) {
+      setSearch('');
+      setPendingColumns(visibleColumns);
+      setPendingOrder(columnOrder);
+      setPendingPresetId(activePresetId);
+      setColumnsBeforePreset(null);
+      setOrderBeforePreset(null);
+    }
+  }, [isOpen, visibleColumns, columnOrder, activePresetId]);
 
   // Close on Escape
   useEffect(() => {
@@ -164,30 +183,10 @@ export function ColumnPicker({ isOpen, onClose }: ColumnPickerProps) {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
-  // Count selected per category
-  const selectedCountByCategory = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const cat of categoryTabs) {
-      if (cat.key === 'all') {
-        counts.all = visibleColumns.length;
-      } else {
-        const catMetrics = metricsByCategory[cat.key] ?? [];
-        counts[cat.key] = catMetrics.filter((m) => visibleColumns.includes(m.key)).length;
-      }
-    }
-    return counts;
-  }, [visibleColumns]);
-
-  // Filter metrics by tab + search
+  // Filter metrics by search only (no category tabs)
   const displayedMetrics = useMemo(() => {
     const query = search.toLowerCase().trim();
-    let metrics: MetricDefinition[];
-
-    if (activeTab === 'all') {
-      metrics = allMetrics;
-    } else {
-      metrics = metricsByCategory[activeTab] ?? [];
-    }
+    let metrics: MetricDefinition[] = allMetrics;
 
     if (query) {
       metrics = metrics.filter(
@@ -199,51 +198,104 @@ export function ColumnPicker({ isOpen, onClose }: ColumnPickerProps) {
     }
 
     // Sort: checked items first, preserving their column order
-    const checked = metrics.filter((m) => visibleColumns.includes(m.key));
-    const unchecked = metrics.filter((m) => !visibleColumns.includes(m.key));
-    // Sort checked by their position in columnOrder
+    const checked = metrics.filter((m) => pendingColumns.includes(m.key));
+    const unchecked = metrics.filter((m) => !pendingColumns.includes(m.key));
+    // Sort checked by their position in pendingOrder
     checked.sort(
-      (a, b) => columnOrder.indexOf(a.key) - columnOrder.indexOf(b.key)
+      (a, b) => pendingOrder.indexOf(a.key) - pendingOrder.indexOf(b.key)
     );
 
     return [...checked, ...unchecked];
-  }, [search, activeTab, visibleColumns, columnOrder]);
+  }, [search, pendingColumns, pendingOrder]);
 
+  // Toggle column in pending state
   const handleToggle = useCallback(
     (key: MetricKey) => {
-      if (visibleColumns.includes(key)) {
-        removeColumn(key);
+      if (pendingColumns.includes(key)) {
+        setPendingColumns(pendingColumns.filter((c) => c !== key));
+        setPendingOrder(pendingOrder.filter((c) => c !== key));
       } else {
-        addColumn(key);
+        setPendingColumns([...pendingColumns, key]);
+        setPendingOrder([...pendingOrder, key]);
       }
+      setPendingPresetId(null); // Clear preset when manually changing columns
     },
-    [visibleColumns, addColumn, removeColumn]
+    [pendingColumns, pendingOrder]
   );
 
+  // Drag end in pending state
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event;
       if (!over || active.id === over.id) return;
 
-      const oldIndex = columnOrder.indexOf(active.id as MetricKey);
-      const newIndex = columnOrder.indexOf(over.id as MetricKey);
+      const oldIndex = pendingOrder.indexOf(active.id as MetricKey);
+      const newIndex = pendingOrder.indexOf(over.id as MetricKey);
 
       if (oldIndex === -1 || newIndex === -1) return;
 
-      const newOrder = arrayMove(columnOrder, oldIndex, newIndex);
-      reorderColumns(newOrder);
+      const newOrder = arrayMove(pendingOrder, oldIndex, newIndex);
+      setPendingOrder(newOrder);
+      setPendingColumns(newOrder);
+      setPendingPresetId(null); // Clear preset when reordering
     },
-    [columnOrder, reorderColumns]
+    [pendingOrder]
   );
 
-  const handleResetToDefault = useCallback(() => {
-    setPreset('performance');
-  }, [setPreset]);
+  // Select/toggle a preset (updates pending state)
+  const handlePresetSelect = useCallback((presetId: string) => {
+    // Toggle behavior: clicking active preset deactivates it
+    if (pendingPresetId === presetId) {
+      // Deactivate preset - restore previously selected columns
+      if (columnsBeforePreset && orderBeforePreset) {
+        setPendingColumns(columnsBeforePreset);
+        setPendingOrder(orderBeforePreset);
+      }
+      setPendingPresetId(null);
+      setColumnsBeforePreset(null);
+      setOrderBeforePreset(null);
+    } else {
+      // Save current columns before activating preset (only if not already in a preset)
+      if (!pendingPresetId) {
+        setColumnsBeforePreset(pendingColumns);
+        setOrderBeforePreset(pendingOrder);
+      }
+      // Activate preset
+      const preset = allPresets.find((p) => p.id === presetId);
+      if (preset) {
+        setPendingColumns(preset.columns);
+        setPendingOrder(preset.columns);
+        setPendingPresetId(presetId);
+      }
+    }
+  }, [allPresets, pendingPresetId, pendingColumns, pendingOrder, columnsBeforePreset, orderBeforePreset]);
 
-  // Sortable IDs = only checked items (so unchecked items are not draggable)
+  // Reset to default preset
+  const handleResetToDefault = useCallback(() => {
+    handlePresetSelect('performance');
+  }, [handlePresetSelect]);
+
+  // Apply changes (OK button)
+  const handleApply = useCallback(() => {
+    if (pendingPresetId) {
+      // Apply a preset
+      setPreset(pendingPresetId);
+    } else {
+      // No preset selected - apply all columns or custom selection
+      setColumnsWithoutPreset(pendingOrder);
+    }
+    onClose();
+  }, [pendingOrder, pendingPresetId, setPreset, setColumnsWithoutPreset, onClose]);
+
+  // Cancel changes
+  const handleCancel = useCallback(() => {
+    onClose();
+  }, [onClose]);
+
+  // Sortable IDs = only checked items (use pending state)
   const sortableIds = useMemo(
-    () => displayedMetrics.filter((m) => visibleColumns.includes(m.key)).map((m) => m.key),
-    [displayedMetrics, visibleColumns]
+    () => displayedMetrics.filter((m) => pendingColumns.includes(m.key)).map((m) => m.key),
+    [displayedMetrics, pendingColumns]
   );
 
   return (
@@ -272,15 +324,61 @@ export function ColumnPicker({ isOpen, onClose }: ColumnPickerProps) {
               {/* Header */}
               <div className="flex items-center justify-between px-5 py-4 border-b border-[rgba(0,0,0,0.06)]">
                 <h2 className="text-[15px] font-semibold text-[#1d1d1f]">Customise Columns</h2>
-                <button
-                  onClick={onClose}
-                  className="rounded-lg p-1.5 text-[#8e8e93] hover:bg-[#f5f5f7] hover:text-[#1d1d1f] transition-colors"
-                >
-                  <X className="h-4.5 w-4.5" />
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setSaveDialogOpen(true)}
+                    className="inline-flex items-center gap-1 text-[12px] font-medium text-[#0071e3] hover:text-[#0077ED] transition-colors"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Save Preset
+                  </button>
+                  <button
+                    onClick={onClose}
+                    className="rounded-lg p-1.5 text-[#8e8e93] hover:bg-[#f5f5f7] hover:text-[#1d1d1f] transition-colors"
+                  >
+                    <X className="h-4.5 w-4.5" />
+                  </button>
+                </div>
               </div>
 
-              {/* Search — sticky */}
+              {/* Presets */}
+              <div className="px-4 py-3 border-b border-[rgba(0,0,0,0.06)]">
+                <div className="flex flex-wrap gap-1.5">
+                  {allPresets.map((preset) => {
+                    const isActive = pendingPresetId === preset.id;
+                    const isCustom = preset.isCustom;
+                    return (
+                      <div key={preset.id} className="group/preset relative">
+                        <button
+                          onClick={() => handlePresetSelect(preset.id)}
+                          className={cn(
+                            'inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium transition-all duration-150',
+                            isActive
+                              ? 'bg-[#0071e3] text-white shadow-sm'
+                              : 'bg-[#f5f5f7] text-[#6e6e73] hover:bg-[#e8e8ed] hover:text-[#1d1d1f]'
+                          )}
+                        >
+                          {preset.name}
+                        </button>
+                        {isCustom && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deletePreset(preset.id);
+                            }}
+                            className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-500 text-white opacity-0 group-hover/preset:opacity-100 hover:bg-red-600 transition-all"
+                            title="Delete preset"
+                          >
+                            <X className="h-2 w-2" />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Search */}
               <div className="px-4 py-3 border-b border-[rgba(0,0,0,0.06)]">
                 <SearchInput
                   value={search}
@@ -289,38 +387,35 @@ export function ColumnPicker({ isOpen, onClose }: ColumnPickerProps) {
                 />
               </div>
 
-              {/* Category Tabs */}
-              <div className="flex gap-1 overflow-x-auto px-4 py-2.5 border-b border-[rgba(0,0,0,0.06)] scrollbar-hide">
-                {categoryTabs.map((tab) => {
-                  const count = selectedCountByCategory[tab.key] ?? 0;
-                  const isActive = activeTab === tab.key;
-                  return (
-                    <button
-                      key={tab.key}
-                      onClick={() => setActiveTab(tab.key)}
-                      className={cn(
-                        'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-[12px] font-medium transition-all duration-150',
-                        isActive
-                          ? 'bg-[#1d1d1f] text-white shadow-sm'
-                          : 'text-[#6e6e73] hover:bg-[#f5f5f7] hover:text-[#1d1d1f]'
-                      )}
-                    >
-                      {tab.label}
-                      {count > 0 && (
-                        <span
-                          className={cn(
-                            'inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-bold',
-                            isActive
-                              ? 'bg-white/20 text-white'
-                              : 'bg-[#0071e3]/10 text-[#0071e3]'
-                          )}
-                        >
-                          {count}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
+              {/* Select All / Deselect All */}
+              <div className="flex items-center justify-between px-4 py-2 border-b border-[rgba(0,0,0,0.06)]">
+                <span className="text-[12px] text-[#8e8e93]">
+                  {pendingColumns.length} of {allMetrics.length} selected
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      const allKeys = allMetrics.map((m) => m.key);
+                      setPendingColumns(allKeys);
+                      setPendingOrder(allKeys);
+                      setPendingPresetId(null);
+                    }}
+                    className="text-[12px] font-medium text-[#0071e3] hover:text-[#0077ED] transition-colors"
+                  >
+                    Select All
+                  </button>
+                  <span className="text-[#e5e7eb]">|</span>
+                  <button
+                    onClick={() => {
+                      setPendingColumns([]);
+                      setPendingOrder([]);
+                      setPendingPresetId(null);
+                    }}
+                    className="text-[12px] font-medium text-[#0071e3] hover:text-[#0077ED] transition-colors"
+                  >
+                    Deselect All
+                  </button>
+                </div>
               </div>
 
               {/* Column List */}
@@ -339,7 +434,7 @@ export function ColumnPicker({ isOpen, onClose }: ColumnPickerProps) {
                         <SortableColumnItem
                           key={metric.key}
                           metric={metric}
-                          isChecked={visibleColumns.includes(metric.key)}
+                          isChecked={pendingColumns.includes(metric.key)}
                           onToggle={handleToggle}
                         />
                       ))
@@ -352,52 +447,6 @@ export function ColumnPicker({ isOpen, onClose }: ColumnPickerProps) {
                 </DndContext>
               </div>
 
-              {/* Saved Presets */}
-              {customPresets.length > 0 && (
-                <div className="border-t border-[rgba(0,0,0,0.06)] px-4 py-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[#8e8e93] mb-2">
-                    Saved Presets
-                  </p>
-                  <div className="space-y-0.5">
-                    {customPresets.map((preset) => {
-                      const isActive = activePresetId === preset.id;
-                      return (
-                        <div
-                          key={preset.id}
-                          className={cn(
-                            'group/preset flex items-center justify-between rounded-lg px-2.5 py-2 cursor-pointer transition-colors duration-150',
-                            isActive
-                              ? 'bg-[#0071e3]/10'
-                              : 'hover:bg-[#f5f5f7]'
-                          )}
-                        >
-                          <button
-                            className={cn(
-                              'flex items-center gap-2 text-[13px] font-medium min-w-0',
-                              isActive ? 'text-[#0071e3]' : 'text-[#1d1d1f]'
-                            )}
-                            onClick={() => setPreset(preset.id)}
-                          >
-                            {isActive && <Check className="h-3.5 w-3.5 shrink-0" />}
-                            <span className="truncate">{preset.name}</span>
-                            <span className="text-[11px] text-[#8e8e93] shrink-0">
-                              {preset.columns.length} cols
-                            </span>
-                          </button>
-                          <button
-                            className="shrink-0 p-1 rounded text-[#c7c7cc] opacity-0 group-hover/preset:opacity-100 hover:text-red-500 hover:bg-red-50 transition-all"
-                            onClick={() => deletePreset(preset.id)}
-                            title="Delete preset"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
               {/* Footer */}
               <div className="flex items-center justify-between border-t border-[rgba(0,0,0,0.06)] px-5 py-3.5">
                 <button
@@ -405,15 +454,24 @@ export function ColumnPicker({ isOpen, onClose }: ColumnPickerProps) {
                   className="inline-flex items-center gap-1.5 text-[13px] font-medium text-[#8e8e93] hover:text-[#1d1d1f] transition-colors"
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
-                  Reset to default
+                  Reset
                 </button>
-                <button
-                  onClick={() => setSaveDialogOpen(true)}
-                  className="inline-flex items-center gap-2 rounded-lg bg-[#0071e3] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#0077ED] transition-colors"
-                >
-                  <Save className="h-3.5 w-3.5" />
-                  Save as Preset
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleCancel}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#e5e7eb] px-4 py-2 text-[13px] font-medium text-[#6e6e73] hover:bg-[#f5f5f7] transition-colors"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleApply}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-[#0071e3] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#0077ED] transition-colors"
+                  >
+                    <Check className="h-3.5 w-3.5" />
+                    OK
+                  </button>
+                </div>
               </div>
             </motion.div>
           </>

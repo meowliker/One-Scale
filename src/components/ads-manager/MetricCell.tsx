@@ -60,15 +60,17 @@ export function MetricCell({ metricKey, value, isTotals, shopifyRoas }: MetricCe
   const colorClass = hasDualRoas ? '' : getMetricColorClass(metricKey, value);
 
   return (
-    <td className={cn(
-      "whitespace-nowrap px-3 py-2 text-right text-[13px] tabular-nums leading-5",
+    <td 
+      style={{ width: 90, minWidth: 90, maxWidth: 90 }}
+      className={cn(
+      "whitespace-nowrap px-3 py-2 text-center text-[13px] tabular-nums leading-5",
       colorClass || "text-text-primary",
       PIXEL_METRIC_KEYS.has(metricKey) && "app-pixel-metric-cell",
       isTotals && "!font-bold !text-[14px] bg-[#f8fafc] dark:bg-[#1e293b] text-[#111827] dark:text-[#f1f5f9]"
     )}>
       {hasDualRoas ? (
         /* Dual ROAS: Shopify "Real" (prominent) + Meta (muted) */
-        <div className="flex flex-col items-end gap-0.5">
+        <div className="flex flex-col items-center gap-0.5">
           <span className={cn("text-[12px] font-bold tabular-nums", getRoasTextColor(shopifyRoas))}>
             <span
               className={cn("mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle", getRoasDotColor(shopifyRoas))}

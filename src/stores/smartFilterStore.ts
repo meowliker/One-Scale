@@ -32,9 +32,14 @@ export type SmartSegmentId =
   | 'fatigue'
   | null;
 
+export type SegmentDays = 3 | 7;
+
 interface SmartFilterStore {
   activeSegment: SmartSegmentId;
   setActiveSegment: (seg: SmartSegmentId) => void;
+  
+  segmentDays: SegmentDays;
+  setSegmentDays: (days: SegmentDays) => void;
 
   columnFilters: ColumnValueFilter[];
   setColumnFilter: (filter: ColumnValueFilter) => void;
@@ -53,6 +58,9 @@ export const useSmartFilterStore = create<SmartFilterStore>()(
     (set, get) => ({
       activeSegment: null,
       setActiveSegment: (seg) => set({ activeSegment: seg, activeSavedFilterId: null }),
+      
+      segmentDays: 7,
+      setSegmentDays: (days) => set({ segmentDays: days }),
 
       columnFilters: [],
       setColumnFilter: (filter) => set((s) => ({

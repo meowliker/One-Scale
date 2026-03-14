@@ -269,3 +269,22 @@ create table if not exists shopify_chargebacks (
   synced_at timestamptz not null default now(),
   unique (store_id, order_id)
 );
+-- Creative assets cache (for instant loading of ad previews)
+create table if not exists creative_assets (
+  id bigserial primary key,
+  store_id text not null references stores(id) on delete cascade,
+  ad_id text not null,
+  creative_type text not null check (creative_type in ('image', 'video')),
+  media_url text,
+  thumbnail_url text,
+  video_id text,
+  headline text,
+  body text,
+  cta_type text,
+  destination_url text,
+  cached_at timestamptz not null default now(),
+  unique (store_id, ad_id)
+);
+
+create index if not exists idx_creative_assets_store_ad
+  on creative_assets(store_id, ad_id);
