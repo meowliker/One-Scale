@@ -1,0 +1,317 @@
+<h2>Sectioned P&L Dashboard — Layout Preview</h2>
+<p class="subtitle">Collapsible sections, 2062 aesthetic. Green = money in, Red = money out, everything else monochrome.</p>
+
+<div class="mockup">
+  <div class="mockup-header">P&L Dashboard — Full Layout</div>
+  <div class="mockup-body" style="background:#09090b;color:#fafafa;font-family:system-ui,-apple-system,sans-serif;padding:0;">
+
+    <!-- Section 1: Pulse -->
+    <div style="padding:24px 28px;border-bottom:1px solid rgba(255,255,255,0.06);">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <div>
+          <div style="font-size:28px;font-weight:800;letter-spacing:-0.5px;">P&L</div>
+          <div style="font-size:12px;color:rgba(255,255,255,0.4);margin-top:2px;">Live profit & loss</div>
+        </div>
+        <div style="padding:8px 16px;border:1px solid rgba(255,255,255,0.1);border-radius:10px;font-size:12px;color:rgba(255,255,255,0.5);">Refresh</div>
+      </div>
+
+      <!-- Live Ticker -->
+      <div style="background:linear-gradient(135deg,#059669,#047857);border-radius:16px;padding:24px;margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+          <div style="width:8px;height:8px;border-radius:50%;background:#fff;opacity:0.8;"></div>
+          <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:rgba(255,255,255,0.7);">Live · Today</span>
+        </div>
+        <div style="font-size:40px;font-weight:900;color:#fff;font-variant-numeric:tabular-nums;">$2,847.32</div>
+        <div style="font-size:13px;color:rgba(255,255,255,0.8);margin-top:4px;">Profitable today</div>
+      </div>
+
+      <!-- Today's mini KPIs -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
+        <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:14px;">
+          <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:1.5px;color:rgba(255,255,255,0.35);">Revenue</div>
+          <div style="font-size:20px;font-weight:700;color:#34d399;margin-top:4px;font-variant-numeric:tabular-nums;">$8,420</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:14px;">
+          <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:1.5px;color:rgba(255,255,255,0.35);">Ad Spend</div>
+          <div style="font-size:20px;font-weight:700;color:#f87171;margin-top:4px;font-variant-numeric:tabular-nums;">$1,240</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:14px;">
+          <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:1.5px;color:rgba(255,255,255,0.35);">Margin</div>
+          <div style="font-size:20px;font-weight:700;color:#34d399;margin-top:4px;">33.8%</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:14px;">
+          <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:1.5px;color:rgba(255,255,255,0.35);">Orders</div>
+          <div style="font-size:20px;font-weight:700;color:rgba(255,255,255,0.9);margin-top:4px;">47</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 2: Period View (collapsible) -->
+    <div style="border-bottom:1px solid rgba(255,255,255,0.06);">
+      <div style="padding:20px 28px 8px;display:flex;align-items:center;justify-content:space-between;">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:rgba(255,255,255,0.3);">Period View</div>
+        <div style="display:flex;gap:6px;">
+          <span style="padding:4px 12px;border-radius:6px;font-size:11px;background:rgba(255,255,255,0.08);color:#fff;">Today</span>
+          <span style="padding:4px 12px;border-radius:6px;font-size:11px;color:rgba(255,255,255,0.3);">7D</span>
+          <span style="padding:4px 12px;border-radius:6px;font-size:11px;color:rgba(255,255,255,0.3);">30D</span>
+          <span style="padding:4px 12px;border-radius:6px;font-size:11px;color:rgba(255,255,255,0.3);">Custom</span>
+        </div>
+      </div>
+
+      <!-- Summary Cards -->
+      <div style="padding:12px 28px 20px;display:grid;grid-template-columns:repeat(6,1fr);gap:8px;">
+        <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:12px;">
+          <div style="font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,0.3);">Revenue</div>
+          <div style="font-size:16px;font-weight:700;color:#34d399;margin-top:4px;font-variant-numeric:tabular-nums;">$8,420</div>
+          <div style="font-size:10px;color:rgba(255,255,255,0.3);margin-top:2px;">47 orders</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:12px;">
+          <div style="font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,0.3);">COGS</div>
+          <div style="font-size:16px;font-weight:700;color:#f87171;margin-top:4px;font-variant-numeric:tabular-nums;">$2,526</div>
+          <div style="font-size:10px;color:rgba(255,255,255,0.3);margin-top:2px;">30% of rev</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:12px;">
+          <div style="font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,0.3);">Ad Spend</div>
+          <div style="font-size:16px;font-weight:700;color:#f87171;margin-top:4px;font-variant-numeric:tabular-nums;">$1,240</div>
+          <div style="font-size:10px;color:rgba(255,255,255,0.3);margin-top:2px;">ROAS 6.79x</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:12px;">
+          <div style="font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,0.3);">Fees + Ship</div>
+          <div style="font-size:16px;font-weight:700;color:#fbbf24;margin-top:4px;font-variant-numeric:tabular-nums;">$680</div>
+          <div style="font-size:10px;color:rgba(255,255,255,0.3);margin-top:2px;">8.1% of rev</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:12px;">
+          <div style="font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,0.3);">Refunds</div>
+          <div style="font-size:16px;font-weight:700;color:#a78bfa;margin-top:4px;font-variant-numeric:tabular-nums;">$127</div>
+          <div style="font-size:10px;color:rgba(255,255,255,0.3);margin-top:2px;">2 full, 1 partial</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:12px;">
+          <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,0.5);">Net Profit</div>
+          <div style="font-size:16px;font-weight:800;color:#34d399;margin-top:4px;font-variant-numeric:tabular-nums;">$2,847</div>
+          <div style="font-size:10px;color:#34d399;margin-top:2px;">33.8% margin</div>
+        </div>
+      </div>
+
+      <!-- Waterfall + Margin placeholder -->
+      <div style="padding:0 28px 20px;display:grid;grid-template-columns:2fr 1fr;gap:12px;">
+        <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:16px;min-height:140px;">
+          <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,0.3);margin-bottom:12px;">Profit Waterfall</div>
+          <div style="display:flex;align-items:flex-end;gap:4px;height:100px;">
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;">
+              <span style="font-size:8px;color:rgba(255,255,255,0.4);">$8.4k</span>
+              <div style="width:100%;height:90px;background:#059669;border-radius:4px 4px 0 0;"></div>
+              <span style="font-size:8px;color:rgba(255,255,255,0.3);">Rev</span>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;">
+              <span style="font-size:8px;color:rgba(255,255,255,0.4);">-$2.5k</span>
+              <div style="width:100%;height:27px;background:#dc2626;border-radius:4px 4px 0 0;margin-top:auto;"></div>
+              <span style="font-size:8px;color:rgba(255,255,255,0.3);">COGS</span>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;">
+              <span style="font-size:8px;color:rgba(255,255,255,0.4);">-$1.2k</span>
+              <div style="width:100%;height:13px;background:#dc2626;border-radius:4px 4px 0 0;margin-top:auto;"></div>
+              <span style="font-size:8px;color:rgba(255,255,255,0.3);">Ads</span>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;">
+              <span style="font-size:8px;color:rgba(255,255,255,0.4);">-$680</span>
+              <div style="width:100%;height:7px;background:#dc2626;border-radius:4px 4px 0 0;margin-top:auto;"></div>
+              <span style="font-size:8px;color:rgba(255,255,255,0.3);">Fees</span>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;">
+              <span style="font-size:8px;color:rgba(255,255,255,0.4);">-$127</span>
+              <div style="width:100%;height:2px;background:#dc2626;border-radius:4px 4px 0 0;margin-top:auto;"></div>
+              <span style="font-size:8px;color:rgba(255,255,255,0.3);">Refund</span>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;">
+              <span style="font-size:8px;color:#34d399;">$2.8k</span>
+              <div style="width:100%;height:30px;background:#059669;border-radius:4px 4px 0 0;margin-top:auto;"></div>
+              <span style="font-size:8px;color:#34d399;font-weight:600;">Profit</span>
+            </div>
+          </div>
+        </div>
+        <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:16px;display:flex;flex-direction:column;align-items:center;justify-content:center;">
+          <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,0.3);margin-bottom:12px;">Margin</div>
+          <div style="width:80px;height:80px;border-radius:50%;border:4px solid rgba(255,255,255,0.06);position:relative;display:flex;align-items:center;justify-content:center;">
+            <div style="position:absolute;inset:0;border-radius:50%;border:4px solid transparent;border-top-color:#059669;border-right-color:#059669;transform:rotate(30deg);"></div>
+            <span style="font-size:20px;font-weight:800;color:#34d399;">33.8%</span>
+          </div>
+          <div style="font-size:11px;color:#34d399;margin-top:8px;">Healthy</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 3: Trends -->
+    <div style="border-bottom:1px solid rgba(255,255,255,0.06);padding:20px 28px;">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:rgba(255,255,255,0.3);margin-bottom:12px;">Trends</div>
+      <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:16px;min-height:80px;">
+        <div style="font-size:10px;color:rgba(255,255,255,0.4);margin-bottom:8px;">Net Profit Trend — 30 days</div>
+        <div style="display:flex;align-items:flex-end;gap:2px;height:50px;">
+          <div style="flex:1;background:#059669;height:30px;border-radius:2px;opacity:0.6;"></div>
+          <div style="flex:1;background:#059669;height:35px;border-radius:2px;opacity:0.7;"></div>
+          <div style="flex:1;background:#dc2626;height:10px;border-radius:2px;opacity:0.5;"></div>
+          <div style="flex:1;background:#059669;height:40px;border-radius:2px;opacity:0.7;"></div>
+          <div style="flex:1;background:#059669;height:45px;border-radius:2px;opacity:0.8;"></div>
+          <div style="flex:1;background:#059669;height:38px;border-radius:2px;opacity:0.7;"></div>
+          <div style="flex:1;background:#059669;height:50px;border-radius:2px;opacity:0.9;"></div>
+          <div style="flex:1;background:#059669;height:42px;border-radius:2px;opacity:0.7;"></div>
+          <div style="flex:1;background:#dc2626;height:5px;border-radius:2px;opacity:0.4;"></div>
+          <div style="flex:1;background:#059669;height:48px;border-radius:2px;opacity:0.85;"></div>
+        </div>
+      </div>
+      <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:16px;min-height:60px;margin-top:10px;">
+        <div style="font-size:10px;color:rgba(255,255,255,0.4);">Daily P&L Breakdown — existing multi-view (bar/stacked/area/table)</div>
+      </div>
+    </div>
+
+    <!-- Section 4: Hourly Heatmap (NEW) -->
+    <div style="border-bottom:1px solid rgba(255,255,255,0.06);padding:20px 28px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:rgba(255,255,255,0.3);">Hourly Performance</div>
+        <span style="font-size:9px;padding:2px 6px;border-radius:4px;background:rgba(52,211,153,0.15);color:#34d399;font-weight:600;">NEW</span>
+      </div>
+      <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:16px;">
+        <div style="display:grid;grid-template-columns:40px repeat(12,1fr);gap:2px;font-size:8px;">
+          <div></div>
+          <div style="text-align:center;color:rgba(255,255,255,0.2);">12a</div>
+          <div style="text-align:center;color:rgba(255,255,255,0.2);">2a</div>
+          <div style="text-align:center;color:rgba(255,255,255,0.2);">4a</div>
+          <div style="text-align:center;color:rgba(255,255,255,0.2);">6a</div>
+          <div style="text-align:center;color:rgba(255,255,255,0.2);">8a</div>
+          <div style="text-align:center;color:rgba(255,255,255,0.2);">10a</div>
+          <div style="text-align:center;color:rgba(255,255,255,0.2);">12p</div>
+          <div style="text-align:center;color:rgba(255,255,255,0.2);">2p</div>
+          <div style="text-align:center;color:rgba(255,255,255,0.2);">4p</div>
+          <div style="text-align:center;color:rgba(255,255,255,0.2);">6p</div>
+          <div style="text-align:center;color:rgba(255,255,255,0.2);">8p</div>
+          <div style="text-align:center;color:rgba(255,255,255,0.2);">10p</div>
+          <div style="color:rgba(255,255,255,0.25);text-align:right;padding-right:4px;">Mon</div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.1);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.05);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.08);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.2);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.7);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.9);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.6);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.5);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.4);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.55);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.35);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.15);"></div>
+          <div style="color:rgba(255,255,255,0.25);text-align:right;padding-right:4px;">Tue</div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.08);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.04);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.06);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.15);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.6);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,1.0);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.7);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.55);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.45);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.5);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.3);"></div>
+          <div style="height:16px;border-radius:3px;background:rgba(5,150,105,0.12);"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:10px;justify-content:flex-end;">
+          <span style="font-size:8px;color:rgba(255,255,255,0.2);">Less</span>
+          <div style="display:flex;gap:2px;">
+            <div style="width:12px;height:12px;border-radius:2px;background:rgba(5,150,105,0.1);"></div>
+            <div style="width:12px;height:12px;border-radius:2px;background:rgba(5,150,105,0.3);"></div>
+            <div style="width:12px;height:12px;border-radius:2px;background:rgba(5,150,105,0.6);"></div>
+            <div style="width:12px;height:12px;border-radius:2px;background:rgba(5,150,105,0.9);"></div>
+          </div>
+          <span style="font-size:8px;color:rgba(255,255,255,0.2);">More</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 5: Products (NEW/Enhanced) -->
+    <div style="border-bottom:1px solid rgba(255,255,255,0.06);padding:20px 28px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:rgba(255,255,255,0.3);">Product Performance</div>
+        <span style="font-size:9px;padding:2px 6px;border-radius:4px;background:rgba(52,211,153,0.15);color:#34d399;font-weight:600;">ENHANCED</span>
+      </div>
+      <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:12px;overflow:hidden;">
+        <!-- Table header -->
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 0.8fr;gap:0;padding:10px 16px;border-bottom:1px solid rgba(255,255,255,0.06);font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,0.25);">
+          <div>Product</div>
+          <div style="text-align:right;">Revenue</div>
+          <div style="text-align:right;">COGS</div>
+          <div style="text-align:right;">Ad Spend</div>
+          <div style="text-align:right;">Fees</div>
+          <div style="text-align:right;">Net Profit</div>
+          <div style="text-align:right;">Margin</div>
+        </div>
+        <!-- Physical product row -->
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 0.8fr;gap:0;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.03);font-size:12px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div style="width:32px;height:32px;background:rgba(255,255,255,0.06);border-radius:6px;"></div>
+            <div>
+              <div style="font-weight:600;color:rgba(255,255,255,0.9);">Vitamin C Serum</div>
+              <div style="font-size:9px;color:rgba(255,255,255,0.3);">SKU-001 · Physical</div>
+            </div>
+          </div>
+          <div style="text-align:right;color:#34d399;font-weight:600;font-variant-numeric:tabular-nums;">$3,240</div>
+          <div style="text-align:right;color:#f87171;font-variant-numeric:tabular-nums;">$972</div>
+          <div style="text-align:right;color:#f87171;font-variant-numeric:tabular-nums;">$480</div>
+          <div style="text-align:right;color:rgba(255,255,255,0.5);font-variant-numeric:tabular-nums;">$162</div>
+          <div style="text-align:right;color:#34d399;font-weight:600;font-variant-numeric:tabular-nums;">$1,626</div>
+          <div style="text-align:right;"><span style="padding:2px 8px;border-radius:4px;background:rgba(52,211,153,0.12);color:#34d399;font-size:11px;font-weight:600;">50.2%</span></div>
+        </div>
+        <!-- Digital product row (no COGS) -->
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 0.8fr;gap:0;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.03);font-size:12px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div style="width:32px;height:32px;background:rgba(255,255,255,0.06);border-radius:6px;"></div>
+            <div>
+              <div style="font-weight:600;color:rgba(255,255,255,0.9);">Skincare Masterclass</div>
+              <div style="font-size:9px;color:rgba(255,255,255,0.3);">SKU-012 · Digital</div>
+            </div>
+          </div>
+          <div style="text-align:right;color:#34d399;font-weight:600;font-variant-numeric:tabular-nums;">$1,990</div>
+          <div style="text-align:right;color:rgba(255,255,255,0.15);font-variant-numeric:tabular-nums;">—</div>
+          <div style="text-align:right;color:#f87171;font-variant-numeric:tabular-nums;">$320</div>
+          <div style="text-align:right;color:rgba(255,255,255,0.5);font-variant-numeric:tabular-nums;">$58</div>
+          <div style="text-align:right;color:#34d399;font-weight:600;font-variant-numeric:tabular-nums;">$1,612</div>
+          <div style="text-align:right;"><span style="padding:2px 8px;border-radius:4px;background:rgba(52,211,153,0.12);color:#34d399;font-size:11px;font-weight:600;">81.0%</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 6: Chargebacks (NEW) -->
+    <div style="border-bottom:1px solid rgba(255,255,255,0.06);padding:20px 28px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:rgba(255,255,255,0.3);">Chargebacks</div>
+        <span style="font-size:9px;padding:2px 6px;border-radius:4px;background:rgba(52,211,153,0.15);color:#34d399;font-weight:600;">NEW</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:16px;">
+          <div style="font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,0.3);">Lost</div>
+          <div style="font-size:24px;font-weight:700;color:rgba(255,255,255,0.2);margin-top:6px;">$0.00</div>
+          <div style="font-size:10px;color:rgba(255,255,255,0.2);margin-top:4px;">No lost chargebacks</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:16px;">
+          <div style="font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,0.3);">Recovered</div>
+          <div style="font-size:24px;font-weight:700;color:rgba(255,255,255,0.2);margin-top:6px;">$0.00</div>
+          <div style="font-size:10px;color:rgba(255,255,255,0.2);margin-top:4px;">No recoveries</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 7: COGS / Breakdown tabs -->
+    <div style="padding:20px 28px;">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:rgba(255,255,255,0.3);margin-bottom:12px;">Settings</div>
+      <div style="display:flex;gap:1px;background:rgba(255,255,255,0.06);border-radius:8px;overflow:hidden;width:fit-content;">
+        <div style="padding:8px 20px;font-size:11px;font-weight:600;background:rgba(255,255,255,0.08);color:#fff;">COGS Manager</div>
+        <div style="padding:8px 20px;font-size:11px;color:rgba(255,255,255,0.3);">Breakdown</div>
+      </div>
+      <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:16px;margin-top:10px;min-height:60px;">
+        <div style="font-size:10px;color:rgba(255,255,255,0.3);">Existing COGS Manager — editable product costs table</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px;">
+  <h3>Digital vs Physical — COGS Rule</h3>
+  <p style="font-size:13px;line-height:1.6;">Notice in the Product table: <strong>Vitamin C Serum</strong> (physical) shows COGS = $972, while <strong>Skincare Masterclass</strong> (digital) shows "—" in COGS column. Both show fees (processing fees from Shopify). Both can show shipping if Shopify reports it.</p>
+</div>
