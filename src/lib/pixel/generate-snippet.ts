@@ -6,10 +6,12 @@
  *
  * Checkout snippet: install in Shopify Admin → Settings → Checkout
  *                   → Order status page → Additional scripts
+ *
+ * v2: Captures product_id on product pages (view_content) and add-to-cart events.
  */
 
 export function generatePixelSnippet(storeId: string, baseUrl: string): string {
-  return `<!-- OneScale Attribution Pixel v1 -->
+  return `<!-- OneScale Attribution Pixel v2 -->
 <script>
 (function(){
   'use strict';
@@ -27,6 +29,25 @@ export function generatePixelSnippet(storeId: string, baseUrl: string): string {
   function fbc(){var f=gp('fbclid');if(f){var v='fb.1.'+Date.now()+'.'+f;sc('_fbc',v,DAYS);sc('_os_fbclid',f,DAYS);}return gc('_fbc')||gc('_os_fbclid');}
   function utms(){var r={};['utm_source','utm_medium','utm_campaign','utm_content','utm_term'].forEach(function(k){var v=gp(k);if(v){r[k]=v;sc('_os_'+k,v,DAYS);}else{var s=gc('_os_'+k);if(s)r[k]=s;}});return r;}
 
+  function dp(){
+    var r={id:null,title:null,variant:null};
+    try{
+      if(window.meta&&window.meta.product){
+        r.id=String(window.meta.product.id);
+        if(window.meta.product.variants&&window.meta.product.variants[0])
+          r.variant=String(window.meta.product.variants[0].id);
+      }
+      else if(window.ShopifyAnalytics&&window.ShopifyAnalytics.meta&&window.ShopifyAnalytics.meta.product){
+        r.id=String(window.ShopifyAnalytics.meta.product.id);
+      }
+      if(r.id){
+        var t=document.querySelector('meta[property="og:title"]');
+        r.title=t?t.getAttribute('content'):document.title.split('\\u2013')[0].split('|')[0].trim();
+      }
+    }catch(e){}
+    return r.id?r:null;
+  }
+
   function send(type,extra){
     var p=Object.assign({
       store_id:SID,visitor_id:vid(),session_id:sid(),
@@ -34,6 +55,7 @@ export function generatePixelSnippet(storeId: string, baseUrl: string): string {
       referrer:document.referrer||null,
       fbclid:gp('fbclid')||gc('_os_fbclid')||null,
       gclid:gp('gclid')||null,
+      ttclid:gp('ttclid')||null,
       _fbc:fbc()||null,_fbp:gc('_fbp')||null,
       user_agent:navigator.userAgent,
     },utms(),extra||{});
@@ -42,7 +64,12 @@ export function generatePixelSnippet(storeId: string, baseUrl: string): string {
     else{fetch(EP,{method:'POST',headers:{'Content-Type':'application/json'},body:b,keepalive:true}).catch(function(){});}
   }
 
-  send('page_view');
+  var prod=dp();
+  if(prod){
+    send('view_content',{product_id:prod.id,product_title:prod.title,variant_id:prod.variant});
+  } else {
+    send('page_view');
+  }
 
   window.OneScalePixel={
     track:send,
@@ -50,8 +77,23 @@ export function generatePixelSnippet(storeId: string, baseUrl: string): string {
   };
 
   var of=window.fetch;
-  window.fetch=function(u){
-    if(typeof u==='string'&&u.includes('/cart/add')){try{send('add_to_cart');}catch(e){}}
+  window.fetch=function(u,o){
+    if(typeof u==='string'&&u.includes('/cart/add')){
+      try{
+        var pid=null,vid2=null;
+        if(o&&o.body){
+          try{
+            var d=JSON.parse(o.body);
+            if(d.items&&d.items[0]){pid=String(d.items[0].product_id||'');vid2=String(d.items[0].id||d.items[0].variant_id||'');}
+            else if(d.id){vid2=String(d.id);pid=String(d.product_id||'');}
+          }catch(e){
+            if(typeof o.body==='string'){var ps=new URLSearchParams(o.body);vid2=ps.get('id');pid=ps.get('product_id');}
+          }
+        }
+        if(!pid&&prod)pid=prod.id;
+        send('add_to_cart',{product_id:pid||null,variant_id:vid2||null});
+      }catch(e){}
+    }
     return of.apply(this,arguments);
   };
 })();
@@ -59,7 +101,7 @@ export function generatePixelSnippet(storeId: string, baseUrl: string): string {
 }
 
 export function generateCheckoutSnippet(storeId: string, baseUrl: string): string {
-  return `<!-- OneScale Purchase Tracking -->
+  return `<!-- OneScale Purchase Tracking v2 -->
 <script>
 (function(){
   var EP=${JSON.stringify(baseUrl + '/api/pixel/event')};
@@ -74,6 +116,8 @@ export function generateCheckoutSnippet(storeId: string, baseUrl: string): strin
     order_value:parseFloat('{{ order.total_price | money_without_currency }}'.replace(/,/g,''))||0,
     page_url:window.location.href,
     fbclid:gc('_os_fbclid')||null,
+    gclid:gc('_os_gclid')||null,
+    ttclid:gc('_os_ttclid')||null,
     _fbc:gc('_fbc')||null,_fbp:gc('_fbp')||null,
     utm_source:gc('_os_utm_source')||null,
     utm_medium:gc('_os_utm_medium')||null,

@@ -138,24 +138,6 @@ export function ProductPnLListRow({ product, isDigital = false, storeId, onClass
         )}
       </td>
 
-      {/* Attribution Method */}
-      <td className="px-2 py-3 text-center">
-        {product.attributionMethod ? (
-          <span className="text-[10px] font-medium text-text-secondary">{product.attributionMethod}</span>
-        ) : (
-          <span className="text-xs text-text-muted">-</span>
-        )}
-      </td>
-
-      {/* Confidence Score */}
-      <td className="px-2 py-3 text-right">
-        {product.confidenceScore != null ? (
-          <span className="text-sm text-text-primary">{product.confidenceScore}%</span>
-        ) : (
-          <span className="text-xs text-text-muted">-</span>
-        )}
-      </td>
-
       {/* Type */}
       <td className="px-2 py-3 text-center">
         <ClassificationBadge

@@ -40,8 +40,6 @@ const listHeaders = [
   { label: 'CTR', align: 'right' as const },
   { label: 'Purchases', align: 'right' as const },
   { label: 'Cost/Purch', align: 'right' as const },
-  { label: 'Attribution', align: 'center' as const },
-  { label: 'Confidence', align: 'right' as const },
   { label: 'Type', align: 'center' as const },
   { label: '', align: 'center' as const },
 ];
@@ -262,7 +260,7 @@ export function ProductPnLSection({ products, isDigital = false, currency = 'USD
           </div>
         ) : (
           <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[1300px]">
+            <table className="w-full min-w-[1100px]">
               <thead>
                 <tr className="border-b border-border">
                   {listHeaders.filter((h) => !(isDigital && h.label === 'COGS')).map((h) => (

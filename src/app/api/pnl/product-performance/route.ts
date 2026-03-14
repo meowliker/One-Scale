@@ -13,15 +13,15 @@ import {
 } from '@/lib/attribution/metaSpendAttributor';
 import { extractAllProductBehaviors } from '@/lib/intelligence/behaviorExtractor';
 import { buildStoreProfile } from '@/lib/intelligence/storeProfiler';
-import { classifyAllProducts, type ClassificationResult } from '@/lib/intelligence/relativeClassifier';
+import { classifyAllProducts } from '@/lib/intelligence/relativeClassifier';
 
 export const dynamic = 'force-dynamic';
 
 /**
  * GET /api/pnl/product-performance?storeId=xxx&from=2026-03-01&to=2026-03-13
  *
- * Reads from shopify_orders_cache + meta_spend_cache (populated by crons)
- * instead of making live Shopify/Meta API calls. Much faster.
+ * Uses visitor-level attribution (pixel → session → order) when coverage is
+ * sufficient. Falls back to campaign-name matching when pixel data is sparse.
  */
 
 interface OrderCacheRow {
@@ -52,6 +52,14 @@ interface CampaignProductMapping {
   product_id: string;
 }
 
+interface OrderAttribution {
+  order_id: string;
+  utm_campaign: string | null;
+  utm_source: string | null;
+  fbclid: string | null;
+  attribution_method: string;
+}
+
 interface ProductAgg {
   productName: string;
   sku: string;
@@ -65,6 +73,15 @@ interface ProductAgg {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+function enc(v: string): string {
+  return encodeURIComponent(v);
+}
+
+/** Normalize campaign name for fuzzy matching between UTM and Meta Ads */
+function normalizeCampaign(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 export async function GET(request: NextRequest) {
@@ -87,22 +104,26 @@ export async function GET(request: NextRequest) {
   const to = dateTo || now.toISOString().split('T')[0];
 
   try {
-    // Fetch orders + spend + COGS + payment fees + campaign mappings from DB in parallel
-    const [orders, spendRows, storedCosts, paymentFees, campaignMappings, storedClassifications] = await Promise.all([
+    // Fetch orders + spend + COGS + payment fees + campaign mappings + order attributions from DB in parallel
+    const [orders, spendRows, storedCosts, paymentFees, campaignMappings, storedClassifications, attributedOrders] = await Promise.all([
       rest<OrderCacheRow[]>(
-        `/shopify_orders_cache?store_id=eq.${encodeURIComponent(storeId)}&created_at=gte.${from}T00:00:00&created_at=lte.${to}T23:59:59&order_status=neq.cancelled&select=shopify_order_id,total_price,subtotal_price,financial_status,order_status,line_items,refund_total,created_at,total_shipping_price`
+        `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${from}T00:00:00&created_at=lte.${to}T23:59:59&order_status=neq.cancelled&select=shopify_order_id,total_price,subtotal_price,financial_status,order_status,line_items,refund_total,created_at,total_shipping_price`
       ),
       rest<SpendCacheRow[]>(
-        `/meta_spend_cache?store_id=eq.${encodeURIComponent(storeId)}&date=gte.${from}&date=lte.${to}&select=date,spend,impressions,clicks,purchases,purchase_value,campaign_id,campaign_name`
+        `/meta_spend_cache?store_id=eq.${enc(storeId)}&date=gte.${from}&date=lte.${to}&select=date,spend,impressions,clicks,purchases,purchase_value,campaign_id,campaign_name`
       ),
       getPersistentProductCosts(storeId).catch(() => []),
       getPersistentPaymentFees(storeId).catch(() => []),
       rest<CampaignProductMapping[]>(
-        `/campaign_product_mappings?store_id=eq.${encodeURIComponent(storeId)}&select=campaign_id,product_id`
+        `/campaign_product_mappings?store_id=eq.${enc(storeId)}&select=campaign_id,product_id`
       ).catch(() => [] as CampaignProductMapping[]),
       rest<Array<{ product_id: string; classification: string; manual_override: boolean; confidence: number; classification_method: string; signals_used: Record<string, number> | null; needs_review: boolean; last_analyzed: string }>>(
-        `/product_classifications?store_id=eq.${encodeURIComponent(storeId)}&select=product_id,classification,manual_override,confidence,classification_method,signals_used,needs_review,last_analyzed`
+        `/product_classifications?store_id=eq.${enc(storeId)}&select=product_id,classification,manual_override,confidence,classification_method,signals_used,needs_review,last_analyzed`
       ).catch(() => [] as Array<{ product_id: string; classification: string; manual_override: boolean; confidence: number; classification_method: string; signals_used: Record<string, number> | null; needs_review: boolean; last_analyzed: string }>),
+      // Fetch visitor-level order attributions for the date range
+      rest<OrderAttribution[]>(
+        `/order_attributions?store_id=eq.${enc(storeId)}&attributed_at=gte.${from}T00:00:00&attributed_at=lte.${to}T23:59:59&select=order_id,utm_campaign,utm_source,fbclid,attribution_method`
+      ).catch(() => [] as OrderAttribution[]),
     ]);
 
     // Build stored classification lookup (from adaptive intelligence system)
@@ -158,7 +179,7 @@ export async function GET(request: NextRequest) {
     let feeStructures: Array<{ effective_rate: number; fixed_fee: number }> = [];
     try {
       feeStructures = await rest<typeof feeStructures>(
-        `/fee_structures?store_id=eq.${encodeURIComponent(storeId)}&is_active=eq.true&select=effective_rate,fixed_fee`
+        `/fee_structures?store_id=eq.${enc(storeId)}&is_active=eq.true&select=effective_rate,fixed_fee`
       );
     } catch { /* table might not exist yet */ }
 
@@ -167,11 +188,9 @@ export async function GET(request: NextRequest) {
     let feeFixed = 0;
 
     if (feeStructures.length > 0) {
-      // Use auto-detected rates (most accurate)
       feePercentage = (feeStructures.reduce((s, f) => s + f.effective_rate, 0) / feeStructures.length) * 100;
       feeFixed = feeStructures.reduce((s, f) => s + f.fixed_fee, 0) / feeStructures.length;
     } else if (activeGateways.length > 0) {
-      // Fall back to user-configured rates
       feePercentage = activeGateways.reduce((s, f) => s + f.fee_percentage, 0) / activeGateways.length;
       feeFixed = activeGateways.reduce((s, f) => s + f.fee_fixed, 0) / activeGateways.length;
     }
@@ -181,7 +200,7 @@ export async function GET(request: NextRequest) {
     let totalImpressions = 0;
     let totalClicks = 0;
     let totalPurchases = 0;
-    const campaignAgg = new Map<string, { campaignName: string; spend: number }>();
+    const campaignAgg = new Map<string, { campaignId: string; campaignName: string; spend: number }>();
 
     for (const row of spendRows ?? []) {
       totalSpend += row.spend || 0;
@@ -195,6 +214,7 @@ export async function GET(request: NextRequest) {
           existing.spend += row.spend || 0;
         } else {
           campaignAgg.set(row.campaign_id, {
+            campaignId: row.campaign_id,
             campaignName: row.campaign_name || row.campaign_id,
             spend: row.spend || 0,
           });
@@ -211,9 +231,6 @@ export async function GET(request: NextRequest) {
       if (order.financial_status === 'refunded') continue;
 
       totalOrders++;
-      // NOTE: Do NOT accumulate totalRevenue from total_price here.
-      // Use line-item revenue sum (≈ subtotal_price) as denominator for proportional
-      // calculations, not total_price which includes tax and shipping.
 
       let lineItems: Array<{
         product_id?: number | string;
@@ -259,13 +276,13 @@ export async function GET(request: NextRequest) {
         // Classify: only the highest-priced product is 'main', rest are upsell/addon
         let category = 'main';
         if (isSingleItemOrder) {
-          category = 'main'; // single-item orders are always main
+          category = 'main';
         } else if (price === 0) {
           category = 'addon';
         } else if (productId === maxPriceProductId) {
-          category = 'main'; // highest-priced item in multi-item order
+          category = 'main';
         } else {
-          category = 'upsell'; // everything else in multi-item order
+          category = 'upsell';
         }
 
         const existing = productAgg.get(productId);
@@ -295,42 +312,137 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // --- GAP 3: Use attributeSpend for per-product ad spend ---
-    const campaignSpendData: CampaignSpendData[] = [];
-    for (const [campaignId, agg2] of campaignAgg.entries()) {
-      campaignSpendData.push({
-        campaignId,
-        campaignName: agg2.campaignName,
-        spend: agg2.spend,
-        adAccountId: '',
-      });
-    }
-    const productDataForAttribution: ProductData[] = [];
-    for (const [pid, agg2] of productAgg.entries()) {
-      productDataForAttribution.push({ productId: pid, productTitle: agg2.productName });
-    }
-    const manualMappings: ManualMapping[] = (campaignMappings ?? []).map((m) => ({
-      campaignId: m.campaign_id,
-      productId: m.product_id,
-    }));
+    // ── AD SPEND ATTRIBUTION ─────────────────────────────────────────────────
+    // Try visitor-level attribution first, fall back to campaign-name matching
 
-    const attributions = attributeSpend(campaignSpendData, productDataForAttribution, manualMappings);
+    // Build order → attribution lookup
+    const orderAttrMap = new Map<string, OrderAttribution>();
+    for (const attr of attributedOrders ?? []) {
+      if (attr.order_id) orderAttrMap.set(attr.order_id, attr);
+    }
 
-    // Build productId -> attributed spend map
+    const attributedCount = orderAttrMap.size;
+    const coverageRate = totalOrders > 0 ? attributedCount / totalOrders : 0;
+    const useVisitorAttribution = coverageRate >= 0.15 && attributedCount >= 3;
+
+    // Build campaign spend lookup for matching utm_campaign → spend
+    const campaignNameToId = new Map<string, string>();
+    const campaignIdToSpend = new Map<string, number>();
+    for (const [campaignId, agg] of campaignAgg) {
+      campaignNameToId.set(normalizeCampaign(agg.campaignName), campaignId);
+      campaignIdToSpend.set(campaignId, agg.spend);
+    }
+
+    function findCampaignSpend(utmCampaign: string): number {
+      // Try exact match on campaign ID
+      const directSpend = campaignIdToSpend.get(utmCampaign);
+      if (directSpend != null) return directSpend;
+      // Try normalized name match
+      const normalized = normalizeCampaign(utmCampaign);
+      const matchedId = campaignNameToId.get(normalized);
+      if (matchedId) return campaignIdToSpend.get(matchedId) || 0;
+      // Try substring match (utm_campaign may be a subset of campaign_name)
+      for (const [normName, cId] of campaignNameToId) {
+        if (normName.includes(normalized) || normalized.includes(normName)) {
+          return campaignIdToSpend.get(cId) || 0;
+        }
+      }
+      return 0;
+    }
+
     const productSpendMap = new Map<string, number>();
     let unattributedSpend = 0;
-    for (const attr of attributions) {
-      if (attr.productId) {
-        productSpendMap.set(attr.productId, (productSpendMap.get(attr.productId) || 0) + attr.spend);
-      } else {
-        unattributedSpend += attr.spend;
+    let attributionMethod = 'campaign_name_match'; // for API metadata
+
+    if (useVisitorAttribution) {
+      // ── VISITOR-LEVEL ATTRIBUTION ──────────────────────────────────────
+      // Group attributed orders by campaign, track which products were purchased
+      attributionMethod = 'pixel_revenue_share';
+
+      const campaignOrderProducts = new Map<string, { totalRevenue: number; products: Map<string, number> }>();
+      const matchedCampaignIds = new Set<string>();
+
+      for (const order of orders ?? []) {
+        if (order.financial_status === 'refunded') continue;
+        const attr = orderAttrMap.get(order.shopify_order_id);
+        if (!attr?.utm_campaign) continue;
+
+        const campaign = attr.utm_campaign;
+        if (!campaignOrderProducts.has(campaign)) {
+          campaignOrderProducts.set(campaign, { products: new Map(), totalRevenue: 0 });
+        }
+
+        let lineItems;
+        try {
+          lineItems = typeof order.line_items === 'string' ? JSON.parse(order.line_items) : order.line_items || [];
+        } catch { continue; }
+
+        for (const item of lineItems) {
+          const pid = item.product_id ? String(item.product_id) : `unknown_${item.title}`;
+          const rev = parseFloat(item.price || '0') * (item.quantity || 1);
+          const entry = campaignOrderProducts.get(campaign)!;
+          entry.products.set(pid, (entry.products.get(pid) || 0) + rev);
+          entry.totalRevenue += rev;
+        }
+      }
+
+      // Distribute campaign spend to products based on purchase revenue share
+      for (const [campaignName, { products: campaignProducts, totalRevenue: campaignRevenue }] of campaignOrderProducts) {
+        const campaignSpend = findCampaignSpend(campaignName);
+        if (campaignSpend <= 0 || campaignRevenue <= 0) continue;
+
+        // Track which campaigns were matched
+        const matchedId = campaignNameToId.get(normalizeCampaign(campaignName))
+          || (campaignIdToSpend.has(campaignName) ? campaignName : null);
+        if (matchedId) matchedCampaignIds.add(matchedId);
+
+        for (const [productId, productRev] of campaignProducts) {
+          const share = productRev / campaignRevenue;
+          const spend = round2(campaignSpend * share);
+          productSpendMap.set(productId, (productSpendMap.get(productId) || 0) + spend);
+        }
+      }
+
+      // Any campaign spend not matched via attribution goes to unattributed
+      let attributedTotalSpend = 0;
+      for (const [, spend] of productSpendMap) attributedTotalSpend += spend;
+      unattributedSpend = Math.max(0, round2(totalSpend - attributedTotalSpend));
+
+    } else {
+      // ── FALLBACK: Campaign name matching ──────────────────────────────
+      const campaignSpendData: CampaignSpendData[] = [];
+      for (const [campaignId, agg2] of campaignAgg.entries()) {
+        campaignSpendData.push({
+          campaignId,
+          campaignName: agg2.campaignName,
+          spend: agg2.spend,
+          adAccountId: '',
+        });
+      }
+      const productDataForAttribution: ProductData[] = [];
+      for (const [pid, agg2] of productAgg.entries()) {
+        productDataForAttribution.push({ productId: pid, productTitle: agg2.productName });
+      }
+      const manualMappings: ManualMapping[] = (campaignMappings ?? []).map((m) => ({
+        campaignId: m.campaign_id,
+        productId: m.product_id,
+      }));
+
+      const attributions = attributeSpend(campaignSpendData, productDataForAttribution, manualMappings);
+
+      for (const attr of attributions) {
+        if (attr.productId) {
+          productSpendMap.set(attr.productId, (productSpendMap.get(attr.productId) || 0) + attr.spend);
+        } else {
+          unattributedSpend += attr.spend;
+        }
       }
     }
 
     // Build response
     const products = [];
     for (const [productId, agg] of productAgg.entries()) {
-      // COGS — never use silent fallback. $0 if not configured + warning via universal calculator.
+      // COGS — never use silent fallback. $0 if not configured.
       const costData = cogsMap.get(productId);
       let cogs = 0;
       if (costData) {
@@ -341,10 +453,7 @@ export async function GET(request: NextRequest) {
 
       const revenueShare = totalRevenue > 0 ? agg.revenue / totalRevenue : 0;
 
-      // GAP 1: Use configured payment fee rate instead of hardcoded 3%
       const fees = round2((agg.revenue * feePercentage / 100) + (feeFixed * agg.orderCount));
-
-      // GAP 4: Use actual shipping from orders
       const shipping = round2(agg.shipping);
 
       // Use stored classification from adaptive intelligence if available
@@ -354,7 +463,6 @@ export async function GET(request: NextRequest) {
       if (storedClass && storedClass !== 'pending' && storedClass !== 'unknown') {
         mostCommonCategory = storedClass;
       } else {
-        // Smart fallback using ALL order signals
         const tc = agg.categoryCounts;
         const mic = agg.multiItemCategoryCounts;
         const totalAppearances = (tc.main || 0) + (tc.upsell || 0) + (tc.addon || 0) + (tc.downsell || 0);
@@ -362,17 +470,12 @@ export async function GET(request: NextRequest) {
         const singleItemCount = totalAppearances - multiItemTotal;
 
         if (totalAppearances === 0 || multiItemTotal === 0) {
-          // Only appears in single-item orders or no data → main product
           mostCommonCategory = 'main';
         } else {
-          // Revenue share: high-revenue products are more likely main
           const productRevenueShare = totalRevenue > 0 ? agg.revenue / totalRevenue : 0;
           const upsellSignals = (mic.upsell || 0) + (mic.addon || 0) + (mic.downsell || 0);
           const upsellRate = upsellSignals / multiItemTotal;
 
-          // A product is only upsell if it's upsell in >60% of multi-item orders
-          // AND it doesn't have significant single-item orders (which means it sells on its own = main)
-          // AND it doesn't dominate revenue
           if (upsellRate > 0.6 && singleItemCount <= multiItemTotal && productRevenueShare < 0.25) {
             if ((mic.addon || 0) > (mic.upsell || 0)) mostCommonCategory = 'addon';
             else if ((mic.downsell || 0) > (mic.upsell || 0)) mostCommonCategory = 'downsell';
@@ -383,10 +486,11 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      // GAP 3: Use attributed spend instead of proportional distribution
-      // Downsells get $0 ad spend — they're alternatives to the main product
+      // Ad spend: downsells always get $0 — they're alternatives to the main product
       const isDownsell = mostCommonCategory === 'downsell';
-      const adSpend = isDownsell ? 0 : round2(productSpendMap.get(productId) || 0);
+      const isUpsellOrAddon = mostCommonCategory === 'upsell' || mostCommonCategory === 'addon';
+      // Only MAIN products get ad spend attribution
+      const adSpend = (isDownsell || isUpsellOrAddon) ? 0 : round2(productSpendMap.get(productId) || 0);
 
       const netProfit = round2(agg.revenue - cogs - adSpend - fees - shipping);
       const margin = agg.revenue > 0 ? round2((netProfit / agg.revenue) * 100) : 0;
@@ -441,6 +545,13 @@ export async function GET(request: NextRequest) {
         needsReview: storedClassObj?.needs_review ?? false,
         manualOverride: storedClassObj?.manual_override ?? false,
         lastAnalyzed: storedClassObj?.last_analyzed ?? '',
+        // Internal attribution metadata — for debugging only, not rendered in UI
+        _internal: {
+          attributionMethod,
+          coverageRate: round2(coverageRate * 100),
+          attributedOrders: attributedCount,
+          totalOrders,
+        },
       });
     }
 
@@ -457,6 +568,8 @@ export async function GET(request: NextRequest) {
         dateFrom: from,
         dateTo: to,
         source: 'db_cache',
+        attributionMethod,
+        pixelCoverage: round2(coverageRate * 100),
       },
     });
   } catch (err) {
