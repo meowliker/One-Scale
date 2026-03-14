@@ -262,7 +262,8 @@ function LineChartView({
   }, [current, previous, showComparison]);
 
   return (
-    <ResponsiveContainer width="100%" height={240}>
+    <div style={{ width: '100%', minHeight: 240 }}>
+    <ResponsiveContainer width="100%" height={240} minHeight={240}>
       <AreaChart data={data} margin={{ top: 8, right: 16, left: 16, bottom: 8 }}>
         <defs>
           <linearGradient id="hourlyGradient" x1="0" y1="0" x2="0" y2="1">
@@ -312,6 +313,7 @@ function LineChartView({
         />
       </AreaChart>
     </ResponsiveContainer>
+    </div>
   );
 }
 

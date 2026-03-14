@@ -15,6 +15,7 @@
 
 import { rest } from '@/app/api/lib/supabase-persistence';
 import { calculateExpenses } from '@/lib/pnl/expenseEngine';
+import { getStoreDateRangeForPeriod } from '@/lib/pnl/dateUtils';
 import type { CustomExpense } from '@/types/pnlSettings';
 import type {
   PnLResult,
@@ -133,7 +134,10 @@ export async function calculatePnL(
   // Trigger balance transaction backfill if empty (non-blocking)
   ensureBalanceTransactions(storeId);
 
-  // ── 1. Fetch all data in parallel ────────────────────────
+  // ── 1. Fetch timezone first, then all data with tz-aware boundaries ──
+  const timezone = await fetchStoreTimezone(storeId);
+  const { start: tzStart, end: tzEnd } = getStoreDateRangeForPeriod(dateFrom, dateTo, timezone);
+
   const [
     orders,
     spendRows,
@@ -145,13 +149,12 @@ export async function calculatePnL(
     cogsSuggestions,
     campaignMappings,
     transactionFees,
-    timezone,
     customExpensesList,
     balanceTxns,
   ] = await Promise.all([
-    fetchOrders(storeId, dateFrom, dateTo),
+    fetchOrders(storeId, tzStart, tzEnd),
     fetchMetaSpend(storeId, dateFrom, dateTo),
-    fetchChargebacks(storeId, dateFrom, dateTo),
+    fetchChargebacks(storeId, tzStart, tzEnd),
     fetchProductCosts(storeId),
     fetchPaymentFees(storeId),
     fetchFeeStructures(storeId),
@@ -159,9 +162,8 @@ export async function calculatePnL(
     fetchCogsSuggestions(storeId),
     fetchCampaignMappings(storeId),
     fetchTransactionFees(storeId, dateFrom, dateTo),
-    fetchStoreTimezone(storeId),
     fetchCustomExpenses(storeId),
-    fetchBalanceTransactions(storeId, dateFrom, dateTo),
+    fetchBalanceTransactions(storeId, tzStart, tzEnd),
   ]);
 
   // ── 2. Build lookup maps ─────────────────────────────────
@@ -684,10 +686,10 @@ export async function calculatePnL(
 
 // ── Data Fetching Helpers ────────────────────────────────────
 
-async function fetchOrders(storeId: string, dateFrom: string, dateTo: string): Promise<OrderCacheRow[]> {
+async function fetchOrders(storeId: string, tzStart: string, tzEnd: string): Promise<OrderCacheRow[]> {
   try {
     return await rest<OrderCacheRow[]>(
-      `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${enc(dateFrom)}&created_at=lte.${enc(dateTo + 'T23:59:59Z')}&select=*&order=created_at.asc`
+      `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${enc(tzStart)}&created_at=lte.${enc(tzEnd)}&select=*&order=created_at.asc`
     );
   } catch {
     return [];
@@ -704,12 +706,12 @@ async function fetchMetaSpend(storeId: string, dateFrom: string, dateTo: string)
   }
 }
 
-async function fetchChargebacks(storeId: string, dateFrom: string, dateTo: string): Promise<ChargebackRow[]> {
+async function fetchChargebacks(storeId: string, tzStart: string, tzEnd: string): Promise<ChargebackRow[]> {
   try {
     // Query by finalized_at first (most accurate for balance-synced disputes),
-    // fall back to initiated_at, then created_at
-    const dateMin = enc(dateFrom);
-    const dateMax = enc(dateTo + 'T23:59:59Z');
+    // fall back to created_at when finalized_at is null
+    const dateMin = enc(tzStart);
+    const dateMax = enc(tzEnd);
     const orFilter = `finalized_at.gte.${dateMin},finalized_at.lte.${dateMax}`;
     return await rest<ChargebackRow[]>(
       `/shopify_chargebacks?store_id=eq.${enc(storeId)}&or=(and(${orFilter}),and(finalized_at.is.null,created_at.gte.${dateMin},created_at.lte.${dateMax}))&select=order_id,amount,status,created_at`
@@ -789,10 +791,10 @@ async function fetchTransactionFees(storeId: string, dateFrom: string, dateTo: s
   }
 }
 
-async function fetchBalanceTransactions(storeId: string, dateFrom: string, dateTo: string): Promise<BalanceTxnRow[]> {
+async function fetchBalanceTransactions(storeId: string, tzStart: string, tzEnd: string): Promise<BalanceTxnRow[]> {
   try {
     return await rest<BalanceTxnRow[]>(
-      `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&processed_at=gte.${enc(dateFrom)}&processed_at=lte.${enc(dateTo + 'T23:59:59Z')}&select=type,amount,fee,net,source_order_id,processed_at`
+      `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&processed_at=gte.${enc(tzStart)}&processed_at=lte.${enc(tzEnd)}&select=type,amount,fee,net,source_order_id,processed_at`
     );
   } catch {
     return [];

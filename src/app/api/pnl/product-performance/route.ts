@@ -87,15 +87,15 @@ function normalizeCampaign(name: string): string {
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const storeId = searchParams.get('storeId');
-  const dateFrom = searchParams.get('from');
-  const dateTo = searchParams.get('to');
+  const dateFrom = searchParams.get('from') ?? searchParams.get('startDate');
+  const dateTo = searchParams.get('to') ?? searchParams.get('endDate');
 
   if (!storeId) {
-    return NextResponse.json({ error: 'storeId required' }, { status: 400 });
+    return NextResponse.json({ error: 'storeId required', products: [] }, { status: 400 });
   }
 
   if (!isSupabasePersistenceEnabled()) {
-    return NextResponse.json({ error: 'Supabase not configured' }, { status: 503 });
+    return NextResponse.json({ error: 'Supabase not configured', products: [] }, { status: 503 });
   }
 
   // Default: last 30 days
@@ -103,15 +103,28 @@ export async function GET(request: NextRequest) {
   const from = dateFrom || new Date(now.getTime() - 30 * 86400000).toISOString().split('T')[0];
   const to = dateTo || now.toISOString().split('T')[0];
 
+  // Fetch store timezone for date range queries
+  let storeTz = 'America/New_York';
   try {
-    // Fetch orders + spend + COGS + payment fees + campaign mappings + order attributions from DB in parallel
-    const [orders, spendRows, storedCosts, paymentFees, campaignMappings, storedClassifications, attributedOrders] = await Promise.all([
+    const tzRows = await rest<Array<{ timezone: string | null }>>(
+      `/store_ad_accounts?store_id=eq.${enc(storeId)}&is_active=eq.true&select=timezone&limit=1`
+    );
+    storeTz = tzRows?.[0]?.timezone || 'America/New_York';
+  } catch { /* use default */ }
+
+  // Compute timezone-aware date boundaries
+  const { getStoreDateRangeForPeriod } = await import('@/lib/pnl/dateUtils');
+  const { start: tzStart, end: tzEnd } = getStoreDateRangeForPeriod(from, to, storeTz);
+
+  try {
+    // Fetch orders + spend + COGS + payment fees + campaign mappings + balance txn fees + order attributions from DB in parallel
+    const [orders, spendRows, storedCosts, paymentFees, campaignMappings, storedClassifications, attributedOrders, balanceTxnFees] = await Promise.all([
       rest<OrderCacheRow[]>(
-        `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${from}T00:00:00&created_at=lte.${to}T23:59:59&order_status=neq.cancelled&select=shopify_order_id,total_price,subtotal_price,financial_status,order_status,line_items,refund_total,created_at,total_shipping_price`
-      ),
+        `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${enc(tzStart)}&created_at=lte.${enc(tzEnd)}&order_status=neq.cancelled&select=shopify_order_id,total_price,subtotal_price,financial_status,order_status,line_items,refund_total,created_at,total_shipping_price`
+      ).catch(() => [] as OrderCacheRow[]),
       rest<SpendCacheRow[]>(
         `/meta_spend_cache?store_id=eq.${enc(storeId)}&date=gte.${from}&date=lte.${to}&select=date,spend,impressions,clicks,purchases,purchase_value,campaign_id,campaign_name`
-      ),
+      ).catch(() => [] as SpendCacheRow[]),
       getPersistentProductCosts(storeId).catch(() => []),
       getPersistentPaymentFees(storeId).catch(() => []),
       rest<CampaignProductMapping[]>(
@@ -122,8 +135,12 @@ export async function GET(request: NextRequest) {
       ).catch(() => [] as Array<{ product_id: string; classification: string; manual_override: boolean; confidence: number; classification_method: string; signals_used: Record<string, number> | null; needs_review: boolean; last_analyzed: string }>),
       // Fetch visitor-level order attributions for the date range
       rest<OrderAttribution[]>(
-        `/order_attributions?store_id=eq.${enc(storeId)}&attributed_at=gte.${from}T00:00:00&attributed_at=lte.${to}T23:59:59&select=order_id,utm_campaign,utm_source,fbclid,attribution_method`
+        `/order_attributions?store_id=eq.${enc(storeId)}&attributed_at=gte.${enc(tzStart)}&attributed_at=lte.${enc(tzEnd)}&select=order_id,utm_campaign,utm_source,fbclid,attribution_method`
       ).catch(() => [] as OrderAttribution[]),
+      // Fetch actual balance transaction fees for the date range (more accurate than estimated rates)
+      rest<Array<{ fee: number; amount: number }>>(
+        `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&type=eq.charge&processed_at=gte.${enc(tzStart)}&processed_at=lte.${enc(tzEnd)}&select=fee,amount`
+      ).catch(() => [] as Array<{ fee: number; amount: number }>),
     ]);
 
     // Build stored classification lookup (from adaptive intelligence system)
@@ -175,7 +192,12 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Compute payment fee rate: auto-detected fee_structures → configured gateways → $0 (never hardcode 3%)
+    // Compute payment fees: prefer actual balance transaction fees, then fee_structures, then configured gateways
+    // Balance transaction fees are the most accurate — they're what Shopify actually charged
+    const btFeeTotal = (balanceTxnFees ?? []).reduce((sum, t) => sum + (Number(t.fee) || 0), 0);
+    const btRevenueTotal = (balanceTxnFees ?? []).reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+    const useActualBtFees = btFeeTotal > 0 && btRevenueTotal > 0;
+
     let feeStructures: Array<{ effective_rate: number; fixed_fee: number }> = [];
     try {
       feeStructures = await rest<typeof feeStructures>(
@@ -187,7 +209,11 @@ export async function GET(request: NextRequest) {
     let feePercentage = 0;
     let feeFixed = 0;
 
-    if (feeStructures.length > 0) {
+    if (useActualBtFees) {
+      // Derive effective fee rate from actual balance transactions
+      feePercentage = (btFeeTotal / btRevenueTotal) * 100;
+      feeFixed = 0;
+    } else if (feeStructures.length > 0) {
       feePercentage = (feeStructures.reduce((s, f) => s + f.effective_rate, 0) / feeStructures.length) * 100;
       feeFixed = feeStructures.reduce((s, f) => s + f.fixed_fee, 0) / feeStructures.length;
     } else if (activeGateways.length > 0) {
@@ -568,12 +594,14 @@ export async function GET(request: NextRequest) {
         dateFrom: from,
         dateTo: to,
         source: 'db_cache',
+        feeSource: useActualBtFees ? 'balance_transactions' : (feeStructures.length > 0 ? 'fee_structures' : (activeGateways.length > 0 ? 'configured' : 'none')),
         attributionMethod,
         pixelCoverage: round2(coverageRate * 100),
       },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    console.error('[product-performance] Error:', message);
+    return NextResponse.json({ ok: false, error: message, details: message, data: [], products: [] }, { status: 500 });
   }
 }

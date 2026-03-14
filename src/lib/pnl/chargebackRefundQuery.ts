@@ -1,4 +1,5 @@
 import { rest } from '@/app/api/lib/supabase-persistence';
+import { getStoreDateRangeForPeriod } from '@/lib/pnl/dateUtils';
 
 export interface RefundSummary {
   total: number;
@@ -24,12 +25,14 @@ export async function getRefundsForDateRange(
   storeId: string,
   startDate: string,
   endDate: string,
+  timezone = 'America/New_York',
 ): Promise<RefundSummary> {
   try {
+    const { start: tzStart, end: tzEnd } = getStoreDateRangeForPeriod(startDate, endDate, timezone);
     const rows = await rest<Array<{ amount: number }>>(
       `/shopify_refunds?store_id=eq.${encodeURIComponent(storeId)}` +
-      `&processed_at=gte.${startDate}T00:00:00Z` +
-      `&processed_at=lte.${endDate}T23:59:59Z` +
+      `&processed_at=gte.${encodeURIComponent(tzStart)}` +
+      `&processed_at=lte.${encodeURIComponent(tzEnd)}` +
       `&select=amount`,
     );
 
@@ -65,12 +68,14 @@ export async function getChargebacksForDateRange(
   storeId: string,
   startDate: string,
   endDate: string,
+  timezone = 'America/New_York',
 ): Promise<ChargebackSummary> {
   try {
+    const { start: tzStart, end: tzEnd } = getStoreDateRangeForPeriod(startDate, endDate, timezone);
     const rows = await rest<Array<{ amount: number; status: string; finalized_at: string | null; initiated_at: string | null }>>(
       `/shopify_chargebacks?store_id=eq.${encodeURIComponent(storeId)}` +
-      `&or=(finalized_at.gte.${startDate}T00:00:00Z,initiated_at.gte.${startDate}T00:00:00Z)` +
-      `&or=(finalized_at.lte.${endDate}T23:59:59Z,initiated_at.lte.${endDate}T23:59:59Z)` +
+      `&or=(finalized_at.gte.${encodeURIComponent(tzStart)},initiated_at.gte.${encodeURIComponent(tzStart)})` +
+      `&or=(finalized_at.lte.${encodeURIComponent(tzEnd)},initiated_at.lte.${encodeURIComponent(tzEnd)})` +
       `&select=amount,status,finalized_at,initiated_at`,
     );
 
@@ -102,13 +107,15 @@ export async function getProcessingFeesForDateRange(
   storeId: string,
   startDate: string,
   endDate: string,
+  timezone = 'America/New_York',
 ): Promise<{ totalFees: number; transactionCount: number; source: string }> {
   try {
+    const { start: tzStart, end: tzEnd } = getStoreDateRangeForPeriod(startDate, endDate, timezone);
     const rows = await rest<Array<{ fee: number }>>(
       `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}` +
       `&type=eq.charge` +
-      `&processed_at=gte.${startDate}T00:00:00Z` +
-      `&processed_at=lte.${endDate}T23:59:59Z` +
+      `&processed_at=gte.${encodeURIComponent(tzStart)}` +
+      `&processed_at=lte.${encodeURIComponent(tzEnd)}` +
       `&select=fee`,
     );
 

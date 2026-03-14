@@ -182,7 +182,8 @@ export function PnLTrendChart({ dailyPnL, previousDailyPnL = [], comparisonDateL
       </div>
 
       {/* Chart */}
-      <ResponsiveContainer width="100%" height={280}>
+      <div style={{ width: '100%', minHeight: 280 }}>
+      <ResponsiveContainer width="100%" height={280} minHeight={280}>
         <AreaChart data={data} margin={{ top: 8, right: 16, left: 16, bottom: 8 }}>
           <defs>
             <linearGradient id="trendGradient" x1="0" y1="0" x2="0" y2="1">
@@ -234,6 +235,7 @@ export function PnLTrendChart({ dailyPnL, previousDailyPnL = [], comparisonDateL
           />
         </AreaChart>
       </ResponsiveContainer>
+      </div>
 
       {/* Legend with date ranges */}
       {showComparison && (

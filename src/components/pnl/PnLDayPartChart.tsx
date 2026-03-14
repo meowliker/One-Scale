@@ -257,7 +257,8 @@ export function PnLDayPartChart({ dailyPnL, isDigital = false, currency = 'USD' 
   );
 
   const renderGroupedBarChart = () => (
-    <ResponsiveContainer width="100%" height={360}>
+    <div style={{ width: '100%', minHeight: 360 }}>
+    <ResponsiveContainer width="100%" height={360} minHeight={360}>
       <ComposedChart data={filteredData} margin={{ top: 8, right: 16, left: 16, bottom: 8 }}>
         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--color-border, #1e2235)" opacity={0.5} />
         <XAxis
@@ -290,10 +291,12 @@ export function PnLDayPartChart({ dailyPnL, isDigital = false, currency = 'USD' 
         />
       </ComposedChart>
     </ResponsiveContainer>
+    </div>
   );
 
   const renderStackedBarChart = () => (
-    <ResponsiveContainer width="100%" height={360}>
+    <div style={{ width: '100%', minHeight: 360 }}>
+    <ResponsiveContainer width="100%" height={360} minHeight={360}>
       <ComposedChart data={filteredData} margin={{ top: 8, right: 16, left: 16, bottom: 8 }}>
         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--color-border, #1e2235)" opacity={0.5} />
         <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
@@ -310,10 +313,12 @@ export function PnLDayPartChart({ dailyPnL, isDigital = false, currency = 'USD' 
         />
       </ComposedChart>
     </ResponsiveContainer>
+    </div>
   );
 
   const renderAreaChart = () => (
-    <ResponsiveContainer width="100%" height={360}>
+    <div style={{ width: '100%', minHeight: 360 }}>
+    <ResponsiveContainer width="100%" height={360} minHeight={360}>
       <AreaChart data={filteredData} margin={{ top: 8, right: 16, left: 16, bottom: 8 }}>
         <defs>
           <linearGradient id="gradRevenue" x1="0" y1="0" x2="0" y2="1">
@@ -337,6 +342,7 @@ export function PnLDayPartChart({ dailyPnL, isDigital = false, currency = 'USD' 
         <Area type="monotone" dataKey="netProfit" name="Net Profit" stroke="#3b82f6" strokeWidth={2.5} fill="url(#gradNetProfit)" />
       </AreaChart>
     </ResponsiveContainer>
+    </div>
   );
 
   const SortIcon = ({ field }: { field: SortField }) => {

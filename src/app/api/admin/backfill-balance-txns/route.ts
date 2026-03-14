@@ -10,52 +10,33 @@ import { fetchFromShopify } from '@/app/api/lib/shopify-client';
 export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
 
-const CRON_NAME = 'sync-balance-transactions';
-
-async function logCron(
-  storeId: string,
-  status: string,
-  rowsProcessed: number,
-  error: string | null,
-  durationMs: number,
-) {
-  try {
-    await rest('/cron_logs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        cron_name: CRON_NAME,
-        store_id: storeId,
-        status,
-        rows_processed: rowsProcessed,
-        error,
-        duration_ms: durationMs,
-        created_at: new Date().toISOString(),
-      }),
-    });
-  } catch { /* don't let logging break the cron */ }
-}
-
 /**
- * GET /api/cron/sync-balance-transactions
+ * POST /api/admin/backfill-balance-txns
  *
- * Daily cron that syncs Shopify Payments balance transactions for all stores.
- * Re-syncs last 7 days since dispute statuses update retroactively.
+ * Forces a 730-day (2 year) backfill of Shopify Payments balance transactions
+ * for all stores. Use this after the initial 7-day sync populated incomplete data.
+ *
+ * This is safe to re-run — all upserts use on_conflict merge-duplicates.
  */
-export async function GET(req: NextRequest) {
-  if (req.headers.get('authorization') !== `Bearer ${process.env.CRON_SECRET}`) {
+export async function POST(request: NextRequest) {
+  if (request.headers.get('authorization') !== `Bearer ${process.env.CRON_SECRET}`) {
     return new Response('Unauthorized', { status: 401 });
   }
 
   if (!isSupabasePersistenceEnabled()) {
-    return NextResponse.json({ error: 'Supabase not configured' }, { status: 500 });
+    return NextResponse.json({ error: 'Supabase not configured' }, { status: 503 });
   }
 
   const stores = await listPersistentStores();
-  const results: Array<{ storeId: string; status: string; count?: number; error?: string }> = [];
+  const results: Array<{
+    storeId: string;
+    status: string;
+    count?: number;
+    oldestTxn?: string;
+    error?: string;
+  }> = [];
 
   for (const store of stores) {
-    const start = Date.now();
     try {
       const token = await getShopifyToken(store.id);
       if (!token?.accessToken || !token?.shopDomain) {
@@ -63,29 +44,15 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
-      // Determine lookback: check the oldest transaction we have for this store
-      // If oldest is within 700 days, we haven't done a full 2-year lookback yet
-      let needsFullSync = true;
-      try {
-        const oldest = await rest<Array<{ processed_at: string }>>(
-          `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(store.id)}&select=processed_at&order=processed_at.asc&limit=1`
-        );
-        if (oldest?.length) {
-          const oldestDate = new Date(oldest[0].processed_at);
-          const daysSinceOldest = (Date.now() - oldestDate.getTime()) / (1000 * 60 * 60 * 24);
-          needsFullSync = daysSinceOldest < 700; // haven't reached 2 years back yet
-        }
-      } catch { /* no data yet = needs full sync */ }
-
-      // Full sync: go back 2 years to capture all historical disputes
-      // Incremental: 30 days (disputes update retroactively)
+      // Always go back 730 days
       const sinceDate = new Date();
-      sinceDate.setDate(sinceDate.getDate() - (needsFullSync ? 730 : 30));
+      sinceDate.setDate(sinceDate.getDate() - 730);
       const sinceISO = sinceDate.toISOString();
 
       let totalCount = 0;
       let sinceId: string | undefined;
       let hasMore = true;
+      let oldestProcessedAt: string | null = null;
 
       while (hasMore) {
         const params: Record<string, string> = {
@@ -94,7 +61,20 @@ export async function GET(req: NextRequest) {
         };
         if (sinceId) params.since_id = sinceId;
 
-        let data: { transactions?: Array<{ id: number | string; type: string; amount: string; fee: string; net: string; currency: string; source_order_id?: number | string; source_type?: string; processed_at: string; payout_id?: number | string }> };
+        let data: {
+          transactions?: Array<{
+            id: number | string;
+            type: string;
+            amount: string;
+            fee: string;
+            net: string;
+            currency: string;
+            source_order_id?: number | string;
+            source_type?: string;
+            processed_at: string;
+            payout_id?: number | string;
+          }>;
+        };
         try {
           data = await fetchFromShopify(
             token.accessToken,
@@ -112,6 +92,13 @@ export async function GET(req: NextRequest) {
 
         const txns = data.transactions ?? [];
         if (txns.length === 0) break;
+
+        // Track oldest transaction for reporting
+        for (const txn of txns) {
+          if (!oldestProcessedAt || txn.processed_at < oldestProcessedAt) {
+            oldestProcessedAt = txn.processed_at;
+          }
+        }
 
         // Upsert all transactions
         for (const txn of txns) {
@@ -177,11 +164,14 @@ export async function GET(req: NextRequest) {
         hasMore = txns.length === 250;
       }
 
-      await logCron(store.id, 'completed', totalCount, null, Date.now() - start);
-      results.push({ storeId: store.id, status: 'completed', count: totalCount });
+      results.push({
+        storeId: store.id,
+        status: 'completed',
+        count: totalCount,
+        oldestTxn: oldestProcessedAt ?? undefined,
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      await logCron(store.id, 'failed', 0, msg, Date.now() - start);
       results.push({ storeId: store.id, status: 'failed', error: msg });
     }
   }

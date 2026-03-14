@@ -4,7 +4,7 @@ import { getShopifyToken } from '@/app/api/lib/tokens';
 import { fetchFromShopify } from '@/app/api/lib/shopify-client';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 interface BalanceTransaction {
   id: number | string;
