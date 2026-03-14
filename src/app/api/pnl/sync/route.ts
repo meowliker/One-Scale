@@ -104,6 +104,9 @@ export async function GET(request: NextRequest) {
       partial_refund_amount: number;
       chargeback_loss: number;
       chargeback_won: number;
+      gross_revenue: number;
+      settled_revenue: number;
+      revenue_source: string;
       synced_at: string;
     }>>(
       `/daily_pnl_snapshots?store_id=eq.${encodeURIComponent(storeId)}&date=gte.${sinceStr}&select=*&order=date.asc`
@@ -112,6 +115,9 @@ export async function GET(request: NextRequest) {
     const entries = (data ?? []).map(row => ({
       date: row.date,
       revenue: Number(row.revenue),
+      grossRevenue: row.gross_revenue ? Number(row.gross_revenue) : undefined,
+      settledRevenue: row.settled_revenue ? Number(row.settled_revenue) : undefined,
+      revenueSource: (row.revenue_source as 'settled' | 'orders_api') || undefined,
       cogs: Number(row.cogs),
       adSpend: Number(row.ad_spend),
       shipping: Number(row.shipping_cost),
@@ -244,10 +250,10 @@ export async function POST(request: NextRequest) {
         );
       } catch { /* no chargeback data yet */ }
 
-      const chargebackLoss = (cbRows ?? [])
+      let chargebackLoss = (cbRows ?? [])
         .filter(c => c.status === 'lost')
         .reduce((s, c) => s + Number(c.amount), 0);
-      const chargebackWon = (cbRows ?? [])
+      let chargebackWon = (cbRows ?? [])
         .filter(c => c.status === 'won')
         .reduce((s, c) => s + Number(c.amount), 0);
 
@@ -290,6 +296,47 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      // ── Balance transactions (settled revenue, real fees) ──────
+      let settledRevenue = 0;
+      let btFees = 0;
+      let btRefunds = 0;
+      let btChargebackLoss = 0;
+      let btChargebackWon = 0;
+      let hasBalanceTxns = false;
+      try {
+        const btRows = await rest<Array<{ type: string; amount: string; fee: string; net: string }>>(
+          `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}&processed_at=gte.${encodeURIComponent(utcBounds.min)}&processed_at=lte.${encodeURIComponent(utcBounds.max)}&select=type,amount,fee,net`
+        );
+        if (btRows && btRows.length > 0) {
+          hasBalanceTxns = true;
+          for (const txn of btRows) {
+            const amount = Math.abs(parseFloat(txn.amount || '0'));
+            const fee = Math.abs(parseFloat(txn.fee || '0'));
+            const net = parseFloat(txn.net || '0');
+            switch (txn.type) {
+              case 'charge': settledRevenue += amount; btFees += fee; break;
+              case 'refund': btRefunds += amount; break;
+              case 'dispute':
+                if (net < 0) btChargebackLoss += Math.abs(net);
+                else btChargebackWon += net;
+                break;
+              case 'adjustment': case 'debit': case 'credit':
+                settledRevenue += parseFloat(txn.amount || '0');
+                break;
+            }
+          }
+        }
+      } catch { /* balance txn table may not exist yet */ }
+
+      // Override with balance txn data when available
+      if (hasBalanceTxns) {
+        transactionFees = btFees;
+        refunds = btRefunds;
+        chargebackLoss = btChargebackLoss;
+        chargebackWon = btChargebackWon;
+      }
+      // ── End balance transactions ───────────────────────────────
+
       // Meta ad spend — use since/until for exact date range
       let adSpend = 0;
       try {
@@ -309,8 +356,10 @@ export async function POST(request: NextRequest) {
         }
       } catch { /* Meta unavailable — 0 until next sync */ }
 
-      const netProfit = revenue - cogs - adSpend - transactionFees - refunds - chargebackLoss + chargebackWon;
-      const margin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
+      // Use settled revenue for P&L when balance txns available
+      const revenueForPnL = hasBalanceTxns && settledRevenue > 0 ? settledRevenue : revenue;
+      const netProfit = revenueForPnL - cogs - adSpend - transactionFees - refunds - chargebackLoss + chargebackWon;
+      const margin = revenueForPnL > 0 ? (netProfit / revenueForPnL) * 100 : 0;
 
       // ── Attribution coverage ──────────────────────────────────────────
       // How many of today's orders have pixel attribution data?
@@ -333,12 +382,15 @@ export async function POST(request: NextRequest) {
           headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
           body: JSON.stringify([{
             store_id: storeId, date: dateStr,
-            revenue, order_count: orderCount, cogs,
+            revenue: revenueForPnL, order_count: orderCount, cogs,
             ad_spend: adSpend, shipping_cost: 0,
             transaction_fees: transactionFees, refunds,
             full_refund_count: fullRefundCount, partial_refund_count: partialRefundCount,
             full_refund_amount: fullRefundAmount, partial_refund_amount: partialRefundAmount,
             chargeback_loss: chargebackLoss, chargeback_won: chargebackWon,
+            gross_revenue: revenue,
+            settled_revenue: hasBalanceTxns ? settledRevenue : 0,
+            revenue_source: hasBalanceTxns ? 'settled' : 'orders_api',
             net_profit: netProfit, margin,
             attribution_rate: attributionRate,
             synced_at: new Date().toISOString(),
