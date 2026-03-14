@@ -12,6 +12,7 @@ const REQUIRED_TOPICS = [
   'orders/create',
   'orders/updated',
   'refunds/create',
+  'disputes/create',
   'shopify_payments/payouts',
   'orders/chargebacks',
   'products/update',

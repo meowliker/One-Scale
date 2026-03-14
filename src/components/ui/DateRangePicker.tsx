@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
-import { Calendar, ChevronRight } from 'lucide-react';
+import { useState, useRef, useEffect, useMemo } from 'react';
+import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getDateRange } from '@/lib/dateUtils';
 import { formatInTimezone, formatDateInTimezone, nowInTimezone, getStoreTimezone } from '@/lib/timezone';
@@ -25,14 +25,6 @@ const presets: { label: string; value: DateRangePreset }[] = [
   { label: 'Last Month', value: 'lastMonth' },
 ];
 
-/** Quick-access pills shown inline next to the calendar trigger */
-const quickPresets: { label: string; shortLabel: string; value: DateRangePreset }[] = [
-  { label: 'Last 3 Days', shortLabel: '3D', value: 'last3' },
-  { label: '7 Days + Today', shortLabel: '7D+T', value: 'last7today' },
-  { label: 'Last 14 Days', shortLabel: '14D', value: 'last14' },
-];
-
-/** Map preset values to their display labels */
 const presetLabels: Record<string, string> = {
   today: 'Today',
   yesterday: 'Yesterday',
@@ -45,56 +37,141 @@ const presetLabels: Record<string, string> = {
   lastMonth: 'Last Month',
 };
 
+const quickPresets: { label: string; shortLabel: string; value: DateRangePreset }[] = [
+  { label: 'Last 3 Days', shortLabel: '3D', value: 'last3' },
+  { label: '7 Days + Today', shortLabel: '7D+T', value: 'last7today' },
+  { label: 'Last 14 Days', shortLabel: '14D', value: 'last14' },
+];
+
 function formatTriggerLabel(start: Date, end: Date, preset?: DateRangePreset): string {
-  // For named presets, show the preset label instead of the date range
-  if (preset && preset !== 'custom' && presetLabels[preset]) {
-    return presetLabels[preset];
-  }
-  // For single-date selection (start == end), show just one date
+  if (preset && preset !== 'custom' && presetLabels[preset]) return presetLabels[preset];
   const startStr = formatDateInTimezone(start);
   const endStr = formatDateInTimezone(end);
-  if (startStr === endStr) {
-    return formatInTimezone(start, 'MMM d, yyyy');
-  }
-  // For custom ranges, show the full date range
+  if (startStr === endStr) return formatInTimezone(start, 'MMM d, yyyy');
   const startYear = start.getFullYear();
   const endYear = end.getFullYear();
-  if (startYear === endYear) {
-    return `${formatInTimezone(start, 'MMM d')} - ${formatInTimezone(end, 'MMM d, yyyy')}`;
-  }
-  return `${formatInTimezone(start, 'MMM d, yyyy')} - ${formatInTimezone(end, 'MMM d, yyyy')}`;
+  if (startYear === endYear) return `${formatInTimezone(start, 'MMM d')} – ${formatInTimezone(end, 'MMM d, yyyy')}`;
+  return `${formatInTimezone(start, 'MMM d, yyyy')} – ${formatInTimezone(end, 'MMM d, yyyy')}`;
 }
 
-/** Format a Date as YYYY-MM-DD for <input type="date"> using store timezone */
-function toDateInputValue(date: Date): string {
-  return formatDateInTimezone(date);
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const DAY_HEADERS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+
+function toYMD(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** Get "today" in store timezone for the max date constraint */
-function todayInputValue(): string {
-  return formatDateInTimezone(nowInTimezone());
+function MiniCalendar({
+  selectedStart,
+  selectedEnd,
+  onSelect,
+}: {
+  selectedStart: string;
+  selectedEnd: string;
+  onSelect: (dateStr: string) => void;
+}) {
+  const today = new Date();
+  const todayStr = toYMD(today);
+  const [viewYear, setViewYear] = useState(today.getFullYear());
+  const [viewMonth, setViewMonth] = useState(today.getMonth());
+
+  const days = useMemo(() => {
+    const firstDay = new Date(viewYear, viewMonth, 1).getDay();
+    const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+    const cells: Array<{ day: number; dateStr: string } | null> = [];
+    for (let i = 0; i < firstDay; i++) cells.push(null);
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateStr = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      cells.push({ day: d, dateStr });
+    }
+    return cells;
+  }, [viewYear, viewMonth]);
+
+  const goPrev = () => {
+    if (viewMonth === 0) { setViewYear(y => y - 1); setViewMonth(11); }
+    else setViewMonth(m => m - 1);
+  };
+  const goNext = () => {
+    if (viewMonth === 11) { setViewYear(y => y + 1); setViewMonth(0); }
+    else setViewMonth(m => m + 1);
+  };
+
+  const isInRange = (dateStr: string) => {
+    if (!selectedStart || !selectedEnd) return false;
+    return dateStr >= selectedStart && dateStr <= selectedEnd;
+  };
+
+  return (
+    <div className="w-[260px]">
+      {/* Month/Year header */}
+      <div className="flex items-center justify-between mb-2 px-1">
+        <button onClick={goPrev} className="p-1 rounded hover:bg-surface-hover text-text-secondary transition-colors">
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <span className="text-sm font-semibold text-text-primary">
+          {MONTH_NAMES[viewMonth]} {viewYear}
+        </span>
+        <button onClick={goNext} className="p-1 rounded hover:bg-surface-hover text-text-secondary transition-colors">
+          <ChevronRight className="h-4 w-4" />
+        </button>
+      </div>
+
+      {/* Day headers */}
+      <div className="grid grid-cols-7 mb-1">
+        {DAY_HEADERS.map(d => (
+          <div key={d} className="text-center text-[10px] font-semibold text-text-secondary/50 py-1">{d}</div>
+        ))}
+      </div>
+
+      {/* Day cells */}
+      <div className="grid grid-cols-7">
+        {days.map((cell, i) => {
+          if (!cell) return <div key={`empty-${i}`} />;
+          const { day, dateStr } = cell;
+          const isFuture = dateStr > todayStr;
+          const isStart = dateStr === selectedStart;
+          const isEnd = dateStr === selectedEnd;
+          const isSelected = isStart || isEnd;
+          const inRange = isInRange(dateStr) && !isSelected;
+          const isToday = dateStr === todayStr;
+
+          return (
+            <button
+              key={dateStr}
+              disabled={isFuture}
+              onClick={() => onSelect(dateStr)}
+              className={cn(
+                'h-8 text-xs font-medium rounded-md transition-all relative',
+                isFuture && 'text-text-secondary/20 cursor-not-allowed',
+                !isFuture && !isSelected && !inRange && 'text-text-secondary hover:bg-surface-hover hover:text-text-primary',
+                isSelected && 'bg-primary text-white font-bold',
+                inRange && 'bg-primary/10 text-primary',
+                isToday && !isSelected && !inRange && 'ring-1 ring-primary/30',
+              )}
+            >
+              {day}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerProps) {
   const [open, setOpen] = useState(false);
   const [showCustom, setShowCustom] = useState(dateRange.preset === 'custom');
-  const [singleDateMode, setSingleDateMode] = useState(false);
-  const [customStart, setCustomStart] = useState(toDateInputValue(dateRange.start));
-  const [customEnd, setCustomEnd] = useState(toDateInputValue(dateRange.end));
+  const [pickingStart, setPickingStart] = useState(true);
+  const [customStart, setCustomStart] = useState(formatDateInTimezone(dateRange.start));
+  const [customEnd, setCustomEnd] = useState(formatDateInTimezone(dateRange.end));
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
-    if (open) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
+    if (open) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [open]);
 
   const handlePresetClick = (preset: DateRangePreset) => {
@@ -104,36 +181,37 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
     setOpen(false);
   };
 
-  /** Build timezone-aware Date objects from YYYY-MM-DD strings in the store timezone */
   const buildRange = (startDateStr: string, endDateStr: string) => {
     const tz = getStoreTimezone();
-    const start = fromZonedTime(`${startDateStr}T00:00:00`, tz);
-    const end = fromZonedTime(`${endDateStr}T23:59:59`, tz);
-    return { start, end };
+    return {
+      start: fromZonedTime(`${startDateStr}T00:00:00`, tz),
+      end: fromZonedTime(`${endDateStr}T23:59:59`, tz),
+    };
   };
 
-  const handleCustomApply = () => {
-    const endValue = singleDateMode ? customStart : customEnd;
-    if (!customStart || !endValue) return;
-    const { start, end } = buildRange(customStart, endValue);
-    if (!isNaN(start.getTime()) && !isNaN(end.getTime()) && start <= end) {
-      onRangeChange({ start, end, preset: 'custom' });
-      setOpen(false);
-    }
-  };
-
-  // Auto-apply when custom dates change
-  useEffect(() => {
-    if (showCustom && customStart) {
-      const endValue = singleDateMode ? customStart : customEnd;
-      if (!endValue) return;
-      const { start, end } = buildRange(customStart, endValue);
-      if (!isNaN(start.getTime()) && !isNaN(end.getTime()) && start <= end) {
-        onRangeChange({ start, end, preset: 'custom' });
+  const handleCalendarSelect = (dateStr: string) => {
+    if (pickingStart) {
+      setCustomStart(dateStr);
+      setCustomEnd(dateStr);
+      setPickingStart(false);
+    } else {
+      // Ensure start <= end
+      if (dateStr < customStart) {
+        setCustomStart(dateStr);
+        setCustomEnd(customStart);
+      } else {
+        setCustomEnd(dateStr);
+      }
+      setPickingStart(true);
+      // Auto-apply
+      const start = dateStr < customStart ? dateStr : customStart;
+      const end = dateStr < customStart ? customStart : dateStr;
+      const range = buildRange(start, end);
+      if (!isNaN(range.start.getTime()) && !isNaN(range.end.getTime())) {
+        onRangeChange({ ...range, preset: 'custom' });
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customStart, customEnd, singleDateMode]);
+  };
 
   return (
     <div className="relative inline-flex items-center gap-1.5" ref={ref}>
@@ -148,8 +226,8 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
             className={cn(
               'inline-flex items-center rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition-all duration-150 border',
               isActive
-                ? 'bg-[#0071e3] text-white border-[#0071e3] shadow-sm'
-                : 'bg-white text-[#86868b] border-[rgba(0,0,0,0.08)] hover:border-[#0071e3]/40 hover:text-[#0071e3] hover:bg-[#f0f6ff]'
+                ? 'bg-primary text-white border-primary shadow-sm'
+                : 'bg-surface border-border text-text-secondary hover:border-primary/40 hover:text-primary hover:bg-primary/5'
             )}
           >
             {qp.shortLabel}
@@ -157,27 +235,27 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
         );
       })}
 
-      {/* Divider */}
-      <span className="h-4 w-px bg-[rgba(0,0,0,0.08)]" />
+      <span className="h-4 w-px bg-border" />
 
-      {/* Calendar trigger — shows current selection label */}
+      {/* Calendar trigger */}
       <button
         onClick={() => setOpen((prev) => !prev)}
         className={cn(
           'inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-medium transition-colors',
           open
-            ? 'border-[#0071e3] bg-[#f0f6ff] text-[#0071e3]'
-            : 'border-[rgba(0,0,0,0.08)] bg-white text-[#86868b] hover:bg-[#f5f5f7]'
+            ? 'border-primary bg-primary/5 text-primary'
+            : 'border-border bg-surface text-text-secondary hover:bg-surface-hover'
         )}
       >
         <Calendar className="h-3.5 w-3.5" />
         {formatTriggerLabel(dateRange.start, dateRange.end, dateRange.preset)}
       </button>
+
       {open && (
-        <div className="absolute right-0 top-full z-[100] mt-1 max-h-[400px] overflow-y-auto rounded-lg border border-border bg-surface-elevated shadow-lg">
+        <div className="absolute right-0 top-full z-[100] mt-1 rounded-xl border border-border bg-surface-elevated shadow-xl overflow-hidden">
           <div className="flex">
             {/* Left column: Presets */}
-            <div className="w-44 border-r border-border py-2">
+            <div className="w-40 border-r border-border py-2">
               {presets.map((preset) => (
                 <button
                   key={preset.value}
@@ -192,9 +270,8 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
                   {preset.label}
                 </button>
               ))}
-              {/* Custom Range toggle */}
               <button
-                onClick={() => setShowCustom(true)}
+                onClick={() => { setShowCustom(true); setPickingStart(true); }}
                 className={cn(
                   'flex w-full items-center justify-between px-4 py-2 text-sm transition-colors text-left',
                   showCustom
@@ -202,70 +279,42 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
                     : 'text-text-secondary hover:bg-surface-hover'
                 )}
               >
-                Custom Range
+                Custom
                 <ChevronRight className="h-3.5 w-3.5" />
               </button>
             </div>
 
-            {/* Right column: Custom date inputs */}
+            {/* Right column: Calendar */}
             {showCustom && (
-              <div className="w-56 p-4 space-y-3">
-                {/* Single Date / Date Range toggle */}
-                <div className="flex rounded-md border border-border overflow-hidden">
+              <div className="p-4">
+                {/* Selection indicator */}
+                <div className="flex items-center gap-2 mb-3 text-xs">
                   <button
-                    onClick={() => setSingleDateMode(true)}
+                    onClick={() => setPickingStart(true)}
                     className={cn(
-                      'flex-1 px-2 py-1 text-xs font-medium transition-colors',
-                      singleDateMode
-                        ? 'bg-primary text-white'
-                        : 'bg-surface-hover text-text-secondary hover:bg-surface-hover/80'
+                      'flex-1 rounded-md border px-2 py-1.5 text-center transition-colors',
+                      pickingStart ? 'border-primary bg-primary/5 text-primary font-semibold' : 'border-border text-text-secondary'
                     )}
                   >
-                    Single Date
+                    {customStart ? formatInTimezone(new Date(customStart + 'T12:00:00'), 'MMM d') : 'Start'}
                   </button>
+                  <span className="text-text-secondary/30">–</span>
                   <button
-                    onClick={() => setSingleDateMode(false)}
+                    onClick={() => setPickingStart(false)}
                     className={cn(
-                      'flex-1 px-2 py-1 text-xs font-medium transition-colors',
-                      !singleDateMode
-                        ? 'bg-primary text-white'
-                        : 'bg-surface-hover text-text-secondary hover:bg-surface-hover/80'
+                      'flex-1 rounded-md border px-2 py-1.5 text-center transition-colors',
+                      !pickingStart ? 'border-primary bg-primary/5 text-primary font-semibold' : 'border-border text-text-secondary'
                     )}
                   >
-                    Date Range
+                    {customEnd ? formatInTimezone(new Date(customEnd + 'T12:00:00'), 'MMM d') : 'End'}
                   </button>
                 </div>
-                <div>
-                  <label className="block text-xs text-text-muted mb-1">
-                    {singleDateMode ? 'Date' : 'Start Date'}
-                  </label>
-                  <input
-                    type="date"
-                    value={customStart}
-                    onChange={(e) => setCustomStart(e.target.value)}
-                    max={singleDateMode ? todayInputValue() : (customEnd || undefined)}
-                    className="w-full rounded-md border border-border bg-surface-hover px-3 py-1.5 text-sm text-text-primary focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50 [color-scheme:dark]"
-                  />
-                </div>
-                {!singleDateMode && (
-                  <div>
-                    <label className="block text-xs text-text-muted mb-1">End Date</label>
-                    <input
-                      type="date"
-                      value={customEnd}
-                      onChange={(e) => setCustomEnd(e.target.value)}
-                      min={customStart || undefined}
-                      max={todayInputValue()}
-                      className="w-full rounded-md border border-border bg-surface-hover px-3 py-1.5 text-sm text-text-primary focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50 [color-scheme:dark]"
-                    />
-                  </div>
-                )}
-                <button
-                  onClick={handleCustomApply}
-                  className="w-full rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-white hover:bg-primary-dark transition-colors"
-                >
-                  Apply
-                </button>
+
+                <MiniCalendar
+                  selectedStart={customStart}
+                  selectedEnd={customEnd}
+                  onSelect={handleCalendarSelect}
+                />
               </div>
             )}
           </div>

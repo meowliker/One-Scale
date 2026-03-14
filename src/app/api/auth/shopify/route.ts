@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
     : getAppCredentials('shopify', workspaceId);
   // Use DB credentials atomically (both or neither) to avoid mixing sources
   const apiKey = (dbCreds?.app_id && dbCreds?.app_secret) ? dbCreds.app_id : process.env.SHOPIFY_API_KEY;
-  const scopes = dbCreds?.scopes || process.env.SHOPIFY_SCOPES || 'read_orders,read_products,read_customers';
+  const scopes = dbCreds?.scopes || process.env.SHOPIFY_SCOPES || 'read_orders,read_products,read_customers,read_shopify_payments_disputes,read_shopify_payments_payouts';
 
   if (!apiKey) {
     return NextResponse.redirect(

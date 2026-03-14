@@ -1,163 +1,252 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import type { PnLEntry } from '@/types/pnl';
-import type { DateRange } from '@/types/analytics';
 import { formatCurrency } from '@/lib/utils';
-import { formatDateInTimezone } from '@/lib/timezone';
-import { AnimatedCounter } from './AnimatedCounter';
-import { MiniSparkline } from './MiniSparkline';
 import {
-  AreaChart, Area, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, ReferenceLine,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  ReferenceLine,
 } from 'recharts';
 
 interface PnLTrendChartProps {
   dailyPnL: PnLEntry[];
-  dateRange: DateRange;
+  previousDailyPnL?: PnLEntry[];
+  comparisonDateLabel?: { current: string; previous: string };
 }
 
-interface TrendPoint {
+interface TrendDataPoint {
   date: string;
   label: string;
   netProfit: number;
-  positive: number | null;
-  negative: number | null;
   prevNetProfit: number | null;
+  prevRevenue: number | null;
+  prevCosts: number | null;
+  revenue: number;
+  costs: number;
 }
 
-function formatLabel(dateStr: string): string {
+function formatDateLabel(dateStr: string): string {
   const d = new Date(dateStr + 'T00:00:00');
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-function buildTrendData(dailyPnL: PnLEntry[], dateRange: DateRange) {
-  const startStr = formatDateInTimezone(dateRange.start);
-  const endStr = formatDateInTimezone(dateRange.end);
-  const periodMs = dateRange.end.getTime() - dateRange.start.getTime();
-  const periodDays = Math.round(periodMs / 86400000) + 1;
+type TrendMetric = 'netProfit' | 'revenue' | 'costs';
+export function PnLTrendChart({ dailyPnL, previousDailyPnL = [], comparisonDateLabel }: PnLTrendChartProps) {
+  const [metric, setMetric] = useState<TrendMetric>('netProfit');
+  const [showComparison, setShowComparison] = useState(false);
 
-  const current = dailyPnL
-    .filter((d) => d.date >= startStr && d.date <= endStr)
-    .sort((a, b) => a.date.localeCompare(b.date));
+  const data: TrendDataPoint[] = useMemo(() => {
+    return dailyPnL.map((entry, i) => {
+      const costs = entry.cogs + entry.adSpend + entry.shipping + entry.fees + entry.refunds;
+      const prevEntry = previousDailyPnL[i] ?? null;
+      const prevCosts = prevEntry ? prevEntry.cogs + prevEntry.adSpend + prevEntry.shipping + prevEntry.fees + prevEntry.refunds : null;
 
-  const prevEnd = new Date(dateRange.start.getTime() - 86400000);
-  const prevStart = new Date(prevEnd.getTime() - (periodDays - 1) * 86400000);
-  const previous = dailyPnL
-    .filter((d) => d.date >= formatDateInTimezone(prevStart) && d.date <= formatDateInTimezone(prevEnd))
-    .sort((a, b) => a.date.localeCompare(b.date));
-
-  const currentTotal = current.reduce((s, d) => s + d.netProfit, 0);
-  const prevTotal = previous.reduce((s, d) => s + d.netProfit, 0);
-
-  const result: TrendPoint[] = [];
-  for (let i = 0; i < current.length; i++) {
-    const entry = current[i];
-    const np = entry.netProfit;
-    if (i > 0) {
-      const prevNp = current[i - 1].netProfit;
-      if ((prevNp < 0 && np > 0) || (prevNp > 0 && np < 0)) {
-        result.push({ date: `${current[i-1].date}_x`, label: '', netProfit: 0, positive: 0, negative: 0, prevNetProfit: null });
-      }
-    }
-    result.push({
-      date: entry.date, label: formatLabel(entry.date), netProfit: np,
-      positive: np >= 0 ? np : null, negative: np <= 0 ? np : null,
-      prevNetProfit: previous[i]?.netProfit ?? null,
+      return {
+        date: entry.date,
+        label: formatDateLabel(entry.date),
+        netProfit: entry.netProfit,
+        prevNetProfit: prevEntry?.netProfit ?? null,
+        prevRevenue: prevEntry?.revenue ?? null,
+        prevCosts,
+        revenue: entry.revenue,
+        costs,
+      };
     });
-  }
-  return { data: result, currentTotal, prevTotal };
-}
+  }, [dailyPnL, previousDailyPnL]);
 
-export function PnLTrendChart({ dailyPnL, dateRange }: PnLTrendChartProps) {
-  const { data, currentTotal, prevTotal } = useMemo(() => buildTrendData(dailyPnL, dateRange), [dailyPnL, dateRange]);
-  const sparkData = useMemo(() => data.filter((d) => !d.date.includes('_x')).map((d) => d.netProfit), [data]);
-  const isPos = currentTotal >= 0;
-  const changePct = prevTotal !== 0 ? ((currentTotal - prevTotal) / Math.abs(prevTotal)) * 100 : 0;
-  const changeAbs = currentTotal - prevTotal;
+  const metricConfig = {
+    netProfit: { label: 'Net Profit', color: '#10b981', key: 'netProfit' as const, prevKey: 'prevNetProfit' as const },
+    revenue: { label: 'Revenue', color: '#3b82f6', key: 'revenue' as const, prevKey: 'prevRevenue' as const },
+    costs: { label: 'Total Costs', color: '#ef4444', key: 'costs' as const, prevKey: 'prevCosts' as const },
+  };
 
-  const values = data.map((d) => d.netProfit);
-  const prevVals = data.map((d) => d.prevNetProfit ?? 0);
-  const allVals = [...values, ...prevVals];
-  const minV = allVals.length > 0 ? Math.min(...allVals, 0) : -100;
-  const maxV = allVals.length > 0 ? Math.max(...allVals, 0) : 100;
-  const pad = Math.max((maxV - minV) * 0.15, 100);
+  const active = metricConfig[metric];
 
-  const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: TrendPoint }> }) => {
-    if (!active || !payload?.length) return null;
+  // Summary stats
+  const summary = useMemo(() => {
+    if (data.length === 0) return { total: 0, avg: 0, best: 0, worst: 0 };
+    const values = data.map(d => d[active.key]);
+    return {
+      total: values.reduce((s, v) => s + v, 0),
+      avg: values.reduce((s, v) => s + v, 0) / values.length,
+      best: Math.max(...values),
+      worst: Math.min(...values),
+    };
+  }, [data, active.key]);
+
+  const CustomTooltipContent = ({
+    active: isActive,
+    payload,
+  }: {
+    active?: boolean;
+    payload?: Array<{ payload: TrendDataPoint }>;
+  }) => {
+    if (!isActive || !payload || !payload.length) return null;
     const item = payload[0].payload;
-    if (item.date.includes('_x')) return null;
     return (
-      <div className="rounded-xl border border-border bg-surface px-3 py-2.5 shadow-lg">
-        <p className="text-sm text-text-secondary mb-1">{item.label}</p>
-        <p className={`text-sm font-bold ${item.netProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatCurrency(item.netProfit)}</p>
-        {item.prevNetProfit !== null && <p className="text-sm text-text-secondary mt-0.5">Prev: {formatCurrency(item.prevNetProfit)}</p>}
+      <div className="rounded-lg border border-border bg-surface-elevated px-3 py-2.5 shadow-lg min-w-[150px]">
+        <p className="text-xs font-semibold text-text-primary mb-1">{item.label}</p>
+        <div className="flex justify-between text-xs">
+          <span className="text-text-secondary">Net Profit</span>
+          <span className={`font-bold ${item.netProfit >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+            {formatCurrency(item.netProfit)}
+          </span>
+        </div>
+        <div className="flex justify-between text-xs mt-0.5">
+          <span className="text-text-secondary">Revenue</span>
+          <span className="font-semibold text-text-primary">{formatCurrency(item.revenue)}</span>
+        </div>
+        <div className="flex justify-between text-xs mt-0.5">
+          <span className="text-text-secondary">Costs</span>
+          <span className="font-semibold text-red-500">{formatCurrency(item.costs)}</span>
+        </div>
+        {showComparison && (() => {
+          const prevVal = metric === 'netProfit' ? item.prevNetProfit : metric === 'revenue' ? item.prevRevenue : item.prevCosts;
+          if (prevVal === null) return null;
+          const currentVal = item[active.key];
+          const diff = currentVal - prevVal;
+          const pct = prevVal !== 0 ? ((diff / Math.abs(prevVal)) * 100).toFixed(1) : '—';
+          return (
+            <div className="mt-1 pt-1 border-t border-border space-y-0.5">
+              <div className="flex justify-between text-xs">
+                <span className="text-amber-500 font-medium">{comparisonDateLabel?.previous ?? 'Prev Period'}</span>
+                <span className="font-semibold text-amber-500">{formatCurrency(prevVal)}</span>
+              </div>
+              <div className="flex justify-end text-xs">
+                <span className={diff >= 0 ? 'text-emerald-500' : 'text-red-500'}>
+                  {diff >= 0 ? '+' : ''}{formatCurrency(diff)} ({pct}%)
+                </span>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     );
   };
 
-  const hasChartData = data.length > 0;
-
   return (
-    <div className="rounded-2xl bg-surface border border-border shadow-sm overflow-hidden h-full flex flex-col">
-      <div className="flex items-center justify-between px-5 pt-4 pb-2">
-        <div className="flex items-center gap-3">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-widest text-text-secondary">Net Profit</p>
-            <div className="flex items-baseline gap-2.5 mt-0.5">
-              <AnimatedCounter value={currentTotal} format={formatCurrency} className={`text-2xl font-extrabold tabular-nums tracking-tight ${isPos ? 'text-emerald-600' : 'text-red-600'}`} />
-              {changePct !== 0 && (
-                <span className={`inline-flex items-center gap-0.5 text-sm font-semibold px-2 py-0.5 rounded-md ${changePct >= 0 ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/30' : 'bg-red-50 text-red-600 dark:bg-red-950/30'}`}>
-                  {changePct >= 0 ? '\u25B2' : '\u25BC'} {Math.abs(changePct).toFixed(1)}%
-                </span>
-              )}
-            </div>
-            <p className="text-sm text-text-secondary mt-0.5">
-              vs prev <span className={changeAbs >= 0 ? 'text-emerald-500 font-medium' : 'text-red-500 font-medium'}>{changeAbs >= 0 ? '+' : ''}{formatCurrency(changeAbs)}</span>
-            </p>
-          </div>
-          {sparkData.length > 1 && <MiniSparkline data={sparkData} color={isPos ? '#10b981' : '#ef4444'} />}
+    <div>
+      {/* Toolbar */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-1 bg-surface-hover rounded-lg p-0.5">
+          {(['netProfit', 'revenue', 'costs'] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => setMetric(m)}
+              className={
+                metric === m
+                  ? 'px-3 py-1.5 text-xs font-semibold rounded-md bg-surface shadow-sm text-text-primary transition-all'
+                  : 'px-3 py-1.5 text-xs font-semibold rounded-md text-text-secondary/50 hover:text-text-secondary transition-colors'
+              }
+            >
+              {metricConfig[m].label}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowComparison(prev => !prev)}
+            className={
+              showComparison
+                ? 'border-2 border-blue-500 bg-blue-500/15 text-blue-400 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-all shadow-sm shadow-blue-500/20'
+                : 'border-2 border-border bg-surface text-text-secondary hover:border-blue-400 hover:text-blue-400 hover:bg-blue-500/5 rounded-lg px-3.5 py-1.5 text-xs font-bold transition-all'
+            }
+          >
+            ↔ Compare
+          </button>
         </div>
       </div>
-      <div className="flex-1 px-1 pb-1">
-        {!hasChartData ? (
-          <div className="flex items-center justify-center h-[220px]">
-            <div className="text-center">
-              <div className="h-8 w-8 mx-auto mb-2 rounded-full bg-surface-hover animate-pulse" />
-              <p className="text-sm text-text-secondary">Select a wider date range to see trends</p>
+
+      {/* Summary stats */}
+      <div className="grid grid-cols-4 gap-3 mb-4">
+        {[
+          { label: 'Total', value: summary.total },
+          { label: 'Daily Avg', value: summary.avg },
+          { label: 'Best Day', value: summary.best },
+          { label: 'Worst Day', value: summary.worst },
+        ].map(s => (
+          <div key={s.label} className="text-center">
+            <div className="text-xs font-semibold text-text-secondary/50 uppercase tracking-wide">{s.label}</div>
+            <div className={`text-sm font-bold tabular-nums ${s.value >= 0 ? 'text-text-primary' : 'text-red-500'}`}>
+              {formatCurrency(s.value)}
             </div>
           </div>
-        ) : data.length === 1 ? (
-          <div className="flex items-center justify-center h-[220px]">
-            <div className="text-center">
-              <p className={`text-4xl font-black tabular-nums ${isPos ? 'text-emerald-600' : 'text-red-600'}`}>{formatCurrency(currentTotal)}</p>
-              <p className="text-sm text-text-secondary mt-1">{data[0].label}</p>
-            </div>
+        ))}
+      </div>
+
+      {/* Chart */}
+      <ResponsiveContainer width="100%" height={280}>
+        <AreaChart data={data} margin={{ top: 8, right: 16, left: 16, bottom: 8 }}>
+          <defs>
+            <linearGradient id="trendGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={active.color} stopOpacity={0.25} />
+              <stop offset="100%" stopColor={active.color} stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--color-border)" />
+          <XAxis
+            dataKey="label"
+            tick={{ fontSize: 11, fill: 'var(--color-text-secondary)' }}
+            axisLine={false}
+            tickLine={false}
+            interval="preserveStartEnd"
+          />
+          <YAxis
+            tick={{ fontSize: 11, fill: 'var(--color-text-secondary)' }}
+            axisLine={false}
+            tickLine={false}
+            tickFormatter={(v: number) => Math.abs(v) >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${v}`}
+          />
+          <Tooltip content={<CustomTooltipContent />} cursor={{ stroke: 'var(--color-border)', strokeDasharray: '4 2' }} />
+          {metric === 'netProfit' && <ReferenceLine y={0} stroke="var(--color-text-secondary)" strokeOpacity={0.2} strokeDasharray="3 3" />}
+
+          {/* Comparison line */}
+          {showComparison && (
+            <Area
+              type="monotone"
+              dataKey={active.prevKey}
+              stroke="#f59e0b"
+              strokeWidth={2}
+              strokeDasharray="6 3"
+              strokeOpacity={0.8}
+              fill="none"
+              dot={false}
+              connectNulls={false}
+            />
+          )}
+
+          {/* Main area */}
+          <Area
+            type="monotone"
+            dataKey={active.key}
+            stroke={active.color}
+            strokeWidth={2.5}
+            fill="url(#trendGradient)"
+            dot={false}
+            activeDot={{ r: 5, fill: active.color, stroke: 'var(--color-surface)', strokeWidth: 2 }}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+
+      {/* Legend with date ranges */}
+      {showComparison && (
+        <div className="flex items-center gap-5 mt-2 justify-end">
+          <div className="flex items-center gap-1.5">
+            <div className="w-5 h-[2px] rounded-full" style={{ background: active.color }} />
+            <span className="text-xs font-medium text-text-primary">{comparisonDateLabel?.current ?? 'Current'}</span>
           </div>
-        ) : (
-          <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={data} margin={{ top: 8, right: 16, left: 8, bottom: 4 }}>
-              <defs>
-                <linearGradient id="tgp" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#10b981" stopOpacity={0.18}/><stop offset="100%" stopColor="#10b981" stopOpacity={0.01}/></linearGradient>
-                <linearGradient id="tgn" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#ef4444" stopOpacity={0.01}/><stop offset="100%" stopColor="#ef4444" stopOpacity={0.15}/></linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-              <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
-              <YAxis domain={[minV - pad, maxV + pad]} tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} width={52} tickFormatter={(v: number) => { const a = Math.abs(v); const s = v < 0 ? '-' : ''; return a >= 1000 ? `${s}$${(a/1000).toFixed(1)}k` : `${s}$${a.toFixed(0)}`; }} />
-              <Tooltip content={<CustomTooltip />} />
-              <ReferenceLine y={0} stroke="#cbd5e1" strokeDasharray="4 4" strokeWidth={1} />
-              <Line type="monotone" dataKey="prevNetProfit" stroke="#cbd5e1" strokeWidth={1.5} strokeDasharray="6 4" dot={false} connectNulls={false} isAnimationActive={false} />
-              <Area type="monotone" dataKey="positive" stroke="none" fill="url(#tgp)" dot={false} connectNulls={true} isAnimationActive={false} />
-              <Area type="monotone" dataKey="negative" stroke="none" fill="url(#tgn)" dot={false} connectNulls={true} isAnimationActive={false} />
-              <Line type="monotone" dataKey="netProfit" stroke={isPos ? '#10b981' : '#ef4444'} strokeWidth={2.5} dot={false} connectNulls={true} activeDot={{ r: 5, fill: isPos ? '#10b981' : '#ef4444', stroke: '#fff', strokeWidth: 2 }} isAnimationActive={false} />
-            </AreaChart>
-          </ResponsiveContainer>
-        )}
-      </div>
-      <div className="flex gap-5 px-5 py-2 border-t border-border-light">
-        <div className="flex items-center gap-1.5 text-sm text-text-secondary font-medium"><span className="w-2 h-2 rounded-full bg-emerald-500"/> Current</div>
-        <div className="flex items-center gap-1.5 text-sm text-text-secondary font-medium"><span className="w-4 border-t-2 border-dashed border-text-dimmed"/> Previous</div>
-      </div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-5 h-[2px] rounded-full bg-amber-500" style={{ opacity: 0.8 }} />
+            <span className="text-xs font-medium text-text-secondary">{comparisonDateLabel?.previous ?? 'Previous'}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

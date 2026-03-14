@@ -9,14 +9,49 @@ import type { ShopifyOrder } from '@/types/shopify';
 import type { BalanceTransaction } from '@/app/api/lib/shopify-client';
 import { todayInTimezone, daysAgoInTimezone, monthStartInTimezone, shopifyDateToStoreDate, getStoreTimezone, formatDateInTimezone } from '@/lib/timezone';
 import { fromZonedTime } from 'date-fns-tz';
+import { convertCurrency, getStoreCurrencyConfig } from '@/lib/attribution/currencyHandler';
+import { calculateFees } from '@/lib/pnl/feesCalculator';
+import type { OrderWithTransactions } from '@/lib/pnl/feesCalculator';
+import { calculateRevenue } from '@/lib/pnl/revenueCalculator';
+import type { RevenueBreakdown, ShopifyOrderData } from '@/lib/pnl/revenueCalculator';
+
+// ------ Fetch chargebacks from daily_pnl_snapshots (populated by sync script) ------
+
+async function fetchChargebacks(_startDate: string, _endDate: string, _tz: string): Promise<Map<string, { loss: number; won: number }>> {
+  const map = new Map<string, { loss: number; won: number }>();
+  try {
+    const { useStoreStore } = await import('@/stores/storeStore');
+    const storeId = useStoreStore.getState().activeStoreId;
+    if (!storeId) return map;
+    // Call the chargebacks endpoint directly — it queries shopify_chargebacks table
+    // with timezone-aware UTC bounds, so it works for ANY date range including today
+    const params = new URLSearchParams({
+      storeId,
+      startDate: _startDate,
+      endDate: _endDate,
+      tz: _tz,
+    });
+    const res = await fetch(`/api/pnl/chargebacks?${params}`);
+    if (!res.ok) return map;
+    const json = await res.json() as {
+      data?: Array<{ date: string; loss: number; won: number; pending?: number }>;
+    };
+
+    for (const row of json.data ?? []) {
+      map.set(row.date, {
+        loss: Number(row.loss) || 0,
+        won: Number(row.won) || 0,
+      });
+    }
+  } catch { /* chargebacks endpoint not available */ }
+  return map;
+}
 
 // ------ Fetch P&L settings from DB ------
 
-async function fetchPnLSettings(storeId: string): Promise<PnLSettings | null> {
+async function fetchPnLSettings(): Promise<PnLSettings | null> {
   try {
-    const data = await apiClient<PnLSettings>('/api/settings/pnl', {
-      params: { storeId },
-    });
+    const data = await apiClient<PnLSettings>('/api/settings/pnl');
     return data;
   } catch {
     return null;
@@ -30,9 +65,10 @@ async function fetchPnLSettings(storeId: string): Promise<PnLSettings | null> {
  * which may be stale or contain wrong IDs.
  */
 async function fetchInsightsDirectly(
-  storeId: string,
   datePreset: string,
 ): Promise<{ data: { date: string; metrics: Record<string, number> }[] }> {
+  const { useStoreStore } = await import('@/stores/storeStore');
+  const storeId = useStoreStore.getState().activeStoreId;
   if (!storeId) return { data: [] };
 
   const res = await fetch(`/api/meta/insights?storeId=${encodeURIComponent(storeId)}&datePreset=${datePreset}`);
@@ -45,6 +81,11 @@ async function fetchInsightsDirectly(
 /**
  * Calculate the total payment processing fee for an order amount.
  * Uses the average across active gateways, or falls back to 3% if none configured.
+ *
+ * This is the fallback estimator used when real Shopify Payments fee data
+ * is not available (e.g. PayPal orders). For real transaction fees, use
+ * the `calculateFees` function from @/lib/pnl/feesCalculator with actual
+ * Shopify GraphQL transaction data.
  */
 function calculatePaymentFee(orderAmount: number, fees: PaymentFee[]): number {
   const activeFees = fees.filter((f) => f.isActive);
@@ -54,6 +95,25 @@ function calculatePaymentFee(orderAmount: number, fees: PaymentFee[]): number {
   const avgPct = activeFees.reduce((sum, f) => sum + f.feePercentage, 0) / activeFees.length;
   const avgFixed = activeFees.reduce((sum, f) => sum + f.feeFixed, 0) / activeFees.length;
   return (orderAmount * avgPct / 100) + avgFixed;
+}
+
+/**
+ * Calculate fees from real Shopify transaction data using the feesCalculator library.
+ * Returns a Map of orderId -> fee amount for use alongside the fallback estimator.
+ */
+function calculateFeesFromTransactions(
+  transactions: Array<{ orderId: number; fees: Array<{ amount: number; type: 'payment_processing' | 'transaction' | 'other'; currency: string }> }>
+): Map<number, number> {
+  const orderTransactions: OrderWithTransactions[] = transactions.map(t => ({
+    orderId: String(t.orderId),
+    fees: t.fees,
+  }));
+  const breakdown = calculateFees(orderTransactions);
+  const feeMap = new Map<number, number>();
+  for (const entry of breakdown.perOrder) {
+    feeMap.set(Number(entry.orderId), entry.fees);
+  }
+  return feeMap;
 }
 
 /**
@@ -122,9 +182,37 @@ function calculateHandlingCost(
  * `totalPrice` = what the customer paid = subtotal + taxes + shipping (discounts already applied).
  *
  * Refunds are tracked separately via financialStatus checks.
+ *
+ * For detailed per-product revenue breakdowns with discount/refund separation,
+ * use `calculateRevenue` from @/lib/pnl/revenueCalculator with line-item data
+ * and product classifications.
  */
 function getAdjustedRevenue(order: ShopifyOrder, _settings: PnLSettings | null): number {
   return parseFloat(order.totalPrice);
+}
+
+/**
+ * Convert Shopify orders into the format expected by the revenueCalculator library.
+ * This enables detailed per-product revenue breakdowns when needed.
+ */
+function toRevenueCalcOrders(orders: ShopifyOrder[]): ShopifyOrderData[] {
+  return orders.map(order => ({
+    orderId: String(order.id),
+    lineItems: order.lineItems.map(li => ({
+      productId: li.productId ? String(li.productId) : `unknown_${li.title}`,
+      productTitle: li.title,
+      price: parseFloat(li.price),
+      quantity: li.quantity,
+      totalDiscount: 0, // Shopify totalPrice already has discounts applied
+    })),
+    refunds: order.refunds.map(r => ({
+      lineItems: r.refundLineItems.map(rli => ({
+        productId: String(rli.lineItemId), // mapped by line item ID
+        quantity: rli.quantity,
+        amount: parseFloat(rli.subtotal),
+      })),
+    })),
+  }));
 }
 
 // ------ Shopify Payments Real Fee Fetching ------
@@ -155,61 +243,48 @@ interface FeeData {
 // Both getPnLSummary and getDailyPnL call fetchRealTransactionFees concurrently.
 // Without deduplication, both would fire separate paginated fetches simultaneously,
 // doubling API calls and rate-limit usage.
-let _feeDataCache: { data: FeeData; timestamp: number; tz: string; storeId: string } | null = null;
-let _feeDataInflight: { key: string; promise: Promise<FeeData> } | null = null;
+let _feeDataCache: { data: FeeData; timestamp: number; tz: string } | null = null;
+let _feeDataInflight: Promise<FeeData> | null = null;
 const FEE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 // Cache today's orders so getPnLSummary can reuse data from getDailyPnL (avoids double-fetch)
-let _cachedTodayOrders: { orders: ShopifyOrder[]; timestamp: number; tz: string; storeId: string } | null = null;
+let _cachedTodayOrders: { orders: ShopifyOrder[]; timestamp: number; tz: string } | null = null;
 
 /**
  * Clear all P&L caches. Call on manual refresh to get fresh data.
  */
 export function clearPnLCaches(): void {
   _feeDataCache = null;
-  _feeDataInflight = null;
   _cachedTodayOrders = null;
   clearCachePrefix('pnl:');
   clearCachePrefix('product-pnl:');
   console.log('[P&L] Caches cleared');
 }
 
-async function getActiveStoreId(): Promise<string> {
-  const { useStoreStore } = await import('@/stores/storeStore');
-  return useStoreStore.getState().activeStoreId || '';
-}
-
-async function fetchRealTransactionFees(tz: string, storeId: string): Promise<FeeData> {
-  const cacheKey = `${storeId}:${tz}`;
+async function fetchRealTransactionFees(tz: string): Promise<FeeData> {
   // Return cached result if fresh enough and same timezone
-  if (
-    _feeDataCache &&
-    _feeDataCache.tz === tz &&
-    _feeDataCache.storeId === storeId &&
-    (Date.now() - _feeDataCache.timestamp) < FEE_CACHE_TTL_MS
-  ) {
+  if (_feeDataCache && _feeDataCache.tz === tz && (Date.now() - _feeDataCache.timestamp) < FEE_CACHE_TTL_MS) {
     console.log(`[P&L] Using cached Shopify Payments fees (${_feeDataCache.data.feesByOrderId.size} orders)`);
     return _feeDataCache.data;
   }
 
   // If a fetch is already in-flight, wait for it instead of starting a new one
-  if (_feeDataInflight?.key === cacheKey) {
+  if (_feeDataInflight) {
     console.log('[P&L] Waiting for in-flight Shopify Payments fee fetch...');
-    return _feeDataInflight.promise;
+    return _feeDataInflight;
   }
 
   // Start the actual fetch and store the promise for deduplication
-  const promise = _doFetchRealTransactionFees(tz, storeId);
-  _feeDataInflight = { key: cacheKey, promise };
+  _feeDataInflight = _doFetchRealTransactionFees(tz);
   try {
-    const result = await promise;
+    const result = await _feeDataInflight;
     return result;
   } finally {
     _feeDataInflight = null;
   }
 }
 
-async function _doFetchRealTransactionFees(tz: string, storeId: string): Promise<FeeData> {
+async function _doFetchRealTransactionFees(tz: string): Promise<FeeData> {
   const feesByOrderId = new Map<number, number>();
   const feesByDate = new Map<string, number>();
   // Track seen transaction IDs to deduplicate — Shopify Balance Transactions API
@@ -225,7 +300,7 @@ async function _doFetchRealTransactionFees(tz: string, storeId: string): Promise
   try {
     let hasMore = true;
     let lastId: string | undefined;
-    let pagesLeft = 40; // safety cap; loop still exits early at cutoff date
+    let pagesLeft = 6; // safety limit — max 1500 transactions (6 × 250), enough for 10 days
     let reachedCutoff = false;
 
     // Shopify Balance Transactions API returns results in DESCENDING order
@@ -239,7 +314,7 @@ async function _doFetchRealTransactionFees(tz: string, storeId: string): Promise
       try {
         const response = await apiClient<{ data: BalanceTransaction[] }>(
           '/api/shopify/balance-transactions',
-          { params: { ...params, storeId }, timeoutMs: 30_000, maxRetries: 2 }
+          { params, timeoutMs: 30_000, maxRetries: 2 }
         );
         txns = response.data;
       } catch (pageErr) {
@@ -305,7 +380,7 @@ async function _doFetchRealTransactionFees(tz: string, storeId: string): Promise
   const result = { feesByOrderId, feesByDate };
 
   // Cache the result
-  _feeDataCache = { data: result, timestamp: Date.now(), tz, storeId };
+  _feeDataCache = { data: result, timestamp: Date.now(), tz };
 
   return result;
 }
@@ -320,7 +395,6 @@ const PAGE_SIZE = 250; // Shopify max per page
  * to reduce API calls. Max 15 pages = 3750 orders per range.
  */
 async function fetchOrdersForDateRange(
-  storeId: string,
   startDateStr: string,
   endDateStr: string,
   tz: string,
@@ -341,8 +415,12 @@ async function fetchOrdersForDateRange(
   let sinceId = '0';
 
   while (pagesLeft > 0) {
+    const { useStoreStore } = await import('@/stores/storeStore');
+    const activeId = useStoreStore.getState().activeStoreId;
+    const orderFetchParams: Record<string, string> = { limit: String(PAGE_SIZE), since_id: sinceId, ...dateParams };
+    if (activeId) orderFetchParams.storeId = activeId;
     const response = await apiClient<{ data: ShopifyOrder[] }>('/api/shopify/orders', {
-      params: { storeId, limit: String(PAGE_SIZE), since_id: sinceId, ...dateParams },
+      params: orderFetchParams,
       timeoutMs: 60_000,
     });
 
@@ -372,9 +450,8 @@ async function fetchOrdersForDateRange(
  * Returns deduplicated orders.
  */
 async function paginateOrders(
-  storeId: string,
   baseParams: Record<string, string>,
-  maxPages = 20,
+  maxPages = 3,
 ): Promise<ShopifyOrder[]> {
   const allOrders: ShopifyOrder[] = [];
   const seenIds = new Set<number>();
@@ -383,7 +460,7 @@ async function paginateOrders(
 
   while (pagesLeft > 0) {
     const response = await apiClient<{ data: ShopifyOrder[] }>('/api/shopify/orders', {
-      params: { storeId, ...params },
+      params,
       timeoutMs: 60_000,
     });
     const orders = response.data;
@@ -413,15 +490,14 @@ async function paginateOrders(
  * 'partially_refunded') and merge the results.
  */
 async function fetchRefundedOrders(
-  storeId: string,
   extraParams: Record<string, string>,
 ): Promise<ShopifyOrder[]> {
   const baseParams = { limit: String(PAGE_SIZE), ...extraParams };
 
   // Two separate calls — Shopify doesn't support comma-separated financial_status
   const [refunded, partiallyRefunded] = await Promise.all([
-    paginateOrders(storeId, { ...baseParams, financial_status: 'refunded' }),
-    paginateOrders(storeId, { ...baseParams, financial_status: 'partially_refunded' }),
+    paginateOrders({ ...baseParams, financial_status: 'refunded' }),
+    paginateOrders({ ...baseParams, financial_status: 'partially_refunded' }),
   ]);
 
   // Merge and deduplicate
@@ -449,7 +525,6 @@ async function fetchRefundedOrders(
  * already fetched by the main order fetches).
  */
 async function fetchAllRefundedOrders(
-  storeId: string,
   displayStartDateStr: string,
   displayEndDateStr: string,
   shopifyWindowStartDateStr: string,
@@ -474,8 +549,8 @@ async function fetchAllRefundedOrders(
   };
 
   const [olderWindowOrders, outsideOrders] = await Promise.all([
-    fetchRefundedOrders(storeId, olderWindowParams),
-    fetchRefundedOrders(storeId, outsideWindowParams),
+    fetchRefundedOrders(olderWindowParams),
+    fetchRefundedOrders(outsideWindowParams),
   ]);
 
   // Merge and deduplicate
@@ -550,7 +625,6 @@ async function mockGetPnLSummary(): Promise<PnLSummary> {
 }
 
 async function realGetPnLSummaryUncached(): Promise<PnLSummary> {
-  const storeId = await getActiveStoreId();
   const tz = getStoreTimezone();
   const todayStr = todayInTimezone(tz);
 
@@ -558,20 +632,20 @@ async function realGetPnLSummaryUncached(): Promise<PnLSummary> {
   // This avoids a duplicate Shopify orders fetch — the page calls getDailyPnL first.
   const useCachedOrders = _cachedTodayOrders
     && _cachedTodayOrders.tz === tz
-    && _cachedTodayOrders.storeId === storeId
     && (Date.now() - _cachedTodayOrders.timestamp) < 120_000;
 
-  // Fetch refunded orders + Meta insights + fees (all use caches if getDailyPnL ran first)
-  const [orders, refundedOlderOrders, historicalRes, recentRes, todayRes, pnlSettings, realFees] = await Promise.all([
+  // Fetch refunded orders + Meta insights + fees + chargebacks (all use caches if getDailyPnL ran first)
+  const [orders, refundedOlderOrders, historicalRes, recentRes, todayRes, pnlSettings, realFees, chargebacksByDate] = await Promise.all([
     useCachedOrders
       ? Promise.resolve(_cachedTodayOrders!.orders)
-      : fetchOrdersForDateRange(storeId, todayStr, todayStr, tz),
-    fetchAllRefundedOrders(storeId, todayStr, todayStr, todayStr, tz),
-    fetchInsightsDirectly(storeId, 'last_30d'),
-    fetchInsightsDirectly(storeId, 'last_7d'),
-    fetchInsightsDirectly(storeId, 'today'),
-    fetchPnLSettings(storeId),
-    fetchRealTransactionFees(tz, storeId), // uses 5-min cache — instant if getDailyPnL ran first
+      : fetchOrdersForDateRange(todayStr, todayStr, tz),
+    fetchAllRefundedOrders(todayStr, todayStr, todayStr, tz),
+    fetchInsightsDirectly('last_30d'),
+    fetchInsightsDirectly('last_7d'),
+    fetchInsightsDirectly('today'),
+    fetchPnLSettings(),
+    fetchRealTransactionFees(tz), // uses 5-min cache — instant if getDailyPnL ran first
+    fetchChargebacks(todayStr, todayStr, tz),
   ]);
 
   // Merge with priority: today > last_7d > last_30d (more recent data wins)
@@ -616,15 +690,29 @@ async function realGetPnLSummaryUncached(): Promise<PnLSummary> {
       fallbackFeeTotal += paymentFee;
     }
 
-    // Digital stores have zero COGS; physical uses stored percentage or 30% default
     const isDigital = pnlSettings?.productType === 'digital';
-    const cogsRate = isDigital ? 0 : (pnlSettings?.cogsPercentage ?? 0.3);
-    const cogs = isDigital ? 0 : revenue * cogsRate;
+    let orderCogs = 0;
+    if (isDigital) {
+      // Digital products have zero COGS
+    } else {
+      for (const li of order.lineItems) {
+        const lineRevenue = parseFloat(li.price) * li.quantity;
+        const productId = li.productId ? String(li.productId) : `unknown_${li.title}`;
+        const productCost = pnlSettings?.productCosts?.find(pc => pc.productId === productId);
+        if (productCost) {
+          orderCogs += productCost.costType === 'fixed'
+            ? productCost.costPerUnit * li.quantity
+            : lineRevenue * (productCost.costPerUnit / 100);
+        } else {
+          orderCogs += lineRevenue * 0.3;
+        }
+      }
+    }
 
     todayAcc.revenue += revenue;
     todayAcc.shipping += shippingCost;
     todayAcc.fees += paymentFee + handlingCost;
-    todayAcc.cogs += cogs;
+    todayAcc.cogs += orderCogs;
   }
   console.log(`[P&L Summary] Fee breakdown: ${realFeeCount} orders with real fees ($${realFeeTotal.toFixed(2)}), ${fallbackFeeCount} orders with 3% fallback ($${fallbackFeeTotal.toFixed(2)}), total: $${todayAcc.fees.toFixed(2)}`);
 
@@ -638,7 +726,10 @@ async function realGetPnLSummaryUncached(): Promise<PnLSummary> {
     adSpend: number,
     orderCount: number,
   ): PnLEntry => {
-    const netProfit = p.revenue - p.cogs - adSpend - p.shipping - p.fees - p.refunds;
+    const cb = chargebacksByDate.get(date);
+    const chargebackLoss = cb?.loss || 0;
+    const chargebackWon = cb?.won || 0;
+    const netProfit = p.revenue - p.cogs - adSpend - p.shipping - p.fees - p.refunds - chargebackLoss + chargebackWon;
     const margin = p.revenue > 0 ? (netProfit / p.revenue) * 100 : 0;
     return {
       date,
@@ -655,12 +746,14 @@ async function realGetPnLSummaryUncached(): Promise<PnLSummary> {
       partialRefundCount: p.partialRefundCount,
       fullRefundAmount: p.fullRefundAmount,
       partialRefundAmount: p.partialRefundAmount,
+      chargebackLoss,
+      chargebackWon,
     };
   };
 
   const todayEntry = buildEntry(todayStr, todayAcc, todayAdSpend, orders.length);
   // Use the same entry for all periods — the actual breakdown comes from getDailyPnL()
-  const emptyEntry: PnLEntry = { date: todayStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0 };
+  const emptyEntry: PnLEntry = { date: todayStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0, chargebackLoss: 0, chargebackWon: 0 };
 
   return {
     today: todayEntry,
@@ -681,45 +774,142 @@ async function mockGetDailyPnL(): Promise<PnLEntry[]> {
   return mockDailyPnL;
 }
 
+/**
+ * Fetch pre-computed P&L snapshot entries from the server DB.
+ * Returns empty array if not available (crons haven't run yet).
+ */
+async function fetchSnapshotEntries(storeId: string): Promise<PnLEntry[]> {
+  try {
+    const params = new URLSearchParams({ storeId, days: '31' });
+    const res = await fetch(`/api/pnl/sync?${params}`);
+    if (!res.ok) return [];
+    const json = await res.json() as { data?: PnLEntry[] };
+    return json.data || [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Fast path: use pre-computed snapshots for historical days, compute only today live.
+ * Reduces API calls from ~15+ to ~5 (only today's orders + insights + fees).
+ */
+async function computeSnapshotPlusTodayLive(
+  snapshots: PnLEntry[],
+  todayStr: string,
+  tz: string,
+): Promise<PnLEntry[]> {
+  const snapshotMap = new Map(snapshots.map(s => [s.date, s]));
+  console.log(`[P&L] Fast path: ${snapshots.length} snapshot entries, computing only today live`);
+
+  // Only fetch today's data live
+  const [todayOrders, todayInsightsRes, pnlSettings, realFees, chargebacksByDate] = await Promise.all([
+    fetchOrdersForDateRange(todayStr, todayStr, tz),
+    fetchInsightsDirectly('today'),
+    fetchPnLSettings(),
+    fetchRealTransactionFees(tz),
+    fetchChargebacks(todayStr, todayStr, tz),
+  ]);
+
+  // Cache today's orders for getPnLSummary reuse
+  _cachedTodayOrders = { orders: todayOrders, timestamp: Date.now(), tz };
+
+  const todayAdSpend = (todayInsightsRes.data || []).reduce(
+    (sum, d) => sum + (d.metrics.spend || 0), 0,
+  );
+
+  // Collect refunds for today
+  const refundedOlderOrders = await fetchAllRefundedOrders(todayStr, todayStr, todayStr, tz);
+  const allOrdersForRefunds = [...todayOrders, ...refundedOlderOrders];
+  const refundsByDate = collectRefundsByDate(allOrdersForRefunds, tz);
+  const todayRefunds = refundsByDate.get(todayStr);
+
+  let revenue = 0, shipping = 0, fees = 0, cogs = 0;
+  const isDigital = pnlSettings?.productType === 'digital';
+  for (const order of todayOrders) {
+    if (order.financialStatus === 'refunded') continue;
+    const rev = getAdjustedRevenue(order, pnlSettings);
+    revenue += rev;
+    shipping += calculateShippingCost(order, pnlSettings);
+    if (realFees.feesByOrderId.has(order.id)) {
+      fees += realFees.feesByOrderId.get(order.id)!;
+    } else {
+      fees += calculatePaymentFee(rev, pnlSettings?.paymentFees || []);
+    }
+    fees += calculateHandlingCost(order, pnlSettings);
+
+    // Per-line-item COGS using pnlSettings.productCosts
+    if (isDigital) {
+      // Digital products have zero COGS
+    } else {
+      for (const li of order.lineItems) {
+        const lineRevenue = parseFloat(li.price) * li.quantity;
+        const productId = li.productId ? String(li.productId) : `unknown_${li.title}`;
+        const productCost = pnlSettings?.productCosts?.find(pc => pc.productId === productId);
+        if (productCost) {
+          cogs += productCost.costType === 'fixed'
+            ? productCost.costPerUnit * li.quantity
+            : lineRevenue * (productCost.costPerUnit / 100);
+        } else {
+          cogs += lineRevenue * 0.3;
+        }
+      }
+    }
+  }
+  const cb = chargebacksByDate.get(todayStr);
+  const chargebackLoss = cb?.loss || 0;
+  const chargebackWon = cb?.won || 0;
+  const refunds = todayRefunds?.totalRefunds || 0;
+  const netProfit = revenue - cogs - todayAdSpend - shipping - fees - refunds - chargebackLoss + chargebackWon;
+  const margin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
+
+  const todayEntry: PnLEntry = {
+    date: todayStr, revenue, cogs, adSpend: todayAdSpend, shipping, fees, refunds,
+    netProfit, margin, orderCount: todayOrders.length,
+    fullRefundCount: todayRefunds?.fullRefundCount || 0,
+    partialRefundCount: todayRefunds?.partialRefundCount || 0,
+    fullRefundAmount: todayRefunds?.fullRefundAmount || 0,
+    partialRefundAmount: todayRefunds?.partialRefundAmount || 0,
+    chargebackLoss, chargebackWon,
+  };
+
+  // Generate all 31 dates and merge
+  const allDates: string[] = [];
+  for (let i = 30; i >= 0; i--) {
+    allDates.push(daysAgoInTimezone(i, tz));
+  }
+  if (!allDates.includes(todayStr)) allDates.push(todayStr);
+  allDates.sort();
+
+  return allDates.map(dateStr => {
+    if (dateStr === todayStr) return todayEntry;
+    const snap = snapshotMap.get(dateStr);
+    if (snap) return snap;
+    return {
+      date: dateStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0,
+      fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0,
+      chargebackLoss: 0, chargebackWon: 0,
+    };
+  });
+}
+
 async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
-  const storeId = await getActiveStoreId();
   const tz = getStoreTimezone();
   const todayStr = todayInTimezone(tz);
 
-  // ── FAST PATH: read from pre-aggregated DB snapshots ──────────────────────
-  // Falls through to live API fetch if DB has no data yet
-  const _baseUrl = typeof window !== 'undefined'
-    ? window.location.origin
-    : (process.env.NEXT_PUBLIC_BASE_URL ?? '');
+  // ---- Fast path: use snapshots for historical days ----
+  const { useStoreStore } = await import('@/stores/storeStore');
+  const storeId = useStoreStore.getState().activeStoreId;
 
-  if (storeId && _baseUrl) {
-    try {
-      const _res = await fetch(
-        `${_baseUrl}/api/pnl/sync?storeId=${encodeURIComponent(storeId)}&days=31`
-      );
-      if (_res.ok) {
-        const _json = await _res.json() as {
-          data: PnLEntry[];
-          meta: { count: number; staleSec: number; isStale: boolean };
-        };
-        if (_json.data?.length > 0) {
-          if (_json.meta.isStale) {
-            // Trigger background resync, don't await
-            fetch(`${_baseUrl}/api/pnl/sync`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ storeId, daysBack: 3 }),
-            }).catch(() => {});
-          }
-          return _json.data;
-        }
-      }
-    } catch {
-      // DB unavailable — fall through to live API path below
+  if (storeId) {
+    const snapshots = await fetchSnapshotEntries(storeId);
+    if (snapshots.length >= 5) {
+      return computeSnapshotPlusTodayLive(snapshots, todayStr, tz);
     }
+    console.log(`[P&L] No snapshots available (${snapshots.length} entries), using full live computation`);
   }
-  // ── END FAST PATH ──────────────────────────────────────────────────────────
 
+  // ---- Fallback: full live computation (no snapshots) ----
   const SHOPIFY_DAYS = 8;
   const dayDates: string[] = [];
   for (let i = 0; i < SHOPIFY_DAYS; i++) {
@@ -734,20 +924,17 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
   // Server-side retry on fetchFromShopify handles 429/503 rate limits.
   const [
     historicalRes, recentRes, todayRes, pnlSettings,
-    allShopifyOrders, refundedOrders, realFees,
+    allShopifyOrders, refundedOrders, realFees, chargebacksByDate,
   ] = await Promise.all([
-    fetchInsightsDirectly(storeId, 'last_30d'),
-    fetchInsightsDirectly(storeId, 'last_7d'),
-    fetchInsightsDirectly(storeId, 'today'),
-    fetchPnLSettings(storeId),
-    // ONE range call for all 8 days instead of 8 separate day calls.
-    // Gracefully return empty arrays if Shopify isn't connected — Meta revenue
-    // fallback will kick in for those days so the page still renders.
-    fetchOrdersForDateRange(storeId, earliestShopifyDate, todayStr, tz)
-      .catch((err) => { console.warn('[P&L] Shopify orders fetch failed, using Meta fallback:', err instanceof Error ? err.message : err); return [] as ShopifyOrder[]; }),
-    fetchAllRefundedOrders(storeId, displayStartDate, todayStr, earliestShopifyDate, tz)
-      .catch((err) => { console.warn('[P&L] Shopify refunds fetch failed:', err instanceof Error ? err.message : err); return [] as ShopifyOrder[]; }),
-    fetchRealTransactionFees(tz, storeId),
+    fetchInsightsDirectly('last_30d'),
+    fetchInsightsDirectly('last_7d'),
+    fetchInsightsDirectly('today'),
+    fetchPnLSettings(),
+    // ONE range call for all 8 days instead of 8 separate day calls
+    fetchOrdersForDateRange(earliestShopifyDate, todayStr, tz),
+    fetchAllRefundedOrders(displayStartDate, todayStr, earliestShopifyDate, tz),
+    fetchRealTransactionFees(tz),
+    fetchChargebacks(displayStartDate, todayStr, tz),
   ]);
 
   // Merge with priority: today > last_7d > last_30d (more recent data wins)
@@ -780,7 +967,7 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
 
   // Cache today's orders so getPnLSummary can reuse them
   const todayOrders = ordersByDate.get(todayStr) || [];
-  _cachedTodayOrders = { orders: todayOrders, timestamp: Date.now(), tz, storeId };
+  _cachedTodayOrders = { orders: todayOrders, timestamp: Date.now(), tz };
 
   for (const dateStr of dayDates) {
     const orders = ordersByDate.get(dateStr) || [];
@@ -879,11 +1066,35 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
     const fullRefundAmount = dayRefunds?.fullRefundAmount || 0;
     const partialRefundAmount = dayRefunds?.partialRefundAmount || 0;
 
-    // Digital stores have zero COGS; physical uses stored percentage or 30% default
     const isDigital = pnlSettings?.productType === 'digital';
-    const cogsRate = isDigital ? 0 : (pnlSettings?.cogsPercentage ?? 0.3);
-    const cogs = isDigital ? 0 : revenue * cogsRate;
-    const netProfit = revenue - cogs - adSpend - shipping - fees - refunds;
+    let cogs = 0;
+    if (isDigital) {
+      // Digital products have zero COGS
+    } else if (dayOrders.length > 0) {
+      // Per-line-item COGS using pnlSettings.productCosts
+      for (const order of dayOrders) {
+        if (order.financialStatus === 'refunded') continue;
+        for (const li of order.lineItems) {
+          const lineRevenue = parseFloat(li.price) * li.quantity;
+          const productId = li.productId ? String(li.productId) : `unknown_${li.title}`;
+          const productCost = pnlSettings?.productCosts?.find(pc => pc.productId === productId);
+          if (productCost) {
+            cogs += productCost.costType === 'fixed'
+              ? productCost.costPerUnit * li.quantity
+              : lineRevenue * (productCost.costPerUnit / 100);
+          } else {
+            cogs += lineRevenue * 0.3;
+          }
+        }
+      }
+    } else {
+      // No orders — fallback to 30% of revenue (Meta-only revenue)
+      cogs = revenue * 0.3;
+    }
+    const cb = chargebacksByDate.get(dateStr);
+    const chargebackLoss = cb?.loss || 0;
+    const chargebackWon = cb?.won || 0;
+    const netProfit = revenue - cogs - adSpend - shipping - fees - refunds - chargebackLoss + chargebackWon;
     const margin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
 
     return {
@@ -901,6 +1112,8 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
       partialRefundCount,
       fullRefundAmount,
       partialRefundAmount,
+      chargebackLoss,
+      chargebackWon,
     };
   });
 }
@@ -929,50 +1142,22 @@ async function mockGetProducts(): Promise<ProductCOGS[]> {
 
 async function realGetProductsUncached(): Promise<ProductCOGS[]> {
   const response = await apiClient<{
-    data: {
-      id: number;
-      title: string;
-      vendor: string;
-      productType: string;
-      status: string;
-      images: { src: string }[];
-      variants: {
-        sku: string;
-        price: string;
-        compareAtPrice: string | null;
-        requiresShipping: boolean;
-      }[];
-    }[];
+    data: { id: number; title: string; variants: { sku: string; price: string; compareAtPrice: string | null }[] }[];
   }>('/api/shopify/products');
 
   return response.data.map((product) => {
-    // requires_shipping lives on variants, not the product root
-    // A product is physical if ANY variant requires shipping
-    // Default to TRUE (physical) if variants missing or field absent
-    const requiresShipping: boolean =
-      Array.isArray(product.variants) && product.variants.length > 0
-        ? product.variants.some(
-            (v) => v.requiresShipping !== false
-          )
-        : true;
-
-    const firstVariant = product.variants?.[0];
-    const price = parseFloat(firstVariant?.price ?? '0') || 0;
-    // Digital products always have zero COGS
-    const cost = requiresShipping ? price * 0.3 : 0;
+    const variant = product.variants[0];
+    const sellingPrice = parseFloat(variant?.price || '0');
+    const costPerUnit = sellingPrice * 0.3;
+    const margin = sellingPrice > 0 ? ((sellingPrice - costPerUnit) / sellingPrice) * 100 : 0;
 
     return {
-      id: String(product.id),
-      title: product.title,
-      image: product.images?.[0]?.src ?? null,
-      product_type: product.productType ?? null,
-      requires_shipping: requiresShipping,
-      vendor: product.vendor ?? null,
-      status: product.status ?? 'active',
-      variant_count: product.variants?.length ?? 1,
-      cost,
-      price,
-      currency: 'USD',
+      productId: String(product.id),
+      productName: product.title,
+      sku: variant?.sku || '',
+      costPerUnit,
+      sellingPrice,
+      margin,
     };
   });
 }

@@ -1,0 +1,280 @@
+/**
+ * Store Type Detector
+ *
+ * Detects store structure (single_product, funnel, general, subscription, mixed)
+ * by analyzing active products and 60 days of orders.
+ * Runs on store connect and weekly thereafter.
+ * One store's detection never affects another.
+ */
+
+import { rest } from '@/app/api/lib/supabase-persistence';
+import type { StoreType } from './types';
+
+// ── Constants ────────────────────────────────────────────────
+
+export const DIGITAL_KEYWORDS = [
+  'digital', 'download', 'ebook', 'e-book', 'course', 'pdf',
+  'template', 'printable', 'software', 'instant-download',
+  'membership', 'access', 'license',
+];
+
+export const BUNDLE_KEYWORDS = [
+  'bundle', 'pack', 'kit', 'set', 'combo', 'duo', 'trio',
+  'collection', 'variety',
+];
+
+const UPSELL_APP_INDICATORS = [
+  'reconvert', 'zipify', 'carthook', 'aftersell', 'honeycomb',
+  'upsell', 'one click', 'post purchase', 'order bump',
+];
+
+// ── Interfaces ───────────────────────────────────────────────
+
+interface OrderCacheRow {
+  shopify_order_id: string;
+  line_items: string;
+  total_price: number;
+  financial_status: string;
+  created_at: string;
+}
+
+interface StoreTypeResult {
+  store_type: StoreType;
+  confidence: number;
+  signals: Record<string, unknown>;
+  has_upsell_app: boolean;
+  has_digital_products: boolean;
+  has_subscriptions: boolean;
+  has_bundles: boolean;
+  total_active_products: number;
+  avg_products_per_order: number;
+  avg_order_value: number;
+}
+
+// ── Main Detection Function ─────────────────────────────────
+
+export async function detectStoreType(storeId: string): Promise<StoreTypeResult> {
+  const sixtyDaysAgo = new Date(Date.now() - 60 * 86400000).toISOString().split('T')[0];
+  const enc = (v: string) => encodeURIComponent(v);
+
+  // Fetch orders from cache
+  const orders = await rest<OrderCacheRow[]>(
+    `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${sixtyDaysAgo}T00:00:00&order_status=neq.cancelled&financial_status=neq.refunded&select=shopify_order_id,line_items,total_price,financial_status,created_at`
+  ).catch(() => [] as OrderCacheRow[]);
+
+  // Parse all orders and build per-product stats
+  const productStats = new Map<string, {
+    title: string;
+    tags: string;
+    productType: string;
+    orderCount: number;
+    aloneCount: number;
+    revenue: number;
+    neverFirst: boolean;
+    neverAlone: boolean;
+    hasSubscription: boolean;
+  }>();
+
+  let totalOrders = 0;
+  let totalRevenue = 0;
+  let totalLineItemCount = 0;
+
+  for (const order of orders) {
+    let lineItems: Array<{
+      product_id?: string | number;
+      title?: string;
+      price?: string;
+      quantity?: number;
+      requires_selling_plan?: boolean;
+      properties?: Array<{ name: string; value: string }>;
+      product_type?: string;
+      tags?: string;
+    }>;
+    try {
+      lineItems = typeof order.line_items === 'string'
+        ? JSON.parse(order.line_items)
+        : order.line_items || [];
+    } catch { continue; }
+
+    if (lineItems.length === 0) continue;
+
+    totalOrders++;
+    totalRevenue += order.total_price || 0;
+    totalLineItemCount += lineItems.length;
+
+    const uniqueProductIds = new Set<string>();
+    for (const item of lineItems) {
+      const pid = item.product_id ? String(item.product_id) : `unknown_${item.title}`;
+      uniqueProductIds.add(pid);
+    }
+    const isAloneOrder = uniqueProductIds.size === 1;
+
+    for (let i = 0; i < lineItems.length; i++) {
+      const item = lineItems[i];
+      const pid = item.product_id ? String(item.product_id) : `unknown_${item.title}`;
+      const isFirst = i === 0;
+
+      const existing = productStats.get(pid);
+      if (existing) {
+        existing.orderCount++;
+        if (isAloneOrder) existing.aloneCount++;
+        existing.revenue += parseFloat(item.price || '0') * (item.quantity || 1);
+        if (isFirst) existing.neverFirst = false;
+        if (!isAloneOrder && existing.neverAlone) { /* stays true only if ALWAYS alone */ }
+        if (isAloneOrder) { /* nothing */ } else { existing.neverAlone = false; }
+        if (item.requires_selling_plan) existing.hasSubscription = true;
+      } else {
+        productStats.set(pid, {
+          title: item.title || '',
+          tags: '',
+          productType: item.product_type || '',
+          orderCount: 1,
+          aloneCount: isAloneOrder ? 1 : 0,
+          revenue: parseFloat(item.price || '0') * (item.quantity || 1),
+          neverFirst: !isFirst,
+          neverAlone: isAloneOrder,
+          hasSubscription: !!item.requires_selling_plan,
+        });
+      }
+    }
+  }
+
+  // Also fetch product metadata from product_intelligence if available
+  const productIntel = await rest<Array<{
+    product_id: string;
+    tags: string;
+    product_type: string;
+    is_subscription: boolean;
+    is_bundle: boolean;
+    is_digital: boolean;
+  }>>(
+    `/product_intelligence?store_id=eq.${enc(storeId)}&select=product_id,tags,product_type,is_subscription,is_bundle,is_digital`
+  ).catch(() => []);
+
+  const intelMap = new Map(productIntel.map(p => [p.product_id, p]));
+
+  // ── Compute detection signals ──────────────────────────────
+
+  const uniqueProductCount = productStats.size;
+  const avgProductsPerOrder = totalOrders > 0 ? totalLineItemCount / totalOrders : 0;
+  const avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+
+  // Revenue share per product
+  let topProductRevenueShare = 0;
+  const alonePcts: number[] = [];
+  let hasSubscriptions = false;
+  let hasBundles = false;
+  let hasDigitalProducts = false;
+  let hasUpsellApp = false;
+
+  for (const [pid, stats] of productStats) {
+    const revShare = totalRevenue > 0 ? (stats.revenue / totalRevenue) * 100 : 0;
+    if (revShare > topProductRevenueShare) topProductRevenueShare = revShare;
+
+    const alonePct = stats.orderCount > 0 ? (stats.aloneCount / stats.orderCount) * 100 : 0;
+    alonePcts.push(alonePct);
+
+    // Check flags from intel table
+    const intel = intelMap.get(pid);
+    if (intel?.is_subscription || stats.hasSubscription) hasSubscriptions = true;
+    if (intel?.is_bundle) hasBundles = true;
+    if (intel?.is_digital) hasDigitalProducts = true;
+
+    // Also check tags/type for digital/bundle keywords
+    const allText = `${stats.title} ${intel?.tags || ''} ${intel?.product_type || stats.productType}`.toLowerCase();
+    if (DIGITAL_KEYWORDS.some(k => allText.includes(k))) hasDigitalProducts = true;
+    if (BUNDLE_KEYWORDS.some(k => allText.includes(k))) hasBundles = true;
+
+    // Upsell app detection: product that NEVER appears as first item AND never appears alone
+    // (likely injected by upsell app post-checkout)
+    if (stats.neverFirst && !stats.neverAlone && stats.orderCount >= 5) {
+      // Check if product title hints at upsell app
+      const titleLower = stats.title.toLowerCase();
+      if (UPSELL_APP_INDICATORS.some(k => titleLower.includes(k))) {
+        hasUpsellApp = true;
+      }
+    }
+  }
+
+  const avgAlonePct = alonePcts.length > 0
+    ? alonePcts.reduce((a, b) => a + b, 0) / alonePcts.length
+    : 0;
+
+  // Check for funnel pattern: one product alone_pct < 5% AND another alone_pct > 50%
+  const hasLowAlone = alonePcts.some(p => p < 5);
+  const hasHighAlone = alonePcts.some(p => p > 50);
+
+  // ── Classify store type ────────────────────────────────────
+
+  let storeType: StoreType;
+  let confidence: number;
+
+  if (uniqueProductCount <= 3 || topProductRevenueShare > 85) {
+    storeType = 'single_product';
+    confidence = topProductRevenueShare > 85 ? 90 : 85;
+  } else if (hasSubscriptions) {
+    storeType = 'subscription';
+    confidence = 80;
+  } else if (hasLowAlone && hasHighAlone) {
+    storeType = 'funnel';
+    confidence = 75;
+  } else if (avgAlonePct > 60) {
+    storeType = 'general';
+    confidence = 70;
+  } else {
+    storeType = 'mixed';
+    confidence = 60;
+  }
+
+  const signals = {
+    uniqueProductCount,
+    topProductRevenueShare: Math.round(topProductRevenueShare * 10) / 10,
+    avgProductsPerOrder: Math.round(avgProductsPerOrder * 100) / 100,
+    avgOrderValue: Math.round(avgOrderValue * 100) / 100,
+    avgAlonePct: Math.round(avgAlonePct * 10) / 10,
+    hasLowAlone,
+    hasHighAlone,
+    totalOrdersAnalyzed: totalOrders,
+  };
+
+  // Persist to store_intelligence
+  const now = new Date().toISOString();
+  await rest(
+    '/store_intelligence?on_conflict=store_id',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify([{
+        store_id: storeId,
+        store_type: storeType,
+        store_type_confidence: confidence,
+        store_type_signals: signals,
+        has_upsell_app: hasUpsellApp,
+        has_digital_products: hasDigitalProducts,
+        has_subscriptions: hasSubscriptions,
+        has_bundles: hasBundles,
+        total_active_products: uniqueProductCount,
+        avg_products_per_order: signals.avgProductsPerOrder,
+        avg_order_value: signals.avgOrderValue,
+        store_type_detected_at: now,
+        updated_at: now,
+      }]),
+    }
+  ).catch(() => { /* table may not exist yet */ });
+
+  return {
+    store_type: storeType,
+    confidence,
+    signals,
+    has_upsell_app: hasUpsellApp,
+    has_digital_products: hasDigitalProducts,
+    has_subscriptions: hasSubscriptions,
+    has_bundles: hasBundles,
+    total_active_products: uniqueProductCount,
+    avg_products_per_order: signals.avgProductsPerOrder,
+    avg_order_value: signals.avgOrderValue,
+  };
+}

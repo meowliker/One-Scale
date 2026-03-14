@@ -1,120 +1,567 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import type { PnLEntry } from '@/types/pnl';
-import { formatCurrency } from '@/lib/utils';
-import { AnimatedCounter } from './AnimatedCounter';
-import { MiniSparkline } from './MiniSparkline';
+import { formatCurrency, formatPercentage, cn } from '@/lib/utils';
+import { BarChart3, Layers, TrendingUp, Table } from 'lucide-react';
 import {
-  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Legend,
+  ComposedChart,
+  AreaChart,
+  Area,
+  Bar,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
 } from 'recharts';
 
 interface PnLDayPartChartProps {
+  isDigital?: boolean;
   dailyPnL: PnLEntry[];
 }
 
-interface DayPoint {
+type ChartView = 'grouped' | 'stacked' | 'area' | 'table';
+
+interface ChartDataPoint {
+  date: string;
   label: string;
   revenue: number;
   adSpend: number;
+  cogs: number;
+  shipping: number;
+  fees: number;
+  refunds: number;
   netProfit: number;
+  margin: number;
 }
 
-function formatDay(dateStr: string): string {
-  const d = new Date(dateStr + 'T00:00:00');
-  return d.toLocaleDateString('en-US', { weekday: 'short' });
-}
+type SortField = 'date' | 'revenue' | 'adSpend' | 'cogs' | 'shipping' | 'fees' | 'refunds' | 'netProfit' | 'margin';
+type SortDirection = 'asc' | 'desc';
 
-function formatShort(dateStr: string): string {
+const viewOptions: { id: ChartView; label: string; Icon: typeof BarChart3 }[] = [
+  { id: 'grouped', label: 'Grouped Bar', Icon: BarChart3 },
+  { id: 'stacked', label: 'Stacked Bar', Icon: Layers },
+  { id: 'area', label: 'Area / Line', Icon: TrendingUp },
+  { id: 'table', label: 'Data Table', Icon: Table },
+];
+
+function formatDateLabel(dateStr: string, shortRange: boolean): string {
   const d = new Date(dateStr + 'T00:00:00');
+  if (shortRange) {
+    return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  }
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-export function PnLDayPartChart({ dailyPnL }: PnLDayPartChartProps) {
-  const data = useMemo<DayPoint[]>(() => {
-    const sorted = [...dailyPnL].sort((a, b) => a.date.localeCompare(b.date));
-    return sorted.map((d) => ({
-      label: sorted.length <= 7 ? formatDay(d.date) : formatShort(d.date),
-      revenue: d.revenue,
-      adSpend: d.adSpend,
-      netProfit: d.netProfit,
+function formatYAxisTick(value: number): string {
+  if (Math.abs(value) >= 1000) {
+    return `$${(value / 1000).toFixed(1)}k`;
+  }
+  return `$${value.toFixed(0)}`;
+}
+
+export function PnLDayPartChart({ dailyPnL, isDigital = false }: PnLDayPartChartProps) {
+  const [chartView, setChartView] = useState<ChartView>('grouped');
+  const [sortField, setSortField] = useState<SortField>('date');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+
+  const shortRange = dailyPnL.length <= 7;
+
+  const filteredData: ChartDataPoint[] = useMemo(() => {
+    const sorted = [...dailyPnL].sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
+
+    return sorted.map((entry) => ({
+      date: entry.date,
+      label: formatDateLabel(entry.date, shortRange),
+      revenue: entry.revenue,
+      adSpend: entry.adSpend,
+      cogs: entry.cogs,
+      shipping: entry.shipping,
+      fees: entry.fees,
+      refunds: entry.refunds,
+      netProfit: entry.netProfit,
+      margin: entry.revenue > 0 ? (entry.netProfit / entry.revenue) * 100 : 0,
     }));
-  }, [dailyPnL]);
+  }, [dailyPnL, shortRange]);
 
-  const totalRevenue = useMemo(() => data.reduce((s, d) => s + d.revenue, 0), [data]);
-  const sparkData = useMemo(() => data.map((d) => d.revenue), [data]);
-  const changePct = useMemo(() => {
-    if (data.length < 2) return 0;
-    const first = data[0].revenue;
-    const last = data[data.length - 1].revenue;
-    return first > 0 ? ((last - first) / first) * 100 : 0;
-  }, [data]);
+  const summary = useMemo(() => {
+    const totalRevenue = filteredData.reduce((sum, d) => sum + d.revenue, 0);
+    const totalAdSpend = filteredData.reduce((sum, d) => sum + d.adSpend, 0);
+    const totalCogs = filteredData.reduce((sum, d) => sum + d.cogs, 0);
+    const totalNetProfit = filteredData.reduce((sum, d) => sum + d.netProfit, 0);
+    return { totalRevenue, totalAdSpend, totalCogs, totalNetProfit };
+  }, [filteredData]);
 
-  const barSize = data.length <= 7 ? 24 : data.length <= 14 ? 16 : 10;
+  const sortedTableData = useMemo(() => {
+    if (chartView !== 'table') return filteredData;
+    return [...filteredData].sort((a, b) => {
+      const aVal = a[sortField];
+      const bVal = b[sortField];
+      if (typeof aVal === 'string' && typeof bVal === 'string') {
+        return sortDirection === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+      }
+      const numA = aVal as number;
+      const numB = bVal as number;
+      return sortDirection === 'asc' ? numA - numB : numB - numA;
+    });
+  }, [filteredData, sortField, sortDirection, chartView]);
 
-  const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ name: string; value: number; color: string }>; label?: string }) => {
-    if (!active || !payload?.length) return null;
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
+  const barSize = dailyPnL.length <= 7 ? 28 : dailyPnL.length <= 14 ? 18 : 12;
+
+  const CustomTooltipContent = ({
+    active,
+    payload,
+  }: {
+    active?: boolean;
+    payload?: Array<{ payload: ChartDataPoint; dataKey: string; color: string }>;
+  }) => {
+    if (!active || !payload || !payload.length) return null;
+    const item = payload[0].payload;
     return (
-      <div className="rounded-xl border border-border bg-surface px-3 py-2.5 shadow-lg">
-        <p className="text-xs text-text-secondary mb-1.5">{label}</p>
-        {payload.map((p) => (
-          <div key={p.name} className="flex items-center gap-2 text-[12px]">
-            <span className="w-2 h-2 rounded-full" style={{ background: p.color }} />
-            <span className="text-text-secondary">{p.name}:</span>
-            <span className="font-semibold text-text-primary tabular-nums">{formatCurrency(p.value)}</span>
+      <div className="rounded-lg border border-border bg-surface-elevated px-4 py-3 shadow-md">
+        <p className="mb-2 text-xs font-medium text-text-muted">{item.label}</p>
+        <div className="space-y-1">
+          <div className="flex items-center justify-between gap-6">
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: '#10b981' }} />
+              <span className="text-xs text-text-secondary">Revenue</span>
+            </div>
+            <span className="text-xs font-semibold text-text-primary">{formatCurrency(item.revenue)}</span>
           </div>
-        ))}
+          <div className="flex items-center justify-between gap-6">
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: '#f97316' }} />
+              <span className="text-xs text-text-secondary">Ad Spend</span>
+            </div>
+            <span className="text-xs font-semibold text-text-primary">{formatCurrency(item.adSpend)}</span>
+          </div>
+          {!isDigital && (
+          <div className="flex items-center justify-between gap-6">
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: '#ef4444' }} />
+              <span className="text-xs text-text-secondary">COGS</span>
+            </div>
+            <span className="text-xs font-semibold text-text-primary">{formatCurrency(item.cogs)}</span>
+          </div>
+          )}
+          {item.refunds > 0 && (
+            <div className="flex items-center justify-between gap-6">
+              <div className="flex items-center gap-2">
+                <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: '#f43f5e' }} />
+                <span className="text-xs text-text-secondary">Refunds</span>
+              </div>
+              <span className="text-xs font-semibold text-text-primary">{formatCurrency(item.refunds)}</span>
+            </div>
+          )}
+          <div className="my-1 border-t border-border" />
+          <div className="flex items-center justify-between gap-6">
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#3b82f6' }} />
+              <span className="text-xs text-text-secondary">Net Profit</span>
+            </div>
+            <span
+              className={cn(
+                'text-xs font-semibold',
+                item.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'
+              )}
+            >
+              {formatCurrency(item.netProfit)}
+            </span>
+          </div>
+        </div>
       </div>
     );
   };
 
+  const CustomLegendContent = () => (
+    <div className="mt-2 flex flex-wrap items-center justify-center gap-4">
+      {[
+        { label: 'Revenue', color: '#10b981', shape: 'square' },
+        { label: 'Ad Spend', color: '#f97316', shape: 'square' },
+        ...(!isDigital ? [{ label: 'COGS', color: '#ef4444', shape: 'square' as const }] : []),
+        { label: 'Net Profit', color: '#3b82f6', shape: 'line' },
+      ].map((item) => (
+        <div key={item.label} className="flex items-center gap-1.5">
+          {item.shape === 'square' ? (
+            <span
+              className="inline-block h-2.5 w-2.5 rounded-sm"
+              style={{ backgroundColor: item.color }}
+            />
+          ) : (
+            <span
+              className="inline-block h-0.5 w-4 rounded"
+              style={{ backgroundColor: item.color }}
+            />
+          )}
+          <span className="text-xs text-text-muted">{item.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+
+  const renderGroupedBarChart = () => (
+    <ResponsiveContainer width="100%" height={350}>
+      <ComposedChart data={filteredData} margin={{ top: 8, right: 16, left: 16, bottom: 8 }}>
+        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1e2235" />
+        <XAxis
+          dataKey="label"
+          tick={{ fontSize: 11, fill: '#94a3b8' }}
+          axisLine={false}
+          tickLine={false}
+          interval="preserveStartEnd"
+        />
+        <YAxis
+          tick={{ fontSize: 11, fill: '#94a3b8' }}
+          axisLine={false}
+          tickLine={false}
+          tickFormatter={formatYAxisTick}
+        />
+        <Tooltip content={<CustomTooltipContent />} />
+        <Legend content={<CustomLegendContent />} />
+        <Bar
+          dataKey="revenue"
+          name="Revenue"
+          fill="#10b981"
+          opacity={0.85}
+          radius={[3, 3, 0, 0]}
+          barSize={barSize}
+        />
+        <Bar
+          dataKey="adSpend"
+          name="Ad Spend"
+          fill="#f97316"
+          opacity={0.85}
+          radius={[3, 3, 0, 0]}
+          barSize={barSize}
+        />
+        {!isDigital && <Bar
+          dataKey="cogs"
+          name="COGS"
+          fill="#ef4444"
+          opacity={0.7}
+          radius={[3, 3, 0, 0]}
+          barSize={barSize}
+        />}
+        <Line
+          type="monotone"
+          dataKey="netProfit"
+          name="Net Profit"
+          stroke="#3b82f6"
+          strokeWidth={2.5}
+          dot={{ r: 4, fill: '#3b82f6', strokeWidth: 0 }}
+          activeDot={{ r: 6, fill: '#3b82f6', strokeWidth: 2, stroke: '#fff' }}
+        />
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+
+  const renderStackedBarChart = () => (
+    <ResponsiveContainer width="100%" height={350}>
+      <ComposedChart data={filteredData} margin={{ top: 8, right: 16, left: 16, bottom: 8 }}>
+        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1e2235" />
+        <XAxis
+          dataKey="label"
+          tick={{ fontSize: 11, fill: '#94a3b8' }}
+          axisLine={false}
+          tickLine={false}
+          interval="preserveStartEnd"
+        />
+        <YAxis
+          tick={{ fontSize: 11, fill: '#94a3b8' }}
+          axisLine={false}
+          tickLine={false}
+          tickFormatter={formatYAxisTick}
+        />
+        <Tooltip content={<CustomTooltipContent />} />
+        <Legend content={<CustomLegendContent />} />
+        <Bar
+          dataKey="revenue"
+          name="Revenue"
+          fill="#10b981"
+          opacity={0.85}
+          radius={[3, 3, 0, 0]}
+          barSize={barSize}
+        />
+        <Bar
+          dataKey="adSpend"
+          name="Ad Spend"
+          fill="#f97316"
+          opacity={0.85}
+          stackId="costs"
+          radius={[0, 0, 0, 0]}
+          barSize={barSize}
+        />
+        {!isDigital && <Bar
+          dataKey="cogs"
+          name="COGS"
+          fill="#ef4444"
+          opacity={0.7}
+          stackId="costs"
+          radius={[3, 3, 0, 0]}
+          barSize={barSize}
+        />}
+        <Line
+          type="monotone"
+          dataKey="netProfit"
+          name="Net Profit"
+          stroke="#3b82f6"
+          strokeWidth={2.5}
+          dot={{ r: 4, fill: '#3b82f6', strokeWidth: 0 }}
+          activeDot={{ r: 6, fill: '#3b82f6', strokeWidth: 2, stroke: '#fff' }}
+        />
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+
+  const renderAreaChart = () => (
+    <ResponsiveContainer width="100%" height={350}>
+      <AreaChart data={filteredData} margin={{ top: 8, right: 16, left: 16, bottom: 8 }}>
+        <defs>
+          <linearGradient id="gradRevenue" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
+            <stop offset="95%" stopColor="#10b981" stopOpacity={0.02} />
+          </linearGradient>
+          <linearGradient id="gradAdSpend" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor="#f97316" stopOpacity={0.3} />
+            <stop offset="95%" stopColor="#f97316" stopOpacity={0.02} />
+          </linearGradient>
+          <linearGradient id="gradCogs" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3} />
+            <stop offset="95%" stopColor="#ef4444" stopOpacity={0.02} />
+          </linearGradient>
+          <linearGradient id="gradNetProfit" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
+            <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.02} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1e2235" />
+        <XAxis
+          dataKey="label"
+          tick={{ fontSize: 11, fill: '#94a3b8' }}
+          axisLine={false}
+          tickLine={false}
+          interval="preserveStartEnd"
+        />
+        <YAxis
+          tick={{ fontSize: 11, fill: '#94a3b8' }}
+          axisLine={false}
+          tickLine={false}
+          tickFormatter={formatYAxisTick}
+        />
+        <Tooltip content={<CustomTooltipContent />} />
+        <Legend content={<CustomLegendContent />} />
+        <Area
+          type="monotone"
+          dataKey="revenue"
+          name="Revenue"
+          stroke="#10b981"
+          strokeWidth={2}
+          fill="url(#gradRevenue)"
+        />
+        <Area
+          type="monotone"
+          dataKey="adSpend"
+          name="Ad Spend"
+          stroke="#f97316"
+          strokeWidth={2}
+          fill="url(#gradAdSpend)"
+        />
+        {!isDigital && <Area
+          type="monotone"
+          dataKey="cogs"
+          name="COGS"
+          stroke="#ef4444"
+          strokeWidth={2}
+          fill="url(#gradCogs)"
+        />}
+        <Area
+          type="monotone"
+          dataKey="netProfit"
+          name="Net Profit"
+          stroke="#3b82f6"
+          strokeWidth={2.5}
+          fill="url(#gradNetProfit)"
+        />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+
+  const SortIcon = ({ field }: { field: SortField }) => {
+    if (sortField !== field) return <span className="ml-1 text-text-muted/40">&#8597;</span>;
+    return (
+      <span className="ml-1 text-brand">
+        {sortDirection === 'asc' ? '\u2191' : '\u2193'}
+      </span>
+    );
+  };
+
+  const renderDataTable = () => (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-border">
+            {([
+              { field: 'date' as SortField, label: 'Date' },
+              { field: 'revenue' as SortField, label: 'Revenue' },
+              { field: 'adSpend' as SortField, label: 'Ad Spend' },
+              ...(!isDigital ? [{ field: 'cogs' as SortField, label: 'COGS' }] : []),
+              { field: 'shipping' as SortField, label: 'Shipping' },
+              { field: 'fees' as SortField, label: 'Fees' },
+              { field: 'refunds' as SortField, label: 'Refunds' },
+              { field: 'netProfit' as SortField, label: 'Net Profit' },
+              { field: 'margin' as SortField, label: 'Margin %' },
+            ]).map((col) => (
+              <th
+                key={col.field}
+                onClick={() => handleSort(col.field)}
+                className={cn(
+                  'cursor-pointer select-none whitespace-nowrap px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wider text-text-muted hover:text-text-secondary transition-colors',
+                  col.field !== 'date' && 'text-right'
+                )}
+              >
+                {col.label}
+                <SortIcon field={col.field} />
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {sortedTableData.map((row) => (
+            <tr
+              key={row.date}
+              className="border-b border-border/50 transition-colors hover:bg-surface-hover/50"
+            >
+              <td className="whitespace-nowrap px-3 py-2 text-xs text-text-secondary">
+                {row.label}
+              </td>
+              <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-medium text-emerald-400">
+                {formatCurrency(row.revenue)}
+              </td>
+              <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-medium text-orange-400">
+                {formatCurrency(row.adSpend)}
+              </td>
+              {!isDigital && <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-medium text-red-400">
+                {formatCurrency(row.cogs)}
+              </td>}
+              <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-medium text-text-secondary">
+                {formatCurrency(row.shipping)}
+              </td>
+              <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-medium text-text-secondary">
+                {formatCurrency(row.fees)}
+              </td>
+              <td className="whitespace-nowrap px-3 py-2 text-right text-xs font-medium text-rose-400">
+                {formatCurrency(row.refunds)}
+              </td>
+              <td
+                className={cn(
+                  'whitespace-nowrap px-3 py-2 text-right text-xs font-semibold',
+                  row.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'
+                )}
+              >
+                {formatCurrency(row.netProfit)}
+              </td>
+              <td
+                className={cn(
+                  'whitespace-nowrap px-3 py-2 text-right text-xs font-medium',
+                  row.margin >= 0 ? 'text-emerald-400' : 'text-red-400'
+                )}
+              >
+                {formatPercentage(row.margin)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {sortedTableData.length === 0 && (
+        <div className="py-12 text-center text-sm text-text-muted">
+          No data available for the selected date range.
+        </div>
+      )}
+    </div>
+  );
+
+  const renderChart = () => {
+    switch (chartView) {
+      case 'grouped':
+        return renderGroupedBarChart();
+      case 'stacked':
+        return renderStackedBarChart();
+      case 'area':
+        return renderAreaChart();
+      case 'table':
+        return renderDataTable();
+    }
+  };
+
   return (
-    <div className="rounded-2xl bg-surface border border-border shadow-sm overflow-hidden h-full flex flex-col">
-      <div className="flex items-center justify-between px-5 pt-4 pb-2">
+    <div className="rounded-lg border border-border bg-surface-elevated p-6 shadow-sm">
+      {/* Header with title + view toggle + date range picker */}
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <h3 className="text-sm font-semibold text-text-primary">
+          Daily P&L Breakdown
+        </h3>
         <div className="flex items-center gap-3">
-          <div>
-            <p className="text-sm font-bold uppercase tracking-widest text-text-secondary">Daily P&L</p>
-            <div className="flex items-baseline gap-2.5 mt-0.5">
-              <AnimatedCounter value={totalRevenue} format={formatCurrency} className="text-2xl font-extrabold tabular-nums tracking-tight text-text-primary" />
-              {changePct !== 0 && (
-                <span className={`inline-flex items-center gap-0.5 text-[10px] font-semibold px-2 py-0.5 rounded-md ${changePct >= 0 ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/30' : 'bg-red-50 text-red-600 dark:bg-red-950/30'}`}>
-                  {changePct >= 0 ? '\u25B2' : '\u25BC'} {Math.abs(changePct).toFixed(1)}%
-                </span>
-              )}
-            </div>
-            <p className="text-sm text-text-secondary mt-0.5">total revenue &middot; {data.length} days</p>
+          {/* View toggle icons */}
+          <div className="flex items-center gap-0.5 rounded-lg border border-border bg-surface p-0.5">
+            {viewOptions.map((opt) => (
+              <button
+                key={opt.id}
+                onClick={() => setChartView(opt.id)}
+                title={opt.label}
+                className={cn(
+                  'rounded-md p-1.5 transition-colors',
+                  chartView === opt.id
+                    ? 'bg-brand/15 text-brand'
+                    : 'text-text-muted hover:bg-surface-hover hover:text-text-secondary'
+                )}
+              >
+                <opt.Icon className="h-4 w-4" />
+              </button>
+            ))}
           </div>
-          <MiniSparkline data={sparkData} color="#334155" width={56} height={24} />
         </div>
       </div>
-      <div className="flex-1 px-1 pb-1">
-        <ResponsiveContainer width="100%" height={220}>
-          <ComposedChart data={data} margin={{ top: 8, right: 16, left: 8, bottom: 4 }}>
-            <defs>
-              <linearGradient id="barRevGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#34d399" /><stop offset="100%" stopColor="#10b981" />
-              </linearGradient>
-              <linearGradient id="barAdGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#fb923c" /><stop offset="100%" stopColor="#f97316" />
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-            <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} width={48}
-              tickFormatter={(v: number) => { const a = Math.abs(v); return a >= 1000 ? `$${(a/1000).toFixed(1)}k` : `$${a.toFixed(0)}`; }} />
-            <Tooltip content={<CustomTooltip />} />
-            <Bar dataKey="revenue" name="Revenue" fill="url(#barRevGrad)" radius={[4, 4, 0, 0]} barSize={barSize} />
-            <Bar dataKey="adSpend" name="Ad Spend" fill="url(#barAdGrad)" radius={[4, 4, 0, 0]} barSize={barSize} />
-            <Line type="monotone" dataKey="netProfit" name="Net Profit" stroke="#6366f1" strokeWidth={2} dot={{ r: 3, fill: '#6366f1', stroke: '#fff', strokeWidth: 1.5 }} isAnimationActive={false} />
-          </ComposedChart>
-        </ResponsiveContainer>
+
+      {/* Summary stats row */}
+      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {[
+          { label: 'Revenue', value: summary.totalRevenue, color: 'text-emerald-400' },
+          { label: 'Ad Spend', value: summary.totalAdSpend, color: 'text-orange-400' },
+          ...(!isDigital ? [{ label: 'COGS', value: summary.totalCogs, color: 'text-red-400' }] : []),
+          {
+            label: 'Net Profit',
+            value: summary.totalNetProfit,
+            color: summary.totalNetProfit >= 0 ? 'text-emerald-400' : 'text-red-400',
+          },
+        ].map((stat) => (
+          <div
+            key={stat.label}
+            className="rounded-md border border-border bg-surface px-3 py-2"
+          >
+            <p className="text-xs text-text-muted">{stat.label}</p>
+            <p className={cn('text-sm font-semibold', stat.color)}>
+              {formatCurrency(stat.value)}
+            </p>
+          </div>
+        ))}
       </div>
-      <div className="flex gap-5 px-5 py-2 border-t border-border-light">
-        <div className="flex items-center gap-1.5 text-xs text-text-secondary font-medium"><span className="w-2 h-2 rounded-full bg-emerald-500"/> Revenue</div>
-        <div className="flex items-center gap-1.5 text-xs text-text-secondary font-medium"><span className="w-2 h-2 rounded-full bg-orange-500"/> Ad Spend</div>
-        <div className="flex items-center gap-1.5 text-xs text-text-secondary font-medium"><span className="w-2 h-2 rounded-full bg-indigo-500"/> Net Profit</div>
-      </div>
+
+      {/* Chart / Table */}
+      {renderChart()}
     </div>
   );
 }

@@ -8,7 +8,7 @@ function makeProduct(
   requiresShipping = true,
   vendor = 'Mock Vendor',
   productType = '',
-): ProductCOGS {
+): any {
   return {
     id,
     title,

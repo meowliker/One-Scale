@@ -770,6 +770,12 @@ export async function POST(request: NextRequest) {
 
     if (sb) {
       try {
+        // Normalize status: lost/charge_refunded/accepted → lost, won → won, else → pending
+        const raw = (cb.status || '').toLowerCase();
+        let normalized = 'pending';
+        if (raw === 'lost' || raw === 'charge_refunded' || raw === 'accepted') normalized = 'lost';
+        else if (raw === 'won') normalized = 'won';
+
         await rest(
           '/shopify_chargebacks?on_conflict=store_id,order_id',
           {
@@ -781,7 +787,8 @@ export async function POST(request: NextRequest) {
               amount: parseFloat(cb.amount),
               currency: cb.currency,
               reason: cb.reason,
-              status: cb.status,
+              status: normalized,
+              shopify_status: cb.status,
               created_at: cb.created_at,
               updated_at: cb.updated_at,
             }]),

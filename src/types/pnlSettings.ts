@@ -58,7 +58,6 @@ export interface HandlingFees {
 
 export interface PnLSettings {
   productType: ProductType;
-  cogsPercentage?: number;
   productCosts: ProductCost[];
   shipping: ShippingSettings;
   paymentFees: PaymentFee[];

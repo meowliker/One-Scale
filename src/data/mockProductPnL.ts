@@ -1,4 +1,4 @@
-import type { ProductPnLData, ProductFBMetrics } from '@/types/productPnL';
+import type { ProductPnLData, ProductFBMetrics } from '@/types/productPnl';
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
@@ -91,6 +91,7 @@ function product(
     adName: adInfo?.adName ?? null,
     adSetName: adInfo?.adSetName ?? null,
     campaignName: adInfo?.campaignName ?? null,
+    category: 'main',
   };
 }
 

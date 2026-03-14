@@ -1150,3 +1150,28 @@ export async function consumePersistentOAuthState(stateToken: string): Promise<O
     used: 1,
   };
 }
+
+// ---- Store Error Logging ----
+
+export async function logStoreError(
+  storeId: string,
+  errorType: string,
+  message: string,
+  actionRequired?: string
+): Promise<void> {
+  if (!isSupabasePersistenceEnabled()) return;
+  try {
+    await rest('/store_errors', {
+      method: 'POST',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({
+        store_id: storeId,
+        error_type: errorType,
+        message: message.substring(0, 1000),
+        action_required: actionRequired || null,
+      }),
+    });
+  } catch {
+    // Best-effort — don't let error logging break the caller
+  }
+}

@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import type { ProductPnLData, ProductSortKey, ProductViewMode } from '@/types/productPnL';
+import type { ProductPnLData, ProductSortKey, ProductViewMode, ProductCategory } from '@/types/productPnl';
+import { REVIEW_CONFIDENCE_THRESHOLD } from '@/lib/intelligence/signalStackClassifier';
+import { useStoreStore } from '@/stores/storeStore';
 import { ProductPnLCard } from '@/components/pnl/ProductPnLCard';
 import { ProductPnLListRow } from '@/components/pnl/ProductPnLListRow';
 import { cn } from '@/lib/utils';
@@ -9,6 +11,7 @@ import { Search, ArrowUpDown, ChevronDown, LayoutGrid, List, Megaphone, ChevronU
 
 interface ProductPnLSectionProps {
   products: ProductPnLData[];
+  isDigital?: boolean;
 }
 
 const sortOptions: { label: string; key: ProductSortKey }[] = [
@@ -21,7 +24,7 @@ const sortOptions: { label: string; key: ProductSortKey }[] = [
   { label: 'Product Name', key: 'productName' },
 ];
 
-type FilterMode = 'all' | 'advertised' | 'not-advertised';
+type ClassificationFilter = 'all' | 'main' | 'upsells' | 'needs-review';
 
 const listHeaders = [
   { label: 'Product', align: 'left' as const },
@@ -36,15 +39,24 @@ const listHeaders = [
   { label: 'CTR', align: 'right' as const },
   { label: 'Purchases', align: 'right' as const },
   { label: 'Cost/Purch', align: 'right' as const },
+  { label: 'Attribution', align: 'center' as const },
+  { label: 'Confidence', align: 'right' as const },
+  { label: 'Type', align: 'center' as const },
   { label: '', align: 'center' as const },
 ];
 
-export function ProductPnLSection({ products }: ProductPnLSectionProps) {
+export function ProductPnLSection({ products, isDigital = false }: ProductPnLSectionProps) {
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<ProductSortKey>('revenue');
   const [sortAsc, setSortAsc] = useState(false);
   const [viewMode, setViewMode] = useState<ProductViewMode>('card');
-  const [filterMode, setFilterMode] = useState<FilterMode>('all');
+  const [filterMode, setFilterMode] = useState<ClassificationFilter>('main');
+  const activeStoreId = useStoreStore((s) => s.activeStoreId) || 'default';
+  const [localClassifications, setLocalClassifications] = useState<Record<string, ProductCategory>>({});
+
+  function handleClassificationChange(productId: string, newClassification: ProductCategory) {
+    setLocalClassifications(prev => ({ ...prev, [productId]: newClassification }));
+  }
 
   const advertisedCount = useMemo(
     () => products.filter((p) => p.isAdvertised).length,
@@ -54,23 +66,48 @@ export function ProductPnLSection({ products }: ProductPnLSectionProps) {
   const filteredAndSorted = useMemo(() => {
     const query = search.toLowerCase().trim();
 
+    // Apply optimistic classification overrides
+    let withOverrides = products.map(p => {
+      const override = localClassifications[p.productId];
+      if (override) return { ...p, category: override, manualOverride: true };
+      return p;
+    });
+
+    // Filter by classification
+    let filtered = withOverrides;
+    switch (filterMode) {
+      case 'main':
+        filtered = filtered.filter((p) => {
+          const cat = (p.category || 'main').toLowerCase();
+          return cat === 'main' || cat === 'bundle';
+        });
+        break;
+      case 'upsells':
+        filtered = filtered.filter((p) => {
+          const cat = (p.category || '').toLowerCase();
+          return cat === 'upsell' || cat === 'downsell' || cat === 'addon';
+        });
+        break;
+      case 'needs-review':
+        filtered = filtered.filter((p) =>
+          p.needsReview || (p.classificationConfidence != null && p.classificationConfidence > 0 && p.classificationConfidence < REVIEW_CONFIDENCE_THRESHOLD)
+        );
+        break;
+      case 'all':
+      default:
+        break;
+    }
+
     // Filter by search
-    let filtered = query
-      ? products.filter(
+    filtered = query
+      ? filtered.filter(
           (p) =>
             p.productName.toLowerCase().includes(query) ||
             p.sku.toLowerCase().includes(query) ||
             (p.adName && p.adName.toLowerCase().includes(query)) ||
             (p.campaignName && p.campaignName.toLowerCase().includes(query))
         )
-      : products;
-
-    // Filter by ad status
-    if (filterMode === 'advertised') {
-      filtered = filtered.filter((p) => p.isAdvertised);
-    } else if (filterMode === 'not-advertised') {
-      filtered = filtered.filter((p) => !p.isAdvertised);
-    }
+      : filtered;
 
     // Sort
     const sorted = [...filtered].sort((a, b) => {
@@ -88,7 +125,7 @@ export function ProductPnLSection({ products }: ProductPnLSectionProps) {
     });
 
     return sorted;
-  }, [products, search, sortKey, sortAsc, filterMode]);
+  }, [products, search, sortKey, sortAsc, filterMode, localClassifications]);
 
   function handleSortChange(newKey: ProductSortKey) {
     if (newKey === sortKey) {
@@ -101,6 +138,31 @@ export function ProductPnLSection({ products }: ProductPnLSectionProps) {
 
   return (
     <div className="rounded-lg border border-border bg-surface-elevated p-6 shadow-sm">
+      {/* Classification filter pills */}
+      <div className="flex items-center justify-end mb-3">
+        <div className="flex items-center gap-1 rounded-lg bg-surface p-0.5">
+          {([
+            { key: 'main' as const, label: 'Main' },
+            { key: 'upsells' as const, label: 'Upsells' },
+            { key: 'needs-review' as const, label: 'Needs Review' },
+            { key: 'all' as const, label: 'All' },
+          ]).map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => setFilterMode(key)}
+              className={cn(
+                'px-3 py-1.5 text-[10px] font-semibold rounded-md transition-colors',
+                filterMode === key
+                  ? 'bg-surface-elevated shadow-sm text-text-primary'
+                  : 'text-text-secondary hover:text-text-primary'
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
@@ -119,24 +181,6 @@ export function ProductPnLSection({ products }: ProductPnLSectionProps) {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Filter tabs */}
-          <div className="flex rounded-md border border-border bg-surface">
-            {(['all', 'advertised', 'not-advertised'] as FilterMode[]).map((mode) => (
-              <button
-                key={mode}
-                onClick={() => setFilterMode(mode)}
-                className={cn(
-                  'px-2.5 py-1 text-[10px] font-medium transition-colors first:rounded-l-md last:rounded-r-md',
-                  filterMode === mode
-                    ? 'bg-brand/15 text-brand'
-                    : 'text-text-muted hover:text-text-secondary'
-                )}
-              >
-                {mode === 'all' ? 'All' : mode === 'advertised' ? 'Running Ads' : 'No Ads'}
-              </button>
-            ))}
-          </div>
-
           {/* Search */}
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-muted" />
@@ -212,15 +256,15 @@ export function ProductPnLSection({ products }: ProductPnLSectionProps) {
         viewMode === 'card' ? (
           <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {filteredAndSorted.map((product) => (
-              <ProductPnLCard key={product.productId} product={product} />
+              <ProductPnLCard key={product.productId} product={product} isDigital={isDigital} storeId={activeStoreId} onClassificationChange={handleClassificationChange} />
             ))}
           </div>
         ) : (
           <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[1100px]">
+            <table className="w-full min-w-[1300px]">
               <thead>
                 <tr className="border-b border-border">
-                  {listHeaders.map((h) => (
+                  {listHeaders.filter((h) => !(isDigital && h.label === 'COGS')).map((h) => (
                     <th
                       key={h.label || 'actions'}
                       className={cn(
@@ -237,7 +281,7 @@ export function ProductPnLSection({ products }: ProductPnLSectionProps) {
               </thead>
               <tbody>
                 {filteredAndSorted.map((product) => (
-                  <ProductPnLListRow key={product.productId} product={product} />
+                  <ProductPnLListRow key={product.productId} product={product} isDigital={isDigital} storeId={activeStoreId} onClassificationChange={handleClassificationChange} />
                 ))}
               </tbody>
             </table>
@@ -249,13 +293,12 @@ export function ProductPnLSection({ products }: ProductPnLSectionProps) {
           <p className="text-sm text-text-muted">
             {search
               ? `No products match "${search}"`
-              : filterMode === 'advertised'
-                ? 'No products with active ads'
-                : 'No products without ads'}
+              : 'No products match the current filter'}
           </p>
           <button
             onClick={() => {
               setSearch('');
+              setFilterMode('all');
               setFilterMode('all');
             }}
             className="mt-2 text-xs text-brand hover:underline"

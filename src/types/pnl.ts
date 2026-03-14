@@ -18,17 +18,12 @@ export interface PnLEntry {
 }
 
 export interface ProductCOGS {
-  id: string;
-  title: string;
-  image?: string | null;
-  product_type?: string | null;
-  requires_shipping: boolean;
-  vendor?: string | null;
-  status?: string | null;
-  variant_count?: number;
-  cost: number;
-  price: number;
-  currency?: string;
+  productId: string;
+  productName: string;
+  sku: string;
+  costPerUnit: number;
+  sellingPrice: number;
+  margin: number;
 }
 
 export interface PnLSummary {

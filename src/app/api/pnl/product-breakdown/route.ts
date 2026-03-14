@@ -257,9 +257,18 @@ export async function GET(request: NextRequest) {
     const productRevenueTotal = Array.from(productMap.values())
       .reduce((s, agg) => s + agg.revenue, 0);
 
-    // If daily snapshot fees are $0, estimate at 3% of product revenue
+    // If daily snapshot fees are $0, try auto-detected fee_structures before showing $0
     if (totalFees === 0 && productRevenueTotal > 0) {
-      totalFees = productRevenueTotal * 0.03;
+      try {
+        const feeStructures = await rest<Array<{ effective_rate: number; fixed_fee: number }>>(
+          `/fee_structures?store_id=eq.${encodeURIComponent(storeId)}&is_active=eq.true&select=effective_rate,fixed_fee`
+        );
+        if (feeStructures.length > 0) {
+          const avgRate = feeStructures.reduce((s, f) => s + f.effective_rate, 0) / feeStructures.length;
+          totalFees = productRevenueTotal * avgRate;
+        }
+        // If no fee_structures either, fees stay $0 — never hardcode 3%
+      } catch { /* fee_structures table may not exist yet */ }
     }
 
     for (const [productId, agg] of productMap.entries()) {
