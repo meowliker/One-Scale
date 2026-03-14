@@ -16,6 +16,7 @@ const PUBLIC_API_PREFIXES = [
   '/api/shopify/webhooks',
   '/api/tracking/pixel',
   '/api/tracking/collect',
+  '/api/admin/',
 ];
 
 function isPublicApiPath(pathname: string): boolean {
