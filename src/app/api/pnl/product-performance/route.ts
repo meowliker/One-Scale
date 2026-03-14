@@ -99,12 +99,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Supabase not configured', products: [] }, { status: 503 });
   }
 
-  // Default: last 30 days
-  const now = new Date();
-  const from = dateFrom || new Date(now.getTime() - 30 * 86400000).toISOString().split('T')[0];
-  const to = dateTo || now.toISOString().split('T')[0];
-
-  // Fetch store timezone for date range queries
+  // Fetch store timezone FIRST — needed for correct default date computation
   let storeTz = 'America/New_York';
   try {
     const tzRows = await rest<Array<{ timezone: string | null }>>(
@@ -113,8 +108,25 @@ export async function GET(request: NextRequest) {
     storeTz = tzRows?.[0]?.timezone || 'America/New_York';
   } catch { /* use default */ }
 
-  // Compute timezone-aware date boundaries
+  // Default dates using store timezone (avoids off-by-one near midnight)
   const { getStoreDateRangeForPeriod } = await import('@/lib/pnl/dateUtils');
+  let from: string;
+  let to: string;
+  if (dateFrom && dateTo) {
+    from = dateFrom;
+    to = dateTo;
+  } else {
+    // Compute today/30-days-ago in store timezone using Intl
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: storeTz, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+    const todayStr = `${parts.find(p => p.type === 'year')!.value}-${parts.find(p => p.type === 'month')!.value}-${parts.find(p => p.type === 'day')!.value}`;
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000);
+    const pastParts = new Intl.DateTimeFormat('en-CA', { timeZone: storeTz, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(thirtyDaysAgo);
+    const pastStr = `${pastParts.find(p => p.type === 'year')!.value}-${pastParts.find(p => p.type === 'month')!.value}-${pastParts.find(p => p.type === 'day')!.value}`;
+    from = dateFrom || pastStr;
+    to = dateTo || todayStr;
+  }
+
+  // Compute timezone-aware date boundaries
   const { start: tzStart, end: tzEnd } = getStoreDateRangeForPeriod(from, to, storeTz);
 
   try {

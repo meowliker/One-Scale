@@ -41,9 +41,23 @@ export async function POST(request: NextRequest) {
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || getAppUrl(request);
   const results: Array<{ storeId: string; syncOk: boolean; syncResult?: unknown; error?: string }> = [];
 
+  // Step 1: Sync balance transactions for ALL stores first
+  // This ensures fees, refunds, and chargebacks are fresh before P&L recompute
+  console.log(`[RecomputePnL] Step 1: Syncing balance transactions for ${stores.length} stores`);
+  try {
+    const btRes = await fetch(`${baseUrl}/api/cron/sync-balance-transactions`, {
+      headers: { Authorization: `Bearer ${process.env.CRON_SECRET}` },
+    });
+    const btJson = await btRes.json().catch(() => null);
+    console.log(`[RecomputePnL] Balance txn sync result:`, btJson?.ok ? 'success' : 'failed');
+  } catch (err) {
+    console.warn('[RecomputePnL] Balance txn sync failed:', err instanceof Error ? err.message : err);
+  }
+
+  // Step 2: Trigger P&L recompute for each store
+  console.log(`[RecomputePnL] Step 2: Recomputing P&L for ${stores.length} stores, daysBack: ${daysBack}`);
   for (const store of stores) {
     const storeId = store.id;
-    console.log(`[RecomputePnL] Triggering sync for store: ${storeId}, daysBack: ${daysBack}`);
 
     try {
       const syncRes = await fetch(`${baseUrl}/api/pnl/sync`, {

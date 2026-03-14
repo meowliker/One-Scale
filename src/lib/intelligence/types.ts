@@ -197,6 +197,8 @@ export interface ProductPnL {
   feeMethod: 'actual' | 'detected_rate' | 'configured_rate' | 'estimated';
   shipping: number;
   refunds: number;
+  chargebackLoss: number;
+  chargebackWon: number;
   netProfit: number;
   margin: number;
 }

@@ -8,6 +8,8 @@ import {
 } from '@/app/api/lib/supabase-persistence';
 import { daysAgoInTimezone } from '@/lib/timezone';
 import { calculatePnL } from '@/lib/pnl/universalCalculator';
+import { getShopifyToken } from '@/app/api/lib/tokens';
+import { fetchFromShopify } from '@/app/api/lib/shopify-client';
 
 export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
@@ -33,6 +35,111 @@ async function logCron(
   });
 }
 
+/**
+ * Sync recent balance transactions for a store before computing P&L.
+ * This ensures fees, refunds, and chargebacks are up-to-date.
+ */
+async function syncBalanceTransactionsForStore(storeId: string): Promise<number> {
+  const token = await getShopifyToken(storeId);
+  if (!token?.accessToken || !token?.shopDomain) return 0;
+
+  // Sync last 7 days (disputes update retroactively)
+  const sinceDate = new Date();
+  sinceDate.setDate(sinceDate.getDate() - 7);
+  const sinceISO = sinceDate.toISOString();
+
+  let totalCount = 0;
+  let sinceId: string | undefined;
+  let hasMore = true;
+
+  while (hasMore) {
+    const params: Record<string, string> = {
+      limit: '250',
+      processed_at_min: sinceISO,
+    };
+    if (sinceId) params.since_id = sinceId;
+
+    let data: { transactions?: Array<{ id: number | string; type: string; amount: string; fee: string; net: string; currency: string; source_order_id?: number | string; source_type?: string; processed_at: string; payout_id?: number | string }> };
+    try {
+      data = await fetchFromShopify(
+        token.accessToken,
+        token.shopDomain,
+        '/shopify_payments/balance/transactions.json',
+        params,
+      );
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('404')) break; // no Shopify Payments
+      throw err;
+    }
+
+    const txns = data.transactions ?? [];
+    if (txns.length === 0) break;
+
+    for (const txn of txns) {
+      const txnType = (txn.type || '').toLowerCase();
+      await rest('/shopify_balance_transactions?on_conflict=store_id,transaction_id', {
+        method: 'POST',
+        headers: { Prefer: 'resolution=merge-duplicates' },
+        body: JSON.stringify({
+          store_id: storeId,
+          transaction_id: String(txn.id),
+          type: txnType,
+          amount: parseFloat(txn.amount || '0'),
+          fee: Math.abs(parseFloat(txn.fee || '0')),
+          net: parseFloat(txn.net || '0'),
+          currency: txn.currency || 'USD',
+          source_order_id: txn.source_order_id ? String(txn.source_order_id) : null,
+          source_type: txn.source_type || null,
+          processed_at: txn.processed_at,
+          payout_id: txn.payout_id ? String(txn.payout_id) : null,
+        }),
+      }).catch(() => null);
+
+      if (txnType === 'refund') {
+        await rest('/shopify_refunds?on_conflict=store_id,transaction_id', {
+          method: 'POST',
+          headers: { Prefer: 'resolution=merge-duplicates' },
+          body: JSON.stringify({
+            store_id: storeId,
+            transaction_id: String(txn.id),
+            order_id: txn.source_order_id ? String(txn.source_order_id) : null,
+            amount: Math.abs(parseFloat(txn.amount || '0')),
+            fee: Math.abs(parseFloat(txn.fee || '0')),
+            currency: txn.currency || 'USD',
+            processed_at: txn.processed_at,
+          }),
+        }).catch(() => null);
+      }
+
+      if (txnType === 'dispute') {
+        const net = parseFloat(txn.net || '0');
+        await rest('/shopify_chargebacks?on_conflict=store_id,order_id', {
+          method: 'POST',
+          headers: { Prefer: 'resolution=merge-duplicates' },
+          body: JSON.stringify({
+            store_id: storeId,
+            order_id: txn.source_order_id ? String(txn.source_order_id) : null,
+            status: net < 0 ? 'lost' : 'won',
+            amount: Math.abs(net),
+            net_amount: net,
+            currency: txn.currency || 'USD',
+            initiated_at: txn.processed_at,
+            finalized_at: txn.processed_at,
+            created_at: txn.processed_at,
+            last_synced_at: new Date().toISOString(),
+          }),
+        }).catch(() => null);
+      }
+    }
+
+    totalCount += txns.length;
+    sinceId = String(txns[txns.length - 1].id);
+    hasMore = txns.length === 250;
+  }
+
+  return totalCount;
+}
+
 export async function GET(req: NextRequest) {
   if (req.headers.get('authorization') !== `Bearer ${process.env.CRON_SECRET}`) {
     return new Response('Unauthorized', { status: 401 });
@@ -51,6 +158,14 @@ export async function GET(req: NextRequest) {
       // Get store timezone from ad accounts
       const adAccounts = await listPersistentStoreAdAccounts(store.id);
       const tz = adAccounts[0]?.timezone || 'America/New_York';
+
+      // Sync balance transactions FIRST — P&L depends on this data
+      try {
+        const btCount = await syncBalanceTransactionsForStore(store.id);
+        if (btCount > 0) console.log(`[daily-pnl] Synced ${btCount} balance txns for ${store.id}`);
+      } catch (err) {
+        console.warn(`[daily-pnl] Balance txn sync failed for ${store.id}:`, err instanceof Error ? err.message : err);
+      }
 
       // Yesterday in store timezone
       const yesterday = daysAgoInTimezone(1, tz);

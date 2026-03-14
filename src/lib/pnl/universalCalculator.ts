@@ -231,6 +231,9 @@ export async function calculatePnL(
     feeMethod: 'actual' | 'detected_rate' | 'configured_rate' | 'estimated';
     shipping: number;
     refunds: number;
+    chargebackLoss: number;
+    chargebackWon: number;
+    orderIds: Set<string>;
   }>();
 
   let totalRevenue = 0;
@@ -310,11 +313,15 @@ export async function calculatePnL(
         feeMethod: 'estimated' as const,
         shipping: 0,
         refunds: 0,
+        chargebackLoss: 0,
+        chargebackWon: 0,
+        orderIds: new Set<string>(),
       };
 
       acc.revenue += netItemRevenue;
       acc.units += Number(item.quantity);
       acc.cogs += itemCogs;
+      acc.orderIds.add(String(order.shopify_order_id));
       if (cogsSource !== 'zero') acc.cogsSource = cogsSource;
       productAcc.set(productId, acc);
 
@@ -524,6 +531,43 @@ export async function calculatePnL(
     hasEstimatedFees = false;
   }
 
+  // ── 5a-ii. Distribute refunds & chargebacks to products by order ID ──
+  // Build order→product lookup from balance transactions
+  if (hasBalanceTxns) {
+    const refundByOrder = new Map<string, number>();
+    const cbLossByOrder = new Map<string, number>();
+    const cbWonByOrder = new Map<string, number>();
+
+    for (const txn of balanceTxns) {
+      const orderId = txn.source_order_id;
+      if (!orderId) continue;
+      const amount = Math.abs(parseFloat(txn.amount || '0'));
+      const net = parseFloat(txn.net || '0');
+
+      if (txn.type === 'refund') {
+        refundByOrder.set(orderId, (refundByOrder.get(orderId) || 0) + amount);
+      } else if (txn.type === 'dispute') {
+        if (net < 0) cbLossByOrder.set(orderId, (cbLossByOrder.get(orderId) || 0) + Math.abs(net));
+        else cbWonByOrder.set(orderId, (cbWonByOrder.get(orderId) || 0) + net);
+      }
+    }
+
+    // Distribute to products based on which orders they appear in
+    for (const [, acc] of productAcc) {
+      let prodRefunds = 0;
+      let prodCbLoss = 0;
+      let prodCbWon = 0;
+      for (const oid of acc.orderIds) {
+        prodRefunds += refundByOrder.get(oid) || 0;
+        prodCbLoss += cbLossByOrder.get(oid) || 0;
+        prodCbWon += cbWonByOrder.get(oid) || 0;
+      }
+      acc.refunds = prodRefunds;
+      acc.chargebackLoss = prodCbLoss;
+      acc.chargebackWon = prodCbWon;
+    }
+  }
+
   const grossRevenue = totalRevenue;
   const revenueForPnL = hasBalanceTxns && settledRevenue > 0 ? settledRevenue : grossRevenue;
   const revenueSource: 'settled' | 'orders_api' = hasBalanceTxns && settledRevenue > 0 ? 'settled' : 'orders_api';
@@ -611,7 +655,8 @@ export async function calculatePnL(
       const adSpend = isUpsellType ? 0 : (spendData?.spend || 0);
       const adSpendConfidence = spendData?.confidence || 0;
 
-      const netProfit = acc.revenue - acc.cogs - adSpend - acc.fees - acc.shipping - acc.refunds;
+      const netProfit = acc.revenue - acc.cogs - adSpend - acc.fees - acc.shipping
+        - acc.refunds - acc.chargebackLoss + acc.chargebackWon;
       const margin = acc.revenue > 0 ? (netProfit / acc.revenue) * 100 : 0;
 
       products.push({
@@ -628,6 +673,8 @@ export async function calculatePnL(
         feeMethod: acc.feeMethod,
         shipping: acc.shipping,
         refunds: acc.refunds,
+        chargebackLoss: acc.chargebackLoss,
+        chargebackWon: acc.chargebackWon,
         netProfit,
         margin,
       });
