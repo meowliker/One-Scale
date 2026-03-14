@@ -54,12 +54,9 @@ export async function classifyAllProducts(storeId: string): Promise<ClassifyResu
     return bootstrapClassify(storeId, recentOrders);
   }
 
-  // 1. Get or detect store intelligence
-  let intel = await getStoreIntelligence(storeId);
-  if (!intel || !('store_type' in intel)) {
-    await detectStoreType(storeId);
-    intel = await getStoreIntelligence(storeId);
-  }
+  // 1. Always re-detect store type — cached values may be stale
+  await detectStoreType(storeId);
+  const intel = await getStoreIntelligence(storeId);
 
   // Determine effective store type (merchant override takes priority)
   const rawIntel = intel as Record<string, unknown> | null;

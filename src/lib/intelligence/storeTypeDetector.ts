@@ -162,7 +162,7 @@ export async function detectStoreType(storeId: string): Promise<StoreTypeResult>
   let hasUpsellApp = false;
 
   for (const [pid, stats] of productStats) {
-    const revShare = totalRevenue > 0 ? (stats.revenue / totalRevenue) * 100 : 0;
+    const revShare = totalRevenue > 0 ? Math.min((stats.revenue / totalRevenue) * 100, 100) : 0;
     if (revShare > topProductRevenueShare) topProductRevenueShare = revShare;
 
     const alonePct = stats.orderCount > 0 ? (stats.aloneCount / stats.orderCount) * 100 : 0;
@@ -221,10 +221,11 @@ export async function detectStoreType(storeId: string): Promise<StoreTypeResult>
     storeType = 'subscription';
     confidence = 80;
   }
-  // 2. Single product — ≤3 products OR one product dominates >85% revenue
-  else if (uniqueProductCount <= 3 || topProductRevenueShare > 85) {
+  // 2. Single product — ≤3 products AND one product dominates >85% revenue
+  //    Revenue share must be capped at 100 to avoid overflow from multi-order accumulation
+  else if (uniqueProductCount <= 3 && Math.min(topProductRevenueShare, 100) > 85) {
     storeType = 'single_product';
-    confidence = topProductRevenueShare > 85 ? 90 : 85;
+    confidence = 85;
   }
   // 3. Funnel — clear funnel signals (high + low alone rates)
   else if (hasLowAlone && hasHighAlone) {
