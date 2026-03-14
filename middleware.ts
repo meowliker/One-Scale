@@ -17,6 +17,8 @@ const PUBLIC_API_PREFIXES = [
   '/api/tracking/pixel',
   '/api/tracking/collect',
   '/api/admin/',
+  '/api/pnl/sync',
+  '/api/cron/',
 ];
 
 function isPublicApiPath(pathname: string): boolean {

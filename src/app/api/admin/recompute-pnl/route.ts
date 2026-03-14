@@ -1,12 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  rest,
   isSupabasePersistenceEnabled,
   listPersistentStores,
-  listPersistentStoreAdAccounts,
 } from '@/app/api/lib/supabase-persistence';
-import { calculatePnL } from '@/lib/pnl/universalCalculator';
-import { daysAgoInTimezone } from '@/lib/timezone';
+import { getAppUrl } from '@/app/api/lib/url';
 
 export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
@@ -14,9 +11,9 @@ export const dynamic = 'force-dynamic';
 /**
  * POST /api/admin/recompute-pnl
  *
- * Deletes existing snapshots and recomputes P&L from scratch using
- * the universal calculator (which reads balance transactions directly).
- * No internal HTTP calls — bypasses middleware entirely.
+ * Triggers the P&L sync route (which fetches live from Shopify API)
+ * for all stores. Does NOT delete existing snapshots — the sync
+ * upserts so existing data is updated, not lost.
  *
  * Auth: CRON_SECRET bearer token.
  *
@@ -40,89 +37,29 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true, message: 'No stores found', storesFound: 0 });
   }
 
-  const results: Array<{ storeId: string; deleted: number; daysComputed: number; tz?: string; loopDays?: number; errors?: string[]; error?: string }> = [];
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || getAppUrl(request);
+  const results: Array<{ storeId: string; syncOk: boolean; syncResult?: unknown; error?: string }> = [];
 
   for (const store of stores) {
     const storeId = store.id;
-    console.log(`[RecomputePnL] Processing store: ${storeId}`);
+    console.log(`[RecomputePnL] Triggering sync for store: ${storeId}, daysBack: ${daysBack}`);
 
     try {
-      // Get store timezone
-      let adAccounts: Array<{ timezone?: string | null }> = [];
-      try {
-        adAccounts = await listPersistentStoreAdAccounts(storeId);
-      } catch { /* no ad accounts */ }
-      const tz = adAccounts[0]?.timezone || 'America/New_York';
+      const syncRes = await fetch(`${baseUrl}/api/pnl/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storeId,
+          secret: process.env.PNL_SYNC_SECRET,
+          daysBack,
+        }),
+      });
 
-      // 1. Delete existing snapshots for the recompute window
-      const sinceDate = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
-      const sinceStr = sinceDate.toISOString().split('T')[0];
-
-      let deletedCount = 0;
-      try {
-        const existingRows = await rest<Array<{ date: string }>>(
-          `/daily_pnl_snapshots?store_id=eq.${encodeURIComponent(storeId)}&date=gte.${sinceStr}&select=date`
-        );
-        deletedCount = existingRows?.length ?? 0;
-        if (deletedCount > 0) {
-          await rest(
-            `/daily_pnl_snapshots?store_id=eq.${encodeURIComponent(storeId)}&date=gte.${sinceStr}`,
-            { method: 'DELETE' }
-          );
-        }
-      } catch { /* table might not exist yet */ }
-
-      // 2. Recompute each day using the universal calculator directly
-      let daysComputed = 0;
-      const dayErrors: string[] = [];
-      for (let i = daysBack; i >= 0; i--) {
-        const dateStr = daysAgoInTimezone(i, tz);
-        try {
-          const pnl = await calculatePnL(storeId, dateStr, dateStr, {
-            includeProductBreakdown: false,
-          });
-
-          await rest('/daily_pnl_snapshots?on_conflict=store_id,date', {
-            method: 'POST',
-            headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-            body: JSON.stringify([{
-              store_id: storeId,
-              date: dateStr,
-              revenue: pnl.totalRevenue,
-              order_count: pnl.orderCount,
-              cogs: pnl.totalCogs,
-              ad_spend: pnl.totalAdSpend,
-              shipping_cost: pnl.totalShipping,
-              transaction_fees: pnl.totalFees,
-              refunds: pnl.totalRefunds,
-              full_refund_count: 0,
-              partial_refund_count: 0,
-              full_refund_amount: 0,
-              partial_refund_amount: 0,
-              chargeback_loss: pnl.totalChargebackLoss,
-              chargeback_won: pnl.totalChargebackWon,
-              net_profit: pnl.totalNetProfit,
-              margin: pnl.totalMargin,
-              fee_method: pnl.feeMethod,
-              synced_at: new Date().toISOString(),
-              shopify_synced: pnl.orderCount > 0,
-              meta_synced: pnl.totalAdSpend > 0,
-            }]),
-          });
-
-          daysComputed++;
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          dayErrors.push(`${dateStr}: ${msg}`);
-          console.error(`[RecomputePnL] ${storeId} ${dateStr} failed:`, err);
-        }
-      }
-
-      results.push({ storeId, deleted: deletedCount, daysComputed, tz, loopDays: daysBack + 1, ...(dayErrors.length > 0 ? { errors: dayErrors.slice(0, 5) } : {}) });
-      console.log(`[RecomputePnL] ${storeId} — deleted ${deletedCount}, recomputed ${daysComputed}/${daysBack + 1} days, errors: ${dayErrors.length}`);
+      const syncJson = await syncRes.json().catch(() => null);
+      results.push({ storeId, syncOk: syncRes.ok, syncResult: syncJson });
     } catch (err) {
-      const msg = err instanceof Error ? `${err.message} | ${err.stack?.split('\n')[1] || ''}` : 'Unknown error';
-      results.push({ storeId, deleted: 0, daysComputed: 0, error: msg });
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      results.push({ storeId, syncOk: false, error: msg });
     }
   }
 
