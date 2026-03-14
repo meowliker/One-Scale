@@ -322,21 +322,32 @@ export async function GET(request: NextRequest) {
       if (storedClass && storedClass !== 'pending' && storedClass !== 'unknown') {
         mostCommonCategory = storedClass;
       } else {
-        // Fallback: use multi-item order signals (single-item orders always say 'main', which is noise)
+        // Smart fallback using ALL order signals
+        const tc = agg.categoryCounts;
         const mic = agg.multiItemCategoryCounts;
+        const totalAppearances = (tc.main || 0) + (tc.upsell || 0) + (tc.addon || 0) + (tc.downsell || 0);
         const multiItemTotal = (mic.main || 0) + (mic.upsell || 0) + (mic.addon || 0) + (mic.downsell || 0);
-        if (multiItemTotal > 0) {
-          if ((mic.upsell || 0) > (mic.main || 0)) {
-            mostCommonCategory = 'upsell';
-          } else if ((mic.addon || 0) > (mic.main || 0)) {
-            mostCommonCategory = 'addon';
-          } else if ((mic.downsell || 0) > (mic.main || 0)) {
-            mostCommonCategory = 'downsell';
+        const singleItemCount = totalAppearances - multiItemTotal;
+
+        if (totalAppearances === 0 || multiItemTotal === 0) {
+          // Only appears in single-item orders or no data → main product
+          mostCommonCategory = 'main';
+        } else {
+          // Revenue share: high-revenue products are more likely main
+          const productRevenueShare = totalRevenue > 0 ? agg.revenue / totalRevenue : 0;
+          const upsellSignals = (mic.upsell || 0) + (mic.addon || 0) + (mic.downsell || 0);
+          const upsellRate = upsellSignals / multiItemTotal;
+
+          // A product is only upsell if it's upsell in >60% of multi-item orders
+          // AND it doesn't have significant single-item orders (which means it sells on its own = main)
+          // AND it doesn't dominate revenue
+          if (upsellRate > 0.6 && singleItemCount <= multiItemTotal && productRevenueShare < 0.25) {
+            if ((mic.addon || 0) > (mic.upsell || 0)) mostCommonCategory = 'addon';
+            else if ((mic.downsell || 0) > (mic.upsell || 0)) mostCommonCategory = 'downsell';
+            else mostCommonCategory = 'upsell';
           } else {
             mostCommonCategory = 'main';
           }
-        } else {
-          mostCommonCategory = 'main';
         }
       }
 
