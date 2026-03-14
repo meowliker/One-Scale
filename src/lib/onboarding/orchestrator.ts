@@ -5,6 +5,7 @@ export type OnboardingStage =
   | 'shopify_products'
   | 'shopify_orders'
   | 'shopify_transactions'
+  | 'balance_transactions'
   | 'shopify_chargebacks'
   | 'meta_ads'
   | 'fee_learning'
@@ -33,6 +34,7 @@ const DEFAULT_STAGES: Record<OnboardingStage, StageStatus> = {
   shopify_products: 'pending',
   shopify_orders: 'pending',
   shopify_transactions: 'pending',
+  balance_transactions: 'pending',
   shopify_chargebacks: 'pending',
   meta_ads: 'pending',
   fee_learning: 'pending',
@@ -195,7 +197,84 @@ export async function onStoreConnected(storeId: string): Promise<void> {
       await updateStageStatus(storeId, 'shopify_transactions', 'skipped', 'No transaction data — sync will populate');
     }
 
-    // Chargebacks
+    // Balance transactions — sync from Shopify Payments (refunds + chargebacks + fees)
+    await runStage(storeId, 'balance_transactions', async () => {
+      const { getShopifyToken } = await import('@/app/api/lib/tokens');
+      const { fetchFromShopify } = await import('@/app/api/lib/shopify-client');
+      const token = await getShopifyToken(storeId);
+      if (!token?.accessToken || !token?.shopDomain) {
+        throw new Error('No Shopify connection');
+      }
+
+      const sinceDate = new Date();
+      sinceDate.setDate(sinceDate.getDate() - 90);
+      let sinceId: string | undefined;
+      let hasMore = true;
+      let totalSynced = 0;
+
+      while (hasMore) {
+        const params: Record<string, string> = { limit: '250', processed_at_min: sinceDate.toISOString() };
+        if (sinceId) params.since_id = sinceId;
+
+        let data: { transactions?: Array<{ id: number | string; type: string; amount: string; fee: string; net: string; currency: string; source_order_id?: number | string; source_type?: string; processed_at: string; payout_id?: number | string }> };
+        try {
+          data = await fetchFromShopify(token.accessToken, token.shopDomain, '/shopify_payments/balance/transactions.json', params);
+        } catch (err) {
+          if (err instanceof Error && err.message.includes('404')) break; // No Shopify Payments
+          throw err;
+        }
+
+        const txns = data.transactions ?? [];
+        if (txns.length === 0) break;
+
+        for (const txn of txns) {
+          const txnType = (txn.type || '').toLowerCase();
+          await rest('/shopify_balance_transactions?on_conflict=store_id,transaction_id', {
+            method: 'POST', headers: { Prefer: 'resolution=merge-duplicates' },
+            body: JSON.stringify({
+              store_id: storeId, transaction_id: String(txn.id), type: txnType,
+              amount: parseFloat(txn.amount || '0'), fee: Math.abs(parseFloat(txn.fee || '0')),
+              net: parseFloat(txn.net || '0'), currency: txn.currency || 'USD',
+              source_order_id: txn.source_order_id ? String(txn.source_order_id) : null,
+              source_type: txn.source_type || null, processed_at: txn.processed_at,
+              payout_id: txn.payout_id ? String(txn.payout_id) : null,
+            }),
+          }).catch(() => null);
+
+          if (txnType === 'refund') {
+            await rest('/shopify_refunds?on_conflict=store_id,transaction_id', {
+              method: 'POST', headers: { Prefer: 'resolution=merge-duplicates' },
+              body: JSON.stringify({
+                store_id: storeId, transaction_id: String(txn.id),
+                order_id: txn.source_order_id ? String(txn.source_order_id) : null,
+                amount: Math.abs(parseFloat(txn.amount || '0')), fee: Math.abs(parseFloat(txn.fee || '0')),
+                currency: txn.currency || 'USD', processed_at: txn.processed_at,
+              }),
+            }).catch(() => null);
+          }
+
+          if (txnType === 'dispute') {
+            const net = parseFloat(txn.net || '0');
+            await rest('/shopify_chargebacks?on_conflict=store_id,order_id', {
+              method: 'POST', headers: { Prefer: 'resolution=merge-duplicates' },
+              body: JSON.stringify({
+                store_id: storeId, order_id: txn.source_order_id ? String(txn.source_order_id) : null,
+                status: net < 0 ? 'lost' : 'won', amount: Math.abs(net), net_amount: net,
+                currency: txn.currency || 'USD', finalized_at: txn.processed_at,
+                last_synced_at: new Date().toISOString(),
+              }),
+            }).catch(() => null);
+          }
+        }
+
+        totalSynced += txns.length;
+        sinceId = String(txns[txns.length - 1].id);
+        hasMore = txns.length === 250;
+      }
+      console.log(`[Onboarding] Synced ${totalSynced} balance transactions for ${storeId}`);
+    });
+
+    // Chargebacks — check if populated from balance_transactions stage above
     const cbCount = await rest<Array<{ id: string }>>(
       `/shopify_chargebacks?store_id=eq.${encodeURIComponent(storeId)}&select=id&limit=1`
     ).catch(() => []);
