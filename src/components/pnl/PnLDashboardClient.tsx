@@ -25,6 +25,7 @@ import { RefundBreakdown } from '@/components/pnl/RefundBreakdown';
 import { ChargebackSection } from '@/components/pnl/ChargebackSection';
 import { AOVSummary } from '@/components/pnl/AOVSummary';
 import { SectionWrapper } from '@/components/pnl/SectionWrapper';
+import { ExpenseBreakdownRow } from '@/components/pnl/ExpenseBreakdownRow';
 
 interface PnLDashboardClientProps {
   summary: PnLSummary;
@@ -335,6 +336,14 @@ export function PnLDashboardClient({
             </div>
           </div>
         </div>
+
+        {(activeEntry.customExpenses || 0) > 0 && (
+          <ExpenseBreakdownRow
+            totalExpenses={activeEntry.customExpenses || 0}
+            revenue={activeEntry.revenue}
+            breakdown={activeEntry.expenseBreakdown || []}
+          />
+        )}
 
       </SectionWrapper>
 
