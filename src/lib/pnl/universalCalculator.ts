@@ -501,6 +501,14 @@ export async function calculatePnL(
           if (net < 0) btChargebackLoss += Math.abs(net);
           else btChargebackWon += net;
           break;
+        case 'adjustment':
+        case 'debit':
+          // V4.4: adjustments can be positive or negative
+          settledRevenue += parseFloat(txn.amount || '0');
+          break;
+        case 'credit':
+          settledRevenue += parseFloat(txn.amount || '0');
+          break;
       }
     }
 
