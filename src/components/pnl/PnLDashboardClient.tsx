@@ -185,8 +185,13 @@ export function PnLDashboardClient({
     return hourlyPnL.filter((h) => h.date >= startStr && h.date <= endStr);
   }, [hourlyPnL, dateRange]);
 
-  // ── Date-range-aware product performance fetching ─────────────────────────
+  // ── Scroll to top on store switch ──────────────────────────────────────────
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  }, [activeStoreId]);
+
+  // ── Date-range-aware product performance fetching ─────────────────────────
   const [liveProductPnL, setLiveProductPnL] = useState<ProductPnLData[] | null>(null);
   const [productLoading, setProductLoading] = useState(false);
   const [productError, setProductError] = useState<string | null>(null);
