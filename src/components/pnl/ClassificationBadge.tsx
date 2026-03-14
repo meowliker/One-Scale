@@ -122,6 +122,7 @@ export function ClassificationBadge({
           <>
             <span className={cn('h-[6px] w-[6px] rounded-full flex-shrink-0', config.dotClass)} />
             {config.label}
+            {manualOverride && <span title="Manually set" className="text-[9px] opacity-60">✎</span>}
           </>
         )}
       </button>
