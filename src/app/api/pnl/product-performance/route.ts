@@ -11,6 +11,9 @@ import {
   type ProductData,
   type ManualMapping,
 } from '@/lib/attribution/metaSpendAttributor';
+import { extractAllProductBehaviors } from '@/lib/intelligence/behaviorExtractor';
+import { buildStoreProfile } from '@/lib/intelligence/storeProfiler';
+import { classifyAllProducts, type ClassificationResult } from '@/lib/intelligence/relativeClassifier';
 
 export const dynamic = 'force-dynamic';
 
@@ -103,9 +106,42 @@ export async function GET(request: NextRequest) {
     ]);
 
     // Build stored classification lookup (from adaptive intelligence system)
-    const classificationMap = new Map<string, { classification: string; manual_override: boolean; confidence: number; classification_method: string; signals_used: Record<string, number> | null; needs_review: boolean; last_analyzed: string }>();
+    type StoredClassEntry = { classification: string; manual_override: boolean; confidence: number; classification_method: string; signals_used: Record<string, number> | null; behavioral_signals?: string[]; parent_product?: string | null; needs_review: boolean; last_analyzed: string };
+    const classificationMap = new Map<string, StoredClassEntry>();
     for (const sc of storedClassifications) {
       classificationMap.set(sc.product_id, sc);
+    }
+
+    // If no stored behavioral classifications exist, run inline behavioral classification
+    const hasBehavioral = storedClassifications.some(sc => sc.classification_method?.startsWith('behavioral') || sc.classification_method === 'shopify_tag' || sc.classification_method === 'manual_override');
+    if (!hasBehavioral && (orders ?? []).length > 0) {
+      try {
+        const behaviors = await extractAllProductBehaviors(storeId!);
+        if (behaviors.length > 0) {
+          const storeProfile = await buildStoreProfile(storeId!, behaviors);
+          const manualOverrides = new Map<string, string>();
+          for (const sc of storedClassifications) {
+            if (sc.manual_override) manualOverrides.set(sc.product_id, sc.classification);
+          }
+          const behavioralResults = classifyAllProducts(behaviors, storeProfile, manualOverrides, new Map());
+          for (const r of behavioralResults) {
+            if (r.method === 'manual_override') continue;
+            classificationMap.set(r.product_id, {
+              classification: r.classification,
+              manual_override: false,
+              confidence: r.confidence,
+              classification_method: r.method,
+              signals_used: null,
+              behavioral_signals: r.signals,
+              parent_product: r.parent_product,
+              needs_review: r.needs_review,
+              last_analyzed: new Date().toISOString(),
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('[product-performance] Behavioral classification failed, using fallback:', e instanceof Error ? e.message : e);
+      }
     }
 
     // Build COGS lookup
@@ -395,6 +431,8 @@ export async function GET(request: NextRequest) {
         classificationConfidence: storedClassObj?.confidence ?? 0,
         classificationMethod: storedClassObj?.classification_method ?? '',
         classificationSignals: storedClassObj?.signals_used ?? null,
+        behavioralSignals: (storedClassObj as StoredClassEntry)?.behavioral_signals ?? [],
+        parentProduct: (storedClassObj as StoredClassEntry)?.parent_product ?? null,
         needsReview: storedClassObj?.needs_review ?? false,
         manualOverride: storedClassObj?.manual_override ?? false,
         lastAnalyzed: storedClassObj?.last_analyzed ?? '',
