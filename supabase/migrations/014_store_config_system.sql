@@ -1,53 +1,66 @@
--- Store config extensions + config change history
--- Extends existing store_config table with full Shopify shop fields
--- Creates store_config_history for audit trail
+-- Store config (full table) + config change history
+-- Creates store_config from scratch with all fields, plus audit trail
 
--- ── 1. Extend store_config with new columns ─────────────────────────────────
+-- ── 1. store_config — all Shopify shop settings ─────────────────────────────
 
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS shopify_store_name text;
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS shopify_store_id text;
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS myshopify_domain text;
+CREATE TABLE IF NOT EXISTS store_config (
+  store_id text PRIMARY KEY,
 
--- Currency detail
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS currency text NOT NULL DEFAULT 'USD';
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS money_format text;
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS money_with_currency_format text;
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS currency_format text;
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS enabled_presentment_currencies text[] DEFAULT ARRAY['USD'];
+  -- Identity
+  shopify_store_name text,
+  shopify_store_id text,
+  shopify_domain text,
+  myshopify_domain text,
 
--- Timezone detail
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS timezone_offset text;
+  -- Currency
+  currency text NOT NULL DEFAULT 'USD',
+  reporting_currency text NOT NULL DEFAULT 'USD',
+  money_format text,
+  money_with_currency_format text,
+  currency_format text,
+  enabled_presentment_currencies text[] DEFAULT ARRAY['USD'],
 
--- Locale
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS country_code text;
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS country_name text;
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS province_code text;
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS primary_locale text DEFAULT 'en';
+  -- Timezone
+  iana_timezone text NOT NULL DEFAULT 'America/New_York',
+  timezone_offset text,
 
--- Plan detail
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS shopify_plan_display text;
+  -- Locale
+  country_code text,
+  country_name text,
+  province_code text,
+  primary_locale text DEFAULT 'en',
 
--- Tax
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS taxes_included boolean DEFAULT false;
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS tax_shipping boolean DEFAULT false;
+  -- Plan
+  shopify_plan text,
+  shopify_plan_display text,
 
--- Store metadata
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS weight_unit text DEFAULT 'kg';
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS store_created_at timestamptz;
+  -- Tax
+  taxes_included boolean DEFAULT false,
+  tax_shipping boolean DEFAULT false,
 
--- Sync tracking
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS config_synced_at timestamptz DEFAULT now();
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS config_version int DEFAULT 1;
+  -- Store metadata
+  weight_unit text DEFAULT 'kg',
+  store_created_at timestamptz,
+  meta_ad_account_ids jsonb DEFAULT '[]',
+  meta_currencies jsonb DEFAULT '{}',
+  onboarding_complete boolean DEFAULT false,
 
--- Change history tracking
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS previous_currency text;
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS previous_timezone text;
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS currency_changed_at timestamptz;
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS timezone_changed_at timestamptz;
-ALTER TABLE store_config ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
+  -- Sync tracking
+  config_synced_at timestamptz DEFAULT now(),
+  config_version int DEFAULT 1,
 
--- Backfill currency from reporting_currency for existing rows
-UPDATE store_config SET currency = reporting_currency WHERE currency = 'USD' AND reporting_currency != 'USD';
+  -- Change history tracking
+  previous_currency text,
+  previous_timezone text,
+  currency_changed_at timestamptz,
+  timezone_changed_at timestamptz,
+
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_store_config_domain
+  ON store_config(shopify_domain);
 
 -- ── 2. Config change history — full audit trail ─────────────────────────────
 
