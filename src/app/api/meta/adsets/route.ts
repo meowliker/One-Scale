@@ -82,6 +82,7 @@ async function readCachedSnapshot(
   exactVariant: string,
   mode: string
 ): Promise<{ data: AdSet[]; updatedAt?: string } | null> {
+  // First try exact variant match
   const exactSnapshot = useSupabase
     ? await getPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, exactVariant)
     : getMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, exactVariant);
@@ -89,6 +90,15 @@ async function readCachedSnapshot(
     return { data: exactSnapshot.data, updatedAt: exactSnapshot.updatedAt };
   }
 
+  // Always check 'latest' variant (populated by cron sync)
+  const latestSnapshot = useSupabase
+    ? await getPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, 'latest')
+    : getMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, 'latest');
+  if (latestSnapshot && latestSnapshot.data.length > 0) {
+    return { data: latestSnapshot.data, updatedAt: latestSnapshot.updatedAt };
+  }
+
+  // Try mode-specific snapshot
   const modeSnapshot = useSupabase
     ? await getPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, `mode:${mode}`)
     : getMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, `mode:${mode}`);
@@ -96,11 +106,12 @@ async function readCachedSnapshot(
     return { data: modeSnapshot.data, updatedAt: modeSnapshot.updatedAt };
   }
 
-  const latestSnapshot = useSupabase
+  // Try any available snapshot
+  const anySnapshot = useSupabase
     ? await getLatestPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId)
     : getLatestMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId);
-  if (latestSnapshot && latestSnapshot.data.length > 0) {
-    return { data: latestSnapshot.data, updatedAt: latestSnapshot.updatedAt };
+  if (anySnapshot && anySnapshot.data.length > 0) {
+    return { data: anySnapshot.data, updatedAt: anySnapshot.updatedAt };
   }
 
   return null;
@@ -303,6 +314,8 @@ export async function GET(request: NextRequest) {
       });
     }
   }
+
+  // No cache available - fetch live data (user is actively expanding this campaign)
 
   if (isMetaCallBlocked(storeId)) {
     if (cached || cachedByCampaign) {

@@ -49,7 +49,9 @@ export async function GET(request: NextRequest) {
   const since = searchParams.get('since');
   const until = searchParams.get('until');
   const strictDate = searchParams.get('strictDate') === '1';
-  const preferCache = searchParams.get('preferCache') === '1';
+  // Default to cache-first behavior - only fetch live data when explicitly requested
+  const forceLive = searchParams.get('forceLive') === '1';
+  const preferCache = searchParams.get('preferCache') === '1' || !forceLive;
 
   if (!storeId) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
@@ -81,7 +83,9 @@ export async function GET(request: NextRequest) {
   const exactVariant = `range:since:${since || ''}|until:${until || ''}|strict:${strictDate ? '1' : '0'}`;
   const isStrictRangeRequest = strictDate && !!since && !!until;
 
+  // Always try to serve from cache first (unless forceLive is set)
   if (preferCache) {
+    // First try exact variant match
     const exactSnapshot = useSupabase
       ? await getPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, exactVariant)
       : getMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, exactVariant);
@@ -93,13 +97,28 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({
         data: exactSnapshot.data,
         cached: true,
-        stale: true,
+        stale: !forceLive,
         snapshotAt: exactSnapshot.updatedAt,
         staleReason: 'snapshot_exact_fast',
       });
     }
 
-    if (!isStrictRangeRequest && !isApproxLast30Range(since, until)) {
+    // Always check 'latest' variant (populated by cron sync)
+    const latestSnapshot = useSupabase
+      ? await getPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'latest')
+      : getMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'latest');
+    if (latestSnapshot && latestSnapshot.data.length > 0) {
+      return NextResponse.json({
+        data: latestSnapshot.data,
+        cached: true,
+        stale: !forceLive,
+        snapshotAt: latestSnapshot.updatedAt,
+        staleReason: 'snapshot_latest_fast',
+      });
+    }
+
+    // Try last_30d preset
+    if (!isApproxLast30Range(since, until)) {
       const last30Snapshot = useSupabase
         ? await getPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'preset:last_30d')
         : getMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'preset:last_30d');
@@ -107,31 +126,38 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({
           data: last30Snapshot.data,
           cached: true,
-          stale: true,
+          stale: !forceLive,
           snapshotAt: last30Snapshot.updatedAt,
           staleReason: 'snapshot_last_30d_fast',
         });
       }
     }
 
-    if (!isStrictRangeRequest) {
-      const latestExact = useSupabase
-        ? await getPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'latest')
-        : getMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'latest');
-      const latestSnapshot = latestExact
-        || (useSupabase
-          ? await getLatestPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId)
-          : getLatestMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId));
-      if (latestSnapshot && latestSnapshot.data.length > 0) {
-        return NextResponse.json({
-          data: latestSnapshot.data,
-          cached: true,
-          stale: true,
-          snapshotAt: latestSnapshot.updatedAt,
-          staleReason: 'snapshot_latest_fast',
-        });
-      }
+    // Try any available snapshot
+    const anySnapshot = useSupabase
+      ? await getLatestPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId)
+      : getLatestMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId);
+    if (anySnapshot && anySnapshot.data.length > 0) {
+      return NextResponse.json({
+        data: anySnapshot.data,
+        cached: true,
+        stale: !forceLive,
+        snapshotAt: anySnapshot.updatedAt,
+        staleReason: 'snapshot_any_fast',
+      });
     }
+  }
+
+  // If not forcing live data and we have no cache, return empty with a hint to wait for sync
+  if (!forceLive) {
+    return NextResponse.json({
+      data: [],
+      cached: true,
+      stale: true,
+      snapshotAt: null,
+      staleReason: 'no_cache_available',
+      hint: 'Data will be available after the next background sync (runs every 10 minutes)',
+    });
   }
 
   const token = await getMetaToken(storeId);

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 
-import { ChevronRight, ChevronDown } from 'lucide-react';
+import { ChevronRight, ChevronDown, Copy } from 'lucide-react';
 import type { AdSet, EntityStatus } from '@/types/campaign';
 import type { MetricKey } from '@/types/metrics';
 import type { SparklineDataPoint } from '@/data/mockSparklineData';
@@ -16,6 +16,8 @@ import { InlineEdit } from '@/components/ui/InlineEdit';
 import { MetricCell } from './MetricCell';
 import { PerformanceSparkline } from './PerformanceSparkline';
 import { LatestActionsCell } from './LatestActionsCell';
+import { DuplicateAdSetModal } from './DuplicateAdSetModal';
+import type { Campaign } from '@/types/campaign';
 
 export interface AdSetRowProps {
   adSet: AdSet;
@@ -39,6 +41,12 @@ export interface AdSetRowProps {
   nameColWidth?: number;
   isToggling?: boolean;
   flashType?: 'success' | 'error';
+  storeId?: string;
+  accountId?: string;
+  campaignId?: string;
+  campaignName?: string;
+  campaigns?: Campaign[];
+  onDuplicateSuccess?: () => void;
 }
 
 function formatTargetingSummary(adSet: AdSet): string {
@@ -86,11 +94,16 @@ export function AdSetRow({
   nameColWidth,
   isToggling = false,
   flashType,
+  storeId,
+  accountId,
+  campaignId,
+  campaignName,
+  campaigns = [],
+  onDuplicateSuccess,
 }: AdSetRowProps) {
   const isActive = adSet.status === 'ACTIVE';
   const [showIssueDetails, setShowIssueDetails] = useState(false);
-  const [showStatusTooltip, setShowStatusTooltip] = useState(false);
-  const activeAdsCount = adSet.ads.filter((a) => a.status === 'ACTIVE').length;
+  const [showDuplicateModal, setShowDuplicateModal] = useState(false);
   const primaryIssue = useMemo(() => {
     if (issues.length === 0) return null;
     return [...issues].sort((a, b) => (a.severity === b.severity ? 0 : a.severity === 'critical' ? -1 : 1))[0];
@@ -126,12 +139,12 @@ export function AdSetRow({
       )}
     >
       {/* Checkbox */}
-      <td className={cn("w-10 min-w-[40px] max-w-[40px] whitespace-nowrap py-2 pl-4 pr-3 sticky left-0 z-10 group-hover:!bg-[var(--apple-table-row-alt-hover)] transition-colors duration-150", stickyBg)}>
+      <td className={cn("whitespace-nowrap px-1 py-2 text-center group-hover:!bg-[var(--apple-table-row-alt-hover)] transition-colors duration-150", stickyBg)} style={{ width: 40, minWidth: 40, maxWidth: 40 }}>
         <Checkbox checked={isSelected} onChange={onToggleSelect} />
       </td>
 
       {/* Toggle */}
-      <td className={cn("min-w-[70px] max-w-[70px] whitespace-nowrap px-3 py-2 sticky left-[40px] z-10 group-hover:!bg-[var(--apple-table-row-alt-hover)] transition-colors duration-150", stickyBg)} style={{ width: 70 }}>
+      <td className={cn("whitespace-nowrap px-1 py-2 text-center group-hover:!bg-[var(--apple-table-row-alt-hover)] transition-colors duration-150", stickyBg)} style={{ width: 70, minWidth: 70, maxWidth: 70 }}>
         <Toggle
           checked={isActive}
           onChange={(checked) => onStatusChange(checked ? 'ACTIVE' : 'PAUSED')}
@@ -142,7 +155,7 @@ export function AdSetRow({
 
       {/* Name + Targeting */}
       <td
-        className={cn("whitespace-nowrap overflow-hidden px-2 py-2 sticky left-[110px] z-10 group-hover:!bg-[var(--apple-table-row-alt-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
+        className={cn("whitespace-nowrap overflow-hidden px-2 py-2 group-hover:!bg-[var(--apple-table-row-alt-hover)] transition-colors duration-150 border-r border-[rgba(0,0,0,0.04)] dark:border-r-border", stickyBg)}
         style={nameColWidth ? { width: nameColWidth, minWidth: nameColWidth, maxWidth: nameColWidth } : undefined}
       >
         <div className="flex items-center gap-2 pl-1 min-w-0 overflow-hidden">
@@ -157,19 +170,23 @@ export function AdSetRow({
             )}
           </button>
           <div className="flex flex-col min-w-0 flex-1">
-            <div className="relative group/tooltip min-w-0">
+            <div className="min-w-0 flex items-center gap-1.5">
               <button
                 onClick={onToggleExpand}
-                className="block w-full truncate text-[13px] font-semibold text-text-primary hover:text-primary-light transition-colors text-left"
-                title={adSet.name || `Ad Set ${adSet.id}`}
+                className="block truncate text-[13px] font-semibold text-text-primary hover:text-primary-light transition-colors text-left"
               >
                 {adSet.name || `Ad Set ${adSet.id}`}
               </button>
-              <div className="absolute left-0 top-full mt-1 z-50 pointer-events-none opacity-0 group-hover/tooltip:opacity-100 translate-y-1 group-hover/tooltip:translate-y-0 transition-all duration-150 ease-out">
-                <div className="onescale-tooltip whitespace-nowrap max-w-xs">
-                  {adSet.name || adSet.id}
-                </div>
-              </div>
+              {/* Duplicate button */}
+              {storeId && campaignId && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); setShowDuplicateModal(true); }}
+                  className="shrink-0 opacity-0 group-hover:opacity-100 p-1.5 rounded hover:bg-surface-hover text-text-dimmed hover:text-primary transition-all duration-150"
+                  title="Duplicate ad set"
+                >
+                  <Copy className="h-4 w-4" />
+                </button>
+              )}
             </div>
             <span className="text-[11px] text-text-dimmed truncate">
               {formatTargetingSummary(adSet)}
@@ -178,72 +195,8 @@ export function AdSetRow({
         </div>
       </td>
 
-      {/* Status */}
-      <td className="whitespace-nowrap px-3 py-2">
-        <div className="relative flex items-center gap-2">
-          {isActive && !deliveryBlocked ? (
-            <button
-              type="button"
-              onMouseEnter={() => setShowStatusTooltip(true)}
-              onMouseLeave={() => setShowStatusTooltip(false)}
-              onClick={() => { if (!isExpanded) onToggleExpand(); }}
-              className={cn(
-                'inline-flex items-center gap-1.5 text-[12px] font-semibold apple-status-active cursor-pointer',
-                'hover:bg-[#bbf7d0] dark:hover:bg-emerald-900/60 transition-all duration-150 hover:scale-[1.02]'
-              )}
-            >
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-              Active
-            </button>
-          ) : (
-            <span
-              className={cn(
-                'inline-flex items-center gap-1.5 text-[12px] font-semibold apple-status-paused',
-                deliveryBlocked ? 'cursor-default' : 'cursor-not-allowed'
-              )}
-              title={deliveryBlocked ? 'Delivery is blocked' : 'Ad set is paused'}
-            >
-              <span className="h-1.5 w-1.5 rounded-full bg-[#aeaeb2]" />
-              {deliveryBlocked ? 'Not Delivering' : 'Paused'}
-            </span>
-          )}
-          {showStatusTooltip && isActive && !deliveryBlocked && (
-            <div className="onescale-tooltip absolute left-0 top-full mt-1.5 z-50 min-w-[200px] p-3 px-4 animate-tooltip-in">
-              <div className="space-y-2 text-[12px]">
-                <div className="flex justify-between gap-6">
-                  <span className="text-[11px] text-text-muted">Status</span>
-                  <span className="font-bold text-emerald-600 dark:text-emerald-400">Active</span>
-                </div>
-                <div className="flex justify-between gap-6">
-                  <span className="text-[11px] text-text-muted">Running since</span>
-                  <span className="font-medium text-text-primary">{new Date(adSet.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
-                </div>
-                <div className="flex justify-between gap-6">
-                  <span className="text-[11px] text-text-muted">Active ads</span>
-                  <span className="font-bold text-text-primary">{adSet.ads.length > 0 ? activeAdsCount : '\u2014'}</span>
-                </div>
-              </div>
-            </div>
-          )}
-          {issues.length > 0 && (
-            <button
-              onClick={() => setShowIssueDetails(true)}
-              className={cn(
-                'rounded-full border px-2 py-0.5 text-[11px] font-semibold',
-                hasRejected
-                  ? 'border-red-400/60 bg-red-500/20 text-red-300'
-                  : 'border-amber-400/50 bg-amber-500/20 text-amber-300'
-              )}
-              title="View issue details"
-            >
-              {hasRejected ? 'Rejected' : `Issues ${issues.length}`}
-            </button>
-          )}
-        </div>
-      </td>
-
       {/* Budget */}
-      <td className="whitespace-nowrap px-3 py-2">
+      <td className="whitespace-nowrap px-3 py-2 text-center" style={{ width: 120, minWidth: 120, maxWidth: 120 }}>
         {isCBO ? (
           <span className="inline-flex items-center gap-1 rounded-md bg-blue-500/10 px-2 py-0.5 text-xs font-semibold text-blue-400 border border-blue-500/20">
             CBO
@@ -267,7 +220,7 @@ export function AdSetRow({
       </td>
 
       {/* Bid Strategy */}
-      <td className="whitespace-nowrap px-3 py-2 text-[13px] text-text-secondary">
+      <td className="whitespace-nowrap px-3 py-2 text-[13px] text-text-secondary text-center" style={{ width: 140, minWidth: 140, maxWidth: 140 }}>
         {(effectiveBidStrategy === 'BID_CAP' || effectiveBidStrategy === 'COST_CAP' || effectiveBidStrategy === 'MINIMUM_ROAS') ? (
           onBidChange ? (
             <div className="flex items-center gap-1">
@@ -340,6 +293,21 @@ export function AdSetRow({
           </div>
         </td>
       </tr>
+    )}
+
+    {/* Duplicate Modal */}
+    {showDuplicateModal && storeId && campaignId && (
+      <DuplicateAdSetModal
+        adSetId={adSet.id}
+        adSetName={adSet.name || `Ad Set ${adSet.id}`}
+        campaignId={campaignId}
+        campaignName={campaignName || 'Campaign'}
+        storeId={storeId}
+        accountId={accountId || ''}
+        campaigns={campaigns}
+        onClose={() => setShowDuplicateModal(false)}
+        onSuccess={() => onDuplicateSuccess?.()}
+      />
     )}
     </>
   );

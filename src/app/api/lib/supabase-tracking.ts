@@ -158,6 +158,29 @@ export async function getLatestPersistentMetaEndpointSnapshot<T>(
   }
 }
 
+export async function getBatchPersistentMetaEndpointSnapshots<T>(
+  storeId: string,
+  endpoint: MetaSnapshotEndpoint,
+  variantKey: string
+): Promise<Map<string, { data: T; updatedAt: string; rowCount: number }>> {
+  const rows = await rest<SnapshotRow[]>(
+    `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&variant_key=eq.${encodeURIComponent(variantKey)}&select=scope_id,payload_json,updated_at,row_count`
+  );
+  const map = new Map<string, { data: T; updatedAt: string; rowCount: number }>();
+  for (const row of rows || []) {
+    try {
+      map.set(row.scope_id, {
+        data: JSON.parse(row.payload_json) as T,
+        updatedAt: row.updated_at,
+        rowCount: row.row_count,
+      });
+    } catch {
+      // Skip invalid JSON
+    }
+  }
+  return map;
+}
+
 export async function getRecentPersistentMetaEndpointSnapshots<T>(
   storeId: string,
   endpoint: MetaSnapshotEndpoint,
@@ -1015,4 +1038,146 @@ export async function getPersistentTrackingEventsSince(
   return rest<DbTrackingEvent[]>(
     `/tracking_events?store_id=eq.${encodeURIComponent(storeId)}&occurred_at=gte.${encodeURIComponent(sinceIso)}&select=*&order=occurred_at.asc`
   );
+}
+
+// ------ Creative Asset Cache ------
+
+interface CreativeAssetRow {
+  id: number;
+  store_id: string;
+  ad_id: string;
+  creative_type: 'image' | 'video';
+  media_url: string | null;
+  thumbnail_url: string | null;
+  video_id: string | null;
+  headline: string | null;
+  body: string | null;
+  cta_type: string | null;
+  destination_url: string | null;
+  cached_at: string;
+}
+
+export interface CachedCreativeAsset {
+  adId: string;
+  creativeType: 'image' | 'video';
+  mediaUrl: string | null;
+  thumbnailUrl: string | null;
+  videoId: string | null;
+  headline: string | null;
+  body: string | null;
+  ctaType: string | null;
+  destinationUrl: string | null;
+  cachedAt: string;
+}
+
+export async function upsertPersistentCreativeAsset(
+  storeId: string,
+  asset: Omit<CachedCreativeAsset, 'cachedAt'>
+): Promise<void> {
+  await rest(
+    '/creative_assets?on_conflict=store_id,ad_id',
+    {
+      method: 'POST',
+      headers: headers({
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      }),
+      body: JSON.stringify([{
+        store_id: storeId,
+        ad_id: asset.adId,
+        creative_type: asset.creativeType,
+        media_url: asset.mediaUrl,
+        thumbnail_url: asset.thumbnailUrl,
+        video_id: asset.videoId,
+        headline: asset.headline,
+        body: asset.body,
+        cta_type: asset.ctaType,
+        destination_url: asset.destinationUrl,
+        cached_at: new Date().toISOString(),
+      }]),
+    }
+  );
+}
+
+export async function upsertPersistentCreativeAssets(
+  storeId: string,
+  assets: Array<Omit<CachedCreativeAsset, 'cachedAt'>>
+): Promise<void> {
+  if (assets.length === 0) return;
+  
+  const rows = assets.map((asset) => ({
+    store_id: storeId,
+    ad_id: asset.adId,
+    creative_type: asset.creativeType,
+    media_url: asset.mediaUrl,
+    thumbnail_url: asset.thumbnailUrl,
+    video_id: asset.videoId,
+    headline: asset.headline,
+    body: asset.body,
+    cta_type: asset.ctaType,
+    destination_url: asset.destinationUrl,
+    cached_at: new Date().toISOString(),
+  }));
+
+  await rest(
+    '/creative_assets?on_conflict=store_id,ad_id',
+    {
+      method: 'POST',
+      headers: headers({
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      }),
+      body: JSON.stringify(rows),
+    }
+  );
+}
+
+export async function getPersistentCreativeAsset(
+  storeId: string,
+  adId: string
+): Promise<CachedCreativeAsset | null> {
+  const rows = await rest<CreativeAssetRow[]>(
+    `/creative_assets?store_id=eq.${encodeURIComponent(storeId)}&ad_id=eq.${encodeURIComponent(adId)}&select=*&limit=1`
+  );
+  const row = rows?.[0];
+  if (!row) return null;
+  return {
+    adId: row.ad_id,
+    creativeType: row.creative_type,
+    mediaUrl: row.media_url,
+    thumbnailUrl: row.thumbnail_url,
+    videoId: row.video_id,
+    headline: row.headline,
+    body: row.body,
+    ctaType: row.cta_type,
+    destinationUrl: row.destination_url,
+    cachedAt: row.cached_at,
+  };
+}
+
+export async function getPersistentCreativeAssets(
+  storeId: string,
+  adIds: string[]
+): Promise<Map<string, CachedCreativeAsset>> {
+  if (adIds.length === 0) return new Map();
+  
+  const idsParam = adIds.map((id) => `"${id}"`).join(',');
+  const rows = await rest<CreativeAssetRow[]>(
+    `/creative_assets?store_id=eq.${encodeURIComponent(storeId)}&ad_id=in.(${idsParam})&select=*`
+  );
+  
+  const map = new Map<string, CachedCreativeAsset>();
+  for (const row of rows || []) {
+    map.set(row.ad_id, {
+      adId: row.ad_id,
+      creativeType: row.creative_type,
+      mediaUrl: row.media_url,
+      thumbnailUrl: row.thumbnail_url,
+      videoId: row.video_id,
+      headline: row.headline,
+      body: row.body,
+      ctaType: row.cta_type,
+      destinationUrl: row.destination_url,
+      cachedAt: row.cached_at,
+    });
+  }
+  return map;
 }

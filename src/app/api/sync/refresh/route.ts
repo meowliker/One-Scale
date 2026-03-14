@@ -6,6 +6,7 @@ import { isSupabasePersistenceEnabled, listPersistentStoreAdAccounts } from '@/a
 import {
   getPersistentMetaEndpointSnapshot,
   upsertPersistentMetaEndpointSnapshot,
+  upsertPersistentCreativeAssets,
 } from '@/app/api/lib/supabase-tracking';
 import { enqueueMetaSyncTask, isMetaCallBlocked, markMetaRateLimited } from '@/app/api/lib/meta-sync-queue';
 import type { Campaign, AdSet, Ad, PerformanceMetrics } from '@/types/campaign';
@@ -94,12 +95,27 @@ async function persistAdSnapshot(
   ads: Ad[]
 ) {
   if (useSupabase) {
+    // Cache creative assets for instant loading - ONLY for ACTIVE ads
+    const activeAds = ads.filter((ad) => ad.status === 'ACTIVE');
+    const creativeAssets = activeAds.map((ad) => ({
+      adId: ad.id,
+      creativeType: ad.creative.type === 'video' ? 'video' as const : 'image' as const,
+      mediaUrl: ad.creative.mediaUrl || null,
+      thumbnailUrl: ad.creative.thumbnailUrl || null,
+      videoId: ad.creative.videoId || null,
+      headline: ad.creative.headline || null,
+      body: ad.creative.body || null,
+      ctaType: ad.creative.ctaType || null,
+      destinationUrl: ad.creative.destinationUrl || null,
+    }));
+
     await Promise.all([
       upsertPersistentMetaEndpointSnapshot(storeId, 'ads', adSetId, exactVariant, ads),
       upsertPersistentMetaEndpointSnapshot(storeId, 'ads', adSetId, 'latest', ads),
       hasSignal(ads)
         ? upsertPersistentMetaEndpointSnapshot(storeId, 'ads', adSetId, 'mode:fast', ads)
         : Promise.resolve(),
+      creativeAssets.length > 0 ? upsertPersistentCreativeAssets(storeId, creativeAssets) : Promise.resolve(),
     ]);
     return;
   }
