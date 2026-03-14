@@ -14,9 +14,12 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { DataFreshness } from '@/components/ui/DataFreshness';
+import { DeltaBadge } from '@/components/ui/DeltaBadge';
+import { PNL_METRICS, type PnLMetricKey } from '@/lib/pnl/pnlMetricConfig';
 
 interface PnLSummaryCardsProps {
   entry: PnLEntry;
+  comparison?: PnLEntry;
   isDigital?: boolean;
   lastUpdated?: Date | string;
 }
@@ -25,6 +28,7 @@ interface CardConfig {
   label: string;
   digitalLabel?: string;
   key: keyof PnLEntry;
+  metricKey: PnLMetricKey;
   icon: React.ReactNode;
   accentClass: string;
   isCost: boolean;
@@ -35,6 +39,7 @@ const cards: CardConfig[] = [
   {
     label: 'Revenue',
     key: 'revenue',
+    metricKey: 'revenue',
     icon: <DollarSign className="h-4 w-4" />,
     accentClass: 'text-emerald-500',
     isCost: false,
@@ -42,6 +47,7 @@ const cards: CardConfig[] = [
   {
     label: 'COGS',
     key: 'cogs',
+    metricKey: 'cogs',
     icon: <Package className="h-4 w-4" />,
     accentClass: 'text-red-500',
     isCost: true,
@@ -50,6 +56,7 @@ const cards: CardConfig[] = [
   {
     label: 'Ad Spend',
     key: 'adSpend',
+    metricKey: 'adSpend',
     icon: <CreditCard className="h-4 w-4" />,
     accentClass: 'text-orange-500',
     isCost: true,
@@ -58,6 +65,7 @@ const cards: CardConfig[] = [
     label: 'Shipping + Fees',
     digitalLabel: 'Transaction Fees',
     key: 'shipping',
+    metricKey: 'shipping',
     icon: <Truck className="h-4 w-4" />,
     accentClass: 'text-amber-500',
     isCost: true,
@@ -65,6 +73,7 @@ const cards: CardConfig[] = [
   {
     label: 'Refunds',
     key: 'refunds',
+    metricKey: 'refunds',
     icon: <RotateCcw className="h-4 w-4" />,
     accentClass: 'text-rose-500',
     isCost: true,
@@ -81,7 +90,7 @@ const item = {
   show: { opacity: 1, y: 0 },
 };
 
-export function PnLSummaryCards({ entry, isDigital = false, lastUpdated }: PnLSummaryCardsProps) {
+export function PnLSummaryCards({ entry, comparison, isDigital = false, lastUpdated }: PnLSummaryCardsProps) {
   const shippingAndFees = entry.shipping + entry.fees;
   const visibleCards = isDigital ? cards.filter((c) => !c.hideForDigital) : cards;
   const isPositiveProfit = entry.netProfit >= 0;
@@ -129,6 +138,21 @@ export function PnLSummaryCards({ entry, isDigital = false, lastUpdated }: PnLSu
                 {formatCurrency(rawValue)}
               </span>
             </div>
+            {comparison && (
+              <div className="mt-1">
+                <DeltaBadge
+                  current={rawValue}
+                  previous={card.key === 'shipping' && isDigital
+                    ? comparison.fees
+                    : card.key === 'shipping'
+                      ? comparison.shipping + comparison.fees
+                      : (comparison[card.key] as number)}
+                  polarity={PNL_METRICS[card.metricKey].polarity}
+                  format={PNL_METRICS[card.metricKey].format}
+                  size="sm"
+                />
+              </div>
+            )}
             {card.key === 'revenue' && entry.orderCount != null && entry.orderCount > 0 && (
               <div className="mt-1.5 flex items-center gap-1 text-xs text-text-secondary/50">
                 <ShoppingCart className="h-3 w-3" />
@@ -184,6 +208,17 @@ export function PnLSummaryCards({ entry, isDigital = false, lastUpdated }: PnLSu
         {entry.revenue > 0 && (
           <div className="mt-1.5 text-xs text-text-secondary/50">
             {entry.margin.toFixed(1)}% margin
+          </div>
+        )}
+        {comparison && (
+          <div className="mt-1">
+            <DeltaBadge
+              current={entry.netProfit}
+              previous={comparison.netProfit}
+              polarity="up_good"
+              format="currency"
+              size="sm"
+            />
           </div>
         )}
       </motion.div>

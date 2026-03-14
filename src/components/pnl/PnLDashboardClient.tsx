@@ -148,6 +148,10 @@ export function PnLDashboardClient({
     return dailyPnL.filter((day) => day.date >= startStr && day.date <= endStr);
   }, [dailyPnL, prevStart, prevEnd]);
 
+  const previousEntry = useMemo(() => {
+    return computeEntryFromDaily(dailyPnL, { start: prevStart, end: prevEnd });
+  }, [dailyPnL, prevStart, prevEnd]);
+
   const comparisonDateLabel = useMemo(() => {
     const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     return {
@@ -288,7 +292,7 @@ export function PnLDashboardClient({
       {/* S2: Period View */}
       <SectionWrapper label="Period View">
         {/* KPI summary cards */}
-        <PnLSummaryCards entry={activeEntry} isDigital={isDigital} lastUpdated={lastUpdated} />
+        <PnLSummaryCards entry={activeEntry} comparison={previousEntry} isDigital={isDigital} lastUpdated={lastUpdated} />
 
         {/* Waterfall + Margin row */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-4 mt-5">
