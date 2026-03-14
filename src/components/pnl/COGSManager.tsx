@@ -8,13 +8,14 @@ import { SearchInput } from '@/components/ui/SearchInput';
 
 interface COGSManagerProps {
   products: ProductCOGS[];
+  currency?: string;
 }
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-export function COGSManager({ products: initialProducts }: COGSManagerProps) {
+export function COGSManager({ products: initialProducts, currency = 'USD' }: COGSManagerProps) {
   const [products, setProducts] = useState<ProductCOGS[]>(initialProducts);
   const [search, setSearch] = useState('');
 
@@ -92,7 +93,7 @@ export function COGSManager({ products: initialProducts }: COGSManagerProps) {
                   />
                 </td>
                 <td className="px-6 py-3 text-text-secondary">
-                  {formatCurrency(product.sellingPrice)}
+                  {formatCurrency(product.sellingPrice, currency)}
                 </td>
                 <td className="px-6 py-3">
                   <span

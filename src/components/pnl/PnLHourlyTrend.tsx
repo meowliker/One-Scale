@@ -18,6 +18,7 @@ interface PnLHourlyTrendProps {
   hourlyPnL: HourlyPnLEntry[];
   previousHourlyPnL?: HourlyPnLEntry[];
   comparisonDateLabel?: { current: string; previous: string };
+  currency?: string;
 }
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -143,13 +144,14 @@ function splitWeekData(hourlyPnL: HourlyPnLEntry[]) {
 }
 
 // Floating tooltip component
-function ChartTooltip({ x, y, data, prevData, containerRef, prevLabel }: {
+function ChartTooltip({ x, y, data, prevData, containerRef, prevLabel, currency = 'USD' }: {
   x: number;
   y: number;
   data: HourData;
   prevData?: HourData;
   containerRef: React.RefObject<HTMLDivElement | null>;
   prevLabel?: string;
+  currency?: string;
 }) {
   if (!containerRef.current) return null;
   const rect = containerRef.current.getBoundingClientRect();
@@ -163,22 +165,22 @@ function ChartTooltip({ x, y, data, prevData, containerRef, prevLabel }: {
       <div className="text-xs font-bold text-text-primary mb-1">{fmtHour(data.hour)}</div>
       <div className="flex justify-between text-xs">
         <span className="text-text-secondary">Revenue</span>
-        <span className="font-semibold text-emerald-500">{formatCurrency(data.revenue)}</span>
+        <span className="font-semibold text-emerald-500">{formatCurrency(data.revenue, currency)}</span>
       </div>
       <div className="flex justify-between text-xs mt-0.5">
         <span className="text-text-secondary">Spend</span>
-        <span className="font-semibold text-red-500">{formatCurrency(data.spend)}</span>
+        <span className="font-semibold text-red-500">{formatCurrency(data.spend, currency)}</span>
       </div>
       <div className="flex justify-between text-xs mt-0.5 pt-1 border-t border-border">
         <span className="text-text-secondary">Profit</span>
         <span className={`font-bold ${data.profit >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-          {formatCurrency(data.profit)}
+          {formatCurrency(data.profit, currency)}
         </span>
       </div>
       {prevData && (
         <div className="flex justify-between text-xs mt-0.5 text-text-secondary/50">
           <span>{prevLabel ?? 'Previous'}</span>
-          <span>{formatCurrency(prevData.profit)}</span>
+          <span>{formatCurrency(prevData.profit, currency)}</span>
         </div>
       )}
     </div>
@@ -195,10 +197,12 @@ function HourlyLineTooltipContent({
   active: isActive,
   payload,
   prevLabel,
+  currency = 'USD',
 }: {
   active?: boolean;
   payload?: Array<{ payload: HourlyChartPoint & { _current: HourData; _prev?: HourData } }>;
   prevLabel?: string;
+  currency?: string;
 }) {
   if (!isActive || !payload || !payload.length) return null;
   const item = payload[0].payload;
@@ -209,22 +213,22 @@ function HourlyLineTooltipContent({
       <p className="text-xs font-bold text-text-primary mb-1">{item.label}</p>
       <div className="flex justify-between text-xs">
         <span className="text-text-secondary">Revenue</span>
-        <span className="font-semibold text-emerald-500">{formatCurrency(d.revenue)}</span>
+        <span className="font-semibold text-emerald-500">{formatCurrency(d.revenue, currency)}</span>
       </div>
       <div className="flex justify-between text-xs mt-0.5">
         <span className="text-text-secondary">Spend</span>
-        <span className="font-semibold text-red-400">{formatCurrency(d.spend)}</span>
+        <span className="font-semibold text-red-400">{formatCurrency(d.spend, currency)}</span>
       </div>
       <div className="flex justify-between text-xs mt-0.5 pt-1 border-t border-border">
         <span className="text-text-secondary">Profit</span>
         <span className={`font-bold ${d.profit >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-          {formatCurrency(d.profit)}
+          {formatCurrency(d.profit, currency)}
         </span>
       </div>
       {prev && (
         <div className="flex justify-between text-xs mt-0.5 text-text-secondary/50">
           <span>{prevLabel ?? 'Previous'}</span>
-          <span>{formatCurrency(prev.profit)}</span>
+          <span>{formatCurrency(prev.profit, currency)}</span>
         </div>
       )}
     </div>
@@ -236,11 +240,13 @@ function LineChartView({
   previousHourlyPnL,
   showComparison,
   prevLabel,
+  currency = 'USD',
 }: {
   hourlyPnL: HourlyPnLEntry[];
   previousHourlyPnL: HourlyPnLEntry[];
   showComparison: boolean;
   prevLabel?: string;
+  currency?: string;
 }) {
   const current = useMemo(() => aggregateByHour(hourlyPnL), [hourlyPnL]);
   const previous = useMemo(() => aggregateByHour(previousHourlyPnL), [previousHourlyPnL]);
@@ -279,7 +285,7 @@ function LineChartView({
           tickFormatter={(v: number) => Math.abs(v) >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${v}`}
         />
         <Tooltip
-          content={<HourlyLineTooltipContent prevLabel={prevLabel} />}
+          content={<HourlyLineTooltipContent prevLabel={prevLabel} currency={currency} />}
           cursor={{ stroke: 'var(--color-border)', strokeDasharray: '4 2' }}
         />
         {showComparison && (
@@ -314,11 +320,13 @@ function BarChartView({
   previousHourlyPnL,
   showComparison,
   prevLabel,
+  currency = 'USD',
 }: {
   hourlyPnL: HourlyPnLEntry[];
   previousHourlyPnL: HourlyPnLEntry[];
   showComparison: boolean;
   prevLabel?: string;
+  currency?: string;
 }) {
   const current = useMemo(() => aggregateByHour(hourlyPnL), [hourlyPnL]);
   const previous = useMemo(() => aggregateByHour(previousHourlyPnL), [previousHourlyPnL]);
@@ -445,6 +453,7 @@ function BarChartView({
           prevData={showComparison ? previous[hovered] : undefined}
           containerRef={containerRef}
           prevLabel={prevLabel}
+          currency={currency}
         />
       )}
     </div>
@@ -452,10 +461,11 @@ function BarChartView({
 }
 
 // Heatmap tooltip for individual cell hover
-function HeatmapTooltip({ cell, dayName, position }: {
+function HeatmapTooltip({ cell, dayName, position, currency = 'USD' }: {
   cell: HeatCell;
   dayName: string;
   position: { x: number; y: number };
+  currency?: string;
 }) {
   return (
     <div
@@ -465,16 +475,16 @@ function HeatmapTooltip({ cell, dayName, position }: {
       <div className="text-xs font-bold text-text-primary mb-1.5">{dayName} · {fmtHour(cell.hour)}</div>
       <div className="flex justify-between text-xs">
         <span className="text-text-secondary">Revenue</span>
-        <span className="font-semibold text-emerald-500">{formatCurrency(cell.revenue)}</span>
+        <span className="font-semibold text-emerald-500">{formatCurrency(cell.revenue, currency)}</span>
       </div>
       <div className="flex justify-between text-xs mt-0.5">
         <span className="text-text-secondary">Spend</span>
-        <span className="font-semibold text-red-500">{formatCurrency(cell.spend)}</span>
+        <span className="font-semibold text-red-500">{formatCurrency(cell.spend, currency)}</span>
       </div>
       <div className="flex justify-between text-xs mt-0.5 pt-1 border-t border-border">
         <span className="text-text-secondary">Profit</span>
         <span className={`font-bold ${cell.value >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-          {formatCurrency(cell.value)}
+          {formatCurrency(cell.value, currency)}
         </span>
       </div>
     </div>
@@ -487,7 +497,7 @@ const VIEW_ICONS: Record<ViewMode, { icon: React.ElementType; label: string }> =
   bar: { icon: BarChart3, label: 'Bar' },
 };
 
-export function PnLHourlyTrend({ hourlyPnL, previousHourlyPnL = [], comparisonDateLabel }: PnLHourlyTrendProps) {
+export function PnLHourlyTrend({ hourlyPnL, previousHourlyPnL = [], comparisonDateLabel, currency = 'USD' }: PnLHourlyTrendProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('line');
   const [showComparison, setShowComparison] = useState(false);
   const [hoveredCell, setHoveredCell] = useState<{ cell: HeatCell; dayName: string; pos: { x: number; y: number } } | null>(null);
@@ -730,7 +740,7 @@ export function PnLHourlyTrend({ hourlyPnL, previousHourlyPnL = [], comparisonDa
         {/* Line chart */}
         {viewMode === 'line' && (
           <div className="mt-1">
-            <LineChartView hourlyPnL={filteredPnL} previousHourlyPnL={previousHourlyPnL} showComparison={showComparison} prevLabel={comparisonDateLabel?.previous} />
+            <LineChartView hourlyPnL={filteredPnL} previousHourlyPnL={previousHourlyPnL} showComparison={showComparison} prevLabel={comparisonDateLabel?.previous} currency={currency} />
             {showComparison && (
               <div className="flex items-center gap-5 mt-3 justify-end">
                 <div className="flex items-center gap-1.5">
@@ -749,7 +759,7 @@ export function PnLHourlyTrend({ hourlyPnL, previousHourlyPnL = [], comparisonDa
         {/* Bar chart */}
         {viewMode === 'bar' && (
           <div className="mt-1">
-            <BarChartView hourlyPnL={filteredPnL} previousHourlyPnL={previousHourlyPnL} showComparison={showComparison} prevLabel={comparisonDateLabel?.previous} />
+            <BarChartView hourlyPnL={filteredPnL} previousHourlyPnL={previousHourlyPnL} showComparison={showComparison} prevLabel={comparisonDateLabel?.previous} currency={currency} />
             <div className="flex items-center gap-4 mt-3 justify-end">
               <div className="flex items-center gap-1.5">
                 <div className="w-3.5 h-3.5 rounded-[3px] bg-emerald-500" />
@@ -776,6 +786,7 @@ export function PnLHourlyTrend({ hourlyPnL, previousHourlyPnL = [], comparisonDa
           cell={hoveredCell.cell}
           dayName={hoveredCell.dayName}
           position={hoveredCell.pos}
+          currency={currency}
         />
       )}
     </div>

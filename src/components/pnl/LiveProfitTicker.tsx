@@ -6,9 +6,10 @@ import { DollarSign } from 'lucide-react';
 
 interface LiveProfitTickerProps {
   netProfit: number;
+  currency?: string;
 }
 
-export function LiveProfitTicker({ netProfit }: LiveProfitTickerProps) {
+export function LiveProfitTicker({ netProfit, currency = 'USD' }: LiveProfitTickerProps) {
   const [displayValue, setDisplayValue] = useState(netProfit);
   const [isAnimating, setIsAnimating] = useState(false);
 
@@ -67,7 +68,7 @@ export function LiveProfitTicker({ netProfit }: LiveProfitTickerProps) {
           isAnimating && 'scale-105'
         )}
       >
-        {formatCurrency(displayValue)}
+        {formatCurrency(displayValue, currency)}
       </div>
     </div>
   );

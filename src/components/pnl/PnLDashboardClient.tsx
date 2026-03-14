@@ -34,6 +34,7 @@ interface PnLDashboardClientProps {
   productPnL?: ProductPnLData[];
   productType?: 'physical' | 'digital';
   hourlyPnL?: HourlyPnLEntry[];
+  currency?: string;
 }
 
 const allBottomTabs = [
@@ -98,6 +99,7 @@ export function PnLDashboardClient({
   productPnL = [],
   productType = 'physical',
   hourlyPnL = [],
+  currency = 'USD',
 }: PnLDashboardClientProps) {
   const [datePreset, setDatePreset] = useState<DateRangePreset>('today');
   const [customRange, setCustomRange] = useState<DateRange | null>(null);
@@ -311,7 +313,7 @@ export function PnLDashboardClient({
     <div className="space-y-1">
       {/* S1: Live Pulse */}
       <div className="pb-4">
-        <LivePulseRow todayEntry={todayEntry} summaryNetProfit={summary.today.netProfit} lastUpdated={lastUpdated} />
+        <LivePulseRow todayEntry={todayEntry} summaryNetProfit={summary.today.netProfit} lastUpdated={lastUpdated} currency={currency} />
       </div>
 
       {/* Global Date Filter */}
@@ -322,16 +324,16 @@ export function PnLDashboardClient({
       {/* S2: Period View */}
       <SectionWrapper label="Period View">
         {/* KPI summary cards */}
-        <PnLSummaryCards entry={activeEntry} comparison={previousEntry} isDigital={isDigital} lastUpdated={lastUpdated} />
+        <PnLSummaryCards entry={activeEntry} comparison={previousEntry} isDigital={isDigital} lastUpdated={lastUpdated} currency={currency} />
 
         {/* Waterfall + Margin row */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-4 mt-5">
           <div className="lg:col-span-3">
-            <PnLWaterfallChart entry={activeEntry} isDigital={isDigital} />
+            <PnLWaterfallChart entry={activeEntry} isDigital={isDigital} currency={currency} />
           </div>
           <div className="lg:col-span-1">
             <div className="apple-card p-5 h-full flex flex-col justify-center">
-              <MarginIndicator margin={activeEntry.margin} netProfit={activeEntry.netProfit} />
+              <MarginIndicator margin={activeEntry.margin} netProfit={activeEntry.netProfit} currency={currency} />
             </div>
           </div>
         </div>
@@ -341,6 +343,7 @@ export function PnLDashboardClient({
             totalExpenses={activeEntry.customExpenses || 0}
             revenue={activeEntry.revenue}
             breakdown={activeEntry.expenseBreakdown || []}
+            currency={currency}
           />
         )}
 
@@ -348,11 +351,12 @@ export function PnLDashboardClient({
 
       {/* S3: Refunds & Chargebacks — moved up for visibility */}
       <SectionWrapper label="Refunds & Chargebacks">
-        <RefundBreakdown entry={activeEntry} />
+        <RefundBreakdown entry={activeEntry} currency={currency} />
         <div className="mt-4">
           <ChargebackSection
             chargebackLoss={activeEntry.chargebackLoss || 0}
             chargebackWon={activeEntry.chargebackWon || 0}
+            currency={currency}
           />
         </div>
       </SectionWrapper>
@@ -361,16 +365,16 @@ export function PnLDashboardClient({
       <SectionWrapper label="Trends">
         <div className="apple-card p-5 mb-4">
           <h3 className="text-sm font-semibold text-text-primary mb-3">Net Profit Trend</h3>
-          <PnLTrendChart dailyPnL={filteredDailyPnL} previousDailyPnL={previousDailyPnL} comparisonDateLabel={comparisonDateLabel} />
+          <PnLTrendChart dailyPnL={filteredDailyPnL} previousDailyPnL={previousDailyPnL} comparisonDateLabel={comparisonDateLabel} currency={currency} />
         </div>
         <div className="apple-card p-5">
-          <PnLDayPartChart dailyPnL={filteredDailyPnL} isDigital={isDigital} />
+          <PnLDayPartChart dailyPnL={filteredDailyPnL} isDigital={isDigital} currency={currency} />
         </div>
       </SectionWrapper>
 
       {/* S5: Hourly Performance */}
       <SectionWrapper label="Hourly Performance" tag="NEW">
-        <PnLHourlyTrend hourlyPnL={filteredHourlyPnL} previousHourlyPnL={previousHourlyPnL} comparisonDateLabel={comparisonDateLabel} />
+        <PnLHourlyTrend hourlyPnL={filteredHourlyPnL} previousHourlyPnL={previousHourlyPnL} comparisonDateLabel={comparisonDateLabel} currency={currency} />
       </SectionWrapper>
 
       {/* S6: Product Performance + AOV */}
@@ -397,10 +401,10 @@ export function PnLDashboardClient({
           </div>
         ) : effectiveProductPnL.length > 0 ? (
           <>
-            <ProductPnLSection products={effectiveProductPnL} isDigital={isDigital} />
+            <ProductPnLSection products={effectiveProductPnL} isDigital={isDigital} currency={currency} />
             <div className="mt-5">
               <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wide mb-3">AOV Metrics</h3>
-              <AOVSummary products={effectiveProductPnL} />
+              <AOVSummary products={effectiveProductPnL} currency={currency} />
             </div>
           </>
         ) : (
@@ -418,7 +422,7 @@ export function PnLDashboardClient({
           activeTab={bottomTab}
           onChange={setBottomTab}
         />
-        {bottomTab === 'cogs' && <COGSManager products={products} />}
+        {bottomTab === 'cogs' && <COGSManager products={products} currency={currency} />}
         {bottomTab === 'breakdown' && (
           <div className="apple-card p-5 mt-3">
             <h3 className="mb-4 text-sm font-semibold text-text-primary">Cost Breakdown</h3>
@@ -436,7 +440,7 @@ export function PnLDashboardClient({
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-text-secondary">{costItem.label}</span>
                       <span className="font-semibold text-text-primary">
-                        {formatCurrency(costItem.value)}
+                        {formatCurrency(costItem.value, currency)}
                         <span className="ml-2 text-xs text-text-secondary/50">({pct.toFixed(1)}%)</span>
                       </span>
                     </div>

@@ -54,6 +54,20 @@ function dateStrToUtcBounds(dateStr: string, tz: string): { min: string; max: st
   };
 }
 
+/**
+ * Read the store's currency from store_config. Falls back to 'USD'.
+ */
+async function getStoreCurrencyServer(storeId: string): Promise<string> {
+  try {
+    const rows = await rest<Array<{ currency: string }>>(
+      `/store_config?store_id=eq.${encodeURIComponent(storeId)}&select=currency&limit=1`
+    );
+    return rows?.[0]?.currency || 'USD';
+  } catch {
+    return 'USD';
+  }
+}
+
 // GET: Read pre-aggregated snapshots from DB (replaces live API calls)
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -119,6 +133,9 @@ export async function GET(request: NextRequest) {
       ? Math.round((Date.now() - new Date(lastRow.synced_at).getTime()) / 1000)
       : 999999;
 
+    // Include the store's currency so the frontend knows how to format values
+    const currency = await getStoreCurrencyServer(storeId);
+
     return NextResponse.json({
       data: entries,
       meta: {
@@ -126,6 +143,7 @@ export async function GET(request: NextRequest) {
         staleSec,
         isStale: staleSec > 300,
         lastSyncedAt: lastRow?.synced_at ?? null,
+        currency,
       },
     });
   } catch (err) {

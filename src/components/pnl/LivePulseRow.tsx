@@ -10,6 +10,7 @@ interface LivePulseRowProps {
   todayEntry: PnLEntry;
   summaryNetProfit: number;
   lastUpdated?: Date | string;
+  currency?: string;
 }
 
 const container = {
@@ -25,7 +26,7 @@ const item = {
   show: { opacity: 1, y: 0 },
 };
 
-export function LivePulseRow({ todayEntry, summaryNetProfit, lastUpdated }: LivePulseRowProps) {
+export function LivePulseRow({ todayEntry, summaryNetProfit, lastUpdated, currency = 'USD' }: LivePulseRowProps) {
   const netProfit = todayEntry.netProfit || summaryNetProfit;
   const isPositive = netProfit >= 0;
   const margin =
@@ -67,7 +68,7 @@ export function LivePulseRow({ todayEntry, summaryNetProfit, lastUpdated }: Live
           {lastUpdated && <DataFreshness lastUpdated={lastUpdated} />}
         </div>
         <div className={`text-4xl font-black tabular-nums tracking-tight ${isPositive ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-          {formatCurrency(netProfit)}
+          {formatCurrency(netProfit, currency)}
         </div>
         <div className="text-sm font-medium text-text-secondary mt-1">Net Profit</div>
       </motion.div>
@@ -76,7 +77,7 @@ export function LivePulseRow({ todayEntry, summaryNetProfit, lastUpdated }: Live
       <motion.div variants={item} className="apple-card p-5">
         <div className="text-xs font-bold text-text-secondary/60 uppercase mb-2">Revenue</div>
         <div className="text-2xl font-bold tabular-nums tracking-tight text-emerald-600 dark:text-emerald-400">
-          {formatCurrency(todayEntry.revenue)}
+          {formatCurrency(todayEntry.revenue, currency)}
         </div>
         <div className="flex items-center gap-1 mt-2 text-xs text-text-secondary">
           <TrendingUp className="h-3.5 w-3.5" />
@@ -88,7 +89,7 @@ export function LivePulseRow({ todayEntry, summaryNetProfit, lastUpdated }: Live
       <motion.div variants={item} className="apple-card p-5">
         <div className="text-xs font-bold text-text-secondary/60 uppercase mb-2">Ad Spend</div>
         <div className="text-2xl font-bold tabular-nums tracking-tight text-red-600 dark:text-red-400">
-          {formatCurrency(todayEntry.adSpend)}
+          {formatCurrency(todayEntry.adSpend, currency)}
         </div>
         <div className="flex items-center gap-1 mt-2 text-xs text-text-secondary">
           <TrendingDown className="h-3.5 w-3.5" />

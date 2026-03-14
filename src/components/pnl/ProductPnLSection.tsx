@@ -12,6 +12,7 @@ import { Search, ArrowUpDown, ChevronDown, LayoutGrid, List, Megaphone, ChevronU
 interface ProductPnLSectionProps {
   products: ProductPnLData[];
   isDigital?: boolean;
+  currency?: string;
 }
 
 const sortOptions: { label: string; key: ProductSortKey }[] = [
@@ -45,7 +46,7 @@ const listHeaders = [
   { label: '', align: 'center' as const },
 ];
 
-export function ProductPnLSection({ products, isDigital = false }: ProductPnLSectionProps) {
+export function ProductPnLSection({ products, isDigital = false, currency = 'USD' }: ProductPnLSectionProps) {
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<ProductSortKey>('revenue');
   const [sortAsc, setSortAsc] = useState(false);
@@ -256,7 +257,7 @@ export function ProductPnLSection({ products, isDigital = false }: ProductPnLSec
         viewMode === 'card' ? (
           <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {filteredAndSorted.map((product) => (
-              <ProductPnLCard key={product.productId} product={product} isDigital={isDigital} storeId={activeStoreId} onClassificationChange={handleClassificationChange} />
+              <ProductPnLCard key={product.productId} product={product} isDigital={isDigital} storeId={activeStoreId} onClassificationChange={handleClassificationChange} currency={currency} />
             ))}
           </div>
         ) : (
@@ -281,7 +282,7 @@ export function ProductPnLSection({ products, isDigital = false }: ProductPnLSec
               </thead>
               <tbody>
                 {filteredAndSorted.map((product) => (
-                  <ProductPnLListRow key={product.productId} product={product} isDigital={isDigital} storeId={activeStoreId} onClassificationChange={handleClassificationChange} />
+                  <ProductPnLListRow key={product.productId} product={product} isDigital={isDigital} storeId={activeStoreId} onClassificationChange={handleClassificationChange} currency={currency} />
                 ))}
               </tbody>
             </table>

@@ -10,9 +10,10 @@ interface ProductPnLCardProps {
   isDigital?: boolean;
   storeId: string;
   onClassificationChange?: (productId: string, newClassification: ProductCategory) => void;
+  currency?: string;
 }
 
-export function ProductPnLCard({ product, isDigital = false, storeId, onClassificationChange }: ProductPnLCardProps) {
+export function ProductPnLCard({ product, isDigital = false, storeId, onClassificationChange, currency = 'USD' }: ProductPnLCardProps) {
   const isPositiveProfit = product.netProfit >= 0;
   const shippingAndFees = product.shipping + product.fees;
 
@@ -90,18 +91,18 @@ export function ProductPnLCard({ product, isDigital = false, storeId, onClassifi
       <div className="mt-3 grid grid-cols-3 gap-x-4 gap-y-2">
         <div>
           <p className="text-[10px] text-text-muted uppercase tracking-wide">Revenue</p>
-          <p className="text-sm font-semibold text-text-primary">{formatCurrency(product.revenue)}</p>
+          <p className="text-sm font-semibold text-text-primary">{formatCurrency(product.revenue, currency)}</p>
         </div>
         {!isDigital && (
         <div>
           <p className="text-[10px] text-text-muted uppercase tracking-wide">COGS</p>
-          <p className="text-sm font-semibold text-text-primary">{formatCurrency(product.cogs)}</p>
+          <p className="text-sm font-semibold text-text-primary">{formatCurrency(product.cogs, currency)}</p>
         </div>
         )}
         <div>
           <p className="text-[10px] text-text-muted uppercase tracking-wide">Net Profit</p>
           <p className={cn('text-sm font-semibold', isPositiveProfit ? 'text-emerald-500' : 'text-red-500')}>
-            {formatCurrency(product.netProfit)}
+            {formatCurrency(product.netProfit, currency)}
           </p>
         </div>
         <div>
@@ -116,7 +117,7 @@ export function ProductPnLCard({ product, isDigital = false, storeId, onClassifi
         </div>
         <div>
           <p className="text-[10px] text-text-muted uppercase tracking-wide">Fees</p>
-          <p className="text-sm font-semibold text-text-primary">{formatCurrency(shippingAndFees)}</p>
+          <p className="text-sm font-semibold text-text-primary">{formatCurrency(shippingAndFees, currency)}</p>
         </div>
       </div>
 
@@ -124,7 +125,7 @@ export function ProductPnLCard({ product, isDigital = false, storeId, onClassifi
       {product.isAdvertised && product.fbMetrics.spend > 0 && (
         <div className="mt-2 pt-2 border-t border-border flex items-center justify-between text-xs">
           <span className="text-text-muted">Ad Spend</span>
-          <span className="text-text-primary font-semibold">{formatCurrency(product.fbMetrics.spend)}</span>
+          <span className="text-text-primary font-semibold">{formatCurrency(product.fbMetrics.spend, currency)}</span>
           <span className="text-text-muted">ROAS</span>
           <span className="text-text-primary font-semibold">{product.fbMetrics.roas.toFixed(2)}x</span>
         </div>

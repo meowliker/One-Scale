@@ -10,9 +10,10 @@ interface ProductPnLListRowProps {
   isDigital?: boolean;
   storeId: string;
   onClassificationChange?: (productId: string, newClassification: ProductCategory) => void;
+  currency?: string;
 }
 
-export function ProductPnLListRow({ product, isDigital = false, storeId, onClassificationChange }: ProductPnLListRowProps) {
+export function ProductPnLListRow({ product, isDigital = false, storeId, onClassificationChange, currency = 'USD' }: ProductPnLListRowProps) {
   const isPositiveProfit = product.netProfit >= 0;
 
   return (
@@ -52,20 +53,20 @@ export function ProductPnLListRow({ product, isDigital = false, storeId, onClass
 
       {/* Revenue */}
       <td className="px-2 py-3 text-right">
-        <span className="text-sm font-medium text-text-primary">{formatCurrency(product.revenue)}</span>
+        <span className="text-sm font-medium text-text-primary">{formatCurrency(product.revenue, currency)}</span>
       </td>
 
       {/* COGS */}
       {!isDigital && (
       <td className="px-2 py-3 text-right">
-        <span className="text-sm text-text-primary">{formatCurrency(product.cogs)}</span>
+        <span className="text-sm text-text-primary">{formatCurrency(product.cogs, currency)}</span>
       </td>
       )}
 
       {/* Net Profit */}
       <td className="px-2 py-3 text-right">
         <span className={cn('text-sm font-medium', isPositiveProfit ? 'text-emerald-500' : 'text-red-500')}>
-          {formatCurrency(product.netProfit)}
+          {formatCurrency(product.netProfit, currency)}
         </span>
       </td>
 
@@ -84,7 +85,7 @@ export function ProductPnLListRow({ product, isDigital = false, storeId, onClass
       {/* Ad Spend */}
       <td className="px-2 py-3 text-right">
         {product.isAdvertised ? (
-          <span className="text-sm text-text-primary">{formatCurrency(product.fbMetrics.spend)}</span>
+          <span className="text-sm text-text-primary">{formatCurrency(product.fbMetrics.spend, currency)}</span>
         ) : (
           <span className="text-xs text-text-muted">-</span>
         )}
@@ -104,7 +105,7 @@ export function ProductPnLListRow({ product, isDigital = false, storeId, onClass
       {/* CPC */}
       <td className="px-2 py-3 text-right">
         {product.isAdvertised ? (
-          <span className="text-sm text-text-primary">{formatCurrency(product.fbMetrics.cpc)}</span>
+          <span className="text-sm text-text-primary">{formatCurrency(product.fbMetrics.cpc, currency)}</span>
         ) : (
           <span className="text-xs text-text-muted">-</span>
         )}
@@ -131,7 +132,7 @@ export function ProductPnLListRow({ product, isDigital = false, storeId, onClass
       {/* Cost/Purchase */}
       <td className="px-2 py-3 text-right">
         {product.isAdvertised ? (
-          <span className="text-sm text-text-primary">{formatCurrency(product.fbMetrics.costPerPurchase)}</span>
+          <span className="text-sm text-text-primary">{formatCurrency(product.fbMetrics.costPerPurchase, currency)}</span>
         ) : (
           <span className="text-xs text-text-muted">-</span>
         )}

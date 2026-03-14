@@ -555,21 +555,40 @@ async function backfillPnlSnapshots(storeId: string, firstOrderDate: string): Pr
 // ── Main Entry Point ─────────────────────────────────────────
 
 export async function onStoreConnected(storeId: string): Promise<void> {
-  // Create or update progress record
-  await rest('/onboarding_progress?on_conflict=store_id', {
-    method: 'POST',
-    headers: { 'Prefer': 'resolution=merge-duplicates' },
-    body: JSON.stringify({
-      store_id: storeId,
-      stages: DEFAULT_STAGES,
-      stage_progress: {},
-      cursors: {},
-      stage_errors: {},
-      overall_status: 'in_progress',
-      started_at: new Date().toISOString(),
-      last_activity_at: new Date().toISOString(),
-    }),
-  }).catch(() => null);
+  // Create or update progress record — preserve already-complete stages
+  const existing = await getOnboardingProgress(storeId);
+  if (existing) {
+    // Preserve completed/skipped stages, only reset pending/failed/running ones
+    const mergedStages = { ...DEFAULT_STAGES };
+    for (const [key, status] of Object.entries(existing.stages)) {
+      if (status === 'complete' || status === 'skipped') {
+        mergedStages[key as OnboardingStage] = status;
+      }
+    }
+    await rest(`/onboarding_progress?store_id=eq.${encodeURIComponent(storeId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        stages: mergedStages,
+        overall_status: 'in_progress',
+        last_activity_at: new Date().toISOString(),
+      }),
+    }).catch(() => null);
+  } else {
+    await rest('/onboarding_progress?on_conflict=store_id', {
+      method: 'POST',
+      headers: { 'Prefer': 'resolution=merge-duplicates' },
+      body: JSON.stringify({
+        store_id: storeId,
+        stages: DEFAULT_STAGES,
+        stage_progress: {},
+        cursors: {},
+        stage_errors: {},
+        overall_status: 'in_progress',
+        started_at: new Date().toISOString(),
+        last_activity_at: new Date().toISOString(),
+      }),
+    }).catch(() => null);
+  }
 
   try {
     // Get Shopify credentials

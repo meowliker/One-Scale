@@ -6,6 +6,7 @@ import { motion } from 'framer-motion';
 interface ChargebackSectionProps {
   chargebackLoss: number;
   chargebackWon: number;
+  currency?: string;
 }
 
 const container = {
@@ -21,7 +22,7 @@ const item = {
   show: { opacity: 1, y: 0 },
 };
 
-export function ChargebackSection({ chargebackLoss, chargebackWon }: ChargebackSectionProps) {
+export function ChargebackSection({ chargebackLoss, chargebackWon, currency = 'USD' }: ChargebackSectionProps) {
   const hasLost = chargebackLoss > 0;
   const hasWon = chargebackWon > 0;
   const bothZero = !hasLost && !hasWon;
@@ -43,7 +44,7 @@ export function ChargebackSection({ chargebackLoss, chargebackWon }: ChargebackS
               hasLost ? 'text-red-500 dark:text-red-400' : 'text-text-secondary/30'
             }`}
           >
-            {formatCurrency(chargebackLoss)}
+            {formatCurrency(chargebackLoss, currency)}
           </div>
           <div
             className={`text-xs mt-1.5 ${
@@ -62,7 +63,7 @@ export function ChargebackSection({ chargebackLoss, chargebackWon }: ChargebackS
               hasWon ? 'text-emerald-500 dark:text-emerald-400' : 'text-text-secondary/30'
             }`}
           >
-            {formatCurrency(chargebackWon)}
+            {formatCurrency(chargebackWon, currency)}
           </div>
           <div
             className={`text-xs mt-1.5 ${

@@ -11,6 +11,7 @@ interface ExpensePanelProps {
   onClose: () => void;
   onSave: (expense: Omit<CustomExpense, 'id' | 'isActive'> & { id?: number }) => void;
   expense?: CustomExpense | null;
+  currency?: string;
 }
 
 const FREQUENCY_OPTIONS: { value: ExpenseFrequency; label: string }[] = [
@@ -41,7 +42,7 @@ function computeImpact(amount: number, frequency: ExpenseFrequency) {
   return { daily, monthly, yearly };
 }
 
-export function ExpensePanel({ open, onClose, onSave, expense }: ExpensePanelProps) {
+export function ExpensePanel({ open, onClose, onSave, expense, currency = 'USD' }: ExpensePanelProps) {
   const [name, setName] = useState('');
   const [category, setCategory] = useState<ExpenseCategory>('fixed');
   const [amount, setAmount] = useState('');
@@ -267,7 +268,7 @@ export function ExpensePanel({ open, onClose, onSave, expense }: ExpensePanelPro
                     ].map((item) => (
                       <div key={item.label} className="text-center">
                         <p className="text-xs text-text-secondary mb-0.5">{item.label}</p>
-                        <p className="text-sm font-semibold text-text-primary">{formatCurrency(item.value)}</p>
+                        <p className="text-sm font-semibold text-text-primary">{formatCurrency(item.value, currency)}</p>
                       </div>
                     ))}
                   </div>

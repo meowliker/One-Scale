@@ -7,6 +7,7 @@ import { formatCurrency } from '@/lib/utils';
 interface PnLWaterfallChartProps {
   entry: PnLEntry;
   isDigital?: boolean;
+  currency?: string;
 }
 
 interface WaterfallRow {
@@ -16,7 +17,7 @@ interface WaterfallRow {
   type: 'income' | 'cost' | 'total';
 }
 
-export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChartProps) {
+export function PnLWaterfallChart({ entry, isDigital = false, currency = 'USD' }: PnLWaterfallChartProps) {
   const rows: WaterfallRow[] = useMemo(() => {
     const rev = entry.revenue || 1;
     const result: WaterfallRow[] = [];
@@ -79,7 +80,7 @@ export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChar
         <div className="flex items-center justify-between mb-1.5">
           <span className="text-sm font-semibold text-text-primary">Revenue</span>
           <span className="text-sm font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
-            {formatCurrency(entry.revenue)}
+            {formatCurrency(entry.revenue, currency)}
           </span>
         </div>
         <div className="h-1.5 rounded-full bg-surface-hover overflow-hidden">
@@ -95,7 +96,7 @@ export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChar
               <span className="text-sm text-text-secondary">{row.name}</span>
               <div className="flex items-center gap-2">
                 <span className="text-xs text-text-secondary/40 tabular-nums">{row.pct.toFixed(1)}%</span>
-                <span className="text-sm font-semibold tabular-nums text-text-primary">−{formatCurrency(row.amount)}</span>
+                <span className="text-sm font-semibold tabular-nums text-text-primary">−{formatCurrency(row.amount, currency)}</span>
               </div>
             </div>
             <div className="h-1.5 rounded-full bg-surface-hover overflow-hidden">
@@ -112,7 +113,7 @@ export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChar
       <div className="border-t border-border pt-3 mb-4">
         <div className="flex items-center justify-between text-xs text-text-secondary/50">
           <span>Total Costs</span>
-          <span className="font-semibold tabular-nums">−{formatCurrency(totalCosts)}</span>
+          <span className="font-semibold tabular-nums">−{formatCurrency(totalCosts, currency)}</span>
         </div>
       </div>
 
@@ -121,7 +122,7 @@ export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChar
         <div className="flex items-center justify-between mb-1.5">
           <span className="text-sm font-semibold text-text-primary">Net Profit</span>
           <span className={`text-sm font-bold tabular-nums ${netProfit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-            {formatCurrency(netProfit)}
+            {formatCurrency(netProfit, currency)}
           </span>
         </div>
         <div className="h-1.5 rounded-full bg-surface-hover overflow-hidden">
