@@ -98,16 +98,42 @@ export function classifyProducts(
       classification = 'main';
       detectionMethod = 'subscription';
     }
-    // Frequency-based: appears as first line item in 70%+ of orders
+    // Frequency-based: appears as first line item in 70%+ of orders → MAIN
     else if (totalOrders > 0 && data.firstItemCount / totalOrders >= FIRST_LINE_ITEM_THRESHOLD) {
       classification = 'main';
       detectionMethod = 'frequency_based';
     }
-    // Price-based: $0 items are MAIN, priced items are UPSELL
+    // Frequency-based: appears as first item in 40%+ AND has high revenue share → likely MAIN
+    else if (totalOrders > 0 && data.firstItemCount / totalOrders >= 0.4) {
+      const avgPrice = data.prices.reduce((a, b) => a + b, 0) / data.prices.length;
+      // High-priced products that frequently lead orders are main products
+      const allPrices = [...productMap.values()].flatMap(p => p.prices);
+      const medianPrice = allPrices.sort((a, b) => a - b)[Math.floor(allPrices.length / 2)] || 0;
+      classification = avgPrice >= medianPrice * 0.5 ? 'main' : 'upsell';
+      detectionMethod = 'frequency_based';
+    }
+    // Price-based fallback
     else {
       const avgPrice = data.prices.reduce((a, b) => a + b, 0) / data.prices.length;
-      classification = avgPrice === 0 ? 'main' : 'upsell';
-      detectionMethod = 'price_based';
+      if (avgPrice === 0) {
+        classification = 'addon';
+        detectionMethod = 'price_based';
+      } else {
+        // Check revenue share — high-revenue products are likely main even if not first in order
+        const totalRevenueAll = [...productMap.values()].reduce((sum, p) => {
+          return sum + p.prices.reduce((s, pr) => s + pr, 0);
+        }, 0);
+        const productRevenue = data.prices.reduce((s, pr) => s + pr, 0);
+        const revenueShare = totalRevenueAll > 0 ? productRevenue / totalRevenueAll : 0;
+        // Products with >25% revenue share are likely main products
+        if (revenueShare > 0.25) {
+          classification = 'main';
+          detectionMethod = 'frequency_based';
+        } else {
+          classification = 'upsell';
+          detectionMethod = 'price_based';
+        }
+      }
     }
 
     results.push({

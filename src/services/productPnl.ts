@@ -109,10 +109,17 @@ function aggregateFBMetrics(
 function classifyLineItemFallback(
   linePrice: number,
   maxPriceInOrder: number,
+  isSingleItemOrder: boolean,
 ): 'main' | 'upsell' | 'downsell' | 'addon' {
+  // Single-item orders are always main products
+  if (isSingleItemOrder) return 'main';
   if (linePrice === 0) return 'addon';
+  // The highest-priced item in the order is the main product
   if (linePrice >= maxPriceInOrder) return 'main';
-  if (linePrice >= maxPriceInOrder * 0.5) return 'upsell';
+  // Items within 70% of the max price are likely also main (e.g. bundles, variants)
+  if (linePrice >= maxPriceInOrder * 0.7) return 'main';
+  // Items between 30-70% of max are upsells
+  if (linePrice >= maxPriceInOrder * 0.3) return 'upsell';
   return 'downsell';
 }
 
@@ -371,7 +378,7 @@ async function realGetProductPnLLive(): Promise<ProductPnLData[]> {
         : null;
 
       const lineCategory = libraryClassifications.get(productId)
-        ?? classifyLineItemFallback(parseFloat(lineItem.price), maxPriceInOrder);
+        ?? classifyLineItemFallback(parseFloat(lineItem.price), maxPriceInOrder, isSingleItemOrder);
 
       const existing = productAgg.get(productId);
       if (existing) {
@@ -415,23 +422,35 @@ async function realGetProductPnLLive(): Promise<ProductPnLData[]> {
     const netProfit = round2(agg.revenue - agg.cogs - agg.shipping - agg.fees - attributedSpend);
     const margin = agg.revenue > 0 ? round2((netProfit / agg.revenue) * 100) : 0;
 
-    // Use ONLY multi-item order signals for classification (single-item orders always say 'main')
+    // Determine product category using all available signals
+    const tc = agg.categoryCounts;
     const mic = agg.multiItemCategoryCounts;
+    const totalAppearances = (tc.main || 0) + (tc.upsell || 0) + (tc.addon || 0) + (tc.downsell || 0);
     const multiItemTotal = (mic.main || 0) + (mic.upsell || 0) + (mic.addon || 0) + (mic.downsell || 0);
+    const singleItemCount = totalAppearances - multiItemTotal;
 
     let mostCommonCategory: ProductCategory;
-    if (multiItemTotal > 0) {
-      if ((mic.upsell || 0) > (mic.main || 0)) {
-        mostCommonCategory = 'upsell';
-      } else if ((mic.addon || 0) > (mic.main || 0)) {
-        mostCommonCategory = 'addon';
-      } else if ((mic.downsell || 0) > (mic.main || 0)) {
-        mostCommonCategory = 'downsell';
+    if (totalAppearances === 0) {
+      mostCommonCategory = 'main';
+    } else if (multiItemTotal === 0) {
+      // Only appears in single-item orders — main product
+      mostCommonCategory = 'main';
+    } else {
+      // Use multi-item signals, but require strong evidence to classify as upsell
+      // A product must be upsell in >60% of multi-item orders to be classified as upsell
+      const upsellRate = ((mic.upsell || 0) + (mic.addon || 0) + (mic.downsell || 0)) / multiItemTotal;
+      const mainRate = (mic.main || 0) / multiItemTotal;
+      // If mostly main in single-item orders AND not overwhelmingly upsell in multi-item → main
+      if (singleItemCount > multiItemTotal && mainRate >= 0.3) {
+        mostCommonCategory = 'main';
+      } else if (upsellRate > 0.6) {
+        // Strong upsell signal
+        if ((mic.addon || 0) > (mic.upsell || 0)) mostCommonCategory = 'addon';
+        else if ((mic.downsell || 0) > (mic.upsell || 0)) mostCommonCategory = 'downsell';
+        else mostCommonCategory = 'upsell';
       } else {
         mostCommonCategory = 'main';
       }
-    } else {
-      mostCommonCategory = 'main';
     }
 
     const productFbMetrics: ProductFBMetrics = attributedSpend > 0

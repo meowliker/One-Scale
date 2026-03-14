@@ -704,7 +704,7 @@ async function realGetPnLSummaryUncached(): Promise<PnLSummary> {
             ? productCost.costPerUnit * li.quantity
             : lineRevenue * (productCost.costPerUnit / 100);
         } else {
-          orderCogs += lineRevenue * 0.3;
+          orderCogs += 0; // No COGS configured — show $0, never guess
         }
       }
     }
@@ -851,7 +851,7 @@ async function computeSnapshotPlusTodayLive(
             ? productCost.costPerUnit * li.quantity
             : lineRevenue * (productCost.costPerUnit / 100);
         } else {
-          cogs += lineRevenue * 0.3;
+          cogs += 0; // No COGS configured — show $0, never guess
         }
       }
     }
@@ -1083,13 +1083,13 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
               ? productCost.costPerUnit * li.quantity
               : lineRevenue * (productCost.costPerUnit / 100);
           } else {
-            cogs += lineRevenue * 0.3;
+            cogs += 0; // No COGS configured — show $0, never guess
           }
         }
       }
     } else {
-      // No orders — fallback to 30% of revenue (Meta-only revenue)
-      cogs = revenue * 0.3;
+      // No orders — no COGS data available
+      cogs = 0;
     }
     const cb = chargebacksByDate.get(dateStr);
     const chargebackLoss = cb?.loss || 0;
@@ -1148,7 +1148,7 @@ async function realGetProductsUncached(): Promise<ProductCOGS[]> {
   return response.data.map((product) => {
     const variant = product.variants[0];
     const sellingPrice = parseFloat(variant?.price || '0');
-    const costPerUnit = sellingPrice * 0.3;
+    const costPerUnit = 0; // Show $0 until user configures actual COGS
     const margin = sellingPrice > 0 ? ((sellingPrice - costPerUnit) / sellingPrice) * 100 : 0;
 
     return {
