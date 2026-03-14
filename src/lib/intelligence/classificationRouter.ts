@@ -1,4 +1,7 @@
 /**
+ * PRISM — Pattern Recognition & Intelligence for Store Metrics
+ * OneScale's behavioral intelligence and data infrastructure engine
+ *
  * Classification Router
  *
  * Routes each store through the correct classification path based on store type.
@@ -10,6 +13,7 @@
  */
 
 import { rest } from '@/app/api/lib/supabase-persistence';
+import { PRISM } from '@/lib/prism';
 import { detectStoreType } from './storeTypeDetector';
 import { analyzeOrderPatterns, partitionByDataSufficiency } from './orderPatternAnalyzer';
 import { computeSignals, classifyProduct, computeMedianPrice, checkShopifyTags } from './signalStackClassifier';
@@ -40,13 +44,13 @@ export async function classifyAllProducts(storeId: string): Promise<ClassifyResu
   // Provides best-guess classifications with low confidence instead of
   // showing everything as 'pending'. Automatically upgraded when more
   // data arrives via the weekly cron or next onboarding run.
-  const recentCutoff = new Date(Date.now() - 60 * 86400000).toISOString();
+  const recentCutoff = new Date(Date.now() - PRISM.dataWindows.behavioralAnalysisDays * 86400000).toISOString();
   const recentOrders = await rest<Array<{ shopify_order_id: string; line_items: string; total_price: number }>>(
     `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${enc(recentCutoff)}&order_status=neq.cancelled&financial_status=neq.refunded&select=shopify_order_id,line_items,total_price&limit=500`
   ).catch(() => []);
 
-  if (recentOrders.length < 30) {
-    console.log(`[Classification] ${storeId}: ${recentOrders.length} recent orders — using bootstrap classifier`);
+  if (recentOrders.length < PRISM.classification.minOrdersForBehavioral) {
+    console.log(`[PRISM:Classify] ${storeId}: ${recentOrders.length} recent orders — using bootstrap classifier`);
     return bootstrapClassify(storeId, recentOrders);
   }
 
@@ -380,7 +384,7 @@ async function bootstrapClassify(
 
   await persistClassifications(storeId, results, manualOverrideIds);
   const needsReview = results.filter(r => r.needs_review).length;
-  console.log(`[Classification] Bootstrap: ${results.length} classified (${needsReview} need review)`);
+  console.log(`[PRISM:Classify] Bootstrap: ${results.length} classified (${needsReview} need review)`);
   return { classified: results.length, needsReview, results };
 }
 

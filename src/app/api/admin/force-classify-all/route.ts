@@ -1,3 +1,7 @@
+/**
+ * PRISM — Pattern Recognition & Intelligence for Store Metrics
+ * OneScale's behavioral intelligence and data infrastructure engine
+ */
 import { NextRequest, NextResponse } from 'next/server';
 import {
   rest,
@@ -58,7 +62,7 @@ export async function POST(request: NextRequest) {
       ).catch(() => []);
 
       console.log(
-        `[ForceClassify] ${store.name} (${store.id}): ${orderRows.length}+ orders, ${existingClassifications.length} existing classifications`
+        `[PRISM:Classify] ${store.name} (${store.id}): ${orderRows.length}+ orders, ${existingClassifications.length} existing classifications`
       );
 
       if (orderRows.length < 5) {
@@ -138,7 +142,7 @@ export async function POST(request: NextRequest) {
           }
         }
       } catch (e) {
-        console.warn(`[ForceClassify] Behavioral failed for ${store.name}:`, e instanceof Error ? e.message : e);
+        console.warn(`[PRISM:Classify] Behavioral failed for ${store.name}:`, e instanceof Error ? e.message : e);
       }
 
       // Get final breakdown
@@ -161,10 +165,10 @@ export async function POST(request: NextRequest) {
       });
 
       console.log(
-        `[ForceClassify] ${store.name}: ${finalClassifications.length} classified — ${JSON.stringify(breakdown)}`
+        `[PRISM:Classify] ${store.name}: ${finalClassifications.length} classified — ${JSON.stringify(breakdown)}`
       );
     } catch (err) {
-      console.error(`[ForceClassify] Failed for ${store.name}:`, err);
+      console.error(`[PRISM:Classify] Failed for ${store.name}:`, err);
       results.push({
         store: store.name,
         storeId: store.id,

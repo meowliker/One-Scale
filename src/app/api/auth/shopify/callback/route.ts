@@ -139,7 +139,7 @@ export async function GET(request: NextRequest) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ storeId }),
     }).catch((err) => {
-      console.error('[OAuth] Classification trigger failed:', err);
+      console.error('[PRISM:OAuth] Classification trigger failed:', err);
     });
 
     // Redirect to popup callback page (closes popup and notifies parent)

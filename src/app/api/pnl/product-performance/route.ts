@@ -1,3 +1,7 @@
+/**
+ * PRISM — Pattern Recognition & Intelligence for Store Metrics
+ * OneScale's behavioral intelligence and data infrastructure engine
+ */
 import { NextRequest, NextResponse } from 'next/server';
 import {
   rest,
@@ -14,6 +18,7 @@ import {
 import { extractAllProductBehaviors } from '@/lib/intelligence/behaviorExtractor';
 import { buildStoreProfile } from '@/lib/intelligence/storeProfiler';
 import { classifyAllProducts } from '@/lib/intelligence/relativeClassifier';
+import { PRISM } from '@/lib/prism';
 
 export const dynamic = 'force-dynamic';
 
@@ -200,7 +205,7 @@ export async function GET(request: NextRequest) {
           }
         }
       } catch (e) {
-        console.warn('[product-performance] Behavioral classification failed, using fallback:', e instanceof Error ? e.message : e);
+        console.warn('[PRISM:ProductPerf] Behavioral classification failed, using fallback:', e instanceof Error ? e.message : e);
       }
     }
 
@@ -401,7 +406,7 @@ export async function GET(request: NextRequest) {
 
     const attributedCount = orderAttrMap.size;
     const coverageRate = totalOrders > 0 ? attributedCount / totalOrders : 0;
-    const useVisitorAttribution = coverageRate >= 0.40 && attributedCount >= 3;
+    const useVisitorAttribution = coverageRate >= PRISM.attribution.pixelCoverageThreshold && attributedCount >= PRISM.attribution.minAttributedOrders;
 
     // Build campaign spend lookup for matching utm_campaign → spend
     const campaignNameToId = new Map<string, string>();
@@ -712,7 +717,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[product-performance] Error:', message);
+    console.error('[PRISM:ProductPerf] Error:', message);
     return NextResponse.json({ ok: false, error: message, details: message, data: [], products: [] }, { status: 500 });
   }
 }

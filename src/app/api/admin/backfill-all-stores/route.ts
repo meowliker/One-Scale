@@ -40,12 +40,12 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-      console.log(`[admin/backfill] Starting onboarding for ${store.id}`);
+      console.log(`[PRISM:Backfill] Starting onboarding for ${store.id}`);
       await onStoreConnected(store.id);
       results.push({ storeId: store.id, status: 'completed' });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      console.error(`[admin/backfill] Failed for ${store.id}:`, msg);
+      console.error(`[PRISM:Backfill] Failed for ${store.id}:`, msg);
       results.push({ storeId: store.id, status: 'failed', error: msg });
     }
   }

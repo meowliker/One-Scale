@@ -1,3 +1,7 @@
+/**
+ * PRISM — Pattern Recognition & Intelligence for Store Metrics
+ * OneScale's behavioral intelligence and data infrastructure engine
+ */
 import { NextRequest, NextResponse } from 'next/server';
 import {
   rest,
@@ -70,7 +74,7 @@ export async function POST(request: NextRequest) {
     }
 
     console.log(
-      `[Classification] ${stores[0].name}: ${classifications.length} products classified — ${JSON.stringify(summary)}`
+      `[PRISM:Classify] ${stores[0].name}: ${classifications.length} products classified — ${JSON.stringify(summary)}`
     );
 
     return NextResponse.json({
@@ -82,7 +86,7 @@ export async function POST(request: NextRequest) {
       summary,
     });
   } catch (err) {
-    console.error('[Classification] Error:', err);
+    console.error('[PRISM:Classify] Error:', err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : String(err) },
       { status: 500 }

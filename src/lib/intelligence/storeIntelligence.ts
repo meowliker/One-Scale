@@ -1,4 +1,8 @@
 /**
+ * PRISM — Pattern Recognition & Intelligence for Store Metrics
+ * OneScale's behavioral intelligence and data infrastructure engine
+ */
+/**
  * Store Intelligence — Orchestrator
  *
  * `initializeStore(storeId)` is the main entry point.

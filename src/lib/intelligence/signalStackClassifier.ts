@@ -1,4 +1,8 @@
 /**
+ * PRISM — Pattern Recognition & Intelligence for Store Metrics
+ * OneScale's behavioral intelligence and data infrastructure engine
+ */
+/**
  * Signal Stack Classifier
  *
  * 8 weighted signals combined into a main/upsell score.

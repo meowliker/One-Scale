@@ -1,3 +1,7 @@
+/**
+ * PRISM — Pattern Recognition & Intelligence for Store Metrics
+ * OneScale's behavioral intelligence and data infrastructure engine
+ */
 import { rest } from '@/app/api/lib/supabase-persistence';
 import type { ProductBehavior } from './behaviorExtractor';
 

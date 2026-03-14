@@ -136,7 +136,7 @@ export async function GET(req: NextRequest) {
           }
         }
       } catch (e) {
-        console.warn(`[classify-products] Behavioral classification failed for ${store.id}:`, e instanceof Error ? e.message : e);
+        console.warn(`[PRISM:Classify] Behavioral classification failed for ${store.id}:`, e instanceof Error ? e.message : e);
       }
 
       await logCron(store.id, 'completed', result.classified + behavioralCount, null, Date.now() - start);

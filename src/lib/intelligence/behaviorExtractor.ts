@@ -1,3 +1,7 @@
+/**
+ * PRISM — Pattern Recognition & Intelligence for Store Metrics
+ * OneScale's behavioral intelligence and data infrastructure engine
+ */
 import { rest } from '@/app/api/lib/supabase-persistence';
 
 /** A single line item parsed from the shopify_orders_cache JSON. */

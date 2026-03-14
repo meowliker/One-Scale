@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true, storeId, status: 'complete' });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
-    console.error(`[onboarding/run] Failed for ${storeId}:`, msg);
+    console.error(`[PRISM:Onboarding] Failed for ${storeId}:`, msg);
     return NextResponse.json({ ok: false, storeId, status: 'partial', error: msg }, { status: 500 });
   }
 }

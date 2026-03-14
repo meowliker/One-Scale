@@ -1,4 +1,9 @@
+/**
+ * PRISM — Pattern Recognition & Intelligence for Store Metrics
+ * OneScale's behavioral intelligence and data infrastructure engine
+ */
 import { rest } from '@/app/api/lib/supabase-persistence';
+import { PRISM } from '@/lib/prism';
 
 export type OnboardingStage =
   | 'store_metadata'
@@ -103,7 +108,7 @@ export async function updateStageProgress(storeId: string, stage: string, fetche
 async function runStage(storeId: string, stage: OnboardingStage, fn: () => Promise<void>): Promise<void> {
   const progress = await getOnboardingProgress(storeId);
   if (progress?.stages[stage] === 'complete') {
-    console.log(`[Onboarding] Stage "${stage}" already complete — skipping`);
+    console.log(`[PRISM:Onboarding] Stage "${stage}" already complete — skipping`);
     return;
   }
 
@@ -112,12 +117,12 @@ async function runStage(storeId: string, stage: OnboardingStage, fn: () => Promi
   try {
     await fn();
     await updateStageStatus(storeId, stage, 'complete');
-    console.log(`[Onboarding] Stage "${stage}" complete for ${storeId}`);
+    console.log(`[PRISM:Onboarding] Stage "${stage}" complete for ${storeId}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.startsWith('skip:')) {
       await updateStageStatus(storeId, stage, 'skipped', msg.slice(5));
-      console.log(`[Onboarding] Stage "${stage}" skipped: ${msg.slice(5)}`);
+      console.log(`[PRISM:Onboarding] Stage "${stage}" skipped: ${msg.slice(5)}`);
     } else {
       await updateStageStatus(storeId, stage, 'failed', msg);
       throw err;
@@ -158,7 +163,7 @@ async function backfillRecentOrders(
 ): Promise<void> {
   const { fetchFromShopify } = await import('@/app/api/lib/shopify-client');
 
-  const ninetyDaysAgo = new Date(Date.now() - 90 * 86400000).toISOString();
+  const ninetyDaysAgo = new Date(Date.now() - PRISM.dataWindows.recentOrdersDays * 86400000).toISOString();
   let totalFetched = 0;
   let hasMore = true;
   let sinceId = '0';
@@ -237,7 +242,7 @@ async function backfillRecentOrders(
     hasMore = orders.length === 250;
   }
 
-  console.log(`[Onboarding] Recent orders (90d): ${totalFetched} fetched for ${storeId}`);
+  console.log(`[PRISM:Onboarding] Recent orders (90d): ${totalFetched} fetched for ${storeId}`);
 }
 
 // ── Stage: Backfill ALL Historical Orders ────────────────────
@@ -337,7 +342,7 @@ async function backfillOrders(
     hasMore = orders.length === 250;
   }
 
-  console.log(`[Onboarding] Backfilled ${totalFetched} orders for ${storeId}`);
+  console.log(`[PRISM:Onboarding] Backfilled ${totalFetched} orders for ${storeId}`);
 }
 
 // ── Stage: Backfill ALL Balance Transactions ─────────────────
@@ -436,7 +441,7 @@ async function backfillBalanceTransactions(
     hasMore = txns.length === 250;
   }
 
-  console.log(`[Onboarding] Backfilled ${totalFetched} balance transactions for ${storeId}`);
+  console.log(`[PRISM:Onboarding] Backfilled ${totalFetched} balance transactions for ${storeId}`);
 }
 
 // ── Stage: Backfill Meta Ads (37 months) ─────────────────────
@@ -534,7 +539,7 @@ async function backfillMetaAds(storeId: string): Promise<void> {
           }).catch(() => null);
         }
       } catch (err) {
-        console.warn(`[Onboarding] Meta ads month ${since} failed:`, err instanceof Error ? err.message : err);
+        console.warn(`[PRISM:Onboarding] Meta ads month ${since} failed:`, err instanceof Error ? err.message : err);
       }
 
       await updateCursor(storeId, cursorKey, String(monthsAgo + 1));
@@ -628,7 +633,7 @@ async function backfillPnlSnapshots(storeId: string, firstOrderDate: string): Pr
         }).catch(() => null);
       }
     } catch (err) {
-      console.warn(`[Onboarding] P&L snapshot ${currentDate} failed:`, err instanceof Error ? err.message : err);
+      console.warn(`[PRISM:Onboarding] P&L snapshot ${currentDate} failed:`, err instanceof Error ? err.message : err);
     }
 
     daysProcessed++;
@@ -645,7 +650,7 @@ async function backfillPnlSnapshots(storeId: string, firstOrderDate: string): Pr
 
   await updateCursor(storeId, 'pnl_snapshot_date', currentDate);
   await updateStageProgress(storeId, 'pnl_snapshots', daysProcessed, totalDays);
-  console.log(`[Onboarding] Backfilled ${daysProcessed} P&L snapshots for ${storeId}`);
+  console.log(`[PRISM:Onboarding] Backfilled ${daysProcessed} P&L snapshots for ${storeId}`);
 }
 
 // ── Main Entry Point ─────────────────────────────────────────
@@ -730,7 +735,7 @@ export async function onStoreConnected(storeId: string): Promise<void> {
       // 1. Run the real classifier (detects store type → signal stack → persists to product_classifications)
       const { classifyAllProducts } = await import('@/lib/intelligence/classificationRouter');
       const result = await classifyAllProducts(storeId);
-      console.log(`[Onboarding] Signal-stack: ${result.classified} classified, ${result.needsReview} need review`);
+      console.log(`[PRISM:Onboarding] Signal-stack: ${result.classified} classified, ${result.needsReview} need review`);
 
       // 2. Run behavioral analysis on top (same pattern as cron/classify-products)
       try {
@@ -797,10 +802,10 @@ export async function onStoreConnected(storeId: string): Promise<void> {
             }).catch(() => null);
           }
 
-          console.log(`[Onboarding] Behavioral: ${behavioralResults.length} products enriched`);
+          console.log(`[PRISM:Onboarding] Behavioral: ${behavioralResults.length} products enriched`);
         }
       } catch (e) {
-        console.warn('[Onboarding] Behavioral analysis failed (non-critical):', e instanceof Error ? e.message : e);
+        console.warn('[PRISM:Onboarding] Behavioral analysis failed (non-critical):', e instanceof Error ? e.message : e);
       }
 
       if (result.classified === 0) {
@@ -860,10 +865,10 @@ export async function onStoreConnected(storeId: string): Promise<void> {
       }),
     }).catch(() => null);
 
-    console.log(`[Onboarding] All stages complete for ${storeId}`);
+    console.log(`[PRISM:Onboarding] All stages complete for ${storeId}`);
 
   } catch (err) {
-    console.error(`[Onboarding] Failed for store ${storeId}:`, err);
+    console.error(`[PRISM:Onboarding] Failed for store ${storeId}:`, err);
     await rest(`/onboarding_progress?store_id=eq.${encodeURIComponent(storeId)}`, {
       method: 'PATCH',
       body: JSON.stringify({ overall_status: 'partial' }),

@@ -1,4 +1,8 @@
 /**
+ * PRISM — Pattern Recognition & Intelligence for Store Metrics
+ * OneScale's behavioral intelligence and data infrastructure engine
+ */
+/**
  * Store Type Detector
  *
  * Detects store structure (single_product, funnel, general, subscription, mixed)
