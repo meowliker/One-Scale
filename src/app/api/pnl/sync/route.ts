@@ -245,8 +245,12 @@ export async function POST(request: NextRequest) {
       // Chargebacks for this date (using timezone-aware UTC bounds)
       let cbRows: Array<{ amount: number; status: string }> = [];
       try {
+        // Query by finalized_at (balance-synced) or created_at (webhook-synced with no finalized_at)
+        const cbMin = encodeURIComponent(utcBounds.min);
+        const cbMax = encodeURIComponent(utcBounds.max);
+        const orFilter = `finalized_at.gte.${cbMin},finalized_at.lte.${cbMax}`;
         cbRows = await rest<typeof cbRows>(
-          `/shopify_chargebacks?store_id=eq.${encodeURIComponent(storeId)}&created_at=gte.${encodeURIComponent(utcBounds.min)}&created_at=lte.${encodeURIComponent(utcBounds.max)}&select=amount,status`
+          `/shopify_chargebacks?store_id=eq.${encodeURIComponent(storeId)}&or=(and(${orFilter}),and(finalized_at.is.null,created_at.gte.${cbMin},created_at.lte.${cbMax}))&select=amount,status`
         );
       } catch { /* no chargeback data yet */ }
 

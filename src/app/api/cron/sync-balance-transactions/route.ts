@@ -147,7 +147,9 @@ export async function GET(req: NextRequest) {
                 amount: Math.abs(net),
                 net_amount: net,
                 currency: txn.currency || 'USD',
+                initiated_at: txn.processed_at,
                 finalized_at: txn.processed_at,
+                created_at: txn.processed_at,
                 last_synced_at: new Date().toISOString(),
               }),
             }).catch(() => null);

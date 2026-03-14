@@ -706,8 +706,13 @@ async function fetchMetaSpend(storeId: string, dateFrom: string, dateTo: string)
 
 async function fetchChargebacks(storeId: string, dateFrom: string, dateTo: string): Promise<ChargebackRow[]> {
   try {
+    // Query by finalized_at first (most accurate for balance-synced disputes),
+    // fall back to initiated_at, then created_at
+    const dateMin = enc(dateFrom);
+    const dateMax = enc(dateTo + 'T23:59:59Z');
+    const orFilter = `finalized_at.gte.${dateMin},finalized_at.lte.${dateMax}`;
     return await rest<ChargebackRow[]>(
-      `/shopify_chargebacks?store_id=eq.${enc(storeId)}&created_at=gte.${enc(dateFrom)}&created_at=lte.${enc(dateTo + 'T23:59:59Z')}&select=order_id,amount,status,created_at`
+      `/shopify_chargebacks?store_id=eq.${enc(storeId)}&or=(and(${orFilter}),and(finalized_at.is.null,created_at.gte.${dateMin},created_at.lte.${dateMax}))&select=order_id,amount,status,created_at`
     );
   } catch {
     return [];
