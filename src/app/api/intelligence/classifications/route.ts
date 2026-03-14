@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { rest, isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
+import { recordCorrection } from '@/lib/intelligence/platformLearning';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,10 +31,12 @@ export async function PATCH(request: NextRequest) {
   if (!isSupabasePersistenceEnabled()) return NextResponse.json({ error: 'Supabase not configured' }, { status: 503 });
 
   const body = await request.json();
-  const { productId, classification, userEmail } = body as {
+  const { productId, classification, userEmail, previousClassification, signals } = body as {
     productId: string;
     classification: string;
     userEmail?: string;
+    previousClassification?: string;
+    signals?: Record<string, unknown>;
   };
 
   if (!productId || !classification) {
@@ -77,6 +80,17 @@ export async function PATCH(request: NextRequest) {
       }),
     }
   ).catch(() => { /* product_intelligence might not have this row */ });
+
+  // Record correction for platform learning
+  if (previousClassification && previousClassification !== classification) {
+    await recordCorrection(
+      storeId,
+      productId,
+      previousClassification,
+      classification,
+      signals || {}
+    ).catch(() => null);
+  }
 
   return NextResponse.json({ ok: true });
 }

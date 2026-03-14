@@ -54,6 +54,8 @@ export function ProductPnLCard({ product, isDigital = false, storeId, onClassifi
           confidence={product.classificationConfidence}
           method={product.classificationMethod}
           signals={product.classificationSignals}
+          behavioralSignals={product.behavioralSignals}
+          parentProduct={product.parentProduct}
           needsReview={product.needsReview}
           manualOverride={product.manualOverride}
           lastAnalyzed={product.lastAnalyzed}
@@ -61,6 +63,28 @@ export function ProductPnLCard({ product, isDigital = false, storeId, onClassifi
           onClassificationChange={onClassificationChange}
         />
       </div>
+
+      {/* Confidence bar + parent product */}
+      {product.classificationConfidence != null && product.classificationConfidence > 0 && (
+        <div className="mt-2 flex items-center gap-2">
+          <div className="flex-1 h-1 rounded-full bg-surface overflow-hidden">
+            <div
+              className={cn(
+                'h-full rounded-full transition-all',
+                product.classificationConfidence >= 75 ? 'bg-emerald-500' :
+                product.classificationConfidence >= 50 ? 'bg-amber-500' : 'bg-red-400'
+              )}
+              style={{ width: `${product.classificationConfidence}%` }}
+            />
+          </div>
+          <span className="text-[9px] text-text-muted font-medium">{product.classificationConfidence}%</span>
+        </div>
+      )}
+      {product.parentProduct && (
+        <div className="mt-1 text-[10px] text-text-muted">
+          Upsell for: <span className="text-text-secondary font-medium">{product.parentProduct}</span>
+        </div>
+      )}
 
       {/* P&L grid */}
       <div className="mt-3 grid grid-cols-3 gap-x-4 gap-y-2">

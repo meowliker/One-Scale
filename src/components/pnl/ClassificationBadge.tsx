@@ -13,6 +13,8 @@ interface ClassificationBadgeProps {
   confidence?: number;
   method?: string;
   signals?: Record<string, number> | null;
+  behavioralSignals?: string[];
+  parentProduct?: string | null;
   needsReview?: boolean;
   manualOverride?: boolean;
   lastAnalyzed?: string;
@@ -46,7 +48,8 @@ const SIGNAL_LABELS: Record<string, string> = {
 
 export function ClassificationBadge({
   productId, storeId, classification, confidence = 0, method, signals,
-  needsReview, manualOverride, lastAnalyzed, shopifyUrl, onClassificationChange,
+  behavioralSignals, parentProduct, needsReview, manualOverride, lastAnalyzed,
+  shopifyUrl, onClassificationChange,
 }: ClassificationBadgeProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [showWhy, setShowWhy] = useState(false);
@@ -82,11 +85,17 @@ export function ClassificationBadge({
   async function handleSelect(newClassification: ProductCategory) {
     setIsOpen(false);
     setShowWhy(false);
+    const previousClassification = classification;
     onClassificationChange?.(productId, newClassification);
     await fetch(`/api/intelligence/classifications?storeId=${encodeURIComponent(storeId)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ productId, classification: newClassification }),
+      body: JSON.stringify({
+        productId,
+        classification: newClassification,
+        previousClassification,
+        signals: signals || {},
+      }),
     }).catch(err => console.error('[Classification] Update failed:', err));
   }
 
@@ -141,27 +150,55 @@ export function ClassificationBadge({
             <Zap className="h-3 w-3" />
             <span>Why auto-detected</span>
           </button>
-          {showWhy && signals && (
+          {showWhy && (
             <div className="px-3.5 pb-3 space-y-1.5">
-              {Object.entries(signals).map(([key, score]) => {
-                if (key === 'main_score' || key === 'upsell_score' || key === 'confidence') return null;
-                if (score === 0) return null;
-                const isMainSignal = score > 0;
-                return (
-                  <div key={key} className="flex items-center justify-between text-[10px]">
-                    <span className="text-text-secondary">{SIGNAL_LABELS[key] || key}</span>
-                    <span className={cn(
-                      'px-1.5 py-0.5 rounded text-[9px] font-medium',
-                      isMainSignal ? 'bg-emerald-50 text-emerald-600' : 'bg-blue-50 text-blue-600',
-                    )}>
-                      {isMainSignal ? 'MAIN' : 'UPSELL'}
-                    </span>
-                  </div>
-                );
-              })}
+              {/* Behavioral signals (from relative classifier) */}
+              {behavioralSignals && behavioralSignals.length > 0 ? (
+                <>
+                  {behavioralSignals.map((signal, i) => {
+                    const isMain = signal.toLowerCase().includes('main signal') || signal.toLowerCase().includes('decision: main');
+                    const isUpsell = signal.toLowerCase().includes('upsell signal') || signal.toLowerCase().includes('decision: upsell');
+                    const isNeutral = signal.toLowerCase().includes('neutral') || signal.toLowerCase().includes('decision: unknown');
+                    return (
+                      <div key={i} className="text-[10px] leading-relaxed">
+                        <span className={cn(
+                          isMain ? 'text-emerald-600' : isUpsell ? 'text-blue-600' : 'text-text-secondary',
+                        )}>
+                          {signal}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  {parentProduct && (
+                    <div className="text-[10px] text-text-muted pt-1 border-t border-border">
+                      Parent product: <strong className="text-text-primary">{parentProduct}</strong>
+                    </div>
+                  )}
+                </>
+              ) : signals ? (
+                /* Legacy signal scores */
+                Object.entries(signals).map(([key, score]) => {
+                  if (key === 'main_score' || key === 'upsell_score' || key === 'confidence') return null;
+                  if (score === 0) return null;
+                  const isMainSignal = score > 0;
+                  return (
+                    <div key={key} className="flex items-center justify-between text-[10px]">
+                      <span className="text-text-secondary">{SIGNAL_LABELS[key] || key}</span>
+                      <span className={cn(
+                        'px-1.5 py-0.5 rounded text-[9px] font-medium',
+                        isMainSignal ? 'bg-emerald-50 text-emerald-600' : 'bg-blue-50 text-blue-600',
+                      )}>
+                        {isMainSignal ? 'MAIN' : 'UPSELL'}
+                      </span>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="text-[10px] text-text-muted">No signal data available</div>
+              )}
               <div className="flex gap-3 pt-1.5 mt-1.5 border-t border-border text-[10px] text-text-muted">
                 <span>Confidence: <strong className={confidence >= REVIEW_CONFIDENCE_THRESHOLD ? 'text-emerald-500' : 'text-amber-500'}>{confidence}%</strong></span>
-                <span>Method: <strong>{method}</strong></span>
+                <span>Method: <strong>{method === 'relative_signals' ? 'Behavioral' : method === 'store_structure' ? 'Store Type' : method === 'manual_override' ? 'Manual' : method === 'shopify_tag' ? 'Shopify Tag' : method || 'Auto'}</strong></span>
               </div>
               {lastAnalyzed && (
                 <div className="text-[10px] text-text-muted">

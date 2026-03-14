@@ -30,6 +30,8 @@ export interface ProductPnLData {
   classificationConfidence?: number;
   classificationMethod?: string;
   classificationSignals?: Record<string, number> | null;
+  behavioralSignals?: string[];
+  parentProduct?: string | null;
   needsReview?: boolean;
   manualOverride?: boolean;
   lastAnalyzed?: string;
