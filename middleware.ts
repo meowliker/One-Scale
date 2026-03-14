@@ -19,6 +19,7 @@ const PUBLIC_API_PREFIXES = [
   '/api/admin/',
   '/api/pnl/sync',
   '/api/cron/',
+  '/api/debug/',
 ];
 
 function isPublicApiPath(pathname: string): boolean {
