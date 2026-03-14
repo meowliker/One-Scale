@@ -67,6 +67,7 @@ interface ProductAgg {
   revenue: number;
   orderCount: number;
   shipping: number;
+  orderIds: Set<string>;
   categoryCounts: Record<string, number>;
   multiItemCategoryCounts: Record<string, number>;
 }
@@ -118,7 +119,7 @@ export async function GET(request: NextRequest) {
 
   try {
     // Fetch orders + spend + COGS + payment fees + campaign mappings + balance txn fees + order attributions from DB in parallel
-    const [orders, spendRows, storedCosts, paymentFees, campaignMappings, storedClassifications, attributedOrders, balanceTxnFees] = await Promise.all([
+    const [orders, spendRows, storedCosts, paymentFees, campaignMappings, storedClassifications, attributedOrders, balanceTxnFees, refundTxns, chargebackRows] = await Promise.all([
       rest<OrderCacheRow[]>(
         `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${enc(tzStart)}&created_at=lte.${enc(tzEnd)}&order_status=neq.cancelled&select=shopify_order_id,total_price,subtotal_price,financial_status,order_status,line_items,refund_total,created_at,total_shipping_price`
       ).catch(() => [] as OrderCacheRow[]),
@@ -138,9 +139,17 @@ export async function GET(request: NextRequest) {
         `/order_attributions?store_id=eq.${enc(storeId)}&attributed_at=gte.${enc(tzStart)}&attributed_at=lte.${enc(tzEnd)}&select=order_id,utm_campaign,utm_source,fbclid,attribution_method`
       ).catch(() => [] as OrderAttribution[]),
       // Fetch actual balance transaction fees for the date range (more accurate than estimated rates)
-      rest<Array<{ fee: number; amount: number }>>(
-        `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&type=eq.charge&processed_at=gte.${enc(tzStart)}&processed_at=lte.${enc(tzEnd)}&select=fee,amount`
-      ).catch(() => [] as Array<{ fee: number; amount: number }>),
+      rest<Array<{ fee: number; amount: number; source_order_id: string | null }>>(
+        `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&type=eq.charge&processed_at=gte.${enc(tzStart)}&processed_at=lte.${enc(tzEnd)}&select=fee,amount,source_order_id`
+      ).catch(() => [] as Array<{ fee: number; amount: number; source_order_id: string | null }>),
+      // Query 9: Refund balance transactions
+      rest<Array<{ amount: number; source_order_id: string | null }>>(
+        `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&type=eq.refund&processed_at=gte.${enc(tzStart)}&processed_at=lte.${enc(tzEnd)}&select=amount,source_order_id`
+      ).catch(() => [] as Array<{ amount: number; source_order_id: string | null }>),
+      // Query 10: Chargebacks
+      rest<Array<{ amount: number; status: string; order_id: string | null }>>(
+        `/shopify_chargebacks?store_id=eq.${enc(storeId)}&or=(and(finalized_at.gte.${enc(tzStart)},finalized_at.lte.${enc(tzEnd)}),and(finalized_at.is.null,created_at.gte.${enc(tzStart)},created_at.lte.${enc(tzEnd)}))&select=amount,status,order_id`
+      ).catch(() => [] as Array<{ amount: number; status: string; order_id: string | null }>),
     ]);
 
     // Build stored classification lookup (from adaptive intelligence system)
@@ -317,6 +326,7 @@ export async function GET(request: NextRequest) {
           existing.revenue += lineRevenue;
           existing.shipping += lineShipping;
           existing.orderCount++;
+          existing.orderIds.add(order.shopify_order_id);
           existing.categoryCounts[category] = (existing.categoryCounts[category] || 0) + 1;
           if (!isSingleItemOrder) {
             existing.multiItemCategoryCounts[category] = (existing.multiItemCategoryCounts[category] || 0) + 1;
@@ -329,11 +339,41 @@ export async function GET(request: NextRequest) {
             revenue: lineRevenue,
             shipping: lineShipping,
             orderCount: 1,
+            orderIds: new Set([order.shopify_order_id]),
             categoryCounts: { main: 0, upsell: 0, downsell: 0, addon: 0, [category]: 1 },
             multiItemCategoryCounts: isSingleItemOrder
               ? { main: 0, upsell: 0, downsell: 0, addon: 0 }
               : { main: 0, upsell: 0, downsell: 0, addon: 0, [category]: 1 },
           });
+        }
+      }
+    }
+
+    // ── SETTLEMENT RATIO: scale order revenue to match balance txn settled amounts ──
+    const totalSettled = (balanceTxnFees ?? []).reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+    const settlementRatio = totalSettled > 0 && totalRevenue > 0 ? totalSettled / totalRevenue : 1;
+    if (totalSettled > 0) {
+      for (const agg of productAgg.values()) {
+        agg.revenue = round2(agg.revenue * settlementRatio);
+      }
+      totalRevenue = round2(totalRevenue * settlementRatio);
+    }
+
+    // ── REFUND & CHARGEBACK MAPS (by order ID) ──
+    const refundByOrder = new Map<string, number>();
+    for (const r of refundTxns ?? []) {
+      if (r.source_order_id) {
+        refundByOrder.set(r.source_order_id, (refundByOrder.get(r.source_order_id) || 0) + Math.abs(Number(r.amount) || 0));
+      }
+    }
+    const cbLossByOrder = new Map<string, number>();
+    const cbWonByOrder = new Map<string, number>();
+    for (const c of chargebackRows ?? []) {
+      if (c.order_id) {
+        if (c.status === 'lost') {
+          cbLossByOrder.set(c.order_id, (cbLossByOrder.get(c.order_id) || 0) + (Number(c.amount) || 0));
+        } else if (c.status === 'won') {
+          cbWonByOrder.set(c.order_id, (cbWonByOrder.get(c.order_id) || 0) + (Number(c.amount) || 0));
         }
       }
     }
@@ -349,7 +389,7 @@ export async function GET(request: NextRequest) {
 
     const attributedCount = orderAttrMap.size;
     const coverageRate = totalOrders > 0 ? attributedCount / totalOrders : 0;
-    const useVisitorAttribution = coverageRate >= 0.15 && attributedCount >= 3;
+    const useVisitorAttribution = coverageRate >= 0.40 && attributedCount >= 3;
 
     // Build campaign spend lookup for matching utm_campaign → spend
     const campaignNameToId = new Map<string, string>();
@@ -518,7 +558,17 @@ export async function GET(request: NextRequest) {
       // Only MAIN products get ad spend attribution
       const adSpend = (isDownsell || isUpsellOrAddon) ? 0 : round2(productSpendMap.get(productId) || 0);
 
-      const netProfit = round2(agg.revenue - cogs - adSpend - fees - shipping);
+      // Distribute refunds & chargebacks to this product based on its order membership
+      let productRefunds = 0;
+      let productCbLoss = 0;
+      let productCbWon = 0;
+      for (const oid of agg.orderIds) {
+        productRefunds += refundByOrder.get(oid) || 0;
+        productCbLoss += cbLossByOrder.get(oid) || 0;
+        productCbWon += cbWonByOrder.get(oid) || 0;
+      }
+
+      const netProfit = round2(agg.revenue - cogs - adSpend - fees - shipping - productRefunds - productCbLoss + productCbWon);
       const margin = agg.revenue > 0 ? round2((netProfit / agg.revenue) * 100) : 0;
 
       // Per-product FB metrics
