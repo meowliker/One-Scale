@@ -3,12 +3,15 @@ import { createHmac } from 'crypto';
 import { consumeOAuthState, getAppCredentials } from '@/app/api/lib/db';
 import {
   isSupabasePersistenceEnabled,
+  rest,
   getPersistentAppCredentials,
   consumePersistentOAuthState,
 } from '@/app/api/lib/supabase-persistence';
 import { setShopifyToken } from '@/app/api/lib/tokens';
 import { getAppUrl } from '@/app/api/lib/url';
 import type { ShopifyTokenPayload } from '@/types/auth';
+
+const SHOPIFY_API_VERSION = '2024-01';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -96,6 +99,47 @@ export async function GET(request: NextRequest) {
       platform: 'shopify',
       storeId,
       shopDomain: shop,
+    });
+
+    // Auto-detect store config (timezone, currency, plan) from Shopify
+    if (isSupabasePersistenceEnabled()) {
+      try {
+        const shopRes = await fetch(
+          `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/shop.json`,
+          {
+            headers: {
+              'X-Shopify-Access-Token': tokenData.access_token,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+        if (shopRes.ok) {
+          const { shop: shopData } = await shopRes.json();
+          await rest('/store_config', {
+            method: 'POST',
+            headers: { Prefer: 'resolution=merge-duplicates' },
+            body: JSON.stringify({
+              store_id: storeId,
+              shopify_domain: shop,
+              iana_timezone: shopData.iana_timezone || 'America/New_York',
+              shopify_plan: shopData.plan_name || null,
+              reporting_currency: shopData.currency || 'USD',
+            }),
+          });
+        }
+      } catch {
+        // Non-critical — store config can be set up later
+      }
+    }
+
+    // Trigger store intelligence initialization (fire-and-forget)
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || appUrl;
+    fetch(`${baseUrl}/api/intelligence/init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ storeId }),
+    }).catch(() => {
+      // Non-critical — intelligence can be initialized later
     });
 
     // Redirect to popup callback page (closes popup and notifies parent)

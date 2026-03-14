@@ -13,6 +13,10 @@ export interface PnLEntry {
   partialRefundCount?: number;
   fullRefundAmount?: number;
   partialRefundAmount?: number;
+  chargebackLoss?: number;
+  chargebackWon?: number;
+  customExpenses?: number;
+  expenseBreakdown?: { name: string; amount: number }[];
 }
 
 export interface ProductCOGS {

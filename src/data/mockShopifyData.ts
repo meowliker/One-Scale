@@ -242,7 +242,7 @@ export const mockShopifyProducts: ShopifyProduct[] = [
     status: 'active',
     tags: ['serum', 'hydrating', 'bestseller'],
     variants: [
-      { id: 3001, title: '30ml', price: '49.99', compareAtPrice: '59.99', sku: 'HS-30', inventoryQuantity: 245 },
+      { id: 3001, title: '30ml', price: '49.99', compareAtPrice: '59.99', sku: 'HS-30', requiresShipping: true, inventoryQuantity: 245 },
     ],
     images: [
       { id: 8001, src: '/placeholder-product.png', alt: 'Hydrating Serum', position: 1 },
@@ -258,7 +258,7 @@ export const mockShopifyProducts: ShopifyProduct[] = [
     status: 'active',
     tags: ['moisturizer', 'spf', 'daily'],
     variants: [
-      { id: 3002, title: '50ml', price: '29.99', compareAtPrice: null, sku: 'DM-50', inventoryQuantity: 380 },
+      { id: 3002, title: '50ml', price: '29.99', compareAtPrice: null, sku: 'DM-50', requiresShipping: true, inventoryQuantity: 380 },
     ],
     images: [
       { id: 8002, src: '/placeholder-product.png', alt: 'Daily Moisturizer', position: 1 },
@@ -274,7 +274,7 @@ export const mockShopifyProducts: ShopifyProduct[] = [
     status: 'active',
     tags: ['bundle', 'anti-aging', 'gift-set'],
     variants: [
-      { id: 3003, title: 'Standard', price: '134.99', compareAtPrice: '159.99', sku: 'AAB-01', inventoryQuantity: 92 },
+      { id: 3003, title: 'Standard', price: '134.99', compareAtPrice: '159.99', sku: 'AAB-01', requiresShipping: true, inventoryQuantity: 92 },
     ],
     images: [
       { id: 8003, src: '/placeholder-product.png', alt: 'Anti-Aging Bundle', position: 1 },
@@ -290,7 +290,7 @@ export const mockShopifyProducts: ShopifyProduct[] = [
     status: 'active',
     tags: ['serum', 'vitamin-c', 'brightening'],
     variants: [
-      { id: 3004, title: '30ml', price: '59.99', compareAtPrice: '69.99', sku: 'VCB-30', inventoryQuantity: 167 },
+      { id: 3004, title: '30ml', price: '59.99', compareAtPrice: '69.99', sku: 'VCB-30', requiresShipping: true, inventoryQuantity: 167 },
     ],
     images: [
       { id: 8004, src: '/placeholder-product.png', alt: 'Vitamin C Serum', position: 1 },
@@ -306,8 +306,8 @@ export const mockShopifyProducts: ShopifyProduct[] = [
     status: 'active',
     tags: ['bundle', 'complete-set', 'bestseller'],
     variants: [
-      { id: 3005, title: 'Standard', price: '179.99', compareAtPrice: '219.99', sku: 'CSS-01', inventoryQuantity: 55 },
-      { id: 3009, title: 'Premium', price: '224.99', compareAtPrice: '279.99', sku: 'PSB-01', inventoryQuantity: 30 },
+      { id: 3005, title: 'Standard', price: '179.99', compareAtPrice: '219.99', sku: 'CSS-01', requiresShipping: true, inventoryQuantity: 55 },
+      { id: 3009, title: 'Premium', price: '224.99', compareAtPrice: '279.99', sku: 'PSB-01', requiresShipping: true, inventoryQuantity: 30 },
     ],
     images: [
       { id: 8005, src: '/placeholder-product.png', alt: 'Complete Skincare Set', position: 1 },
@@ -323,7 +323,7 @@ export const mockShopifyProducts: ShopifyProduct[] = [
     status: 'active',
     tags: ['cleanser', 'gentle', 'sensitive'],
     variants: [
-      { id: 3006, title: '100ml', price: '24.99', compareAtPrice: null, sku: 'GC-100', inventoryQuantity: 412 },
+      { id: 3006, title: '100ml', price: '24.99', compareAtPrice: null, sku: 'GC-100', requiresShipping: true, inventoryQuantity: 412 },
     ],
     images: [
       { id: 8006, src: '/placeholder-product.png', alt: 'Gentle Cleanser', position: 1 },
@@ -339,7 +339,7 @@ export const mockShopifyProducts: ShopifyProduct[] = [
     status: 'active',
     tags: ['lip-care', 'spf', 'everyday'],
     variants: [
-      { id: 3007, title: 'Standard', price: '4.99', compareAtPrice: null, sku: 'LB-15', inventoryQuantity: 890 },
+      { id: 3007, title: 'Standard', price: '4.99', compareAtPrice: null, sku: 'LB-15', requiresShipping: true, inventoryQuantity: 890 },
     ],
     images: [
       { id: 8007, src: '/placeholder-product.png', alt: 'Lip Balm SPF 15', position: 1 },
@@ -355,8 +355,8 @@ export const mockShopifyProducts: ShopifyProduct[] = [
     status: 'active',
     tags: ['retinol', 'night-cream', 'anti-aging'],
     variants: [
-      { id: 3008, title: '50ml', price: '74.99', compareAtPrice: '89.99', sku: 'RNC-50', inventoryQuantity: 134 },
-      { id: 3010, title: 'Eye Cream 15ml', price: '44.99', compareAtPrice: '54.99', sku: 'ECAW-15', inventoryQuantity: 198 },
+      { id: 3008, title: '50ml', price: '74.99', compareAtPrice: '89.99', sku: 'RNC-50', requiresShipping: true, inventoryQuantity: 134 },
+      { id: 3010, title: 'Eye Cream 15ml', price: '44.99', compareAtPrice: '54.99', sku: 'ECAW-15', requiresShipping: true, inventoryQuantity: 198 },
     ],
     images: [
       { id: 8008, src: '/placeholder-product.png', alt: 'Retinol Night Cream', position: 1 },

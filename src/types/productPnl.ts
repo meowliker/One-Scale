@@ -26,6 +26,20 @@ export interface ProductPnLData {
   adSetName: string | null;
   // Campaign name for grouping
   campaignName: string | null;
+  category: ProductCategory;
+  classificationConfidence?: number;
+  classificationMethod?: string;
+  classificationSignals?: Record<string, number> | null;
+  behavioralSignals?: string[];
+  parentProduct?: string | null;
+  downsellOf?: string | null;
+  needsReview?: boolean;
+  manualOverride?: boolean;
+  lastAnalyzed?: string;
+
+  // Attribution tracking
+  attributionMethod?: string;  // 'fbclid_match' | 'utm_match' | 'session_match' | 'proportional' | 'survey_calibrated'
+  confidenceScore?: number;    // 0-100
 }
 
 export interface ProductFBMetrics {
@@ -59,3 +73,13 @@ export type ProductSortKey =
   | 'adRoas';
 
 export type ProductViewMode = 'card' | 'list';
+
+export type ProductCategory =
+  | 'main'
+  | 'upsell'
+  | 'downsell'
+  | 'addon'
+  | 'bundle'
+  | 'excluded'
+  | 'pending'
+  | 'unknown';

@@ -1,0 +1,90 @@
+<h2>P&L Enhancement — Design Direction</h2>
+<p class="subtitle">Keep everything that works. Add what's missing. Elevate the aesthetic.</p>
+
+<div class="section">
+  <h3>What stays (untouched)</h3>
+  <ul>
+    <li>Live Profit Ticker (animated hero)</li>
+    <li>Date Range Picker</li>
+    <li>PnL Summary Cards (6 metrics)</li>
+    <li>Waterfall Chart + Margin Indicator</li>
+    <li>Net Profit Trend (30-day area chart)</li>
+    <li>Daily P&L Breakdown (multi-view chart)</li>
+    <li>COGS Manager tab + Breakdown tab</li>
+    <li>All existing data fetching & caching logic</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>What gets added / enhanced</h3>
+</div>
+
+<div class="cards">
+  <div class="card" data-choice="approach-a" onclick="toggleSelect(this)">
+    <div class="card-body">
+      <h3>A: Surgical Enhancement</h3>
+      <p style="font-size:13px;line-height:1.6;">
+        <strong>Add below existing layout:</strong><br>
+        &bull; Hourly Heatmap section (below daily breakdown)<br>
+        &bull; Chargebacks section (after heatmap)<br>
+        &bull; Product Performance table with real figures (replace current ProductPnLSection with corrected data)<br>
+        &bull; Digital/Physical COGS toggle baked into every component<br><br>
+        <strong>UI upgrade:</strong> Swap hardcoded colors for CSS custom properties. Neutral palette (grays, one accent). Subtle glass borders. No gradient backgrounds. Monospace numbers.
+      </p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Minimal risk of breaking</li><li>Fast to implement</li><li>Keeps familiar layout</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Page gets longer</li><li>UI won't feel "new"</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="approach-b" onclick="toggleSelect(this)">
+    <div class="card-body">
+      <h3>B: Sectioned Dashboard (Recommended)</h3>
+      <p style="font-size:13px;line-height:1.6;">
+        <strong>Organize into collapsible sections:</strong><br>
+        &bull; <strong>Section 1 — Pulse:</strong> Live ticker + today's mini KPIs (revenue, spend, margin, orders)<br>
+        &bull; <strong>Section 2 — Period View:</strong> Date picker + Summary cards + Waterfall + Margin<br>
+        &bull; <strong>Section 3 — Trends:</strong> Net profit trend + Daily breakdown (existing)<br>
+        &bull; <strong>Section 4 — Hourly:</strong> Heatmap (new)<br>
+        &bull; <strong>Section 5 — Products:</strong> Product performance table with real COGS/digital logic<br>
+        &bull; <strong>Section 6 — Chargebacks:</strong> Lost/Recovered tracker<br>
+        &bull; <strong>Section 7 — Settings:</strong> COGS Manager + Breakdown tabs<br><br>
+        <strong>UI style:</strong> 2062 — monochrome surfaces, 1px borders, large typography for numbers, micro-labels, no color unless it encodes data (green=profit, red=loss). Glass-morphism subtle blur on section headers.
+      </p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Organized, scannable</li><li>Future-proof structure</li><li>Collapsible = less scroll</li><li>Clean visual hierarchy</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>More code to write</li><li>Slightly more complex state</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="approach-c" onclick="toggleSelect(this)">
+    <div class="card-body">
+      <h3>C: Tab-Based Views</h3>
+      <p style="font-size:13px;line-height:1.6;">
+        <strong>Split P&L into top-level tabs:</strong><br>
+        &bull; <strong>Overview tab:</strong> Ticker + KPIs + Waterfall + Margin<br>
+        &bull; <strong>Trends tab:</strong> All charts (trend, daily, hourly)<br>
+        &bull; <strong>Products tab:</strong> Full product performance + COGS manager<br>
+        &bull; <strong>Chargebacks tab:</strong> Dispute tracking<br><br>
+        <strong>UI style:</strong> Same 2062 aesthetic. Each tab is a focused view.
+      </p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Less scrolling per view</li><li>Focused contexts</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Hides data behind tabs</li><li>User can't see everything at once</li><li>More navigation friction</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:24px;">
+  <h3>Key Rules (All Approaches)</h3>
+  <ul>
+    <li><strong>Digital products:</strong> COGS = $0, no COGS card/row/bar shown. Shipping = $0. Only show: Revenue, Ad Spend, Fees, Refunds, Net Profit</li>
+    <li><strong>Physical products:</strong> Full COGS + Shipping displayed everywhere</li>
+    <li><strong>Product table figures:</strong> Fetched from real Shopify order line items, aggregated by product ID. COGS from stored costs or 30% default (physical only)</li>
+    <li><strong>Chargebacks:</strong> Lost + Recovered from Shopify dispute data</li>
+    <li><strong>Color philosophy:</strong> Monochrome base. Green = money in. Red = money out. Nothing else.</li>
+  </ul>
+</div>

@@ -12,6 +12,7 @@ import {
   Settings,
   Calculator,
   Users,
+  Crosshair,
 } from 'lucide-react';
 
 const settingsTabs = [
@@ -32,6 +33,12 @@ const settingsTabs = [
     href: '/dashboard/settings/credentials',
     icon: Key,
     description: 'Configure OAuth app keys',
+  },
+  {
+    label: 'Attribution Pixel',
+    href: '/dashboard/settings/pixel',
+    icon: Crosshair,
+    description: 'First-party tracking & attribution',
   },
   {
     label: 'P&L Settings',

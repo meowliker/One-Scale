@@ -39,7 +39,7 @@ function headers(extra?: Record<string, string>): Record<string, string> {
   return out;
 }
 
-async function rest<T>(path: string, init?: RequestInit): Promise<T> {
+export async function rest<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
     ...init,
     headers: {
@@ -1149,4 +1149,29 @@ export async function consumePersistentOAuthState(stateToken: string): Promise<O
     created_at: row.created_at,
     used: 1,
   };
+}
+
+// ---- Store Error Logging ----
+
+export async function logStoreError(
+  storeId: string,
+  errorType: string,
+  message: string,
+  actionRequired?: string
+): Promise<void> {
+  if (!isSupabasePersistenceEnabled()) return;
+  try {
+    await rest('/store_errors', {
+      method: 'POST',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({
+        store_id: storeId,
+        error_type: errorType,
+        message: message.substring(0, 1000),
+        action_required: actionRequired || null,
+      }),
+    });
+  } catch {
+    // Best-effort — don't let error logging break the caller
+  }
 }

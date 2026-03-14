@@ -12,6 +12,10 @@ const REQUIRED_TOPICS = [
   'orders/create',
   'orders/updated',
   'refunds/create',
+  'disputes/create',
+  'shopify_payments/payouts',
+  'orders/chargebacks',
+  'products/update',
 ] as const;
 
 interface ShopifyWebhook {
@@ -127,6 +131,13 @@ export async function POST(request: NextRequest) {
         errors.push(`${topic}: ${err instanceof Error ? err.message : 'Unknown error'}`);
       }
     }
+
+    // After webhooks are registered, auto-install pixel
+    fetch(`${baseUrl}/api/shopify/install-pixel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ storeId }),
+    }).catch(() => {}); // fire and forget
 
     return NextResponse.json({
       ok: true,

@@ -26,12 +26,12 @@ import type { TimeSeriesDataPoint } from '@/types/analytics';
 import type { SparklineDataPoint } from '@/data/mockSparklineData';
 import type { EntityAction } from '@/types/latestActions';
 import type { ProductCOGS } from '@/types/pnl';
-import type { ProductPnLData } from '@/types/productPnL';
+import type { ProductPnLData } from '@/types/productPnl';
 import { useCampaignStore } from '@/stores/campaignStore';
 import { useColumnPresetStore } from '@/stores/columnPresetStore';
 import { getBlendedMetricsForRange, getTimeSeriesForRange, getTopCampaignsForRange } from '@/services/analytics';
 import { getPnLSummary, getDailyPnL, getProducts } from '@/services/pnl';
-import { getProductPnL } from '@/services/productPnL';
+import { getProductPnL } from '@/services/productPnl';
 import {
   getCampaigns,
   updateCampaignStatus,
