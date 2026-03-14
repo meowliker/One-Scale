@@ -48,7 +48,10 @@ export async function POST(request: NextRequest) {
 
     try {
       // Get store timezone
-      const adAccounts = await listPersistentStoreAdAccounts(storeId);
+      let adAccounts: Array<{ timezone?: string | null }> = [];
+      try {
+        adAccounts = await listPersistentStoreAdAccounts(storeId);
+      } catch { /* no ad accounts */ }
       const tz = adAccounts[0]?.timezone || 'America/New_York';
 
       // 1. Delete existing snapshots for the recompute window
@@ -118,10 +121,10 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      results.push({ storeId, deleted: deletedCount, daysComputed, ...(dayErrors.length > 0 ? { errors: dayErrors.slice(0, 3) } : {}) });
-      console.log(`[RecomputePnL] ${storeId} — deleted ${deletedCount}, recomputed ${daysComputed} days, errors: ${dayErrors.length}`);
+      results.push({ storeId, deleted: deletedCount, daysComputed, tz, loopDays: daysBack + 1, ...(dayErrors.length > 0 ? { errors: dayErrors.slice(0, 5) } : {}) });
+      console.log(`[RecomputePnL] ${storeId} — deleted ${deletedCount}, recomputed ${daysComputed}/${daysBack + 1} days, errors: ${dayErrors.length}`);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
+      const msg = err instanceof Error ? `${err.message} | ${err.stack?.split('\n')[1] || ''}` : 'Unknown error';
       results.push({ storeId, deleted: 0, daysComputed: 0, error: msg });
     }
   }
