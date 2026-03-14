@@ -127,10 +127,16 @@ export async function classifyAllProducts(storeId: string): Promise<ClassifyResu
   // 4. Apply edge cases to ALL results regardless of store type
   results = applyEdgeCases(results);
 
-  // 5. Persist to product_classifications table (skip manual overrides)
+  // 5. Enforce: low-confidence non-tag/non-store-rule → pending
+  results = enforceConfidenceFloor(results);
+
+  // 6. Persist to product_classifications table (skip manual overrides)
   await persistClassifications(storeId, results, manualOverrideIds);
 
-  // 6. Update store_intelligence timestamp
+  // 7. Validate — flag and auto-correct suspicious distributions
+  await validateClassifications(storeId);
+
+  // 8. Update store_intelligence timestamp
   await rest(
     `/store_intelligence?store_id=eq.${enc(storeId)}`,
     {
@@ -352,12 +358,14 @@ async function bootstrapClassify(
       } else if (aloneRate <= 0.1) {
         classification = 'upsell'; confidence = Math.min(35 + s.total * 3, 65); method = 'bootstrap_alone_rate';
       } else {
-        classification = 'main'; confidence = 25; method = 'bootstrap_default';
+        // Ambiguous alone rate — honest uncertainty, not a guess
+        classification = 'pending'; confidence = 25; method = 'bootstrap_ambiguous';
       }
     } else if (UPSELL_TITLE_HINTS.some(kw => titleLower.includes(kw))) {
       classification = 'upsell'; confidence = 20; method = 'bootstrap_title_hint';
     } else {
-      classification = 'main'; confidence = 20; method = 'bootstrap_default';
+      // Too few orders and no title signal — pending, not main
+      classification = 'pending'; confidence = 15; method = 'bootstrap_insufficient';
     }
 
     // Gift cards always excluded
@@ -408,6 +416,61 @@ function applyEdgeCases(results: SignalStackResult[]): SignalStackResult[] {
 
     return r;
   });
+}
+
+// ── Confidence Floor Enforcement ─────────────────────────────
+// Products with low confidence that aren't from trusted sources
+// (shopify_tag, store_type_rule, manual) get downgraded to pending.
+
+function enforceConfidenceFloor(results: SignalStackResult[]): SignalStackResult[] {
+  const TRUSTED_METHODS = new Set(['shopify_tag', 'store_type_rule', 'manual_override', 'edge_case']);
+  return results.map(r => {
+    if (TRUSTED_METHODS.has(r.method)) return r;
+    if (r.classification === 'pending' || r.classification === 'excluded') return r;
+    if (r.confidence < PRISM.classification.lowConfidenceThreshold) {
+      return { ...r, classification: 'pending' as const, needs_review: true };
+    }
+    return r;
+  });
+}
+
+// ── Post-Classification Validation ──────────────────────────
+// Flags and auto-corrects suspicious distributions.
+
+async function validateClassifications(storeId: string): Promise<void> {
+  const enc = (v: string) => encodeURIComponent(v);
+  const rows = await rest<Array<{ classification: string; confidence: number; manual_override: boolean }>>(
+    `/product_classifications?store_id=eq.${enc(storeId)}&select=classification,confidence,manual_override`
+  ).catch(() => []);
+
+  if (rows.length === 0) return;
+
+  const nonManual = rows.filter(r => !r.manual_override);
+  const total = nonManual.length;
+  if (total === 0) return;
+
+  const mainCount = nonManual.filter(r => r.classification === 'main').length;
+  const mainRate = mainCount / total;
+
+  if (mainRate > 0.5 && total > 5) {
+    console.warn(
+      `[PRISM:Classify] WARNING — Store ${storeId}: ${Math.round(mainRate * 100)}% MAIN (${mainCount}/${total}). Auto-correcting low-confidence.`
+    );
+    // Downgrade low-confidence MAINs to pending
+    await rest(
+      `/product_classifications?store_id=eq.${enc(storeId)}&classification=eq.main&manual_override=eq.false&confidence=lt.${PRISM.classification.lowConfidenceThreshold}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+        body: JSON.stringify({ classification: 'pending', needs_review: true, updated_at: new Date().toISOString() }),
+      }
+    ).catch(() => null);
+  }
+
+  // Log final distribution
+  const dist: Record<string, number> = {};
+  for (const r of rows) dist[r.classification] = (dist[r.classification] || 0) + 1;
+  console.log(`[PRISM:Classify] Final distribution for ${storeId}: ${JSON.stringify(dist)}`);
 }
 
 // ── Persistence ──────────────────────────────────────────────
