@@ -7,7 +7,7 @@ import { useStoreStore } from '@/stores/storeStore';
 import { ProductPnLCard } from '@/components/pnl/ProductPnLCard';
 import { ProductPnLListRow } from '@/components/pnl/ProductPnLListRow';
 import { cn } from '@/lib/utils';
-import { Search, ArrowUpDown, ChevronDown, LayoutGrid, List, Megaphone, ChevronUp } from 'lucide-react';
+import { Search, ArrowUpDown, ChevronDown, LayoutGrid, List, Megaphone, ChevronUp, Info } from 'lucide-react';
 
 interface ProductPnLSectionProps {
   products: ProductPnLData[];
@@ -61,6 +61,16 @@ export function ProductPnLSection({ products, isDigital = false, currency = 'USD
     () => products.filter((p) => p.isAdvertised).length,
     [products],
   );
+
+  // Detect "no main products" condition for guidance banner
+  const mainCount = useMemo(() => {
+    return products.filter(p => {
+      const cat = (localClassifications[p.productId] || p.category || '').toLowerCase();
+      return cat === 'main';
+    }).length;
+  }, [products, localClassifications]);
+
+  const showNoMainBanner = mainCount === 0 && products.length > 0;
 
   const filteredAndSorted = useMemo(() => {
     const query = search.toLowerCase().trim();
@@ -161,6 +171,21 @@ export function ProductPnLSection({ products, isDigital = false, currency = 'USD
           ))}
         </div>
       </div>
+
+      {/* No main products guidance banner */}
+      {showNoMainBanner && (
+        <div className="flex items-start gap-3 p-3 mb-4 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30">
+          <Info className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+              No main product detected
+            </p>
+            <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">
+              Your store appears to use a bundle model where products are always bought together. Set your main product manually using the classification badge on any product card.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
