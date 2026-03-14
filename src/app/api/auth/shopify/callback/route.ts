@@ -101,46 +101,35 @@ export async function GET(request: NextRequest) {
       shopDomain: shop,
     });
 
-    // Auto-detect full store config (currency, timezone, tax, locale, plan)
+    // ── PRISM Fast-Track: pre-fetch data BEFORE merchant sees dashboard ──
+    // Runs synchronously during OAuth redirect. Fetches 30 days of orders,
+    // balance transactions, classifies products, builds P&L snapshots.
+    // Merchant waits 5-8 seconds here, but dashboard loads instantly after.
     if (isSupabasePersistenceEnabled()) {
       try {
-        const { detectAndSaveStoreConfig } = await import('@/lib/onboarding/stages/detectStoreConfig');
-        await detectAndSaveStoreConfig(storeId, tokenData.access_token, shop);
-      } catch {
-        // Non-critical — onboarding pipeline will retry
+        const { fastTrackOnboarding } = await import('@/lib/onboarding/orchestrator');
+        const result = await fastTrackOnboarding(storeId, tokenData.access_token, shop);
+        console.log(`[PRISM:OAuth] Fast-track complete: ${result.orders} orders, ${result.classified} classified, ${result.pnlDays} P&L days`);
+      } catch (err) {
+        console.error('[PRISM:OAuth] Fast-track failed (will retry via onboarding):', err instanceof Error ? err.message : err);
       }
     }
 
-    // Trigger full onboarding pipeline (fire-and-forget)
-    // This backfills ALL historical data: orders, fees, refunds, chargebacks, ads, P&L
+    // Fire-and-forget: full historical onboarding continues in background
+    // Merchant already has 30 days of data — this fills the rest silently
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || appUrl;
     fetch(`${baseUrl}/api/onboarding/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ storeId }),
-    }).catch(() => {
-      // Non-critical — resume cron will pick up stalled onboarding
-    });
+    }).catch(() => { /* resume cron will pick up stalled onboarding */ });
 
-    // Also trigger intelligence initialization (fire-and-forget)
+    // Intelligence init (fire-and-forget)
     fetch(`${baseUrl}/api/intelligence/init`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ storeId }),
-    }).catch(() => {
-      // Non-critical — intelligence can be initialized later
-    });
-
-    // Trigger behavioral classification (fire-and-forget)
-    // Will gracefully skip if orders haven't been backfilled yet —
-    // the onboarding pipeline's classification stage handles the primary run
-    fetch(`${baseUrl}/api/intelligence/run-classification`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ storeId }),
-    }).catch((err) => {
-      console.error('[PRISM:OAuth] Classification trigger failed:', err);
-    });
+    }).catch(() => { /* can be initialized later */ });
 
     // Redirect to popup callback page (closes popup and notifies parent)
     return NextResponse.redirect(

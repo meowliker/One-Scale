@@ -653,6 +653,182 @@ async function backfillPnlSnapshots(storeId: string, firstOrderDate: string): Pr
   console.log(`[PRISM:Onboarding] Backfilled ${daysProcessed} P&L snapshots for ${storeId}`);
 }
 
+// ── Fast-Track: synchronous pre-fetch for instant dashboard ──
+// Runs BEFORE the merchant sees the dashboard.
+// Fetches last 30 days of orders + balance txns, classifies, builds P&L.
+// Total: 5-8 seconds. Dashboard shows data immediately after.
+
+export async function fastTrackOnboarding(
+  storeId: string,
+  accessToken: string,
+  shopDomain: string,
+): Promise<{ orders: number; classified: number; pnlDays: number }> {
+  const start = Date.now();
+
+  // 1. Store metadata (currency, timezone) — ~1s
+  try {
+    const { detectAndSaveStoreConfig } = await import('@/lib/onboarding/stages/detectStoreConfig');
+    await detectAndSaveStoreConfig(storeId, accessToken, shopDomain);
+  } catch (e) {
+    console.warn('[PRISM:FastTrack] Config detection failed (non-critical):', e instanceof Error ? e.message : e);
+  }
+
+  // 2. Recent orders — last 30 days, max 3 pages (~750 orders) — ~3s
+  const { fetchFromShopify } = await import('@/app/api/lib/shopify-client');
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString();
+  let totalOrders = 0;
+  let sinceId = '0';
+  const maxPages = 3;
+
+  for (let page = 0; page < maxPages; page++) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = await fetchFromShopify<{ orders: any[] }>(
+      accessToken, shopDomain, '/orders.json', {
+        limit: '250', status: 'any', created_at_min: thirtyDaysAgo, since_id: sinceId,
+      },
+    );
+    const orders = data.orders || [];
+    if (orders.length === 0) break;
+
+    for (const order of orders) {
+      let refundTotal = 0;
+      if (order.refunds?.length > 0) {
+        for (const refund of order.refunds) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          for (const txn of refund.transactions || []) {
+            refundTotal += parseFloat(txn.amount || '0');
+          }
+        }
+      }
+      let orderStatus = 'open';
+      if (order.cancelled_at) orderStatus = 'cancelled';
+      else if (order.financial_status === 'refunded') orderStatus = 'refunded';
+      else if (order.financial_status === 'partially_refunded') orderStatus = 'partially_refunded';
+      else if (order.closed_at) orderStatus = 'closed';
+      const totalShipping = (order.shipping_lines || []).reduce(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (sum: number, line: any) => sum + parseFloat(line.price || '0'), 0,
+      );
+      await rest('/shopify_orders_cache', {
+        method: 'POST',
+        headers: { Prefer: 'resolution=merge-duplicates' },
+        body: JSON.stringify({
+          store_id: storeId, shopify_order_id: String(order.id), order_name: order.name,
+          email: order.email, created_at: order.created_at, updated_at: order.updated_at,
+          cancelled_at: order.cancelled_at, financial_status: order.financial_status,
+          fulfillment_status: order.fulfillment_status,
+          total_price: parseFloat(order.total_price) || 0, subtotal_price: parseFloat(order.subtotal_price) || 0,
+          total_tax: parseFloat(order.total_tax) || 0, total_discounts: parseFloat(order.total_discounts) || 0,
+          refund_total: refundTotal, currency: order.currency, line_items: JSON.stringify(order.line_items),
+          customer_id: order.customer?.id ? String(order.customer.id) : null,
+          customer_email: order.customer?.email || order.email,
+          order_status: orderStatus, tags: order.tags || '', landing_site: order.landing_site,
+          referring_site: order.referring_site, discount_codes: JSON.stringify(order.discount_codes || []),
+          total_shipping_price: totalShipping, synced_at: new Date().toISOString(),
+        }),
+      }).catch(() => null);
+    }
+
+    totalOrders += orders.length;
+    sinceId = String(orders[orders.length - 1].id);
+    if (orders.length < 250) break;
+  }
+  console.log(`[PRISM:FastTrack] ${totalOrders} orders fetched in ${Date.now() - start}ms`);
+
+  // 3. Balance transactions — last 30 days — ~2s
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const btData = await fetchFromShopify<{ transactions?: any[] }>(
+      accessToken, shopDomain, '/shopify_payments/balance/transactions.json', {
+        limit: '250', processed_at_min: thirtyDaysAgo,
+      },
+    );
+    for (const txn of btData.transactions ?? []) {
+      const txnType = (txn.type || '').toLowerCase();
+      await rest('/shopify_balance_transactions?on_conflict=store_id,transaction_id', {
+        method: 'POST', headers: { Prefer: 'resolution=merge-duplicates' },
+        body: JSON.stringify({
+          store_id: storeId, transaction_id: String(txn.id), type: txnType,
+          amount: parseFloat(txn.amount || '0'), fee: Math.abs(parseFloat(txn.fee || '0')),
+          net: parseFloat(txn.net || '0'), currency: txn.currency || 'USD',
+          source_order_id: txn.source_order_id ? String(txn.source_order_id) : null,
+          source_type: txn.source_type || null, processed_at: txn.processed_at,
+          payout_id: txn.payout_id ? String(txn.payout_id) : null,
+        }),
+      }).catch(() => null);
+      if (txnType === 'refund') {
+        await rest('/shopify_refunds?on_conflict=store_id,transaction_id', {
+          method: 'POST', headers: { Prefer: 'resolution=merge-duplicates' },
+          body: JSON.stringify({
+            store_id: storeId, transaction_id: String(txn.id),
+            order_id: txn.source_order_id ? String(txn.source_order_id) : null,
+            amount: Math.abs(parseFloat(txn.amount || '0')), fee: Math.abs(parseFloat(txn.fee || '0')),
+            currency: txn.currency || 'USD', processed_at: txn.processed_at,
+          }),
+        }).catch(() => null);
+      }
+    }
+    console.log(`[PRISM:FastTrack] ${btData.transactions?.length ?? 0} balance txns in ${Date.now() - start}ms`);
+  } catch {
+    console.warn('[PRISM:FastTrack] Balance transactions skipped (store may not use Shopify Payments)');
+  }
+
+  // 4. Classify products — pure in-memory from cached orders — ~1s
+  let classified = 0;
+  try {
+    const { classifyAllProducts } = await import('@/lib/intelligence/classificationRouter');
+    const result = await classifyAllProducts(storeId);
+    classified = result.classified;
+    console.log(`[PRISM:FastTrack] Classified ${classified} products in ${Date.now() - start}ms`);
+  } catch (e) {
+    console.warn('[PRISM:FastTrack] Classification failed:', e instanceof Error ? e.message : e);
+  }
+
+  // 5. Build P&L snapshots for last 30 days — pure math — ~1s
+  let pnlDays = 0;
+  try {
+    const { calculatePnL } = await import('@/lib/pnl/universalCalculator');
+    const today = new Date().toISOString().split('T')[0];
+    const startDate = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
+    let currentDate = startDate;
+
+    while (currentDate <= today) {
+      try {
+        const pnl = await calculatePnL(storeId, currentDate, currentDate, { includeProductBreakdown: true });
+        if (pnl.orderCount > 0 || pnl.totalAdSpend > 0) {
+          await rest('/daily_pnl_snapshots?on_conflict=store_id,date', {
+            method: 'POST',
+            headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+            body: JSON.stringify([{
+              store_id: storeId, date: currentDate,
+              revenue: pnl.totalRevenue, order_count: pnl.orderCount,
+              cogs: pnl.totalCogs, ad_spend: pnl.totalAdSpend,
+              shipping_cost: pnl.totalShipping, transaction_fees: pnl.totalFees,
+              refunds: pnl.totalRefunds, full_refund_count: 0, partial_refund_count: 0,
+              full_refund_amount: 0, partial_refund_amount: 0,
+              chargeback_loss: pnl.totalChargebackLoss, chargeback_won: pnl.totalChargebackWon,
+              net_profit: pnl.totalNetProfit, margin: pnl.totalMargin,
+              attribution_rate: 0, warnings: JSON.stringify(pnl.warnings),
+              product_breakdown: JSON.stringify(pnl.products), fee_method: pnl.feeMethod,
+              synced_at: new Date().toISOString(), shopify_synced: pnl.orderCount > 0, meta_synced: pnl.totalAdSpend > 0,
+            }]),
+          }).catch(() => null);
+          pnlDays++;
+        }
+      } catch { /* skip individual day failures */ }
+      const next = new Date(currentDate);
+      next.setDate(next.getDate() + 1);
+      currentDate = next.toISOString().split('T')[0];
+    }
+    console.log(`[PRISM:FastTrack] Built ${pnlDays} P&L snapshots in ${Date.now() - start}ms`);
+  } catch (e) {
+    console.warn('[PRISM:FastTrack] P&L build failed:', e instanceof Error ? e.message : e);
+  }
+
+  console.log(`[PRISM:FastTrack] Complete in ${Date.now() - start}ms — ${totalOrders} orders, ${classified} classified, ${pnlDays} P&L days`);
+  return { orders: totalOrders, classified, pnlDays };
+}
+
 // ── Main Entry Point ─────────────────────────────────────────
 
 export async function onStoreConnected(storeId: string): Promise<void> {
