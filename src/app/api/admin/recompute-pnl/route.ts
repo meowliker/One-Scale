@@ -71,6 +71,7 @@ export async function POST(request: NextRequest) {
 
       // 2. Recompute each day using the universal calculator directly
       let daysComputed = 0;
+      const dayErrors: string[] = [];
       for (let i = daysBack; i >= 0; i--) {
         const dateStr = daysAgoInTimezone(i, tz);
         try {
@@ -111,12 +112,14 @@ export async function POST(request: NextRequest) {
 
           daysComputed++;
         } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          dayErrors.push(`${dateStr}: ${msg}`);
           console.error(`[RecomputePnL] ${storeId} ${dateStr} failed:`, err);
         }
       }
 
-      results.push({ storeId, deleted: deletedCount, daysComputed });
-      console.log(`[RecomputePnL] ${storeId} — deleted ${deletedCount}, recomputed ${daysComputed} days`);
+      results.push({ storeId, deleted: deletedCount, daysComputed, ...(dayErrors.length > 0 ? { errors: dayErrors.slice(0, 3) } : {}) });
+      console.log(`[RecomputePnL] ${storeId} — deleted ${deletedCount}, recomputed ${daysComputed} days, errors: ${dayErrors.length}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       results.push({ storeId, deleted: 0, daysComputed: 0, error: msg });
