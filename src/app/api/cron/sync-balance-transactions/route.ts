@@ -63,8 +63,19 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
+      // Check if we've ever done a full sync for this store
+      let existingCount = 0;
+      try {
+        const countRows = await rest<Array<{ store_id: string }>>(
+          `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(store.id)}&select=store_id&limit=50`
+        );
+        existingCount = countRows?.length ?? 0;
+      } catch { /* ignore */ }
+
+      // First sync: go back 2 years to capture all historical disputes
+      // Subsequent syncs: 30 days (disputes update retroactively)
       const sinceDate = new Date();
-      sinceDate.setDate(sinceDate.getDate() - 7);
+      sinceDate.setDate(sinceDate.getDate() - (existingCount < 50 ? 730 : 30));
       const sinceISO = sinceDate.toISOString();
 
       let totalCount = 0;
