@@ -10,6 +10,10 @@
     {
       "path": "/api/cron/daily-pnl-snapshot",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/sync-balance-transactions",
+      "schedule": "0 5 * * *"
     }
   ],
   "headers": [
