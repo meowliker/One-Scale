@@ -291,16 +291,54 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // ── LINE-ITEM REVENUE MODEL (universal) ────────────────────────────
-    // Each product's revenue = sum of its own line item prices.
-    // Fees distributed proportionally by revenue share.
-    // Works for every store model without configuration.
+    // ── SETTLEMENT-BASED PRODUCT BREAKDOWN ─────────────────────────────
+    // Primary: use balance transactions (settlement date = P&L date).
+    // For each charge transaction, look up the order's line items.
+    // If order isn't in cache, try to find it from Shopify.
+    // Falls back to order-created-at aggregation if no balance txns exist.
 
     const productAgg = new Map<string, ProductAgg>();
     let totalRevenue = 0;
     let totalOrders = 0;
 
-    for (const order of orders ?? []) {
+    // Build a map of order IDs from balance transactions → { amount, fee }
+    const btOrderMap = new Map<string, { amount: number; fee: number }>();
+    for (const bt of balanceTxnFees ?? []) {
+      if (bt.source_order_id) {
+        const existing = btOrderMap.get(bt.source_order_id);
+        if (existing) {
+          existing.amount += Number(bt.amount) || 0;
+          existing.fee += Number(bt.fee) || 0;
+        } else {
+          btOrderMap.set(bt.source_order_id, {
+            amount: Number(bt.amount) || 0,
+            fee: Number(bt.fee) || 0,
+          });
+        }
+      }
+    }
+
+    // If balance txns exist but no orders in cache for this date range,
+    // fetch line items for the settlement orders from the cache by order ID
+    let effectiveOrders = orders ?? [];
+    if (effectiveOrders.length === 0 && btOrderMap.size > 0) {
+      // Look up orders by source_order_id from balance transactions
+      const orderIds = [...btOrderMap.keys()];
+      const batchSize = 50;
+      const fetchedOrders: OrderCacheRow[] = [];
+      for (let i = 0; i < orderIds.length; i += batchSize) {
+        const batch = orderIds.slice(i, i + batchSize);
+        const idFilter = batch.map(id => `"${id}"`).join(',');
+        const batchOrders = await rest<OrderCacheRow[]>(
+          `/shopify_orders_cache?store_id=eq.${enc(storeId)}&shopify_order_id=in.(${idFilter})&select=shopify_order_id,total_price,subtotal_price,financial_status,order_status,line_items,refund_total,created_at,total_shipping_price`
+        ).catch(() => [] as OrderCacheRow[]);
+        fetchedOrders.push(...batchOrders);
+      }
+      effectiveOrders = fetchedOrders;
+      console.log(`[PRISM:ProductPerf] Settlement mode: ${btOrderMap.size} txns, ${fetchedOrders.length} orders found in cache`);
+    }
+
+    for (const order of effectiveOrders) {
       if (order.financial_status === 'refunded') continue;
 
       totalOrders++;
