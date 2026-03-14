@@ -30,6 +30,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
           STORE_ID: ${{ inputs.store_id }}
           JOB_TYPE: ${{ inputs.job_type || 'all' }}
         run: node scripts/prism-backfill.js
