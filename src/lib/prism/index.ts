@@ -39,3 +39,11 @@ export const PRISM = {
 } as const;
 
 export type PrismConfig = typeof PRISM;
+
+// Re-export PRISM modules
+export { normalize, normalizeBatch, syncExchangeRates } from './currencyNormalizer';
+export { buildStoreFinancialProfile, getOrBuildFinancialProfile } from './financialProfiler';
+export { detectFinancialAnomalies } from './anomalyDetector';
+export type { NormalizedAmount } from './currencyNormalizer';
+export type { StoreFinancialProfile } from './financialProfiler';
+export type { Anomaly } from './anomalyDetector';

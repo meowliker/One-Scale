@@ -50,6 +50,7 @@ interface SpendCacheRow {
   purchase_value: number;
   campaign_id: string;
   campaign_name: string;
+  currency?: string;
 }
 
 interface CampaignProductMapping {
@@ -141,7 +142,7 @@ export async function GET(request: NextRequest) {
         `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${enc(tzStart)}&created_at=lte.${enc(tzEnd)}&order_status=neq.cancelled&select=shopify_order_id,total_price,subtotal_price,financial_status,order_status,line_items,refund_total,created_at,total_shipping_price`
       ).catch(() => [] as OrderCacheRow[]),
       rest<SpendCacheRow[]>(
-        `/meta_spend_cache?store_id=eq.${enc(storeId)}&date=gte.${from}&date=lte.${to}&select=date,spend,impressions,clicks,purchases,purchase_value,campaign_id,campaign_name`
+        `/meta_spend_cache?store_id=eq.${enc(storeId)}&date=gte.${from}&date=lte.${to}&select=date,spend,impressions,clicks,purchases,purchase_value,campaign_id,campaign_name,currency`
       ).catch(() => [] as SpendCacheRow[]),
       getPersistentProductCosts(storeId).catch(() => []),
       getPersistentPaymentFees(storeId).catch(() => []),
@@ -247,7 +248,16 @@ export async function GET(request: NextRequest) {
       feeFixed = activeGateways.reduce((s, f) => s + f.fee_fixed, 0) / activeGateways.length;
     }
 
-    // Aggregate Meta spend totals and build per-campaign spend data
+    // Aggregate Meta spend totals — normalize currency if needed
+    // storeTz is already available from the timezone lookup above
+    const { normalize: normalizeCurrency } = await import('@/lib/prism/currencyNormalizer');
+
+    // Detect store base currency from orders or config
+    const storeCurrencyRows = await rest<Array<{ currency: string }>>(
+      `/shopify_orders_cache?store_id=eq.${enc(storeId)}&select=currency&limit=1`
+    ).catch(() => []);
+    const storeCurrency = storeCurrencyRows[0]?.currency || 'USD';
+
     let totalSpend = 0;
     let totalImpressions = 0;
     let totalClicks = 0;
@@ -255,7 +265,14 @@ export async function GET(request: NextRequest) {
     const campaignAgg = new Map<string, { campaignId: string; campaignName: string; spend: number }>();
 
     for (const row of spendRows ?? []) {
-      totalSpend += row.spend || 0;
+      // Normalize ad spend from ads currency to store currency
+      const spendCurrency = row.currency || storeCurrency;
+      let normalizedSpend = row.spend || 0;
+      if (spendCurrency !== storeCurrency && normalizedSpend > 0) {
+        const normalized = await normalizeCurrency(normalizedSpend, spendCurrency, storeCurrency, row.date || from);
+        normalizedSpend = normalized.value;
+      }
+      totalSpend += normalizedSpend;
       totalImpressions += row.impressions || 0;
       totalClicks += row.clicks || 0;
       totalPurchases += row.purchases || 0;
@@ -263,12 +280,12 @@ export async function GET(request: NextRequest) {
       if (row.campaign_id) {
         const existing = campaignAgg.get(row.campaign_id);
         if (existing) {
-          existing.spend += row.spend || 0;
+          existing.spend += normalizedSpend;
         } else {
           campaignAgg.set(row.campaign_id, {
             campaignId: row.campaign_id,
             campaignName: row.campaign_name || row.campaign_id,
-            spend: row.spend || 0,
+            spend: normalizedSpend,
           });
         }
       }
