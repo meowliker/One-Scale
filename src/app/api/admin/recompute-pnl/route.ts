@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true, message: 'No stores found', storesFound: 0 });
   }
 
-  const results: Array<{ storeId: string; deleted: number; daysComputed: number; error?: string }> = [];
+  const results: Array<{ storeId: string; deleted: number; daysComputed: number; tz?: string; loopDays?: number; errors?: string[]; error?: string }> = [];
 
   for (const store of stores) {
     const storeId = store.id;
