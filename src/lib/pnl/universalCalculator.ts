@@ -14,6 +14,8 @@
  */
 
 import { rest } from '@/app/api/lib/supabase-persistence';
+import { calculateExpenses } from '@/lib/pnl/expenseEngine';
+import type { CustomExpense } from '@/types/pnlSettings';
 import type {
   PnLResult,
   PnLWarning,
@@ -132,6 +134,7 @@ export async function calculatePnL(
     campaignMappings,
     transactionFees,
     timezone,
+    customExpensesList,
   ] = await Promise.all([
     fetchOrders(storeId, dateFrom, dateTo),
     fetchMetaSpend(storeId, dateFrom, dateTo),
@@ -144,6 +147,7 @@ export async function calculatePnL(
     fetchCampaignMappings(storeId),
     fetchTransactionFees(storeId, dateFrom, dateTo),
     fetchStoreTimezone(storeId),
+    fetchCustomExpenses(storeId),
   ]);
 
   // ── 2. Build lookup maps ─────────────────────────────────
@@ -455,6 +459,10 @@ export async function calculatePnL(
     }
   }
 
+  // ── 5b. Calculate custom expenses ──────────────────────────
+  const expenseResult = calculateExpenses(customExpensesList, { start: dateFrom, end: dateTo });
+  const totalCustomExpenses = expenseResult.totalExpenses;
+
   // ── 6. Determine fee method ───────────────────────────────
 
   if (hasActualFees && !hasEstimatedFees) {
@@ -499,6 +507,15 @@ export async function calculatePnL(
       message: `$${unattributedSpend.toFixed(2)} ad spend could not be attributed to specific products. Map campaigns in Settings.`,
       severity: 'warning',
       amount: unattributedSpend,
+    });
+  }
+
+  if (totalCustomExpenses > 0 && totalRevenue > 0 && (totalCustomExpenses / totalRevenue) > 0.2) {
+    warnings.push({
+      type: 'high_expense_ratio',
+      message: `Custom expenses are ${((totalCustomExpenses / totalRevenue) * 100).toFixed(1)}% of revenue.`,
+      severity: 'warning',
+      amount: totalCustomExpenses,
     });
   }
 
@@ -554,7 +571,7 @@ export async function calculatePnL(
   // ── 9. Calculate totals ───────────────────────────────────
 
   const totalNetProfit = totalRevenue - totalCogs - totalAdSpend - totalFees
-    - totalShipping - totalRefunds - totalChargebackLoss + totalChargebackWon;
+    - totalShipping - totalRefunds - totalChargebackLoss + totalChargebackWon - totalCustomExpenses;
   const totalMargin = totalRevenue > 0 ? (totalNetProfit / totalRevenue) * 100 : 0;
 
   // Data completeness score
@@ -590,6 +607,8 @@ export async function calculatePnL(
     warnings,
     feeMethod: overallFeeMethod,
     dataCompleteness: completeness,
+    totalCustomExpenses,
+    expenseBreakdown: expenseResult.breakdown.map(b => ({ name: b.name, amount: b.allocated })),
   };
 }
 
@@ -703,6 +722,39 @@ async function fetchStoreTimezone(storeId: string): Promise<string> {
     return rows?.[0]?.timezone || 'America/New_York';
   } catch {
     return 'America/New_York';
+  }
+}
+
+interface CustomExpenseRow {
+  id: number;
+  name: string;
+  category: 'fixed' | 'variable';
+  amount: number;
+  frequency: 'daily' | 'weekly' | 'monthly' | 'yearly' | 'one_time';
+  distribution: 'daily' | 'hourly' | 'smart';
+  start_date: string | null;
+  end_date: string | null;
+  is_active: boolean;
+}
+
+async function fetchCustomExpenses(storeId: string): Promise<CustomExpense[]> {
+  try {
+    const rows = await rest<CustomExpenseRow[]>(
+      `/pnl_custom_expenses?store_id=eq.${enc(storeId)}&is_active=eq.true&select=*`
+    );
+    return rows.map(r => ({
+      id: r.id,
+      name: r.name,
+      category: r.category,
+      amount: Number(r.amount),
+      frequency: r.frequency,
+      distribution: r.distribution,
+      startDate: r.start_date,
+      endDate: r.end_date,
+      isActive: r.is_active,
+    }));
+  } catch {
+    return [];
   }
 }
 
