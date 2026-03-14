@@ -673,12 +673,14 @@ export async function fastTrackOnboarding(
     console.warn('[PRISM:FastTrack] Config detection failed (non-critical):', e instanceof Error ? e.message : e);
   }
 
-  // 2. Recent orders — last 30 days, max 3 pages (~750 orders) — ~3s
+  // 2. Recent orders — last 30 days, 1 page (250 orders) — ~5s
+  // Single page keeps us well under Vercel's 60s timeout.
+  // More orders are fetched by the background onboarding pipeline.
   const { fetchFromShopify } = await import('@/app/api/lib/shopify-client');
   const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString();
   let totalOrders = 0;
   let sinceId = '0';
-  const maxPages = 3;
+  const maxPages = 1;
 
   for (let page = 0; page < maxPages; page++) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -735,43 +737,9 @@ export async function fastTrackOnboarding(
   }
   console.log(`[PRISM:FastTrack] ${totalOrders} orders fetched in ${Date.now() - start}ms`);
 
-  // 3. Balance transactions — last 30 days — ~2s
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const btData = await fetchFromShopify<{ transactions?: any[] }>(
-      accessToken, shopDomain, '/shopify_payments/balance/transactions.json', {
-        limit: '250', processed_at_min: thirtyDaysAgo,
-      },
-    );
-    for (const txn of btData.transactions ?? []) {
-      const txnType = (txn.type || '').toLowerCase();
-      await rest('/shopify_balance_transactions?on_conflict=store_id,transaction_id', {
-        method: 'POST', headers: { Prefer: 'resolution=merge-duplicates' },
-        body: JSON.stringify({
-          store_id: storeId, transaction_id: String(txn.id), type: txnType,
-          amount: parseFloat(txn.amount || '0'), fee: Math.abs(parseFloat(txn.fee || '0')),
-          net: parseFloat(txn.net || '0'), currency: txn.currency || 'USD',
-          source_order_id: txn.source_order_id ? String(txn.source_order_id) : null,
-          source_type: txn.source_type || null, processed_at: txn.processed_at,
-          payout_id: txn.payout_id ? String(txn.payout_id) : null,
-        }),
-      }).catch(() => null);
-      if (txnType === 'refund') {
-        await rest('/shopify_refunds?on_conflict=store_id,transaction_id', {
-          method: 'POST', headers: { Prefer: 'resolution=merge-duplicates' },
-          body: JSON.stringify({
-            store_id: storeId, transaction_id: String(txn.id),
-            order_id: txn.source_order_id ? String(txn.source_order_id) : null,
-            amount: Math.abs(parseFloat(txn.amount || '0')), fee: Math.abs(parseFloat(txn.fee || '0')),
-            currency: txn.currency || 'USD', processed_at: txn.processed_at,
-          }),
-        }).catch(() => null);
-      }
-    }
-    console.log(`[PRISM:FastTrack] ${btData.transactions?.length ?? 0} balance txns in ${Date.now() - start}ms`);
-  } catch {
-    console.warn('[PRISM:FastTrack] Balance transactions skipped (store may not use Shopify Payments)');
-  }
+  // 3. Balance transactions skipped during fast-track — too slow.
+  // The background onboarding pipeline handles this.
+  // Dashboard P&L routes use order data + fee estimation when balance txns are missing.
 
   // 4. Classify products — pure in-memory from cached orders — ~1s
   let classified = 0;
