@@ -11,6 +11,7 @@ import { useConnectionStore } from '@/stores/connectionStore';
 import { useStoreStore } from '@/stores/storeStore';
 import { NotConnectedError } from '@/services/withMockFallback';
 import { ConnectionEmptyState } from '@/components/ui/ConnectionEmptyState';
+import { StoreHealthBanner } from '@/components/pnl/StoreHealthBanner';
 
 interface PnLCachePayload {
   summary: PnLSummary;
@@ -316,6 +317,7 @@ export default function PnLPage() {
 
   return (
     <div className="space-y-5">
+      <StoreHealthBanner />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-text-primary tracking-tight">Profit & Loss</h1>
