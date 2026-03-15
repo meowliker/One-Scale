@@ -195,27 +195,36 @@ export async function POST(request: NextRequest) {
       // Convert date string to proper UTC bounds using store timezone
       const utcBounds = dateStrToUtcBounds(dateStr, storeTz);
 
-      // Fetch orders via existing internal route (already rate-limited)
-      const ordersRes = await fetch(
-        `${baseUrl}/api/shopify/orders?` + new URLSearchParams({
-          storeId,
-          created_at_min: utcBounds.min,
-          created_at_max: utcBounds.max,
-          status: 'any',
-          limit: '250',
-        }),
-        { headers: { 'x-internal-sync': '1' } }
-      );
-      const ordersJson = await ordersRes.json() as {
-        data?: Array<{
-          id: number | string;
-          totalPrice: string;
-          financialStatus: string;
-          lineItems: Array<{ quantity: number; productId: number | string; price: string }>;
-          refunds?: Array<{ totalAmount: number; createdAt: string }>;
-        }>;
-      };
-      const orders = ordersJson.data ?? [];
+      // Read orders from cache (populated by backfill/webhooks, always available)
+      const cachedOrderRows = await rest<Array<{
+        shopify_order_id: string; total_price: number; financial_status: string;
+        line_items: string; refund_total: number; created_at: string;
+      }>>(
+        `/shopify_orders_cache?store_id=eq.${encodeURIComponent(storeId)}` +
+        `&and=(created_at.gte.${encodeURIComponent(utcBounds.min)},created_at.lt.${encodeURIComponent(utcBounds.max)})` +
+        `&order_status=neq.cancelled&select=shopify_order_id,total_price,financial_status,line_items,refund_total,created_at` +
+        `&limit=1000`
+      ).catch(() => []);
+
+      // Map to the format the rest of the code expects
+      const orders = (cachedOrderRows ?? []).map(row => {
+        let lineItems: Array<{ quantity: number; productId: number | string; price: string }> = [];
+        try {
+          const parsed = typeof row.line_items === 'string' ? JSON.parse(row.line_items) : row.line_items || [];
+          lineItems = parsed.map((li: { product_id?: string | number; quantity?: number; price?: string }) => ({
+            productId: li.product_id ?? 0,
+            quantity: li.quantity ?? 1,
+            price: li.price ?? '0',
+          }));
+        } catch { /* skip malformed line items */ }
+        return {
+          id: row.shopify_order_id,
+          totalPrice: String(row.total_price),
+          financialStatus: row.financial_status,
+          lineItems,
+          refunds: row.refund_total > 0 ? [{ totalAmount: row.refund_total, createdAt: row.created_at }] : [],
+        };
+      });
 
       // COGS settings
       let cogsRows: Array<{ product_id: string | null; cost_per_unit: number | null; cost_percentage: number | null }> = [];
