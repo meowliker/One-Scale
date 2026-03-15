@@ -4,9 +4,8 @@
  *
  * Universal Classification Router
  *
- * One path for every store: behavioral signals → relative comparison → classification.
- * No store type detection. No assumptions about what the store sells.
- * Classification emerges from the data, not from guessing the store model.
+ * Primary path: Master classifier (SQL signals + combined scoring).
+ * Fallback: Legacy signal stack (for stores without SQL function).
  *
  * Manual overrides are permanent and never overwritten during re-runs.
  * One store's classification never affects another.
@@ -14,6 +13,7 @@
 
 import { rest } from '@/app/api/lib/supabase-persistence';
 import { PRISM } from '@/lib/prism';
+import { masterClassifyAll } from './masterClassifier';
 import { analyzeOrderPatterns, partitionByDataSufficiency } from './orderPatternAnalyzer';
 import { computeSignals, classifyProduct, computeMedianPrice, checkShopifyTags } from './signalStackClassifier';
 import { detectPostPurchaseUpsells } from './postPurchaseDetector';
@@ -89,6 +89,35 @@ export interface ClassifyResult {
 // ── Main Entry Point ─────────────────────────────────────────
 
 export async function classifyAllProducts(storeId: string): Promise<ClassifyResult> {
+  // ── PRIMARY PATH: Master classifier (SQL signals + combined scoring) ──
+  try {
+    const masterResults = await masterClassifyAll(storeId);
+    if (masterResults.length > 0) {
+      console.log(`[PRISM:Classify] ${storeId}: Master classifier returned ${masterResults.length} results`);
+      // Convert master results to SignalStackResult format for compatibility
+      const results: SignalStackResult[] = masterResults.map(r => ({
+        product_id: r.product_id,
+        product_title: r.product_title,
+        product_type: '',
+        classification: r.classification as SignalStackResult['classification'],
+        confidence: r.confidence,
+        method: r.method as SignalStackResult['method'],
+        signals: null,
+        alone_pct: 0,
+        first_position_pct: 0,
+        avg_position: 0,
+        revenue_share: 0,
+        total_orders_analyzed: 0,
+        needs_review: r.needs_review,
+      }));
+      const needsReview = results.filter(r => r.needs_review).length;
+      return { classified: results.length, needsReview, results };
+    }
+  } catch (err) {
+    console.warn(`[PRISM:Classify] Master classifier failed, falling back to legacy:`, err instanceof Error ? err.message : 'Unknown');
+  }
+
+  // ── FALLBACK: Legacy signal stack ──────────────────────────────────
   // ── Bootstrap path: stores with < 30 recent orders ──────────────────
   const recentCutoff = new Date(Date.now() - PRISM.dataWindows.behavioralAnalysisDays * 86400000).toISOString();
   const recentOrders = await rest<Array<{ shopify_order_id: string; line_items: string; total_price: number }>>(
