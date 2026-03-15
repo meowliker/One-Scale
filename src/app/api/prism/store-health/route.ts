@@ -42,7 +42,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ store_id: storeId, score: 0, label: 'No data', breakdown: {} });
   }
 
-  const sum = (arr: typeof recent, key: string) => arr.reduce((s, r) => s + (Number((r as Record<string, unknown>)[key]) || 0), 0);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sum = (arr: any[], key: string) => arr.reduce((s: number, r: any) => s + (Number(r[key]) || 0), 0);
 
   const recentRev = sum(recent, 'revenue');
   const recentSpend = sum(recent, 'ad_spend');
