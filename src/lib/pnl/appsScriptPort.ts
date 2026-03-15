@@ -66,6 +66,7 @@ interface AdAccountMapping {
 export interface ProductPnLResult {
   product_id: string;
   product_name: string;
+  classification: 'main' | 'upsell' | 'downsell' | 'bundle' | 'excluded' | 'pending';
   revenue: number;
   orders: number;
   fees: number;
@@ -74,6 +75,8 @@ export interface ProductPnLResult {
   net_profit: number;
   margin: number;
   attribution_method: string;
+  parent_product_id: string | null;
+  parent_product_name: string | null;
 }
 
 // ── Step 1: Match Order to Product (4-pass) ─────────────
@@ -438,6 +441,34 @@ export async function buildProductPerformance(
     }
   }
 
+  // ── Step 1b: Collect upsell products (paid items in matched orders) ──
+  const upsellAgg = new Map<string, { title: string; revenue: number; orders: number; parentId: string | null }>();
+  const mainProductIds = new Set(productConfigs.map(p => p.product_id));
+
+  for (const order of orders) {
+    if (['voided', 'refunded'].includes(order.financial_status)) continue;
+    const parentId = orderProductMap.get(String(order.shopify_order_id));
+    if (!parentId) continue; // unmatched order
+
+    let lineItems: LineItem[];
+    try {
+      lineItems = typeof order.line_items === 'string' ? JSON.parse(order.line_items) : order.line_items || [];
+    } catch { continue; }
+
+    for (const item of lineItems) {
+      const pid = item.product_id ? String(item.product_id) : '';
+      if (!pid || mainProductIds.has(pid)) continue; // skip main products
+      const price = parseFloat(item.price || '0');
+      if (price === 0) continue; // skip free items (they're the main products)
+
+      const existing = upsellAgg.get(pid) ?? { title: item.title || 'Unknown', revenue: 0, orders: 0, parentId };
+      existing.revenue += price * (item.quantity || 1);
+      existing.orders++;
+      if (!existing.parentId) existing.parentId = parentId;
+      upsellAgg.set(pid, existing);
+    }
+  }
+
   // ── Step 2: Split fees by product ─────────────────────
   const fees = splitFeesByProduct(btTxns, orderProductMap, productConfigs, orderCounts);
 
@@ -501,6 +532,7 @@ export async function buildProductPerformance(
     results.push({
       product_id: pid,
       product_name: product.product_name,
+      classification: 'main',
       revenue: rev,
       orders: ords,
       fees: fee,
@@ -509,6 +541,30 @@ export async function buildProductPerformance(
       net_profit: profit,
       margin,
       attribution_method: adMethod,
+      parent_product_id: null,
+      parent_product_name: null,
+    });
+  }
+
+  // ── Add upsell products ─────────────────────────────
+  const mainNameMap = new Map<string, string>();
+  for (const p of productConfigs) mainNameMap.set(p.product_id, p.product_name);
+
+  for (const [pid, agg] of upsellAgg.entries()) {
+    results.push({
+      product_id: pid,
+      product_name: agg.title,
+      classification: 'upsell',
+      revenue: round2(agg.revenue),
+      orders: agg.orders,
+      fees: 0,
+      ad_spend: 0,
+      cogs: 0,
+      net_profit: round2(agg.revenue),
+      margin: 100,
+      attribution_method: 'upsell_no_cost',
+      parent_product_id: agg.parentId,
+      parent_product_name: agg.parentId ? (mainNameMap.get(agg.parentId) ?? null) : null,
     });
   }
 
