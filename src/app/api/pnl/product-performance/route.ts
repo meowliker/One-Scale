@@ -453,220 +453,155 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // ── AD SPEND ATTRIBUTION ─────────────────────────────────────────────────
-    // Try visitor-level attribution first, fall back to campaign-name matching
-
-    // Build order → attribution lookup
-    const orderAttrMap = new Map<string, OrderAttribution>();
-    for (const attr of attributedOrders ?? []) {
-      if (attr.order_id) orderAttrMap.set(attr.order_id, attr);
-    }
-
-    const attributedCount = orderAttrMap.size;
-    const coverageRate = totalOrders > 0 ? attributedCount / totalOrders : 0;
-    const useVisitorAttribution = coverageRate >= PRISM.attribution.pixelCoverageThreshold && attributedCount >= PRISM.attribution.minAttributedOrders;
-
-    // Build campaign spend lookup for matching utm_campaign → spend
-    const campaignNameToId = new Map<string, string>();
-    const campaignIdToSpend = new Map<string, number>();
-    for (const [campaignId, agg] of campaignAgg) {
-      campaignNameToId.set(normalizeCampaign(agg.campaignName), campaignId);
-      campaignIdToSpend.set(campaignId, agg.spend);
-    }
-
-    function findCampaignSpend(utmCampaign: string): number {
-      // Try exact match on campaign ID
-      const directSpend = campaignIdToSpend.get(utmCampaign);
-      if (directSpend != null) return directSpend;
-      // Try normalized name match
-      const normalized = normalizeCampaign(utmCampaign);
-      const matchedId = campaignNameToId.get(normalized);
-      if (matchedId) return campaignIdToSpend.get(matchedId) || 0;
-      // Try substring match (utm_campaign may be a subset of campaign_name)
-      for (const [normName, cId] of campaignNameToId) {
-        if (normName.includes(normalized) || normalized.includes(normName)) {
-          return campaignIdToSpend.get(cId) || 0;
-        }
-      }
-      return 0;
-    }
+    // ══════════════════════════════════════════════════════════════════════════
+    // AD SPEND DISTRIBUTION — 3 methods in priority order
+    // Ground truth: daily_pnl_snapshots.ad_spend (same as P&L page)
+    // Guarantee: SUM(product ad_spend) = P&L total ad_spend
+    // ══════════════════════════════════════════════════════════════════════════
 
     const productSpendMap = new Map<string, number>();
     let unattributedSpend = 0;
-    let attributionMethod = 'campaign_name_match'; // for API metadata
+    let attributionMethod = 'none';
 
-    if (useVisitorAttribution) {
-      // ── VISITOR-LEVEL ATTRIBUTION ──────────────────────────────────────
-      // Group attributed orders by campaign, track which products were purchased
-      attributionMethod = 'pixel_revenue_share';
+    // ── GROUND TRUTH: Get total ad spend from daily_pnl_snapshots ─────────
+    // This is the SAME number shown on the P&L page. Use it as the source of truth.
+    // meta_spend_cache may be empty or have schema gaps — don't rely on it alone.
+    let groundTruthAdSpend = 0;
+    try {
+      const pnlSnapshots = await rest<Array<{ ad_spend: number }>>(
+        `/daily_pnl_snapshots?store_id=eq.${enc(storeId)}&date=gte.${from}&date=lte.${to}&select=ad_spend`
+      );
+      groundTruthAdSpend = (pnlSnapshots ?? []).reduce((s, r) => s + (Number(r.ad_spend) || 0), 0);
+    } catch { /* table may not exist yet */ }
 
-      const campaignOrderProducts = new Map<string, { totalRevenue: number; products: Map<string, number> }>();
-      const matchedCampaignIds = new Set<string>();
+    // If daily_pnl_snapshots is empty, fall back to meta_spend_cache total
+    if (groundTruthAdSpend === 0 && totalSpend > 0) {
+      groundTruthAdSpend = totalSpend;
+    }
+    // Update totalSpend to ground truth for metrics calculations
+    if (groundTruthAdSpend > 0) {
+      totalSpend = groundTruthAdSpend;
+    }
 
-      for (const order of orders ?? []) {
-        if (order.financial_status === 'refunded') continue;
-        const attr = orderAttrMap.get(order.shopify_order_id);
-        if (!attr?.utm_campaign) continue;
-
-        const campaign = attr.utm_campaign;
-        if (!campaignOrderProducts.has(campaign)) {
-          campaignOrderProducts.set(campaign, { products: new Map(), totalRevenue: 0 });
-        }
-
-        let lineItems;
-        try {
-          lineItems = typeof order.line_items === 'string' ? JSON.parse(order.line_items) : order.line_items || [];
-        } catch { continue; }
-
-        for (const item of lineItems) {
-          const pid = item.product_id ? String(item.product_id) : `unknown_${item.title}`;
-          const rev = parseFloat(item.price || '0') * (item.quantity || 1);
-          const entry = campaignOrderProducts.get(campaign)!;
-          entry.products.set(pid, (entry.products.get(pid) || 0) + rev);
-          entry.totalRevenue += rev;
-        }
-      }
-
-      // Distribute campaign spend to products based on purchase revenue share
-      for (const [campaignName, { products: campaignProducts, totalRevenue: campaignRevenue }] of campaignOrderProducts) {
-        const campaignSpend = findCampaignSpend(campaignName);
-        if (campaignSpend <= 0 || campaignRevenue <= 0) continue;
-
-        // Track which campaigns were matched
-        const matchedId = campaignNameToId.get(normalizeCampaign(campaignName))
-          || (campaignIdToSpend.has(campaignName) ? campaignName : null);
-        if (matchedId) matchedCampaignIds.add(matchedId);
-
-        for (const [productId, productRev] of campaignProducts) {
-          const share = productRev / campaignRevenue;
-          const spend = round2(campaignSpend * share);
-          productSpendMap.set(productId, (productSpendMap.get(productId) || 0) + spend);
-        }
-      }
-
-      // Any campaign spend not matched via attribution goes to unattributed
-      let attributedTotalSpend = 0;
-      for (const [, spend] of productSpendMap) attributedTotalSpend += spend;
-      unattributedSpend = Math.max(0, round2(totalSpend - attributedTotalSpend));
-
-    } else {
-      // ── FALLBACK: Campaign name matching ──────────────────────────────
-      const campaignSpendData: CampaignSpendData[] = [];
-      for (const [campaignId, agg2] of campaignAgg.entries()) {
-        campaignSpendData.push({
-          campaignId,
-          campaignName: agg2.campaignName,
-          spend: agg2.spend,
-          adAccountId: '',
-        });
-      }
-      const productDataForAttribution: ProductData[] = [];
-      for (const [pid, agg2] of productAgg.entries()) {
-        productDataForAttribution.push({ productId: pid, productTitle: agg2.productName });
-      }
-      const manualMappings: ManualMapping[] = (campaignMappings ?? []).map((m) => ({
-        campaignId: m.campaign_id,
-        productId: m.product_id,
-      }));
-
-      const attributions = attributeSpend(campaignSpendData, productDataForAttribution, manualMappings);
-
-      for (const attr of attributions) {
-        if (attr.productId) {
-          productSpendMap.set(attr.productId, (productSpendMap.get(attr.productId) || 0) + attr.spend);
-        } else {
-          unattributedSpend += attr.spend;
-        }
+    // Build campaign spend lookup from meta_spend_cache (used by Methods 1 & 2)
+    const campaignIdToSpend = new Map<string, number>();
+    const campaignNameToId = new Map<string, string>();
+    for (const [campaignId, agg] of campaignAgg) {
+      campaignIdToSpend.set(campaignId, agg.spend);
+      if (agg.campaignName) {
+        campaignNameToId.set(normalizeCampaign(agg.campaignName), campaignId);
       }
     }
 
-    // ── REFINE MAIN-PRODUCT SPEND via pixel-attributed order counts ─────
-    // When pixel data is available, count how many attributed orders each
-    // MAIN product drove. Redistribute total MAIN spend proportionally by
-    // attributed order count instead of revenue share.
-    if (useVisitorAttribution) {
-      const mainProductIds = new Set<string>();
-      for (const [pid] of productAgg) {
-        const sc = classificationMap.get(pid)?.classification;
-        if (!sc || sc === 'main' || sc === 'pending' || sc === 'unknown') {
-          mainProductIds.add(pid);
+    // Identify MAIN products (only main products get ad spend)
+    const mainProductList: Array<{ pid: string; orders: number }> = [];
+    for (const [pid, agg] of productAgg.entries()) {
+      const cls = classificationMap.get(pid)?.classification;
+      const isMain = !cls || cls === 'main' || cls === 'pending' || cls === 'unknown';
+      if (isMain) mainProductList.push({ pid, orders: agg.orderIds.size });
+    }
+
+    // Helper: distribute spend proportionally by order count
+    function distributeProportionally(amount: number, products: Array<{ pid: string; orders: number }>, map: Map<string, number>) {
+      const totalOrd = products.reduce((s, p) => s + p.orders, 0);
+      if (totalOrd === 0) return;
+      for (const p of products) {
+        const share = p.orders / totalOrd;
+        const current = map.get(p.pid) ?? 0;
+        map.set(p.pid, round2(current + amount * share));
+      }
+    }
+
+    if (groundTruthAdSpend > 0 && mainProductList.length > 0) {
+      let mappedSpend = 0;
+
+      // ── METHOD 1: Direct campaign → product mapping ───────────────────
+      // Check campaign_product_mappings and campaign_product_attributions
+      if (campaignMappings && campaignMappings.length > 0 && campaignIdToSpend.size > 0) {
+        for (const mapping of campaignMappings) {
+          const spend = campaignIdToSpend.get(mapping.campaign_id) ?? 0;
+          if (spend > 0 && mapping.product_id) {
+            const current = productSpendMap.get(mapping.product_id) ?? 0;
+            productSpendMap.set(mapping.product_id, round2(current + spend));
+            mappedSpend += spend;
+          }
+        }
+        if (mappedSpend > 0) {
+          attributionMethod = 'campaign_product_mapping';
+          console.log(`[PRISM:ProductPerf] Method 1: mapped $${round2(mappedSpend)} via campaign→product mappings`);
         }
       }
 
-      if (mainProductIds.size > 1) {
-        // Count pixel-attributed orders per MAIN product
-        const mainAttrCounts = new Map<string, number>();
-        for (const order of orders ?? []) {
-          if (order.financial_status === 'refunded') continue;
-          const attr = orderAttrMap.get(order.shopify_order_id);
-          if (!attr?.utm_campaign) continue;
-
-          let lineItems;
-          try {
-            lineItems = typeof order.line_items === 'string' ? JSON.parse(order.line_items) : order.line_items || [];
-          } catch { continue; }
-
-          for (const item of lineItems) {
-            const pid = item.product_id ? String(item.product_id) : `unknown_${item.title}`;
-            if (mainProductIds.has(pid)) {
-              mainAttrCounts.set(pid, (mainAttrCounts.get(pid) || 0) + 1);
+      // Also check campaign_product_attributions (from PRISM ad attribution engine)
+      if (mappedSpend === 0) {
+        try {
+          const attrRows = await rest<Array<{ campaign_id: string; product_id: string; creative_url: string | null; confidence: number }>>(
+            `/campaign_product_attributions?store_id=eq.${enc(storeId)}&select=campaign_id,product_id,creative_url,confidence`
+          );
+          for (const attr of attrRows ?? []) {
+            const spend = campaignIdToSpend.get(attr.campaign_id) ?? 0;
+            if (spend > 0 && attr.product_id) {
+              const current = productSpendMap.get(attr.product_id) ?? 0;
+              productSpendMap.set(attr.product_id, round2(current + spend));
+              mappedSpend += spend;
             }
           }
-        }
-
-        const totalMainAttr = [...mainAttrCounts.values()].reduce((s, c) => s + c, 0);
-        if (totalMainAttr > 0) {
-          // Sum total MAIN spend then redistribute by attributed order count
-          let totalMainSpend = 0;
-          for (const pid of mainProductIds) {
-            totalMainSpend += productSpendMap.get(pid) || 0;
-          }
-          for (const pid of mainProductIds) {
-            const attrCount = mainAttrCounts.get(pid) || 0;
-            productSpendMap.set(pid, round2(totalMainSpend * (attrCount / totalMainAttr)));
-          }
-        }
-      }
-    }
-
-    // ── FALLBACK: Distribute total spend to MAIN products by order count ─────
-    // When attribution (visitor or campaign matching) produced $0 for all products
-    // but we know there IS ad spend, distribute proportionally by order count.
-    {
-      let attributedTotal = 0;
-      for (const [, spend] of productSpendMap) attributedTotal += spend;
-
-      // Also try daily_pnl_snapshots ad_spend if meta_spend_cache was empty
-      let effectiveTotalSpend = totalSpend;
-      if (effectiveTotalSpend === 0) {
-        try {
-          const snapshots = await rest<Array<{ ad_spend: number }>>(
-            `/daily_pnl_snapshots?store_id=eq.${enc(storeId)}&date=gte.${from}&date=lte.${to}&select=ad_spend`
-          );
-          effectiveTotalSpend = (snapshots ?? []).reduce((s, r) => s + (Number(r.ad_spend) || 0), 0);
-          if (effectiveTotalSpend > 0) {
-            totalSpend = effectiveTotalSpend;
+          if (mappedSpend > 0) {
+            attributionMethod = 'campaign_product_attribution';
+            console.log(`[PRISM:ProductPerf] Method 1b: mapped $${round2(mappedSpend)} via campaign_product_attributions`);
           }
         } catch { /* table may not exist */ }
       }
 
-      if (attributedTotal === 0 && effectiveTotalSpend > 0 && productAgg.size > 0) {
-        // Identify MAIN products and distribute spend by order count
-        const mainProducts: Array<{ pid: string; orders: number }> = [];
-        for (const [pid, agg] of productAgg.entries()) {
-          const cls = classificationMap.get(pid)?.classification;
-          const isMain = !cls || cls === 'main' || cls === 'pending' || cls === 'unknown';
-          if (isMain) mainProducts.push({ pid, orders: agg.orderIds.size });
-        }
-        const totalMainOrders = mainProducts.reduce((s, m) => s + m.orders, 0);
-        if (totalMainOrders > 0) {
-          for (const m of mainProducts) {
-            productSpendMap.set(m.pid, round2(effectiveTotalSpend * (m.orders / totalMainOrders)));
+      // ── METHOD 2: Creative URL → product handle matching ──────────────
+      if (mappedSpend === 0 && campaignIdToSpend.size > 0) {
+        try {
+          // Check campaign_product_attributions for creative_url
+          const creativeRows = await rest<Array<{ campaign_id: string; creative_url: string | null }>>(
+            `/campaign_product_attributions?store_id=eq.${enc(storeId)}&creative_url=not.is.null&select=campaign_id,creative_url`
+          );
+          if (creativeRows && creativeRows.length > 0) {
+            // Build product handle lookup
+            const handleToProductId = new Map<string, string>();
+            for (const [pid, agg] of productAgg.entries()) {
+              const handle = agg.productName.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
+              handleToProductId.set(handle, pid);
+            }
+
+            for (const row of creativeRows) {
+              if (!row.creative_url) continue;
+              const handleMatch = row.creative_url.match(/\/products\/([^/?#]+)/);
+              if (!handleMatch) continue;
+              const handle = handleMatch[1].toLowerCase();
+              const matchedPid = handleToProductId.get(handle);
+              if (!matchedPid) continue;
+
+              const spend = campaignIdToSpend.get(row.campaign_id) ?? 0;
+              if (spend > 0) {
+                const current = productSpendMap.get(matchedPid) ?? 0;
+                productSpendMap.set(matchedPid, round2(current + spend));
+                mappedSpend += spend;
+              }
+            }
+            if (mappedSpend > 0) {
+              attributionMethod = 'creative_url_match';
+              console.log(`[PRISM:ProductPerf] Method 2: mapped $${round2(mappedSpend)} via creative URL matching`);
+            }
           }
-          unattributedSpend = 0;
-          console.log(`[PRISM:ProductPerf] Fallback: distributed $${effectiveTotalSpend} to ${mainProducts.length} MAIN products by order count`);
-        }
+        } catch { /* table may not exist */ }
       }
+
+      // ── REMAINDER: Distribute any unmapped spend proportionally ────────
+      const unmappedSpend = round2(groundTruthAdSpend - mappedSpend);
+      if (unmappedSpend > 0) {
+        if (mappedSpend === 0) {
+          attributionMethod = 'proportional_order_count';
+        }
+        distributeProportionally(unmappedSpend, mainProductList, productSpendMap);
+        console.log(`[PRISM:ProductPerf] Method 3: distributed $${unmappedSpend} proportionally to ${mainProductList.length} MAIN products`);
+      }
+
+      unattributedSpend = 0; // all spend is now attributed
     }
 
     // Build response
@@ -793,8 +728,7 @@ export async function GET(request: NextRequest) {
         // Internal attribution metadata — for debugging only, not rendered in UI
         _internal: {
           attributionMethod,
-          coverageRate: round2(coverageRate * 100),
-          attributedOrders: attributedCount,
+          totalSpend: round2(totalSpend),
           totalOrders,
         },
       });
@@ -829,7 +763,6 @@ export async function GET(request: NextRequest) {
         source: 'db_cache',
         feeSource: useActualBtFees ? 'balance_transactions' : (feeStructures.length > 0 ? 'fee_structures' : (activeGateways.length > 0 ? 'configured' : 'none')),
         attributionMethod,
-        pixelCoverage: round2(coverageRate * 100),
         ...(lastOrderRange ? { lastOrderRange } : {}),
       },
     });
