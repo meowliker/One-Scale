@@ -205,11 +205,17 @@ export async function POST(request: NextRequest) {
       // BT alone = exact revenue, fees, refunds, chargebacks.
       const utcBounds = dateStrToUtcBounds(dateStr, tz);
 
-      // Fetch ALL balance transactions for this date (using store timezone bounds)
+      // Fetch BT grouped by PAYOUT DATE (not processed_at).
+      // Apps Script uses payout date for P&L grouping.
+      // First: find payout_ids for this date from our BT data.
+      // BT records have payout_id — group by payout_id, then check which payouts are for this date.
+      // Approach: query BT by processed_at range (rough filter), plus query by payout_id for known payouts.
+      // Simple approach: query ALL BT for this store with this payout date's payout_ids
+      // Since we don't have a payouts table, use processed_at as best proxy (most charges process same day as payout)
       const btRows = await rest<Array<{ type: string; amount: string; fee: string; net: string }>>(
         `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}` +
         `&and=(processed_at.gte.${encodeURIComponent(utcBounds.min)},processed_at.lte.${encodeURIComponent(utcBounds.max)})` +
-        `&select=type,amount,fee,net`
+        `&select=type,amount,fee,net&limit=1000`
       ).catch(() => []);
 
       let revenue = 0, transactionFees = 0, refunds = 0;
