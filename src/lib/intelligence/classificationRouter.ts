@@ -13,6 +13,7 @@
 
 import { rest } from '@/app/api/lib/supabase-persistence';
 import { PRISM } from '@/lib/prism';
+import { classifyAllProductsV2 } from './classificationV2';
 import { masterClassifyAll } from './masterClassifier';
 import { analyzeOrderPatterns, partitionByDataSufficiency } from './orderPatternAnalyzer';
 import { computeSignals, classifyProduct, computeMedianPrice, checkShopifyTags } from './signalStackClassifier';
@@ -89,7 +90,34 @@ export interface ClassifyResult {
 // ── Main Entry Point ─────────────────────────────────────────
 
 export async function classifyAllProducts(storeId: string): Promise<ClassifyResult> {
-  // ── PRIMARY PATH: Master classifier (SQL signals + combined scoring) ──
+  // ── PRIORITY 1: Classification V2 (store model aware, 4-layer system) ──
+  try {
+    const v2Results = await classifyAllProductsV2(storeId);
+    if (v2Results.length > 0) {
+      console.log(`[PRISM:Classify] ${storeId}: V2 classifier returned ${v2Results.length} results`);
+      const results: SignalStackResult[] = v2Results.map(r => ({
+        product_id: r.product_id,
+        product_title: r.product_title,
+        product_type: '',
+        classification: r.classification as SignalStackResult['classification'],
+        confidence: r.confidence,
+        method: r.method as SignalStackResult['method'],
+        signals: null,
+        alone_pct: 0,
+        first_position_pct: 0,
+        avg_position: 0,
+        revenue_share: 0,
+        total_orders_analyzed: 0,
+        needs_review: r.needs_review,
+      }));
+      const needsReview = results.filter(r => r.needs_review).length;
+      return { classified: results.length, needsReview, results };
+    }
+  } catch (err) {
+    console.warn(`[PRISM:Classify] V2 failed, trying master:`, err instanceof Error ? err.message : 'Unknown');
+  }
+
+  // ── PRIORITY 2: Master classifier (SQL signals + combined scoring) ──
   try {
     const masterResults = await masterClassifyAll(storeId);
     if (masterResults.length > 0) {
