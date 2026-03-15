@@ -1,16 +1,27 @@
 name: PRISM Full Backfill
 on:
   schedule:
-    - cron: '0 */6 * * *' # Every 6 hours
+    - cron: '0 1 * * *'   # 1 AM UTC — balance transactions
+    - cron: '0 2 * * *'   # 2 AM UTC — meta spend
+    - cron: '0 3 * * *'   # 3 AM UTC — P&L recompute
+    - cron: '0 4 * * 1'   # 4 AM UTC Monday — weekly reclassification
   workflow_dispatch:
     inputs:
       store_id:
         description: 'Specific store ID (leave empty for all)'
         required: false
       job_type:
-        description: 'Job type: all | orders | balance_transactions | classify | snapshots'
+        description: 'Job type'
         required: false
         default: 'all'
+        type: choice
+        options:
+          - all
+          - orders
+          - balance_transactions
+          - classify
+          - snapshots
+          - meta_spend
 
 jobs:
   backfill:
@@ -25,12 +36,29 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Determine job type from schedule
+        id: job
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            HOUR=$(date -u +%H)
+            case $HOUR in
+              01) echo "type=balance_transactions" >> $GITHUB_OUTPUT ;;
+              02) echo "type=meta_spend" >> $GITHUB_OUTPUT ;;
+              03) echo "type=snapshots" >> $GITHUB_OUTPUT ;;
+              04) echo "type=classify" >> $GITHUB_OUTPUT ;;
+              *)  echo "type=all" >> $GITHUB_OUTPUT ;;
+            esac
+          else
+            echo "type=${{ inputs.job_type || 'all' }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Run PRISM Backfill
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           APP_URL: ${{ secrets.APP_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          TOKEN_ENCRYPTION_SECRET: ${{ secrets.TOKEN_ENCRYPTION_SECRET }}
           STORE_ID: ${{ inputs.store_id }}
-          JOB_TYPE: ${{ inputs.job_type || 'all' }}
+          JOB_TYPE: ${{ steps.job.outputs.type }}
         run: node scripts/prism-backfill.js

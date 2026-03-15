@@ -518,6 +518,23 @@ export async function calculatePnL(
         case 'credit':
           settledRevenue += parseFloat(txn.amount || '0');
           break;
+        case 'reserved_funds':
+        case 'reserve':
+          // Shopify holding money in reserve — deducted from settled revenue
+          settledRevenue += parseFloat(txn.amount || '0');
+          break;
+        case 'marketplace_tax':
+          // GST/VAT collected by Shopify on behalf of tax authorities
+          settledRevenue += parseFloat(txn.amount || '0');
+          break;
+        case 'payout':
+          // Payout summaries — skip (not a transaction, just a record of bank transfer)
+          break;
+        default:
+          // Unknown type — include in revenue so money is never lost
+          settledRevenue += parseFloat(txn.amount || '0');
+          console.warn(`[PRISM:MONEY] Unknown BT type "${txn.type}" amount=${txn.amount} store=${storeId}`);
+          break;
       }
     }
 
