@@ -433,8 +433,15 @@ export async function POST(request: NextRequest) {
         } catch { /* Meta unavailable — 0 until next sync */ }
       }
 
-      // Use settled revenue for P&L when balance txns available
-      const revenueForPnL = hasBalanceTxns && settledRevenue > 0 ? settledRevenue : revenue;
+      // ALWAYS use order revenue (from Shopify orders API).
+      // BT data is used for FEES only (exact per-transaction fees).
+      // If BT fees are partial, estimate missing fees from learned rate.
+      const revenueForPnL = revenue;
+      if (hasBalanceTxns && btFees > 0 && settledRevenue > 0 && settledRevenue < revenue) {
+        // BT covers only some orders — scale fees proportionally to full revenue
+        const feeRate = btFees / settledRevenue;
+        transactionFees = Math.round(revenue * feeRate * 100) / 100;
+      }
       const netProfit = revenueForPnL - cogs - adSpend - transactionFees - refunds - chargebackLoss + chargebackWon;
       const margin = revenueForPnL > 0 ? (netProfit / revenueForPnL) * 100 : 0;
 
