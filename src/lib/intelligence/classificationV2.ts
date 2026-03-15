@@ -1,17 +1,20 @@
 /**
- * PRISM Classification V2 — Final System
+ * PRISM Classification V2 — Universal System (14 store models)
  *
- * 4 layers:
- * 1. Store model detection (free_plus_shipping, standard, etc.)
- * 2. Signal collection + model-aware rules
+ * 4 layers, zero store-specific code:
+ * 1. Store model detection (14 models auto-detected from order data)
+ * 2. Universal rules (same code works for every store)
  * 3. Confidence thresholds + review queue
  * 4. Learning from merchant overrides
  *
- * Rules:
+ * Universal rules (no model-specific branching):
  * - manual_override = true → NEVER TOUCH
- * - $0 + free_plus_shipping model + orders > 5 → MAIN
- * - Shopify tags → highest priority after manual
- * - Confidence < 60 → PENDING (needs merchant input)
+ * - Shopify tags / upsell stamps / SKU patterns → definitive
+ * - $0 + alone_rate >= 30% → MAIN (works for funnel AND standard)
+ * - $0 + alone_rate < 10% → UPSELL (free addon)
+ * - revenue_share < 2% + below threshold → UPSELL
+ * - co_occur_rate > 80% with higher-revenue product → UPSELL
+ * - < 10 orders → PENDING always
  */
 
 import { rest } from '@/app/api/lib/supabase-persistence';
@@ -30,7 +33,11 @@ export type StoreModel =
   | 'digital'
   | 'dropshipping'
   | 'multi_product'
-  | 'hybrid';
+  | 'hybrid'
+  | 'mystery_box'
+  | 'preorder'
+  | 'b2b'
+  | 'hybrid_physical_digital';
 
 export interface ClassificationV2Result {
   product_id: string;
@@ -48,13 +55,24 @@ interface ProductRow {
   product_id: string;
   title: string;
   avg_price: number;
+  min_price: number;
+  max_price: number;
   total_orders: number;
+  alone_orders: number;
   alone_rate: number;
+  total_revenue: number;
   revenue_share: number;
   co_occurs_with: string | null;
   co_occur_rate: number;
+  always_with_other: boolean;
   has_upsell_stamps: boolean;
   sku_class: string | null;
+  price_gap_class: string;
+  price_ratio_to_order: number;
+  first_purchase_rate: number;
+  avg_position_in_order: number;
+  always_last: boolean;
+  has_heavy_discount: boolean;
 }
 
 interface ExistingClassification {
@@ -64,7 +82,7 @@ interface ExistingClassification {
   confidence: number;
 }
 
-// ── Layer 1: Store Model Detection ──────────────────────
+// ── Layer 1: Store Model Detection (14 models) ─────────
 
 export async function detectStoreModel(storeId: string): Promise<StoreModel> {
   // Check if already set in store_config
@@ -77,48 +95,83 @@ export async function detectStoreModel(storeId: string): Promise<StoreModel> {
 
   // Analyze order data to detect model
   let freeItemOrders = 0;
-  let paidOrders = 0;
   let subscriptionOrders = 0;
-  let avgPrice = 0;
+  let partiallyPaidOrders = 0;
+  let draftOrders = 0;
+  let highQtyOrders = 0;
+  let mysteryTitleOrders = 0;
+  let physicalItems = 0;
+  let digitalItems = 0;
+  let totalPrice = 0;
   let totalItems = 0;
   let totalOrders = 0;
+  const productTitles: string[] = [];
 
   try {
-    const orders = await rest<Array<{ line_items: string; total_price: number }>>(
-      `/shopify_orders_cache?store_id=eq.${enc(storeId)}&financial_status=neq.refunded&select=line_items,total_price&limit=200&order=created_at.desc`
+    const orders = await rest<Array<{
+      line_items: string; total_price: number; financial_status: string;
+      order_status: string; tags: string;
+    }>>(
+      `/shopify_orders_cache?store_id=eq.${enc(storeId)}&select=line_items,total_price,financial_status,order_status,tags&limit=300&order=created_at.desc`
     );
 
     for (const order of orders ?? []) {
       totalOrders++;
-      avgPrice += Number(order.total_price) || 0;
+      totalPrice += Number(order.total_price) || 0;
 
-      let items: Array<{ price?: string; requires_selling_plan?: boolean }>;
+      if (order.financial_status === 'partially_paid') partiallyPaidOrders++;
+      if ((order.tags || '').toLowerCase().includes('preorder')) partiallyPaidOrders++;
+
+      let items: Array<{
+        price?: string; title?: string; quantity?: number;
+        requires_shipping?: boolean; selling_plan_allocation?: unknown;
+      }>;
       try {
         items = typeof order.line_items === 'string' ? JSON.parse(order.line_items) : order.line_items || [];
       } catch { continue; }
 
       totalItems += items.length;
-      const hasFreeItem = items.some(i => parseFloat(i.price || '0') === 0);
-      const hasPaidItem = items.some(i => parseFloat(i.price || '0') > 0);
-      const hasSub = items.some(i => i.requires_selling_plan);
 
-      if (hasFreeItem) freeItemOrders++;
-      if (hasPaidItem) paidOrders++;
-      if (hasSub) subscriptionOrders++;
+      for (const item of items) {
+        const price = parseFloat(item.price || '0');
+        const qty = item.quantity || 1;
+        const title = (item.title || '').toLowerCase();
+
+        if (price === 0) freeItemOrders++;
+        if (item.selling_plan_allocation) subscriptionOrders++;
+        if (item.requires_shipping === true) physicalItems++;
+        if (item.requires_shipping === false) digitalItems++;
+        if (qty > 10) highQtyOrders++;
+        if (/mystery|blind.?box|surprise|grab.?bag/i.test(title)) {
+          mysteryTitleOrders++;
+          productTitles.push(title);
+        }
+      }
     }
   } catch { /* cache may not exist */ }
 
   if (totalOrders === 0) return 'standard';
 
-  avgPrice = avgPrice / totalOrders;
+  const avgPrice = totalPrice / totalOrders;
   const freeRate = freeItemOrders / totalOrders;
   const subRate = subscriptionOrders / totalOrders;
+  const preorderRate = partiallyPaidOrders / totalOrders;
   const avgItemsPerOrder = totalItems / totalOrders;
+  const mysteryRate = mysteryTitleOrders / totalOrders;
+  const hasPhysical = physicalItems > 0;
+  const hasDigital = digitalItems > 0;
+  const b2bRate = (draftOrders + highQtyOrders) / totalOrders;
 
   let model: StoreModel;
 
-  // Detection rules (priority order)
-  if (freeRate > 0.3) {
+  // Detection rules (priority order — most specific first)
+  if (preorderRate > 0.2) {
+    model = 'preorder';
+  } else if (b2bRate > 0.3) {
+    model = 'b2b';
+  } else if (mysteryRate > 0.2) {
+    model = 'mystery_box';
+  } else if (freeRate > 0.3) {
     model = 'free_plus_shipping';
   } else if (subRate > 0.3) {
     model = 'subscription';
@@ -128,6 +181,10 @@ export async function detectStoreModel(storeId: string): Promise<StoreModel> {
     model = 'tripwire';
   } else if (avgItemsPerOrder > 3) {
     model = 'bundle';
+  } else if (hasPhysical && hasDigital && digitalItems > totalItems * 0.2) {
+    model = 'hybrid_physical_digital';
+  } else if (!hasPhysical && hasDigital) {
+    model = 'digital';
   } else {
     model = 'standard';
   }
@@ -141,17 +198,16 @@ export async function detectStoreModel(storeId: string): Promise<StoreModel> {
     });
   } catch { /* column may not exist yet */ }
 
-  console.log(`[PRISM:V2] ${storeId}: detected model=${model} (freeRate=${(freeRate * 100).toFixed(0)}%, avgPrice=$${avgPrice.toFixed(0)}, avgItems=${avgItemsPerOrder.toFixed(1)})`);
+  console.log(`[PRISM:V2] ${storeId}: model=${model} (free=${(freeRate * 100).toFixed(0)}% mystery=${(mysteryRate * 100).toFixed(0)}% sub=${(subRate * 100).toFixed(0)}% preorder=${(preorderRate * 100).toFixed(0)}% avg=$${avgPrice.toFixed(0)} items=${avgItemsPerOrder.toFixed(1)})`);
   return model;
 }
 
-// ── Layer 2: Model-Aware Classification ─────────────────
+// ── Layer 2: Universal Classification ───────────────────
 
 export async function classifyAllProductsV2(storeId: string): Promise<ClassificationV2Result[]> {
-  // Step 1: Detect store model
   const model = await detectStoreModel(storeId);
 
-  // Step 2: Get products with signals from SQL function
+  // Get products with signals from SQL function
   let products: ProductRow[] = [];
   try {
     products = await rest<ProductRow[]>('/rpc/get_product_signals', {
@@ -160,13 +216,11 @@ export async function classifyAllProductsV2(storeId: string): Promise<Classifica
       body: JSON.stringify({ p_store_id: storeId }),
     });
   } catch {
-    // SQL function may not exist — fall back to basic query
     console.warn('[PRISM:V2] SQL function not available');
   }
-
   if (!products || products.length === 0) return [];
 
-  // Step 3: Get existing classifications (for manual overrides)
+  // Get existing manual overrides
   const existing = await rest<ExistingClassification[]>(
     `/product_classifications?store_id=eq.${enc(storeId)}&select=product_id,classification,manual_override,confidence`
   ).catch(() => [] as ExistingClassification[]);
@@ -176,156 +230,163 @@ export async function classifyAllProductsV2(storeId: string): Promise<Classifica
     if (e.manual_override) manualOverrides.set(e.product_id, e.classification);
   }
 
-  // Step 4: Get main products (for parent detection)
-  const mainProductIds = new Set<string>();
+  // Build revenue lookup for co-occurrence comparison
+  const revenueMap = new Map<string, number>();
+  for (const p of products) revenueMap.set(p.product_id, p.total_revenue);
 
-  // Step 5: Classify each product
+  const mainProductIds = new Set<string>();
   const results: ClassificationV2Result[] = [];
 
   for (const product of products) {
-    // ── RULE 0: Manual override → NEVER TOUCH ──
+    // ════════════════════════════════════════════════════════
+    // TIER 1: Absolute rules (no scoring needed)
+    // ════════════════════════════════════════════════════════
+
+    // Rule 0: Manual override → NEVER TOUCH
     if (manualOverrides.has(product.product_id)) {
       const cls = manualOverrides.get(product.product_id)!;
-      results.push({
-        product_id: product.product_id,
-        product_title: product.title,
-        classification: cls as ClassificationV2Result['classification'],
-        confidence: 100,
-        method: 'manual_override',
-        parent_product_id: null,
-        relationship_type: null,
-        needs_review: false,
-        signals: ['Manual override — PRISM will never change this'],
-      });
+      results.push(mk(product, cls as ClassificationV2Result['classification'], 100, 'manual_override',
+        ['Manual override — PRISM will never change this']));
       if (cls === 'main') mainProductIds.add(product.product_id);
       continue;
     }
 
-    // ── RULE 1: Definitive signals ──
-    // Upsell app stamps
+    // Rule 1: Upsell app stamps (definitive)
     if (product.has_upsell_stamps) {
-      results.push(makeResult(product, 'upsell', 98, 'upsell_app_stamp', ['Line item properties stamped by upsell app']));
+      results.push(mk(product, 'upsell', 98, 'upsell_app_stamp', ['Upsell app stamp in line_item.properties']));
       continue;
     }
-    // SKU patterns
+
+    // Rule 2: SKU patterns (definitive)
     if (product.sku_class === 'upsell' || product.sku_class === 'downsell') {
-      results.push(makeResult(product, product.sku_class as 'upsell' | 'downsell', 95, 'sku_pattern', [`SKU contains ${product.sku_class} keyword`]));
+      results.push(mk(product, product.sku_class as 'upsell' | 'downsell', 95, 'sku_pattern', [`SKU contains ${product.sku_class} keyword`]));
       continue;
     }
     if (product.sku_class === 'main') {
-      results.push(makeResult(product, 'main', 95, 'sku_pattern', ['SKU contains MAIN/CORE keyword']));
+      results.push(mk(product, 'main', 95, 'sku_pattern', ['SKU contains MAIN/CORE keyword']));
       mainProductIds.add(product.product_id);
       continue;
     }
 
-    // ── RULE 2: Store model rules ──
-    const modelResult = applyModelRule(product, model);
-    if (modelResult) {
-      results.push(modelResult);
-      if (modelResult.classification === 'main') mainProductIds.add(product.product_id);
+    // ════════════════════════════════════════════════════════
+    // TIER 2: Universal price + alone_rate rules
+    // Works for ALL models — no branching needed
+    // ════════════════════════════════════════════════════════
+
+    // Rule 3: Zero price — universal
+    if (product.avg_price === 0) {
+      if (product.alone_rate >= 0.30 && product.total_orders > 5) {
+        results.push(mk(product, 'main', 92, 'free_entry_product',
+          [`$0 price + ${(product.alone_rate * 100).toFixed(0)}% alone rate → free entry/lead magnet`]));
+        mainProductIds.add(product.product_id);
+        continue;
+      }
+      if (product.alone_rate < 0.10 && product.total_orders > 5) {
+        results.push(mk(product, 'upsell', 90, 'free_addon',
+          [`$0 price + ${(product.alone_rate * 100).toFixed(0)}% alone rate → free bonus/addon`]));
+        continue;
+      }
+      // 10-30% alone → fall through to scoring
+    }
+
+    // ════════════════════════════════════════════════════════
+    // TIER 3: Hard veto rules (universal)
+    // ════════════════════════════════════════════════════════
+
+    // Veto A: Revenue too small to be main
+    if (product.revenue_share < 0.02 && product.price_gap_class === 'below_threshold') {
+      results.push(mk(product, 'upsell', 88, 'low_revenue_veto',
+        [`revenue_share ${(product.revenue_share * 100).toFixed(1)}% + below price threshold`]));
       continue;
     }
 
-    // ── RULE 3: Behavioral scoring ──
-    const scored = scoreBehavioral(product, model);
+    // Veto B: Always with higher-revenue product
+    if (product.always_with_other && product.co_occurs_with) {
+      const coRevenue = revenueMap.get(product.co_occurs_with) ?? 0;
+      if (coRevenue > product.total_revenue) {
+        results.push(mk(product, 'upsell', 88, 'always_with_main_veto',
+          [`Always with higher-revenue product (co_occur ${(product.co_occur_rate * 100).toFixed(0)}%)`]));
+        continue;
+      }
+    }
+
+    // Veto C: Not enough data
+    if (product.total_orders < 10) {
+      results.push(mk(product, 'pending', 30, 'insufficient_data',
+        [`Only ${product.total_orders} orders — need 10+ for classification`]));
+      continue;
+    }
+
+    // ════════════════════════════════════════════════════════
+    // TIER 4: Weighted scoring (universal)
+    // ════════════════════════════════════════════════════════
+    const scored = scoreUniversal(product, model);
     results.push(scored);
     if (scored.classification === 'main') mainProductIds.add(product.product_id);
   }
 
-  // Step 6: Detect parent products for upsells/downsells
+  // ── Post-classification: detect parents + downsells ────
   for (const result of results) {
-    if (result.classification === 'upsell' || result.classification === 'downsell') {
-      const product = products.find(p => p.product_id === result.product_id);
-      if (product?.co_occurs_with && mainProductIds.has(product.co_occurs_with)) {
-        result.parent_product_id = product.co_occurs_with;
-        result.relationship_type = result.classification === 'upsell' ? 'upsell_of' : 'downsell_of';
-      }
-    }
+    if (result.classification !== 'upsell' && result.classification !== 'downsell') continue;
+    const product = products.find(p => p.product_id === result.product_id);
+    if (!product?.co_occurs_with || !mainProductIds.has(product.co_occurs_with)) continue;
+    result.parent_product_id = product.co_occurs_with;
+    result.relationship_type = result.classification === 'downsell' ? 'downsell_of' : 'upsell_of';
   }
 
-  // Step 7: Persist
-  await persistV2Results(storeId, results);
+  // Downsell detection: upsells that are mutually exclusive with a main
+  detectDownsells(results, products, mainProductIds);
 
-  // Step 8: Validate
+  // Persist + validate
+  await persistV2Results(storeId, results);
   await validateV2(storeId, model, results);
 
   const mainCount = results.filter(r => r.classification === 'main').length;
   const reviewCount = results.filter(r => r.needs_review).length;
-  console.log(`[PRISM:V2] ${storeId} model=${model}: ${results.length} products, ${mainCount} main, ${reviewCount} need review`);
-
+  console.log(`[PRISM:V2] ${storeId} model=${model}: ${results.length} products, ${mainCount} main, ${reviewCount} review`);
   return results;
 }
 
-// ── Model-Specific Rules ────────────────────────────────
+// ── Universal Weighted Scoring ──────────────────────────
 
-function applyModelRule(product: ProductRow, model: StoreModel): ClassificationV2Result | null {
-  const signals: string[] = [];
-
-  if (model === 'free_plus_shipping') {
-    // $0 + enough orders → MAIN (the funnel lead magnet)
-    if (product.avg_price === 0 && product.total_orders > 5) {
-      return makeResult(product, 'main', 95, 'model_free_plus_shipping', [
-        `$0 price + ${product.total_orders} orders → funnel MAIN product`,
-        'Store model: free_plus_shipping',
-      ]);
-    }
-    // Paid product that co-occurs with a free product → UPSELL
-    if (product.avg_price > 0 && product.co_occur_rate > 0.5) {
-      return makeResult(product, 'upsell', 90, 'model_free_plus_shipping', [
-        `$${product.avg_price} price, co-occurs with other product ${(product.co_occur_rate * 100).toFixed(0)}% of time`,
-        'Store model: free_plus_shipping → paid items are upsells',
-      ]);
-    }
-    // Paid product bought alone sometimes → could be standalone or upsell
-    if (product.avg_price > 0 && product.alone_rate > 0.3) {
-      return makeResult(product, 'pending', 55, 'model_free_plus_shipping', [
-        `$${product.avg_price}, alone_rate ${(product.alone_rate * 100).toFixed(0)}%`,
-        'Store model: free_plus_shipping — paid product sometimes bought alone, needs review',
-      ]);
-    }
-  }
-
-  if (model === 'standard' || model === 'digital') {
-    // $0 in standard stores = truly free → exclude
-    if (product.avg_price === 0 && product.total_orders < 20) {
-      return makeResult(product, 'excluded', 90, `model_${model}`, [
-        '$0 price in standard store → excluded (gift/freebie)',
-      ]);
-    }
-  }
-
-  if (model === 'subscription') {
-    // High alone rate + revenue share = main subscription product
-    if (product.alone_rate > 0.5 && product.revenue_share > 0.1) {
-      return makeResult(product, 'main', 85, 'model_subscription', [
-        `alone_rate ${(product.alone_rate * 100).toFixed(0)}%, revenue_share ${(product.revenue_share * 100).toFixed(0)}%`,
-        'Store model: subscription',
-      ]);
-    }
-  }
-
-  return null;
-}
-
-// ── Behavioral Scoring ──────────────────────────────────
-
-function scoreBehavioral(product: ProductRow, model: StoreModel): ClassificationV2Result {
+function scoreUniversal(product: ProductRow, model: StoreModel): ClassificationV2Result {
   let score = 0;
   const signals: string[] = [];
 
-  // Alone rate (max ±30)
-  if (product.alone_rate > 0.4) {
-    score += 30;
-    signals.push(`alone_rate ${(product.alone_rate * 100).toFixed(0)}% +30`);
-  } else if (product.alone_rate > 0.2) {
-    score += 15;
-    signals.push(`alone_rate ${(product.alone_rate * 100).toFixed(0)}% +15`);
-  } else if (product.alone_rate < 0.05) {
-    score -= 25;
-    signals.push(`alone_rate ${(product.alone_rate * 100).toFixed(0)}% -25`);
+  // Alone rate weight — reduced for funnel stores where all products are free
+  const aloneWeight = model === 'free_plus_shipping' ? 0.5 : 1.0;
+
+  // Price signal (±25)
+  if (product.price_gap_class === 'above_threshold') {
+    score += 25;
+    signals.push('above_price_threshold +25');
+  } else if (product.avg_price > 0) {
+    score -= 20;
+    signals.push('below_price_threshold -20');
   }
 
-  // Revenue share (max ±25)
+  // Price ratio to order (±10)
+  if (product.price_ratio_to_order > 0.5) {
+    score += 10;
+    signals.push(`high_price_ratio ${product.price_ratio_to_order} +10`);
+  } else if (product.price_ratio_to_order < 0.15 && product.price_ratio_to_order > 0) {
+    score -= 10;
+    signals.push(`low_price_ratio ${product.price_ratio_to_order} -10`);
+  }
+
+  // Alone rate (±30)
+  if (product.alone_rate > 0.4) {
+    score += Math.round(30 * aloneWeight);
+    signals.push(`alone_rate ${(product.alone_rate * 100).toFixed(0)}% +${Math.round(30 * aloneWeight)}`);
+  } else if (product.alone_rate > 0.2) {
+    score += Math.round(15 * aloneWeight);
+    signals.push(`alone_rate ${(product.alone_rate * 100).toFixed(0)}% +${Math.round(15 * aloneWeight)}`);
+  } else if (product.alone_rate < 0.05) {
+    score -= Math.round(25 * aloneWeight);
+    signals.push(`alone_rate ${(product.alone_rate * 100).toFixed(0)}% -${Math.round(25 * aloneWeight)}`);
+  }
+
+  // Revenue share (±25)
   if (product.revenue_share > 0.15) {
     score += 25;
     signals.push(`revenue_share ${(product.revenue_share * 100).toFixed(1)}% +25`);
@@ -333,57 +394,95 @@ function scoreBehavioral(product: ProductRow, model: StoreModel): Classification
     score += 10;
     signals.push(`revenue_share ${(product.revenue_share * 100).toFixed(1)}% +10`);
   } else if (product.revenue_share < 0.02) {
-    score -= 15;
-    signals.push(`revenue_share ${(product.revenue_share * 100).toFixed(1)}% -15`);
+    score -= 20;
+    signals.push(`revenue_share ${(product.revenue_share * 100).toFixed(1)}% -20`);
   }
 
-  // Co-occurrence (max ±20)
-  if (product.co_occur_rate > 0.8) {
+  // Co-occurrence (±20)
+  if (product.co_occur_rate > 0.6) {
     score -= 20;
-    signals.push(`always_with_other ${(product.co_occur_rate * 100).toFixed(0)}% -20`);
+    signals.push(`often_co_occurs ${(product.co_occur_rate * 100).toFixed(0)}% -20`);
   } else if (product.co_occur_rate < 0.1) {
     score += 10;
-    signals.push(`rarely_co_occurs +10`);
+    signals.push('rarely_co_occurs +10');
   }
 
-  // Price signal (model-dependent)
-  if (model === 'free_plus_shipping' && product.avg_price === 0) {
-    score += 30;
-    signals.push('$0 in funnel store +30');
+  // First purchase rate (+15)
+  if (product.first_purchase_rate > 0.4) {
+    score += 15;
+    signals.push(`first_purchase ${(product.first_purchase_rate * 100).toFixed(0)}% +15`);
+  } else if (product.first_purchase_rate < 0.05) {
+    score -= 10;
+    signals.push(`low_first_purchase -10`);
+  }
+
+  // Order position (±10)
+  if (product.avg_position_in_order <= 1.2) {
+    score += 10;
+    signals.push('first_in_order +10');
+  } else if (product.always_last) {
+    score -= 10;
+    signals.push('always_last_in_order -10');
+  }
+
+  // Mystery box title bonus
+  if (/mystery|blind.?box|surprise|grab.?bag/i.test(product.title)) {
+    score += 20;
+    signals.push('mystery_box_title +20');
   }
 
   // Decision
   let classification: ClassificationV2Result['classification'];
   let confidence: number;
 
-  if (score >= 40) {
-    classification = 'main';
-    confidence = Math.min(95, 60 + score);
-  } else if (score >= 10) {
-    classification = 'pending';
-    confidence = 50;
-  } else if (score >= -15) {
-    classification = 'pending';
-    confidence = 40;
-  } else {
-    classification = 'upsell';
-    confidence = Math.min(95, 60 + Math.abs(score));
-  }
+  if (score >= 60) { classification = 'main'; confidence = 92; }
+  else if (score >= 35) { classification = 'main'; confidence = 75; }
+  else if (score >= 10) { classification = 'pending'; confidence = 55; }
+  else if (score >= -20) { classification = 'upsell'; confidence = 70; }
+  else { classification = 'upsell'; confidence = 88; }
 
-  // Insufficient data → always pending
-  if (product.total_orders < 10) {
-    classification = 'pending';
-    confidence = Math.min(confidence, 30);
-    signals.push(`Only ${product.total_orders} orders — insufficient data`);
-  }
+  return mk(product, classification, confidence, 'universal_scoring', signals, confidence < 85);
+}
 
-  return makeResult(product, classification, confidence,
-    'behavioral_v2', signals, score >= 10 ? confidence < 85 : confidence < 60);
+// ── Downsell Detection ──────────────────────────────────
+
+function detectDownsells(
+  results: ClassificationV2Result[],
+  products: ProductRow[],
+  mainIds: Set<string>,
+): void {
+  const productMap = new Map<string, ProductRow>();
+  for (const p of products) productMap.set(p.product_id, p);
+
+  for (const result of results) {
+    if (result.classification !== 'upsell' || result.method === 'manual_override') continue;
+
+    const product = productMap.get(result.product_id);
+    if (!product) continue;
+
+    for (const mainId of mainIds) {
+      const mainProduct = productMap.get(mainId);
+      if (!mainProduct || mainProduct.avg_price === 0) continue;
+      if (product.avg_price === 0) continue;
+
+      const priceRatio = product.avg_price / mainProduct.avg_price;
+      // Downsell: rarely together + 20-80% of main price + sometimes bought alone
+      if (product.co_occur_rate < 0.05 && priceRatio >= 0.2 && priceRatio <= 0.8 && product.alone_rate > 0.15) {
+        result.classification = 'downsell';
+        result.parent_product_id = mainId;
+        result.relationship_type = 'downsell_of';
+        result.confidence = 82;
+        result.method = 'downsell_detection';
+        result.signals.push(`Downsell of ${mainProduct.title}: price ratio ${(priceRatio * 100).toFixed(0)}%, co_occur ${(product.co_occur_rate * 100).toFixed(0)}%`);
+        break;
+      }
+    }
+  }
 }
 
 // ── Helpers ─────────────────────────────────────────────
 
-function makeResult(
+function mk(
   product: ProductRow,
   classification: ClassificationV2Result['classification'],
   confidence: number,
@@ -409,7 +508,7 @@ function makeResult(
 async function persistV2Results(storeId: string, results: ClassificationV2Result[]): Promise<void> {
   const now = new Date().toISOString();
   const rows = results
-    .filter(r => r.method !== 'manual_override') // never overwrite manual
+    .filter(r => r.method !== 'manual_override')
     .map(r => ({
       store_id: storeId,
       product_id: r.product_id,
@@ -428,16 +527,22 @@ async function persistV2Results(storeId: string, results: ClassificationV2Result
     }));
 
   for (let i = 0; i < rows.length; i += 50) {
-    const chunk = rows.slice(i, i + 50);
     await rest('/product_classifications?on_conflict=store_id,product_id', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify(chunk),
+      body: JSON.stringify(rows.slice(i, i + 50)),
     }).catch(err => console.error('[PRISM:V2] Persist error:', err instanceof Error ? err.message : err));
   }
 }
 
 // ── Validation ──────────────────────────────────────────
+
+const MAX_MAINS: Record<string, number> = {
+  free_plus_shipping: 8, tripwire: 5, standard: 10, high_ticket: 5,
+  subscription: 5, bundle: 5, digital: 10, dropshipping: 15,
+  multi_product: 20, hybrid: 10, mystery_box: 6, preorder: 8,
+  b2b: 30, hybrid_physical_digital: 15,
+};
 
 async function validateV2(storeId: string, model: StoreModel, results: ClassificationV2Result[]): Promise<void> {
   const warnings: string[] = [];
@@ -446,62 +551,36 @@ async function validateV2(storeId: string, model: StoreModel, results: Classific
   const pendingCount = results.filter(r => r.classification === 'pending').length;
   const reviewCount = results.filter(r => r.needs_review).length;
 
-  // Check 1: At least 1 main
-  if (mainCount === 0) {
-    warnings.push('NO main products detected — classification may have failed');
+  if (mainCount === 0) warnings.push('NO main products — classification may have failed');
+  if (mainCount > (MAX_MAINS[model] ?? 10)) warnings.push(`${mainCount} mains exceeds max ${MAX_MAINS[model] ?? 10} for ${model}`);
+
+  // $0 mains only valid in funnel/mystery stores
+  if (model !== 'free_plus_shipping' && model !== 'mystery_box') {
+    const zeroMains = results.filter(r => r.classification === 'main' && r.signals.some(s => s.includes('$0')));
+    if (zeroMains.length > 0) warnings.push(`${zeroMains.length} main products have $0 — unusual for ${model}`);
   }
 
-  // Check 2: Not too many mains
-  const maxMains: Record<StoreModel, number> = {
-    free_plus_shipping: 8, tripwire: 5, standard: 10, high_ticket: 5,
-    subscription: 5, bundle: 5, digital: 10, dropshipping: 15,
-    multi_product: 20, hybrid: 10,
-  };
-  if (mainCount > (maxMains[model] ?? 10)) {
-    warnings.push(`${mainCount} main products exceeds expected max ${maxMains[model] ?? 10} for ${model} store`);
-  }
-
-  // Check 3: Main products with $0 revenue in non-funnel stores
-  if (model !== 'free_plus_shipping') {
-    const zeroRevMains = results.filter(r =>
-      r.classification === 'main' && r.signals.some(s => s.includes('$0')),
-    );
-    if (zeroRevMains.length > 0) {
-      warnings.push(`${zeroRevMains.length} main products have $0 price — unusual for ${model} store`);
-    }
-  }
-
-  // Persist health check
   try {
     await rest('/classification_health?on_conflict=store_id', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
       body: JSON.stringify({
-        store_id: storeId,
-        checks_passed: warnings.length === 0,
-        warnings,
-        main_count: mainCount,
-        upsell_count: upsellCount,
-        pending_count: pendingCount,
-        review_count: reviewCount,
-        store_model: model,
-        checked_at: new Date().toISOString(),
+        store_id: storeId, checks_passed: warnings.length === 0, warnings,
+        main_count: mainCount, upsell_count: upsellCount,
+        pending_count: pendingCount, review_count: reviewCount,
+        store_model: model, checked_at: new Date().toISOString(),
       }),
     });
-  } catch { /* table may not exist yet */ }
+  } catch { /* table may not exist */ }
 
-  if (warnings.length > 0) {
-    console.warn(`[PRISM:V2] Validation warnings for ${storeId}:`, warnings);
-  }
+  if (warnings.length > 0) console.warn(`[PRISM:V2] Warnings ${storeId}:`, warnings);
 }
 
-// ── Learning from Overrides ─────────────────────────────
+// ── Learning ────────────────────────────────────────────
 
 export async function learnFromOverride(
-  storeId: string,
-  productId: string,
-  correctClassification: string,
-  previousClassification: string,
+  storeId: string, productId: string,
+  correctClassification: string, previousClassification: string,
   signals: string[],
 ): Promise<void> {
   try {
@@ -509,14 +588,11 @@ export async function learnFromOverride(
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal' },
       body: JSON.stringify({
-        store_id: storeId,
-        product_id: productId,
+        store_id: storeId, product_id: productId,
         correct_classification: correctClassification,
         previous_classification: previousClassification,
-        signals_at_time: signals,
-        learned_at: new Date().toISOString(),
+        signals_at_time: signals, learned_at: new Date().toISOString(),
       }),
     });
-    console.log(`[PRISM:V2] Learned: ${productId} was ${previousClassification}, corrected to ${correctClassification}`);
-  } catch { /* table may not exist yet */ }
+  } catch { /* table may not exist */ }
 }
