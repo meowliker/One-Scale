@@ -57,8 +57,18 @@ export async function POST(request: NextRequest) {
     }
 
     // Find FREE products (avg price = 0) with significant order count
+    // Known upsells that happen to be $0 — exclude from MAIN
+    const UPSELL_EXCLUSIONS = [
+      'impulse control',
+      'phonics activity bundle',
+    ];
+
     freeProducts = [...productStats.entries()]
-      .filter(([, stats]) => stats.totalPrice === 0 && stats.count >= 5)
+      .filter(([, stats]) => {
+        if (stats.totalPrice !== 0 || stats.count < 5) return false;
+        const titleLower = stats.title.toLowerCase();
+        return !UPSELL_EXCLUSIONS.some(ex => titleLower.includes(ex));
+      })
       .sort((a, b) => b[1].count - a[1].count)
       .slice(0, 10)
       .map(([pid, stats]) => ({ product_id: pid, title: stats.title, order_count: stats.count }));
