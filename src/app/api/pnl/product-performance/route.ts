@@ -71,6 +71,7 @@ interface ProductAgg {
   sku: string;
   unitsSold: number;
   revenue: number;
+  fees: number;
   orderCount: number;
   shipping: number;
   orderIds: Set<string>;
@@ -366,6 +367,11 @@ export async function GET(request: NextRequest) {
         orderLineItemRevenueSum += parseFloat(item.price || '0') * (item.quantity || 1);
       }
 
+      // Get actual BT fee for this order (if available)
+      const btOrder = btOrderMap.get(order.shopify_order_id);
+      const orderActualFee = btOrder ? Math.abs(btOrder.fee) : 0;
+      const hasActualFee = orderActualFee > 0;
+
       for (const item of lineItems) {
         const productId = item.product_id ? String(item.product_id) : `unknown_${item.title}`;
         const price = parseFloat(item.price || '0');
@@ -373,14 +379,19 @@ export async function GET(request: NextRequest) {
         const lineRevenue = price * quantity;
         totalRevenue += lineRevenue;
 
-        // Distribute shipping proportionally across line items
+        // Distribute shipping and fees proportionally by revenue share within this order
         const lineRevenueShare = orderLineItemRevenueSum > 0 ? lineRevenue / orderLineItemRevenueSum : 0;
         const lineShipping = round2(orderShipping * lineRevenueShare);
+        // Actual BT fee distributed proportionally, or estimate from store-wide rate
+        const lineFee = hasActualFee
+          ? round2(orderActualFee * lineRevenueShare)
+          : round2((lineRevenue * feePercentage / 100) + (feeFixed > 0 ? feeFixed / Math.max(1, lineItems.length) : 0));
 
         const existing = productAgg.get(productId);
         if (existing) {
           existing.unitsSold += quantity;
           existing.revenue += lineRevenue;
+          existing.fees += lineFee;
           existing.shipping += lineShipping;
           existing.orderCount++;
           existing.orderIds.add(order.shopify_order_id);
@@ -390,6 +401,7 @@ export async function GET(request: NextRequest) {
             sku: item.sku || '',
             unitsSold: quantity,
             revenue: lineRevenue,
+            fees: lineFee,
             shipping: lineShipping,
             orderCount: 1,
             orderIds: new Set([order.shopify_order_id]),
@@ -400,15 +412,10 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // ── SETTLEMENT RATIO: scale order revenue to match balance txn settled amounts ──
-    const totalSettled = (balanceTxnFees ?? []).reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
-    const settlementRatio = totalSettled > 0 && totalRevenue > 0 ? totalSettled / totalRevenue : 1;
-    if (totalSettled > 0) {
-      for (const agg of productAgg.values()) {
-        agg.revenue = round2(agg.revenue * settlementRatio);
-      }
-      totalRevenue = round2(totalRevenue * settlementRatio);
-    }
+    // Product revenue uses line item prices directly (price × quantity).
+    // Do NOT scale by settlement ratio — BT data may be incomplete and
+    // scaling corrupts per-product revenue when only partial BT exists.
+    // BT data is used ONLY for fee rate calculation (feePercentage above).
 
     // ── REFUND & CHARGEBACK MAPS (by order ID) ──
     const refundByOrder = new Map<string, number>();
@@ -619,8 +626,8 @@ export async function GET(request: NextRequest) {
 
       const revenueShare = totalRevenue > 0 ? agg.revenue / totalRevenue : 0;
 
-      // Fees: proportional by revenue share (universal, works for every store)
-      const fees = round2((agg.revenue * feePercentage / 100) + (feeFixed * agg.orderCount));
+      // Fees: already computed per-order proportionally during aggregation
+      const fees = round2(agg.fees);
       const shipping = round2(agg.shipping);
 
       // Use stored classification from adaptive intelligence if available
