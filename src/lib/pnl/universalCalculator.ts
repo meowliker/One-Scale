@@ -531,9 +531,25 @@ export async function calculatePnL(
           // Payout summaries — skip (not a transaction, just a record of bank transfer)
           break;
         default:
-          // Unknown type — include in revenue so money is never lost
+          // Unknown type — include as adjustment so money is never lost
           settledRevenue += parseFloat(txn.amount || '0');
-          console.warn(`[PRISM:MONEY] Unknown BT type "${txn.type}" amount=${txn.amount} store=${storeId}`);
+          console.error(
+            `[PRISM:MONEY] UNKNOWN TRANSACTION TYPE: "${txn.type}"`,
+            `amount=${txn.amount} store=${storeId}`,
+            `— ADDED TO ADJUSTMENTS, needs proper handling`
+          );
+          // Save alert for review
+          rest('/prism_alerts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              store_id: storeId,
+              alert_type: 'unknown_transaction_type',
+              severity: 'high',
+              message: `Unknown BT type: ${txn.type}, amount: $${txn.amount}`,
+              details: { type: txn.type, amount: txn.amount, net: txn.net },
+            }),
+          }).catch(() => null);
           break;
       }
     }
