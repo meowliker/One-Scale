@@ -198,73 +198,71 @@ export async function POST(request: NextRequest) {
 
   const results: Array<{ date: string; success: boolean; error?: string }> = [];
 
+  // ── PRIMARY: Use payout summary fields (exact, same as Apps Script) ──
+  // Each payout has pre-calculated summary from Shopify = exact numbers.
+  // Group by payout_date (not processed_at) for correct date attribution.
+
+  const payoutRows = await rest<Array<{
+    payout_date: string; charges_gross: number; charges_fee: number;
+    refunds_gross: number; adjustments_gross: number; reserved_gross: number;
+  }>>(
+    `/store_payouts?store_id=eq.${encodeURIComponent(storeId)}` +
+    `&status=in.(paid,in_transit)` +
+    `&select=payout_date,charges_gross,charges_fee,refunds_gross,adjustments_gross,reserved_gross` +
+    `&order=payout_date.desc&limit=100`
+  ).catch(() => []);
+
+  // Group payouts by date (multiple payouts can share a date)
+  const payoutByDate = new Map<string, { revenue: number; fees: number; refunds: number; adjustments: number; reserved: number }>();
+  for (const p of payoutRows ?? []) {
+    const d = p.payout_date;
+    const existing = payoutByDate.get(d) ?? { revenue: 0, fees: 0, refunds: 0, adjustments: 0, reserved: 0 };
+    existing.revenue += Number(p.charges_gross) || 0;
+    existing.fees += Math.abs(Number(p.charges_fee) || 0);
+    existing.refunds += Math.abs(Number(p.refunds_gross) || 0);
+    existing.adjustments += Number(p.adjustments_gross) || 0;
+    existing.reserved += Number(p.reserved_gross) || 0;
+    payoutByDate.set(d, existing);
+  }
+
+  // Get chargebacks from BT (payout summary doesn't break disputes out)
+  const disputeRows = await rest<Array<{ processed_at: string; net: number }>>(
+    `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}` +
+    `&type=eq.dispute&select=processed_at,net&limit=500`
+  ).catch(() => []);
+
+  // Group disputes by date in store timezone
+  const disputeByDate = new Map<string, { loss: number; won: number }>();
+  for (const d of disputeRows ?? []) {
+    const dateStr = formatDateInTz(new Date(d.processed_at), tz);
+    const existing = disputeByDate.get(dateStr) ?? { loss: 0, won: 0 };
+    const net = Number(d.net) || 0;
+    if (net < 0) existing.loss += Math.abs(net);
+    else existing.won += net;
+    disputeByDate.set(dateStr, existing);
+  }
+
+  // Build P&L for each requested date
   for (const dateStr of dates) {
     try {
-      // ── SIMPLIFIED P&L: Pure balance transaction calculation ──
-      // Same logic as Apps Script V4.4. No orders needed.
-      // BT alone = exact revenue, fees, refunds, chargebacks.
-      const utcBounds = dateStrToUtcBounds(dateStr, tz);
+      const payout = payoutByDate.get(dateStr);
+      const dispute = disputeByDate.get(dateStr);
 
-      // Fetch BT grouped by PAYOUT DATE (not processed_at).
-      // Apps Script uses payout date for P&L grouping.
-      // First: find payout_ids for this date from our BT data.
-      // BT records have payout_id — group by payout_id, then check which payouts are for this date.
-      // Approach: query BT by processed_at range (rough filter), plus query by payout_id for known payouts.
-      // Simple approach: query ALL BT for this store with this payout date's payout_ids
-      // Since we don't have a payouts table, use processed_at as best proxy (most charges process same day as payout)
-      const btRows = await rest<Array<{ type: string; amount: string; fee: string; net: string }>>(
-        `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}` +
-        `&and=(processed_at.gte.${encodeURIComponent(utcBounds.min)},processed_at.lte.${encodeURIComponent(utcBounds.max)})` +
-        `&select=type,amount,fee,net&limit=1000`
-      ).catch(() => []);
+      const revenue = Math.round((payout?.revenue ?? 0) * 100) / 100;
+      const transactionFees = Math.round((payout?.fees ?? 0) * 100) / 100;
+      const refunds = Math.round((payout?.refunds ?? 0) * 100) / 100;
+      const adjustments = Math.round(((payout?.adjustments ?? 0) + (payout?.reserved ?? 0)) * 100) / 100;
+      const chargebackLoss = Math.round((dispute?.loss ?? 0) * 100) / 100;
+      const chargebackWon = Math.round((dispute?.won ?? 0) * 100) / 100;
 
-      let revenue = 0, transactionFees = 0, refunds = 0;
-      let chargebackLoss = 0, chargebackWon = 0;
-      let adjustments = 0;
-
-      for (const txn of btRows ?? []) {
-        const amount = parseFloat(txn.amount || '0');
-        const fee = Math.abs(parseFloat(txn.fee || '0'));
-        const net = parseFloat(txn.net || '0');
-        const type = (txn.type || '').toLowerCase();
-
-        switch (type) {
-          case 'charge':
-            revenue += Math.abs(amount);
-            transactionFees += fee;
-            break;
-          case 'refund':
-            refunds += Math.abs(amount);
-            break;
-          case 'dispute':
-            if (net < 0) chargebackLoss += Math.abs(net);
-            else chargebackWon += net;
-            break;
-          case 'payout':
-            break; // Skip payout summaries
-          default:
-            // adjustments, credits, reserves, marketplace_tax, unknown
-            adjustments += amount;
-            break;
-        }
-      }
-
-      // Round to 2 decimal places
-      revenue = Math.round(revenue * 100) / 100;
-      transactionFees = Math.round(transactionFees * 100) / 100;
-      refunds = Math.round(refunds * 100) / 100;
-      chargebackLoss = Math.round(chargebackLoss * 100) / 100;
-      chargebackWon = Math.round(chargebackWon * 100) / 100;
-      adjustments = Math.round(adjustments * 100) / 100;
-
-      // Meta ad spend from cache
+      // Meta ad spend
       let adSpend = 0;
       try {
         const spendRows = await rest<Array<{ spend: number }>>(
           `/meta_spend_cache?store_id=eq.${encodeURIComponent(storeId)}&date=eq.${dateStr}&select=spend`
         );
         adSpend = (spendRows ?? []).reduce((s, r) => s + (Number(r.spend) || 0), 0);
-      } catch { /* no meta data */ }
+      } catch { /* no meta */ }
 
       const netProfit = Math.round((revenue - transactionFees - refunds - chargebackLoss + chargebackWon + adjustments - adSpend) * 100) / 100;
       const margin = revenue > 0 ? Math.round((netProfit / revenue) * 10000) / 100 : 0;
@@ -280,7 +278,7 @@ export async function POST(request: NextRequest) {
             chargeback_loss: chargebackLoss, chargeback_won: chargebackWon,
             ad_spend: adSpend, net_profit: netProfit, margin,
             synced_at: new Date().toISOString(),
-            shopify_synced: (btRows ?? []).length > 0,
+            shopify_synced: revenue > 0 || refunds > 0,
             meta_synced: adSpend > 0,
           }]),
         }
