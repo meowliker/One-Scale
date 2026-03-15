@@ -301,7 +301,10 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // ── Balance transactions (settled revenue, real fees) ──────
+      // ── Balance transactions (exact fees per order, attributed to ORDER DATE) ──
+      // Join BT to orders via source_order_id to use order.created_at for date bucketing.
+      // This shows revenue on the day customers bought, not when Shopify settled.
+      // Adjustments/credits/reserves with no source_order_id use processed_at as fallback.
       let settledRevenue = 0;
       let btFees = 0;
       let btRefunds = 0;
@@ -309,12 +312,28 @@ export async function POST(request: NextRequest) {
       let btChargebackWon = 0;
       let hasBalanceTxns = false;
       try {
-        const btRows = await rest<Array<{ type: string; amount: string; fee: string; net: string }>>(
-          `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}&and=(processed_at.gte.${encodeURIComponent(utcBounds.min)},processed_at.lte.${encodeURIComponent(utcBounds.max)})&select=type,amount,fee,net`
-        );
-        if (btRows && btRows.length > 0) {
+        // Step 1: Get order IDs for this date, then fetch their BT records
+        const dateOrderIds = orders.map(o => String(o.id));
+
+        let matchedBTs: Array<{ type: string; amount: string; fee: string; net: string }> = [];
+        if (dateOrderIds.length > 0) {
+          // Fetch BTs for these specific orders (efficient — only this date's orders)
+          const batchSize = 50;
+          for (let i = 0; i < dateOrderIds.length; i += batchSize) {
+            const batch = dateOrderIds.slice(i, i + batchSize);
+            const idFilter = batch.map(id => `"${id}"`).join(',');
+            const batchBTs = await rest<Array<{ type: string; amount: string; fee: string; net: string }>>(
+              `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}` +
+              `&source_order_id=in.(${idFilter})` +
+              `&select=type,amount,fee,net`
+            );
+            matchedBTs.push(...(batchBTs ?? []));
+          }
+        }
+
+        if (matchedBTs.length > 0) {
           hasBalanceTxns = true;
-          for (const txn of btRows) {
+          for (const txn of matchedBTs) {
             const amount = Math.abs(parseFloat(txn.amount || '0'));
             const fee = Math.abs(parseFloat(txn.fee || '0'));
             const net = parseFloat(txn.net || '0');
@@ -328,6 +347,48 @@ export async function POST(request: NextRequest) {
               case 'adjustment': case 'debit': case 'credit':
                 settledRevenue += parseFloat(txn.amount || '0');
                 break;
+              case 'reserved_funds': case 'reserve':
+                settledRevenue += parseFloat(txn.amount || '0');
+                break;
+              case 'marketplace_tax':
+                settledRevenue += parseFloat(txn.amount || '0');
+                break;
+              case 'payout': break;
+              default:
+                settledRevenue += parseFloat(txn.amount || '0');
+                break;
+            }
+          }
+        }
+
+        // Step 2: If no order-linked BTs found, fall back to processed_at date
+        if (!hasBalanceTxns) {
+          const fallbackBTs = await rest<Array<{ type: string; amount: string; fee: string; net: string }>>(
+            `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}` +
+            `&and=(processed_at.gte.${encodeURIComponent(utcBounds.min)},processed_at.lte.${encodeURIComponent(utcBounds.max)})` +
+            `&select=type,amount,fee,net`
+          );
+          if (fallbackBTs && fallbackBTs.length > 0) {
+            hasBalanceTxns = true;
+            for (const txn of fallbackBTs) {
+              const amount = Math.abs(parseFloat(txn.amount || '0'));
+              const fee = Math.abs(parseFloat(txn.fee || '0'));
+              const net = parseFloat(txn.net || '0');
+              switch (txn.type) {
+                case 'charge': settledRevenue += amount; btFees += fee; break;
+                case 'refund': btRefunds += amount; break;
+                case 'dispute':
+                  if (net < 0) btChargebackLoss += Math.abs(net);
+                  else btChargebackWon += net;
+                  break;
+                case 'adjustment': case 'debit': case 'credit':
+                  settledRevenue += parseFloat(txn.amount || '0');
+                  break;
+                case 'payout': break;
+                default:
+                  settledRevenue += parseFloat(txn.amount || '0');
+                  break;
+              }
             }
           }
         }
