@@ -20,6 +20,7 @@ import {
 import { extractAllProductBehaviors } from '@/lib/intelligence/behaviorExtractor';
 import { buildStoreProfile } from '@/lib/intelligence/storeProfiler';
 import { classifyAllProducts } from '@/lib/intelligence/relativeClassifier';
+import { buildProductPerformance } from '@/lib/pnl/appsScriptPort';
 import { PRISM } from '@/lib/prism';
 
 export const dynamic = 'force-dynamic';
@@ -139,6 +140,93 @@ export async function GET(request: NextRequest) {
   const { start: tzStart, end: tzEnd } = getStoreDateRangeForPeriod(from, to, storeTz);
 
   try {
+    // ══════════════════════════════════════════════════════════════════════
+    // PRIMARY PATH: Apps Script V4.4 Port
+    // If product_config exists for this store, use the exact Apps Script
+    // logic: keyword matching → BT fee split → ad spend distribution.
+    // This guarantees SUM(product ad_spend) = P&L ad_spend.
+    // ══════════════════════════════════════════════════════════════════════
+    try {
+      const appsScriptResults = await buildProductPerformance(storeId, from, to);
+      if (appsScriptResults.length > 0) {
+        // Fetch product images for card display
+        const imgMap = new Map<string, string>();
+        try {
+          const shopToken = await getShopifyToken(storeId);
+          if (shopToken?.accessToken && shopToken?.shopDomain) {
+            const shopProducts = await fetchShopifyProducts(shopToken.accessToken, shopToken.shopDomain, { limit: 250 });
+            for (const p of shopProducts) {
+              const img = p.images?.[0]?.src;
+              if (img) imgMap.set(String(p.id), img);
+            }
+          }
+        } catch { /* images non-critical */ }
+
+        const data = appsScriptResults.map(r => ({
+          productId: r.product_id,
+          productName: r.product_name,
+          productImage: imgMap.get(r.product_id) ?? null,
+          shopifyUrl: r.product_id.startsWith('unknown_') ? null : `/admin/products/${r.product_id}`,
+          sku: '',
+          unitsSold: r.orders,
+          revenue: r.revenue,
+          cogs: r.cogs,
+          shipping: 0,
+          fees: r.fees,
+          netProfit: r.net_profit,
+          margin: r.margin,
+          fbMetrics: {
+            roas: r.ad_spend > 0 ? Math.round((r.revenue / r.ad_spend) * 100) / 100 : 0,
+            cpc: 0, cpm: 0, ctr: 0, aov: 0, atcRate: 0,
+            spend: r.ad_spend,
+            impressions: 0, clicks: 0, purchases: 0,
+            costPerPurchase: 0, frequency: 0, reach: 0,
+          },
+          isAdvertised: r.ad_spend > 0,
+          adLandingPageUrl: null, adName: null, adSetName: null, campaignName: null,
+          category: 'main' as const,
+          classificationConfidence: 95,
+          classificationMethod: 'product_config',
+          classificationSignals: null,
+          behavioralSignals: [],
+          parentProduct: null,
+          downsellOf: null,
+          needsReview: false,
+          manualOverride: false,
+          lastAnalyzed: new Date().toISOString(),
+          _internal: {
+            attributionMethod: r.attribution_method,
+            totalSpend: appsScriptResults.reduce((s, x) => s + x.ad_spend, 0),
+            totalOrders: appsScriptResults.reduce((s, x) => s + x.orders, 0),
+          },
+        }));
+
+        console.log(`[PRISM:ProductPerf] Apps Script path: ${data.length} products, method=${appsScriptResults[0]?.attribution_method}`);
+
+        return NextResponse.json({
+          ok: true,
+          data,
+          meta: {
+            totalOrders: appsScriptResults.reduce((s, r) => s + r.orders, 0),
+            totalRevenue: Math.round(appsScriptResults.reduce((s, r) => s + r.revenue, 0) * 100) / 100,
+            totalSpend: Math.round(appsScriptResults.reduce((s, r) => s + r.ad_spend, 0) * 100) / 100,
+            unattributedSpend: 0,
+            dateFrom: from,
+            dateTo: to,
+            source: 'apps_script_port',
+            attributionMethod: appsScriptResults[0]?.attribution_method ?? 'none',
+          },
+        });
+      }
+    } catch (err) {
+      console.warn('[PRISM:ProductPerf] Apps Script path failed, falling back:', err instanceof Error ? err.message : 'Unknown');
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // FALLBACK PATH: Original line-item-level aggregation
+    // Used when product_config doesn't exist for this store.
+    // ══════════════════════════════════════════════════════════════════════
+
     // Fetch orders + spend + COGS + payment fees + campaign mappings + balance txn fees + order attributions from DB in parallel
     const [orders, spendRows, storedCosts, paymentFees, campaignMappings, storedClassifications, attributedOrders, balanceTxnFees, refundTxns, chargebackRows] = await Promise.all([
       rest<OrderCacheRow[]>(
