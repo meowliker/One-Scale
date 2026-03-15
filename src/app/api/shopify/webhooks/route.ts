@@ -804,5 +804,34 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  // ── products/create — instant classification for new products ──
+  if (topic === 'products/create' || topic === 'products/update') {
+    const product = payload as {
+      id: number;
+      title: string;
+      body_html?: string;
+      vendor?: string;
+      product_type?: string;
+      tags?: string;
+      variants?: Array<{
+        id: number; title?: string; price?: string; sku?: string;
+        option1?: string; option2?: string; option3?: string;
+        requires_shipping?: boolean; cost?: string;
+      }>;
+      images?: Array<{ id: number; src: string }>;
+      created_at?: string;
+    };
+
+    try {
+      const { classifyNewProduct } = await import('@/lib/intelligence/newProductHandler');
+      const result = await classifyNewProduct(store.id, product);
+      console.log(`[Webhook] Product ${topic}: ${product.title} → ${result.classification} (${result.confidence}% via ${result.method})`);
+    } catch (err) {
+      console.error('[Webhook] New product classification failed:', err instanceof Error ? err.message : err);
+    }
+
+    return NextResponse.json({ ok: true });
+  }
+
   return NextResponse.json({ ok: true, ignored: true });
 }
