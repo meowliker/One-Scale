@@ -342,24 +342,30 @@ export async function POST(request: NextRequest) {
       }
       // ── End balance transactions ───────────────────────────────
 
-      // Meta ad spend — use since/until for exact date range
+      // Meta ad spend — read from meta_spend_cache (already synced by cron)
       let adSpend = 0;
       try {
-        const mr = await fetch(
-          `${baseUrl}/api/meta/insights?` + new URLSearchParams({ storeId, since: dateStr, until: dateStr })
+        const spendRows = await rest<Array<{ spend: number }>>(
+          `/meta_spend_cache?store_id=eq.${enc(storeId)}&date=eq.${dateStr}&select=spend`
         );
-        if (mr.ok) {
-          const mj = await mr.json() as { data?: Array<{ date: string; metrics?: { spend?: number }; spend?: number }> };
-          // The response may have metrics nested or flat depending on path
-          for (const row of mj.data ?? []) {
-            const rowDate = row.date;
-            const spend = row.metrics?.spend ?? row.spend ?? 0;
-            if (rowDate === dateStr) {
-              adSpend += spend;
+        adSpend = (spendRows ?? []).reduce((s, r) => s + (Number(r.spend) || 0), 0);
+      } catch { /* meta_spend_cache unavailable — 0 until next sync */ }
+
+      // Fallback: if no cached spend, try live Meta API
+      if (adSpend === 0) {
+        try {
+          const mr = await fetch(
+            `${baseUrl}/api/meta/insights?` + new URLSearchParams({ storeId, since: dateStr, until: dateStr })
+          );
+          if (mr.ok) {
+            const mj = await mr.json() as { data?: Array<{ date: string; metrics?: { spend?: number }; spend?: number }> };
+            for (const row of mj.data ?? []) {
+              const spend = row.metrics?.spend ?? row.spend ?? 0;
+              if (row.date === dateStr) adSpend += spend;
             }
           }
-        }
-      } catch { /* Meta unavailable — 0 until next sync */ }
+        } catch { /* Meta unavailable — 0 until next sync */ }
+      }
 
       // Use settled revenue for P&L when balance txns available
       const revenueForPnL = hasBalanceTxns && settledRevenue > 0 ? settledRevenue : revenue;
