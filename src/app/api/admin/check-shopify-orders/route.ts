@@ -16,7 +16,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Supabase not configured' }, { status: 503 });
   }
 
-  const storeId = new URL(request.url).searchParams.get('storeId') || 'store-b8eea935d87e';
+  const storeId = new URL(request.url).searchParams.get('storeId');
+  if (!storeId) {
+    return NextResponse.json({ error: 'storeId parameter required' }, { status: 400 });
+  }
   const enc = (v: string) => encodeURIComponent(v);
 
   const token = await getShopifyToken(storeId);

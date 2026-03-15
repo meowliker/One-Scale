@@ -17,9 +17,12 @@ export async function GET(request: NextRequest) {
   }
 
   const { searchParams } = new URL(request.url);
-  const storeId = searchParams.get('storeId') || 'store-b8eea935d87e';
-  const from = searchParams.get('from') || '2026-02-01';
-  const to = searchParams.get('to') || '2026-02-13';
+  const storeId = searchParams.get('storeId');
+  if (!storeId) {
+    return NextResponse.json({ error: 'storeId parameter required' }, { status: 400 });
+  }
+  const from = searchParams.get('from') || new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+  const to = searchParams.get('to') || new Date().toISOString().split('T')[0];
   const enc = (v: string) => encodeURIComponent(v);
 
   // Replicate what product-performance route does

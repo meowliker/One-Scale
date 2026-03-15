@@ -13,6 +13,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { rest, isSupabasePersistenceEnabled, listPersistentStores } from '@/app/api/lib/supabase-persistence';
+import { fromZonedTime } from 'date-fns-tz';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -51,22 +52,11 @@ export async function GET(request: NextRequest) {
     ).catch(() => []);
     const tz = storeConfig[0]?.iana_timezone || 'America/New_York';
 
-    // Compute UTC offset for this timezone on the audit date
-    // Simple approach: try known offsets. For production, use date-fns-tz.
-    const tzOffsets: Record<string, number> = {
-      'America/New_York': 5, 'America/Chicago': 6, 'America/Denver': 7,
-      'America/Los_Angeles': 8, 'America/Guatemala': 6, 'America/Bogota': 5,
-      'Asia/Kolkata': -5.5, 'Europe/London': 0, 'Europe/Berlin': -1,
-      'Australia/Sydney': -11, 'Pacific/Auckland': -13,
-    };
-    const offset = tzOffsets[tz] ?? 5;
-    const offsetStr = String(Math.floor(offset)).padStart(2, '0');
-    const dateFilterStart = `${dateFrom}T${offsetStr}:00:00Z`;
-    const dateFilterEnd = `${dateTo}T${offsetStr}:00:00Z`;
-    // Add 24 hours to end date
-    const endDate = new Date(new Date(dateFilterEnd).getTime() + 86400000).toISOString();
+    // Convert date range to UTC using store timezone (via date-fns-tz)
+    const utcStart = fromZonedTime(`${dateFrom}T00:00:00`, tz).toISOString();
+    const utcEnd = fromZonedTime(`${dateTo}T23:59:59`, tz).toISOString();
 
-    const dateFilter = `and=(processed_at.gte.${enc(dateFilterStart)},processed_at.lt.${enc(endDate)})`;
+    const dateFilter = `and=(processed_at.gte.${enc(utcStart)},processed_at.lte.${enc(utcEnd)})`;
 
     const btCharges = await rest<Array<{ amount: number; fee: number }>>(
       `/shopify_balance_transactions?store_id=eq.${enc(store.id)}&type=eq.charge` +

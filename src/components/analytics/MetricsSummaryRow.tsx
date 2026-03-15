@@ -189,8 +189,8 @@ function ProfitBreakdownModal({
   const rows: { label: string; value: number; formatted: string; color: string; type: 'positive' | 'negative' | 'result' }[] = [
     { label: 'Shopify Revenue', value: revenue, formatted: formatCurrency(revenue), color: 'bg-emerald-500', type: 'positive' },
     { label: 'Ad Spend', value: adSpend, formatted: `-${formatCurrency(adSpend)}`, color: 'bg-red-500', type: 'negative' },
-    { label: 'Transaction Fees (2.9%)', value: transactionFees, formatted: `-${formatCurrency(transactionFees)}`, color: 'bg-orange-500', type: 'negative' },
-    { label: 'Refunds (2.5%)', value: refunds, formatted: `-${formatCurrency(refunds)}`, color: 'bg-amber-500', type: 'negative' },
+    { label: 'Transaction Fees', value: transactionFees, formatted: `-${formatCurrency(transactionFees)}`, color: 'bg-orange-500', type: 'negative' },
+    { label: 'Refunds', value: refunds, formatted: `-${formatCurrency(refunds)}`, color: 'bg-amber-500', type: 'negative' },
     { label: 'Net Profit', value: netProfit, formatted: formatCurrency(netProfit), color: netProfit >= 0 ? 'bg-emerald-500' : 'bg-red-500', type: 'result' },
   ];
 
@@ -371,9 +371,9 @@ export function MetricsSummaryRow({ metrics }: MetricsSummaryRowProps) {
   const conversions = metrics.totalConversions ?? 0;
   const cpa = conversions > 0 ? spend / conversions : 0;
 
-  // Use P&L-derived values when available (same source as P&L and Store Overview).
-  const transactionFees = metrics.shopifyFees ?? (shopifyRevenue * 0.029);
-  const refunds = metrics.shopifyRefunds ?? (shopifyRevenue * 0.025);
+  // Use P&L-derived values when available. Fallback to 0 (not hardcoded rates).
+  const transactionFees = metrics.shopifyFees ?? 0;
+  const refunds = metrics.shopifyRefunds ?? 0;
   const netProfit = metrics.shopifyNetProfit ?? (shopifyRevenue - spend - transactionFees - refunds);
   const margin = shopifyRevenue > 0 ? (netProfit / shopifyRevenue) * 100 : 0;
 

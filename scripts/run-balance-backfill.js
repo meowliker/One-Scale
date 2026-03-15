@@ -169,7 +169,6 @@ async function main() {
             source_type: txn.source_type || null,
             processed_at: txn.processed_at,
             payout_id: txn.payout_id ? String(txn.payout_id) : null,
-            payout_status: txn.payout_status || null,
           }),
         }).catch(() => null);
 
