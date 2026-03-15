@@ -176,297 +176,92 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Supabase not configured' }, { status: 503 });
   }
 
-  // Use the store's timezone for date calculations
+  // Get store timezone
   const storeTz = await getStoreTimezoneServer(storeId);
-  const now = new Date();
 
+  // Also try store_config
+  let configTz = storeTz;
+  try {
+    const cfgRows = await rest<Array<{ iana_timezone: string }>>(
+      `/store_config?store_id=eq.${encodeURIComponent(storeId)}&select=iana_timezone&limit=1`
+    );
+    if (cfgRows?.[0]?.iana_timezone) configTz = cfgRows[0].iana_timezone;
+  } catch { /* use storeTz */ }
+  const tz = configTz || storeTz;
+
+  const now = new Date();
   const dates: string[] = [];
   for (let i = daysBack; i >= 0; i--) {
     const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
-    dates.push(formatDateInTz(d, storeTz));
+    dates.push(formatDateInTz(d, tz));
   }
 
   const results: Array<{ date: string; success: boolean; error?: string }> = [];
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL
-    || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
 
   for (const dateStr of dates) {
     try {
-      // Convert date string to proper UTC bounds using store timezone
-      const utcBounds = dateStrToUtcBounds(dateStr, storeTz);
+      // ── SIMPLIFIED P&L: Pure balance transaction calculation ──
+      // Same logic as Apps Script V4.4. No orders needed.
+      // BT alone = exact revenue, fees, refunds, chargebacks.
+      const utcBounds = dateStrToUtcBounds(dateStr, tz);
 
-      // Read orders from cache (populated by backfill/webhooks, always available)
-      const cachedOrderRows = await rest<Array<{
-        shopify_order_id: string; total_price: number; financial_status: string;
-        line_items: string; refund_total: number; created_at: string;
-      }>>(
-        `/shopify_orders_cache?store_id=eq.${encodeURIComponent(storeId)}` +
-        `&and=(created_at.gte.${encodeURIComponent(utcBounds.min)},created_at.lt.${encodeURIComponent(utcBounds.max)})` +
-        `&order_status=neq.cancelled&select=shopify_order_id,total_price,financial_status,line_items,refund_total,created_at` +
-        `&limit=1000`
+      // Fetch ALL balance transactions for this date (using store timezone bounds)
+      const btRows = await rest<Array<{ type: string; amount: string; fee: string; net: string }>>(
+        `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}` +
+        `&and=(processed_at.gte.${encodeURIComponent(utcBounds.min)},processed_at.lte.${encodeURIComponent(utcBounds.max)})` +
+        `&select=type,amount,fee,net`
       ).catch(() => []);
 
-      // Map to the format the rest of the code expects
-      const orders = (cachedOrderRows ?? []).map(row => {
-        let lineItems: Array<{ quantity: number; productId: number | string; price: string }> = [];
-        try {
-          const parsed = typeof row.line_items === 'string' ? JSON.parse(row.line_items) : row.line_items || [];
-          lineItems = parsed.map((li: { product_id?: string | number; quantity?: number; price?: string }) => ({
-            productId: li.product_id ?? 0,
-            quantity: li.quantity ?? 1,
-            price: li.price ?? '0',
-          }));
-        } catch { /* skip malformed line items */ }
-        return {
-          id: row.shopify_order_id,
-          totalPrice: String(row.total_price),
-          financialStatus: row.financial_status,
-          lineItems,
-          refunds: row.refund_total > 0 ? [{ totalAmount: row.refund_total, createdAt: row.created_at }] : [],
-        };
-      });
+      let revenue = 0, transactionFees = 0, refunds = 0;
+      let chargebackLoss = 0, chargebackWon = 0;
+      let adjustments = 0;
 
-      // COGS settings
-      let cogsRows: Array<{ product_id: string | null; cost_per_unit: number | null; cost_percentage: number | null }> = [];
-      try {
-        cogsRows = await rest<typeof cogsRows>(
-          `/store_cogs_settings?store_id=eq.${encodeURIComponent(storeId)}&select=product_id,cost_per_unit,cost_percentage`
-        );
-      } catch { /* no COGS table yet — use defaults */ }
+      for (const txn of btRows ?? []) {
+        const amount = parseFloat(txn.amount || '0');
+        const fee = Math.abs(parseFloat(txn.fee || '0'));
+        const net = parseFloat(txn.net || '0');
+        const type = (txn.type || '').toLowerCase();
 
-      const defaultCogs = cogsRows?.find(r => !r.product_id);
-      const defaultRate = defaultCogs?.cost_percentage
-        ? Number(defaultCogs.cost_percentage) / 100
-        : 0.30;
-
-      // Real fees from webhook-stored data
-      const orderIds = orders.map(o => String(o.id));
-      let feeRows: Array<{ order_id: string; fee: number }> = [];
-      if (orderIds.length > 0) {
-        try {
-          feeRows = await rest<typeof feeRows>(
-            `/shopify_transaction_fees?store_id=eq.${encodeURIComponent(storeId)}&transaction_type=eq.payment&order_id=in.(${orderIds.map(id => encodeURIComponent(id)).join(',')})&select=order_id,fee`
-          );
-        } catch { /* no fee data yet */ }
-      }
-
-      const feeMap = new Map((feeRows ?? []).map(r => [r.order_id, Math.abs(Number(r.fee))]));
-
-      // Chargebacks for this date (using timezone-aware UTC bounds)
-      let cbRows: Array<{ amount: number; status: string }> = [];
-      try {
-        // Query by finalized_at (balance-synced) or created_at (webhook-synced with no finalized_at)
-        const cbMin = encodeURIComponent(utcBounds.min);
-        const cbMax = encodeURIComponent(utcBounds.max);
-        const orFilter = `finalized_at.gte.${cbMin},finalized_at.lte.${cbMax}`;
-        cbRows = await rest<typeof cbRows>(
-          `/shopify_chargebacks?store_id=eq.${encodeURIComponent(storeId)}&or=(and(${orFilter}),and(finalized_at.is.null,created_at.gte.${cbMin},created_at.lte.${cbMax}))&select=amount,status`
-        );
-      } catch { /* no chargeback data yet */ }
-
-      let chargebackLoss = (cbRows ?? [])
-        .filter(c => c.status === 'lost')
-        .reduce((s, c) => s + Number(c.amount), 0);
-      let chargebackWon = (cbRows ?? [])
-        .filter(c => c.status === 'won')
-        .reduce((s, c) => s + Number(c.amount), 0);
-
-      // Aggregate
-      let revenue = 0, orderCount = 0, cogs = 0;
-      let transactionFees = 0, refunds = 0;
-      let fullRefundCount = 0, partialRefundCount = 0;
-      let fullRefundAmount = 0, partialRefundAmount = 0;
-
-      for (const order of orders) {
-        const isFullRefund = order.financialStatus === 'refunded';
-        const isPartial = order.financialStatus === 'partially_refunded';
-
-        if (isFullRefund) {
-          const amt = (order.refunds ?? []).reduce((s, r) => s + r.totalAmount, 0);
-          refunds += amt; fullRefundCount++; fullRefundAmount += amt;
-          continue;
-        }
-
-        const rev = parseFloat(order.totalPrice);
-        revenue += rev; orderCount++;
-
-        for (const item of order.lineItems) {
-          const ps = cogsRows?.find(r => r.product_id === String(item.productId));
-          const itemRev = parseFloat(item.price) * item.quantity;
-          cogs += ps?.cost_per_unit ? Number(ps.cost_per_unit) * item.quantity : itemRev * defaultRate;
-        }
-
-        const fee = feeMap.get(String(order.id)) ?? 0;
-        transactionFees += fee > 0 ? fee : rev * 0.03;
-
-        if (isPartial) {
-          for (const r of order.refunds ?? []) {
-            // Convert refund timestamp to store timezone date for accurate bucketing
-            const refundDate = r.createdAt ? formatDateInTz(new Date(r.createdAt), storeTz) : '';
-            if (refundDate === dateStr) {
-              refunds += r.totalAmount; partialRefundCount++; partialRefundAmount += r.totalAmount;
-            }
-          }
+        switch (type) {
+          case 'charge':
+            revenue += Math.abs(amount);
+            transactionFees += fee;
+            break;
+          case 'refund':
+            refunds += Math.abs(amount);
+            break;
+          case 'dispute':
+            if (net < 0) chargebackLoss += Math.abs(net);
+            else chargebackWon += net;
+            break;
+          case 'payout':
+            break; // Skip payout summaries
+          default:
+            // adjustments, credits, reserves, marketplace_tax, unknown
+            adjustments += amount;
+            break;
         }
       }
 
-      // ── Balance transactions (exact fees per order, attributed to ORDER DATE) ──
-      // Join BT to orders via source_order_id to use order.created_at for date bucketing.
-      // This shows revenue on the day customers bought, not when Shopify settled.
-      // Adjustments/credits/reserves with no source_order_id use processed_at as fallback.
-      let settledRevenue = 0;
-      let btFees = 0;
-      let btRefunds = 0;
-      let btChargebackLoss = 0;
-      let btChargebackWon = 0;
-      let hasBalanceTxns = false;
-      try {
-        // Step 1: Get order IDs for this date from orders CACHE (has shopify_order_id matching BT source_order_id)
-        const cachedOrders = await rest<Array<{ shopify_order_id: string }>>(
-          `/shopify_orders_cache?store_id=eq.${encodeURIComponent(storeId)}` +
-          `&and=(created_at.gte.${encodeURIComponent(utcBounds.min)},created_at.lt.${encodeURIComponent(utcBounds.max)})` +
-          `&order_status=neq.cancelled&select=shopify_order_id`
-        ).catch(() => []);
-        const dateOrderIds = (cachedOrders ?? []).map(o => o.shopify_order_id);
+      // Round to 2 decimal places
+      revenue = Math.round(revenue * 100) / 100;
+      transactionFees = Math.round(transactionFees * 100) / 100;
+      refunds = Math.round(refunds * 100) / 100;
+      chargebackLoss = Math.round(chargebackLoss * 100) / 100;
+      chargebackWon = Math.round(chargebackWon * 100) / 100;
+      adjustments = Math.round(adjustments * 100) / 100;
 
-        let matchedBTs: Array<{ type: string; amount: string; fee: string; net: string }> = [];
-        if (dateOrderIds.length > 0) {
-          // Fetch BTs for these specific orders (efficient — only this date's orders)
-          const batchSize = 50;
-          for (let i = 0; i < dateOrderIds.length; i += batchSize) {
-            const batch = dateOrderIds.slice(i, i + batchSize);
-            const idFilter = batch.map(id => `"${id}"`).join(',');
-            const batchBTs = await rest<Array<{ type: string; amount: string; fee: string; net: string }>>(
-              `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}` +
-              `&source_order_id=in.(${idFilter})` +
-              `&select=type,amount,fee,net`
-            );
-            matchedBTs.push(...(batchBTs ?? []));
-          }
-        }
-
-        if (matchedBTs.length > 0) {
-          hasBalanceTxns = true;
-          for (const txn of matchedBTs) {
-            const amount = Math.abs(parseFloat(txn.amount || '0'));
-            const fee = Math.abs(parseFloat(txn.fee || '0'));
-            const net = parseFloat(txn.net || '0');
-            switch (txn.type) {
-              case 'charge': settledRevenue += amount; btFees += fee; break;
-              case 'refund': btRefunds += amount; break;
-              case 'dispute':
-                if (net < 0) btChargebackLoss += Math.abs(net);
-                else btChargebackWon += net;
-                break;
-              case 'adjustment': case 'debit': case 'credit':
-                settledRevenue += parseFloat(txn.amount || '0');
-                break;
-              case 'reserved_funds': case 'reserve':
-                settledRevenue += parseFloat(txn.amount || '0');
-                break;
-              case 'marketplace_tax':
-                settledRevenue += parseFloat(txn.amount || '0');
-                break;
-              case 'payout': break;
-              default:
-                settledRevenue += parseFloat(txn.amount || '0');
-                break;
-            }
-          }
-        }
-
-        // Step 2: If no order-linked BTs found, fall back to processed_at date
-        if (!hasBalanceTxns) {
-          const fallbackBTs = await rest<Array<{ type: string; amount: string; fee: string; net: string }>>(
-            `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}` +
-            `&and=(processed_at.gte.${encodeURIComponent(utcBounds.min)},processed_at.lte.${encodeURIComponent(utcBounds.max)})` +
-            `&select=type,amount,fee,net`
-          );
-          if (fallbackBTs && fallbackBTs.length > 0) {
-            hasBalanceTxns = true;
-            for (const txn of fallbackBTs) {
-              const amount = Math.abs(parseFloat(txn.amount || '0'));
-              const fee = Math.abs(parseFloat(txn.fee || '0'));
-              const net = parseFloat(txn.net || '0');
-              switch (txn.type) {
-                case 'charge': settledRevenue += amount; btFees += fee; break;
-                case 'refund': btRefunds += amount; break;
-                case 'dispute':
-                  if (net < 0) btChargebackLoss += Math.abs(net);
-                  else btChargebackWon += net;
-                  break;
-                case 'adjustment': case 'debit': case 'credit':
-                  settledRevenue += parseFloat(txn.amount || '0');
-                  break;
-                case 'payout': break;
-                default:
-                  settledRevenue += parseFloat(txn.amount || '0');
-                  break;
-              }
-            }
-          }
-        }
-      } catch { /* balance txn table may not exist yet */ }
-
-      // Override with balance txn data when available
-      if (hasBalanceTxns) {
-        transactionFees = btFees;
-        refunds = btRefunds;
-        chargebackLoss = btChargebackLoss;
-        chargebackWon = btChargebackWon;
-      }
-      // ── End balance transactions ───────────────────────────────
-
-      // Meta ad spend — read from meta_spend_cache (already synced by cron)
+      // Meta ad spend from cache
       let adSpend = 0;
       try {
         const spendRows = await rest<Array<{ spend: number }>>(
           `/meta_spend_cache?store_id=eq.${encodeURIComponent(storeId)}&date=eq.${dateStr}&select=spend`
         );
         adSpend = (spendRows ?? []).reduce((s, r) => s + (Number(r.spend) || 0), 0);
-      } catch { /* meta_spend_cache unavailable — 0 until next sync */ }
+      } catch { /* no meta data */ }
 
-      // Fallback: if no cached spend, try live Meta API
-      if (adSpend === 0) {
-        try {
-          const mr = await fetch(
-            `${baseUrl}/api/meta/insights?` + new URLSearchParams({ storeId, since: dateStr, until: dateStr })
-          );
-          if (mr.ok) {
-            const mj = await mr.json() as { data?: Array<{ date: string; metrics?: { spend?: number }; spend?: number }> };
-            for (const row of mj.data ?? []) {
-              const spend = row.metrics?.spend ?? row.spend ?? 0;
-              if (row.date === dateStr) adSpend += spend;
-            }
-          }
-        } catch { /* Meta unavailable — 0 until next sync */ }
-      }
-
-      // ALWAYS use order revenue (from Shopify orders API).
-      // BT data is used for FEES only (exact per-transaction fees).
-      // If BT fees are partial, estimate missing fees from learned rate.
-      const revenueForPnL = revenue;
-      if (hasBalanceTxns && btFees > 0 && settledRevenue > 0 && settledRevenue < revenue) {
-        // BT covers only some orders — scale fees proportionally to full revenue
-        const feeRate = btFees / settledRevenue;
-        transactionFees = Math.round(revenue * feeRate * 100) / 100;
-      }
-      const netProfit = revenueForPnL - cogs - adSpend - transactionFees - refunds - chargebackLoss + chargebackWon;
-      const margin = revenueForPnL > 0 ? (netProfit / revenueForPnL) * 100 : 0;
-
-      // ── Attribution coverage ──────────────────────────────────────────
-      // How many of today's orders have pixel attribution data?
-      let attributionRate = 0;
-      if (orderIds.length > 0) {
-        try {
-          const attributionRows = await rest<Array<{ order_id: string }>>(
-            `/order_attributions?store_id=eq.${encodeURIComponent(storeId)}&order_id=in.(${orderIds.map(id => encodeURIComponent(id)).join(',')})&select=order_id`
-          );
-          const attributedCount = (attributionRows ?? []).length;
-          attributionRate = orderCount > 0 ? Math.round((attributedCount / orderCount) * 100) : 0;
-        } catch { /* order_attributions table may not exist yet */ }
-      }
-      // ── End attribution ───────────────────────────────────────────────
+      const netProfit = Math.round((revenue - transactionFees - refunds - chargebackLoss + chargebackWon + adjustments - adSpend) * 100) / 100;
+      const margin = revenue > 0 ? Math.round((netProfit / revenue) * 10000) / 100 : 0;
 
       await rest(
         '/daily_pnl_snapshots?on_conflict=store_id,date',
@@ -475,16 +270,11 @@ export async function POST(request: NextRequest) {
           headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
           body: JSON.stringify([{
             store_id: storeId, date: dateStr,
-            revenue: revenueForPnL, order_count: orderCount, cogs,
-            ad_spend: adSpend, shipping_cost: 0,
-            transaction_fees: transactionFees, refunds,
-            full_refund_count: fullRefundCount, partial_refund_count: partialRefundCount,
-            full_refund_amount: fullRefundAmount, partial_refund_amount: partialRefundAmount,
+            revenue, transaction_fees: transactionFees, refunds,
             chargeback_loss: chargebackLoss, chargeback_won: chargebackWon,
-            net_profit: netProfit, margin,
-            attribution_rate: attributionRate,
+            ad_spend: adSpend, net_profit: netProfit, margin,
             synced_at: new Date().toISOString(),
-            shopify_synced: orders.length > 0,
+            shopify_synced: (btRows ?? []).length > 0,
             meta_synced: adSpend > 0,
           }]),
         }
@@ -499,3 +289,10 @@ export async function POST(request: NextRequest) {
 
   return NextResponse.json({ ok: true, results });
 }
+
+// Legacy code below removed — P&L now calculated purely from balance transactions.
+// No orders needed. No fee estimation. No joins. Exact numbers from BT.
+// Orders are only needed for product performance (which product was in which order).
+/* eslint-disable @typescript-eslint/no-unused-vars */
+const _LEGACY_REMOVED = true;
+
