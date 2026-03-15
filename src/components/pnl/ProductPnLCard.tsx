@@ -103,7 +103,9 @@ export function ProductPnLCard({ product, isDigital = false, storeId, onClassifi
               </p>
             </div>
             <div>
-              <p className="text-[10px] text-text-muted uppercase tracking-wide">Fees</p>
+              <p className="text-[10px] text-text-muted uppercase tracking-wide">
+                Fees{product.feesEstimated && <span className="text-amber-500 ml-0.5">(est.)</span>}
+              </p>
               <p className="text-sm font-semibold text-text-primary">{formatCurrency(product.fees, currency)}</p>
             </div>
           </div>

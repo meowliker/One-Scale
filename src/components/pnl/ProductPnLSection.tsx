@@ -187,6 +187,14 @@ export function ProductPnLSection({ products, isDigital = false, currency = 'USD
         </div>
       </div>
 
+      {/* Estimated fees banner */}
+      {products.some(p => p.feesEstimated) && (
+        <div className="flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 rounded-lg px-3 py-1.5 mb-3 border border-amber-200 dark:border-amber-800">
+          <span>&#9203;</span>
+          <span>Today&apos;s fees are estimated. Final figures available after settlement (1-3 days).</span>
+        </div>
+      )}
+
       {/* Tabs with count badges */}
       <div className="flex items-center gap-1 mb-3">
         {tabs.map(tab => (

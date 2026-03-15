@@ -70,6 +70,7 @@ export interface ProductPnLResult {
   revenue: number;
   orders: number;
   fees: number;
+  fees_estimated: boolean;
   ad_spend: number;
   cogs: number;
   net_profit: number;
@@ -470,7 +471,34 @@ export async function buildProductPerformance(
   }
 
   // ── Step 2: Split fees by product ─────────────────────
-  const fees = splitFeesByProduct(btTxns, orderProductMap, productConfigs, orderCounts);
+  // If BT data exists → real fees. If no BT (today) → estimate from learned rate.
+  const hasBTData = btTxns.filter(t => t.type === 'charge').length > 0;
+  let fees: Map<string, number>;
+  let feesEstimated = false;
+
+  if (hasBTData) {
+    fees = splitFeesByProduct(btTxns, orderProductMap, productConfigs, orderCounts);
+  } else {
+    // Estimate fees: get learned rate from historical BT data or use 5.4% default
+    let feeRate = 0.054;
+    try {
+      const recentBT = await rest<Array<{ amount: number; fee: number }>>(
+        `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&type=eq.charge&select=amount,fee&limit=100&order=processed_at.desc`
+      );
+      if (recentBT && recentBT.length > 10) {
+        const totalAmt = recentBT.reduce((s, t) => s + Math.abs(Number(t.amount) || 0), 0);
+        const totalFee = recentBT.reduce((s, t) => s + Math.abs(Number(t.fee) || 0), 0);
+        if (totalAmt > 0) feeRate = totalFee / totalAmt;
+      }
+    } catch { /* use default */ }
+
+    fees = new Map<string, number>();
+    for (const p of productConfigs) {
+      const rev = revenue.get(p.product_id) ?? 0;
+      fees.set(p.product_id, round2(rev * feeRate));
+    }
+    feesEstimated = true;
+  }
 
   // ── Step 3: Distribute ad spend ───────────────────────
   let adSpend: Map<string, number>;
@@ -536,6 +564,7 @@ export async function buildProductPerformance(
       revenue: rev,
       orders: ords,
       fees: fee,
+      fees_estimated: feesEstimated,
       ad_spend: ads,
       cogs,
       net_profit: profit,
@@ -558,6 +587,7 @@ export async function buildProductPerformance(
       revenue: round2(agg.revenue),
       orders: agg.orders,
       fees: 0,
+      fees_estimated: false,
       ad_spend: 0,
       cogs: 0,
       net_profit: round2(agg.revenue),

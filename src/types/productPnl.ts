@@ -11,6 +11,7 @@ export interface ProductPnLData {
   cogs: number;
   shipping: number;
   fees: number;
+  feesEstimated?: boolean;            // true when BT not available (today)
   netProfit: number;
   margin: number;                    // percentage
 

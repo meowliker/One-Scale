@@ -173,6 +173,7 @@ export async function GET(request: NextRequest) {
           cogs: r.cogs,
           shipping: 0,
           fees: r.fees,
+          feesEstimated: r.fees_estimated,
           netProfit: r.net_profit,
           margin: r.margin,
           fbMetrics: {
