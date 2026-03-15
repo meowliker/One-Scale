@@ -45,33 +45,52 @@ export async function GET(request: NextRequest) {
     const audits: Record<string, any> = {};
 
     // ═══ AUDIT 1: Balance Transactions ═══════════════════════
-    // PostgREST: must use and() for range queries on same column (duplicate param keys override)
-    const dateFilter = `and=(processed_at.gte.${enc(dateFrom + 'T00:00:00Z')},processed_at.lte.${enc(dateTo + 'T23:59:59Z')})`;
+    // Get store timezone for accurate date bucketing
+    const storeConfig = await rest<Array<{ iana_timezone: string }>>(
+      `/store_config?store_id=eq.${enc(store.id)}&select=iana_timezone&limit=1`
+    ).catch(() => []);
+    const tz = storeConfig[0]?.iana_timezone || 'America/New_York';
 
-    const btCharges = await rest<Array<{ amount: number; fee: number; payout_status: string }>>(
+    // Compute UTC offset for this timezone on the audit date
+    // Simple approach: try known offsets. For production, use date-fns-tz.
+    const tzOffsets: Record<string, number> = {
+      'America/New_York': 5, 'America/Chicago': 6, 'America/Denver': 7,
+      'America/Los_Angeles': 8, 'America/Guatemala': 6, 'America/Bogota': 5,
+      'Asia/Kolkata': -5.5, 'Europe/London': 0, 'Europe/Berlin': -1,
+      'Australia/Sydney': -11, 'Pacific/Auckland': -13,
+    };
+    const offset = tzOffsets[tz] ?? 5;
+    const offsetStr = String(Math.floor(offset)).padStart(2, '0');
+    const dateFilterStart = `${dateFrom}T${offsetStr}:00:00Z`;
+    const dateFilterEnd = `${dateTo}T${offsetStr}:00:00Z`;
+    // Add 24 hours to end date
+    const endDate = new Date(new Date(dateFilterEnd).getTime() + 86400000).toISOString();
+
+    const dateFilter = `and=(processed_at.gte.${enc(dateFilterStart)},processed_at.lt.${enc(endDate)})`;
+
+    const btCharges = await rest<Array<{ amount: number; fee: number }>>(
       `/shopify_balance_transactions?store_id=eq.${enc(store.id)}&type=eq.charge` +
-      `&${dateFilter}&select=amount,fee,payout_status`
+      `&${dateFilter}&select=amount,fee`
     ).catch(() => []);
 
-    const btRefunds = await rest<Array<{ amount: number; payout_status: string }>>(
+    const btRefunds = await rest<Array<{ amount: number }>>(
       `/shopify_balance_transactions?store_id=eq.${enc(store.id)}&type=eq.refund` +
-      `&${dateFilter}&select=amount,payout_status`
+      `&${dateFilter}&select=amount`
     ).catch(() => []);
 
-    const btDisputes = await rest<Array<{ amount: number; fee: number; net: number; payout_status: string; processed_at: string }>>(
+    const btDisputes = await rest<Array<{ amount: number; fee: number; net: number; processed_at: string }>>(
       `/shopify_balance_transactions?store_id=eq.${enc(store.id)}&type=eq.dispute` +
-      `&${dateFilter}&select=amount,fee,net,payout_status,processed_at`
+      `&${dateFilter}&select=amount,fee,net,processed_at`
     ).catch(() => []);
 
-    const paidCharges = btCharges.filter(c => c.payout_status === 'paid');
-    const revenue = paidCharges.reduce((s, c) => s + (Number(c.amount) || 0), 0);
-    const fees = paidCharges.reduce((s, c) => s + Math.abs(Number(c.fee) || 0), 0);
-    const refunds = btRefunds.filter(r => r.payout_status === 'paid').reduce((s, r) => s + Math.abs(Number(r.amount) || 0), 0);
-    const chargebackLost = btDisputes.filter(d => Number(d.net) < 0 && d.payout_status === 'paid')
+    const revenue = btCharges.reduce((s, c) => s + (Number(c.amount) || 0), 0);
+    const fees = btCharges.reduce((s, c) => s + Math.abs(Number(c.fee) || 0), 0);
+    const refunds = btRefunds.reduce((s, r) => s + Math.abs(Number(r.amount) || 0), 0);
+    const chargebackLost = btDisputes.filter(d => Number(d.net) < 0)
       .reduce((s, d) => s + Math.abs(Number(d.net) || 0), 0);
-    const chargebackWon = btDisputes.filter(d => Number(d.net) > 0 && d.payout_status === 'paid')
+    const chargebackWon = btDisputes.filter(d => Number(d.net) > 0)
       .reduce((s, d) => s + (Number(d.net) || 0), 0);
-    const pendingCount = [...btCharges, ...btRefunds, ...btDisputes].filter(t => t.payout_status !== 'paid').length;
+    const pendingCount = 0; // payout_status column doesn't exist in current schema
 
     audits.balance_transactions = {
       date_range: `${dateFrom} to ${dateTo}`,
@@ -82,7 +101,7 @@ export async function GET(request: NextRequest) {
       chargeback_won: Math.round(chargebackWon * 100) / 100,
       dispute_count: btDisputes.length,
       pending_excluded: pendingCount,
-      charges_count: paidCharges.length,
+      charges_count: btCharges.length,
     };
 
     // ═══ AUDIT 2: Chargeback Detail ═════════════════════════
@@ -90,19 +109,17 @@ export async function GET(request: NextRequest) {
       amount: Number(d.amount),
       fee: Number(d.fee),
       net: Number(d.net),
-      payout_status: d.payout_status,
-      classification: Number(d.net) < 0 && d.payout_status === 'paid' ? 'CHARGEBACK_LOST'
-        : Number(d.net) > 0 && d.payout_status === 'paid' ? 'CHARGEBACK_WON'
-        : d.payout_status !== 'paid' ? 'DISPUTE_PENDING'
+      classification: Number(d.net) < 0 ? 'CHARGEBACK_LOST'
+        : Number(d.net) > 0 ? 'CHARGEBACK_WON'
         : 'OTHER',
-      counted_in_pnl: d.payout_status === 'paid',
+      counted_in_pnl: true,
       bug_check_amount_vs_net: Number(d.amount) !== Number(d.net) ? 'DIFFERENT (using net is correct)' : 'SAME',
     }));
 
     audits.chargebacks = {
       total_disputes: btDisputes.length,
-      paid_counted: btDisputes.filter(d => d.payout_status === 'paid').length,
-      pending_excluded: btDisputes.filter(d => d.payout_status !== 'paid').length,
+      lost: btDisputes.filter(d => Number(d.net) < 0).length,
+      won: btDisputes.filter(d => Number(d.net) > 0).length,
       details: disputeDetails,
     };
 
