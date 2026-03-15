@@ -312,8 +312,13 @@ export async function POST(request: NextRequest) {
       let btChargebackWon = 0;
       let hasBalanceTxns = false;
       try {
-        // Step 1: Get order IDs for this date, then fetch their BT records
-        const dateOrderIds = orders.map(o => String(o.id));
+        // Step 1: Get order IDs for this date from orders CACHE (has shopify_order_id matching BT source_order_id)
+        const cachedOrders = await rest<Array<{ shopify_order_id: string }>>(
+          `/shopify_orders_cache?store_id=eq.${encodeURIComponent(storeId)}` +
+          `&and=(created_at.gte.${encodeURIComponent(utcBounds.min)},created_at.lt.${encodeURIComponent(utcBounds.max)})` +
+          `&order_status=neq.cancelled&select=shopify_order_id`
+        ).catch(() => []);
+        const dateOrderIds = (cachedOrders ?? []).map(o => o.shopify_order_id);
 
         let matchedBTs: Array<{ type: string; amount: string; fee: string; net: string }> = [];
         if (dateOrderIds.length > 0) {
