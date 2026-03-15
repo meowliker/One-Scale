@@ -346,7 +346,7 @@ export async function POST(request: NextRequest) {
       let adSpend = 0;
       try {
         const spendRows = await rest<Array<{ spend: number }>>(
-          `/meta_spend_cache?store_id=eq.${enc(storeId)}&date=eq.${dateStr}&select=spend`
+          `/meta_spend_cache?store_id=eq.${encodeURIComponent(storeId)}&date=eq.${dateStr}&select=spend`
         );
         adSpend = (spendRows ?? []).reduce((s, r) => s + (Number(r.spend) || 0), 0);
       } catch { /* meta_spend_cache unavailable — 0 until next sync */ }
