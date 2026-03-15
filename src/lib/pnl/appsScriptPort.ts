@@ -316,15 +316,38 @@ export async function buildProductPerformance(
     upsell_keywords: (p.upsell_keywords ?? []) as string[],
   }));
 
+  // Get store timezone for correct date boundaries
+  let storeTz = 'America/New_York';
+  try {
+    const tzRows = await rest<Array<{ timezone: string | null }>>(
+      `/store_ad_accounts?store_id=eq.${enc(storeId)}&is_active=eq.true&select=timezone&limit=1`
+    );
+    storeTz = tzRows?.[0]?.timezone || 'America/New_York';
+  } catch { /* use default */ }
+
+  // Compute timezone-aware UTC boundaries for order created_at filtering
+  // dateFrom "2026-03-14" in store tz → UTC start/end
+  function localDateToUtc(dateStr: string, isEnd: boolean): string {
+    const d = new Date(dateStr + (isEnd ? 'T23:59:59' : 'T00:00:00'));
+    // Get offset: create a date in the store timezone, find the difference
+    const utcDate = new Date(dateStr + 'T12:00:00Z');
+    const inTz = new Date(utcDate.toLocaleString('en-US', { timeZone: storeTz }));
+    const offsetMs = utcDate.getTime() - inTz.getTime();
+    return new Date(d.getTime() + offsetMs).toISOString();
+  }
+
+  const orderStart = localDateToUtc(dateFrom, false);
+  const orderEnd = localDateToUtc(dateTo, true);
+
   // Load data in parallel
   const [orders, btTxns, spendRows, adMappings, costRows] = await Promise.all([
-    // Orders for date range
+    // Orders for date range (timezone-aware)
     rest<OrderRow[]>(
-      `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${enc(dateFrom)}T00:00:00Z&created_at=lte.${enc(dateTo)}T23:59:59Z&select=order_id,total_price,subtotal_price,financial_status,line_items`
+      `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${enc(orderStart)}&created_at=lte.${enc(orderEnd)}&select=order_id,total_price,subtotal_price,financial_status,line_items`
     ).catch(() => [] as OrderRow[]),
-    // Balance transactions for date range
+    // Balance transactions for date range (BT uses processed_at which is already in UTC)
     rest<BTRow[]>(
-      `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&and=(processed_at.gte.${enc(dateFrom)}T00:00:00Z,processed_at.lte.${enc(dateTo)}T23:59:59Z)&select=transaction_id,type,amount,fee,net,source_order_id`
+      `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&and=(processed_at.gte.${enc(orderStart)},processed_at.lte.${enc(orderEnd)})&select=transaction_id,type,amount,fee,net,source_order_id`
     ).catch(() => [] as BTRow[]),
     // Meta spend for date range
     rest<SpendRow[]>(
