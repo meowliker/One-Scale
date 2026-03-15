@@ -32,10 +32,11 @@ interface LineItem {
 }
 
 interface OrderRow {
-  order_id: string;
+  shopify_order_id: string;
   total_price: number;
   subtotal_price: number;
   financial_status: string;
+  order_status: string;
   line_items: string; // JSON
 }
 
@@ -343,7 +344,7 @@ export async function buildProductPerformance(
   const [orders, btTxns, spendRows, adMappings, costRows] = await Promise.all([
     // Orders for date range (timezone-aware)
     rest<OrderRow[]>(
-      `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${enc(orderStart)}&created_at=lte.${enc(orderEnd)}&select=order_id,total_price,subtotal_price,financial_status,line_items`
+      `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${enc(orderStart)}&created_at=lte.${enc(orderEnd)}&order_status=neq.cancelled&select=shopify_order_id,total_price,subtotal_price,financial_status,order_status,line_items`
     ).catch(() => [] as OrderRow[]),
     // Balance transactions for date range (BT uses processed_at which is already in UTC)
     rest<BTRow[]>(
@@ -394,7 +395,7 @@ export async function buildProductPerformance(
 
     const matched = matchOrderToProduct(lineItems, productConfigs);
     if (matched) {
-      orderProductMap.set(String(order.order_id), matched);
+      orderProductMap.set(String(order.shopify_order_id), matched);
       revenue.set(matched, (revenue.get(matched) ?? 0) + Number(order.total_price));
       orderCounts.set(matched, (orderCounts.get(matched) ?? 0) + 1);
     }
