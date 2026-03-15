@@ -17,3 +17,10 @@ ALTER TABLE product_classifications
   ADD COLUMN IF NOT EXISTS creation_age_percentile numeric DEFAULT 0,
   ADD COLUMN IF NOT EXISTS median_time_to_purchase_seconds numeric DEFAULT 0,
   ADD COLUMN IF NOT EXISTS in_facebook_catalog boolean;
+
+-- ── Missing attribution window columns on meta_spend_cache ──
+ALTER TABLE meta_spend_cache
+  ADD COLUMN IF NOT EXISTS purchases_7d_click integer DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS purchase_value_7d_click numeric(12,2) DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS purchases_1d_view integer DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS purchase_value_1d_view numeric(12,2) DEFAULT 0;
