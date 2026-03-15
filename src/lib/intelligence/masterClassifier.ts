@@ -221,8 +221,9 @@ export function scoreProduct(s: CombinedSignals): MasterClassificationResult {
   if (s.sku_class)
     return makeResult(s.product_id, s.title, s.sku_class as MasterClassificationResult['classification'], 95, 'sku_pattern');
 
-  if (s.avg_price === 0)
-    return makeResult(s.product_id, s.title, 'excluded', 100, 'zero_price');
+  // Apps Script rule: $0 = MAIN for funnel/free+shipping stores
+  if (s.avg_price === 0 && s.total_orders > 5)
+    return makeResult(s.product_id, s.title, 'main', 95, 'zero_price_funnel_main');
 
   // ── HARD VETO RULES ──
 

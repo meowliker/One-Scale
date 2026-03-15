@@ -81,14 +81,51 @@ export interface ProductPnLResult {
 /**
  * Port of matchOrderToProduct_ from Apps Script.
  * Returns product_id of the matched product, or null.
+ *
+ * Apps Script rule: $0 price = MAIN product (funnel/lead magnet).
+ * Matching priority: $0 items first, then keyword passes.
+ * Title cleaning: strips "(Free Today)", "(FREE TODAY)" etc.
  */
 export function matchOrderToProduct(
   lineItems: LineItem[],
   products: ProductConfig[],
 ): string | null {
-  // Pass 1: ALL keywords in set must match title
+  // Helper: clean title for matching — strip "(Free Today)" etc.
+  function cleanTitle(title: string): string {
+    return title.toLowerCase()
+      .replace(/\s*\(free today\)\s*/gi, '')
+      .replace(/\s*\(free\)\s*/gi, '')
+      .replace(/\s*free today\s*/gi, '')
+      .trim();
+  }
+
+  // Pass 0 (Apps Script Fix #22): $0 items are MAIN — match them first
+  const freeItems = lineItems.filter(i => parseFloat(i.price || '0') === 0 && i.title);
+  if (freeItems.length > 0) {
+    for (const item of freeItems) {
+      const title = cleanTitle(item.title || '');
+      if (!title) continue;
+      for (const product of products) {
+        for (const keywordSet of product.main_keywords) {
+          const allMatch = keywordSet.every(kw => title.includes(kw.toLowerCase()));
+          if (allMatch) return product.product_id;
+        }
+      }
+    }
+    // Also try product name match on free items
+    for (const item of freeItems) {
+      const title = cleanTitle(item.title || '');
+      for (const product of products) {
+        const pName = product.product_name.toLowerCase();
+        if (pName.length >= 5 && title.includes(pName)) return product.product_id;
+        if (pName.length >= 5 && pName.includes(title) && title.length >= 5) return product.product_id;
+      }
+    }
+  }
+
+  // Pass 1: ALL keywords in set must match title (any item)
   for (const item of lineItems) {
-    const title = (item.title || '').toLowerCase();
+    const title = cleanTitle(item.title || '');
     if (!title) continue;
     for (const product of products) {
       for (const keywordSet of product.main_keywords) {
@@ -111,7 +148,7 @@ export function matchOrderToProduct(
 
   // Pass 3: Product name in title (min 5 chars)
   for (const item of lineItems) {
-    const title = (item.title || '').toLowerCase();
+    const title = cleanTitle(item.title || '');
     if (!title) continue;
     for (const product of products) {
       const pName = product.product_name.toLowerCase();
@@ -122,7 +159,7 @@ export function matchOrderToProduct(
 
   // Pass 4: 60% word overlap
   for (const item of lineItems) {
-    const titleWords = (item.title || '').toLowerCase()
+    const titleWords = cleanTitle(item.title || '')
       .replace(/[^a-z0-9\s]/g, '')
       .split(/\s+/)
       .filter(w => w.length > 2);

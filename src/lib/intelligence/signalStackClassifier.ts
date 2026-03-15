@@ -186,8 +186,10 @@ export function classifyProduct(
     };
   }
 
-  // Free gift with purchase: alone_pct < 2% AND $0 price
-  if (pattern.alone_pct < 2 && pattern.price === 0) {
+  // Free product: could be funnel main ($0 lead magnet) or gift with purchase
+  // Only exclude if very low alone rate AND very few orders (true gifts)
+  // Funnel mains have many orders even at $0
+  if (pattern.alone_pct < 2 && pattern.price === 0 && pattern.total_orders < 20) {
     return {
       ...base,
       classification: 'excluded',
