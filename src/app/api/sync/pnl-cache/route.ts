@@ -4,12 +4,13 @@ import { syncPnlCacheAllStores } from '@/app/api/lib/pnl-cache-sync';
 export const maxDuration = 300;
 
 export async function GET(request: NextRequest) {
-  const CRON_SECRET = process.env.CRON_SECRET || '';
-  if (CRON_SECRET) {
-    const authHeader = request.headers.get('authorization') || '';
-    if (authHeader !== `Bearer ${CRON_SECRET}`) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+  const CRON_SECRET = process.env.CRON_SECRET;
+  if (!CRON_SECRET) {
+    return NextResponse.json({ error: 'CRON_SECRET not configured' }, { status: 500 });
+  }
+  const authHeader = request.headers.get('authorization') || '';
+  if (authHeader !== `Bearer ${CRON_SECRET}`) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const { searchParams } = new URL(request.url);

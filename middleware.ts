@@ -16,9 +16,11 @@ const PUBLIC_API_PREFIXES = [
   '/api/shopify/webhooks',
   '/api/tracking/pixel',
   '/api/tracking/collect',
+  '/api/tracking/cron-backfill',
   '/api/admin/',
   '/api/prism/',
   '/api/pnl/sync',
+  '/api/sync/',
   '/api/cron/',
   '/api/debug/',
 ];

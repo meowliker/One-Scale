@@ -24,12 +24,13 @@ function sleep(ms: number): Promise<void> {
  * GET /api/sync/cron
  */
 export async function GET(request: NextRequest) {
-  const CRON_SECRET = process.env.CRON_SECRET || '';
-  if (CRON_SECRET) {
-    const authHeader = request.headers.get('authorization') || '';
-    if (authHeader !== `Bearer ${CRON_SECRET}`) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+  const CRON_SECRET = process.env.CRON_SECRET;
+  if (!CRON_SECRET) {
+    return NextResponse.json({ error: 'CRON_SECRET not configured' }, { status: 500 });
+  }
+  const authHeader = request.headers.get('authorization') || '';
+  if (authHeader !== `Bearer ${CRON_SECRET}`) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const today = new Date().toISOString().slice(0, 10);

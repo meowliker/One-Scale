@@ -16,7 +16,60 @@ import { rest } from '@/app/api/lib/supabase-persistence';
 import { PRISM } from '@/lib/prism';
 import { analyzeOrderPatterns, partitionByDataSufficiency } from './orderPatternAnalyzer';
 import { computeSignals, classifyProduct, computeMedianPrice, checkShopifyTags } from './signalStackClassifier';
+import { detectPostPurchaseUpsells } from './postPurchaseDetector';
+import { computeAdvancedSignals } from './advancedSignals';
+import { scanNovelSignals } from './novelSignals';
 import type { SignalStackResult } from './types';
+
+const enc = (v: string) => encodeURIComponent(v);
+
+// ── Ad Signal Fetcher ───────────────────────────────────────
+
+async function getAdSignalsForProducts(storeId: string): Promise<Map<string, { has_own_campaigns: boolean; landing_page_rate: number; direct_spend_share: number }>> {
+  const signals = new Map<string, { has_own_campaigns: boolean; landing_page_rate: number; direct_spend_share: number }>();
+
+  const [attributions, landingData] = await Promise.all([
+    rest<Array<{ product_id: string }>>(
+      `/campaign_product_attributions?store_id=eq.${enc(storeId)}&confidence=gte.50&select=product_id`
+    ).catch(() => []),
+    rest<Array<{ first_product_viewed_id: string }>>(
+      `/visitor_attribution?store_id=eq.${enc(storeId)}&or=(utm_source.ilike.*facebook*,utm_source.ilike.*meta*,fbclid.not.is.null)&first_product_viewed_id=not.is.null&select=first_product_viewed_id`
+    ).catch(() => []),
+  ]);
+
+  if (attributions.length === 0 && landingData.length === 0) return signals;
+
+  const totalMetaSessions = landingData.length;
+  const landingCounts = new Map<string, number>();
+  for (const s of landingData) {
+    if (s.first_product_viewed_id) {
+      landingCounts.set(s.first_product_viewed_id, (landingCounts.get(s.first_product_viewed_id) ?? 0) + 1);
+    }
+  }
+
+  const campaignsPerProduct = new Map<string, number>();
+  for (const a of attributions) {
+    campaignsPerProduct.set(a.product_id, (campaignsPerProduct.get(a.product_id) ?? 0) + 1);
+  }
+  const totalCampaigns = new Set(attributions.map(a => a.product_id)).size;
+
+  const allProductIds = new Set([...campaignsPerProduct.keys(), ...landingCounts.keys()]);
+  for (const pid of allProductIds) {
+    const campaignCount = campaignsPerProduct.get(pid) ?? 0;
+    const landingSessions = landingCounts.get(pid) ?? 0;
+    signals.set(pid, {
+      has_own_campaigns: campaignCount > 0,
+      landing_page_rate: totalMetaSessions > 0 ? landingSessions / totalMetaSessions : 0,
+      direct_spend_share: totalCampaigns > 0 ? campaignCount / totalCampaigns : 0,
+    });
+  }
+
+  return signals;
+}
+
+function deriveHandle(title: string): string {
+  return title.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+}
 
 // ── Interfaces ───────────────────────────────────────────────
 
@@ -36,8 +89,6 @@ export interface ClassifyResult {
 // ── Main Entry Point ─────────────────────────────────────────
 
 export async function classifyAllProducts(storeId: string): Promise<ClassifyResult> {
-  const enc = (v: string) => encodeURIComponent(v);
-
   // ── Bootstrap path: stores with < 30 recent orders ──────────────────
   const recentCutoff = new Date(Date.now() - PRISM.dataWindows.behavioralAnalysisDays * 86400000).toISOString();
   const recentOrders = await rest<Array<{ shopify_order_id: string; line_items: string; total_price: number }>>(
@@ -84,16 +135,52 @@ export async function classifyAllProducts(storeId: string): Promise<ClassifyResu
     }
   }
 
-  // 3. ONE UNIVERSAL PATH — behavioral signal stack for all products
-  //    No store type routing. No markAllAsMain. No assumptions.
-  const filtered = allPatterns.filter(p => !manualOverrideIds.has(p.product_id) && !tagMatchedIds.has(p.product_id));
+  // 2b. TIER 1 — Definitive signals (100% confidence)
+  //     Post-purchase order updates and SKU patterns
+  const tier1Ids = new Set<string>();
+  try {
+    const postPurchaseResults = await detectPostPurchaseUpsells(storeId);
+    for (const pp of postPurchaseResults) {
+      if (manualOverrideIds.has(pp.product_id) || tagMatchedIds.has(pp.product_id)) continue;
+      tier1Ids.add(pp.product_id);
+    }
+
+    // SKU pattern + price/AOV + repeat purchase signals
+    const advancedResults = await computeAdvancedSignals(storeId);
+    for (const adv of advancedResults.products) {
+      if (manualOverrideIds.has(adv.product_id) || tagMatchedIds.has(adv.product_id)) continue;
+      if (adv.sku_pattern_signal === 'upsell_sku' || adv.sku_pattern_signal === 'main_sku') {
+        tier1Ids.add(adv.product_id);
+      }
+    }
+
+    // Novel signals: line item properties, variant options, creation timestamp
+    const novelResults = await scanNovelSignals(storeId);
+    for (const novel of novelResults.products) {
+      if (manualOverrideIds.has(novel.product_id) || tagMatchedIds.has(novel.product_id)) continue;
+      if (novel.line_item_stamped || novel.has_bump_variants) {
+        tier1Ids.add(novel.product_id);
+      }
+    }
+  } catch (err) {
+    console.warn(`[PRISM:Classify] Tier 1 signals error:`, err instanceof Error ? err.message : 'Unknown');
+  }
+
+  // 3. ONE UNIVERSAL PATH — behavioral signal stack for remaining products
+  const filtered = allPatterns.filter(p =>
+    !manualOverrideIds.has(p.product_id) && !tagMatchedIds.has(p.product_id) && !tier1Ids.has(p.product_id)
+  );
   const { sufficient, pending } = partitionByDataSufficiency(filtered);
   const medianPrice = computeMedianPrice(sufficient);
+
+  // 3b. Fetch ad signals for all products (from PRISM attribution engine)
+  const adSignalMap = await getAdSignalsForProducts(storeId);
 
   const behavioralResults: SignalStackResult[] = [];
 
   for (const p of sufficient) {
-    const signals = computeSignals(p, medianPrice);
+    const adSig = adSignalMap.get(p.product_id);
+    const signals = computeSignals(p, medianPrice, adSig);
     behavioralResults.push(classifyProduct(p, signals));
   }
 
@@ -125,7 +212,7 @@ export async function classifyAllProducts(storeId: string): Promise<ClassifyResu
   results = enforceConfidenceFloor(results);
 
   // 6. Persist
-  await persistClassifications(storeId, results, manualOverrideIds);
+  await persistClassifications(storeId, results, manualOverrideIds, adSignalMap);
 
   // 7. Validate distribution
   await validateClassifications(storeId);
@@ -143,8 +230,6 @@ async function bootstrapClassify(
   storeId: string,
   orders: Array<{ shopify_order_id: string; line_items: string; total_price: number }>,
 ): Promise<ClassifyResult> {
-  const enc = (v: string) => encodeURIComponent(v);
-
   const existingOverrides = await rest<StoredClassification[]>(
     `/product_classifications?store_id=eq.${enc(storeId)}&manual_override=eq.true&select=product_id,classification,manual_override,confidence`
   ).catch(() => [] as StoredClassification[]);
@@ -249,7 +334,6 @@ function enforceConfidenceFloor(results: SignalStackResult[]): SignalStackResult
 // ── Post-Classification Validation ──────────────────────────
 
 async function validateClassifications(storeId: string): Promise<void> {
-  const enc = (v: string) => encodeURIComponent(v);
   const rows = await rest<Array<{ classification: string; confidence: number; manual_override: boolean }>>(
     `/product_classifications?store_id=eq.${enc(storeId)}&select=classification,confidence,manual_override`
   ).catch(() => []);
@@ -286,30 +370,39 @@ async function persistClassifications(
   storeId: string,
   results: SignalStackResult[],
   skipIds: Set<string>,
+  adSignalMap?: Map<string, { has_own_campaigns: boolean; landing_page_rate: number; direct_spend_share: number }>,
 ): Promise<void> {
   const now = new Date().toISOString();
   const rows = results
     .filter(r => !skipIds.has(r.product_id))
-    .map(r => ({
-      store_id: storeId,
-      product_id: r.product_id,
-      product_title: r.product_title,
-      product_type: r.product_type || '',
-      classification: r.classification,
-      confidence: r.confidence,
-      classification_method: r.method,
-      detection_method: r.method,
-      signals_used: r.signals || {},
-      alone_pct: r.alone_pct,
-      first_position_pct: r.first_position_pct,
-      avg_position: r.avg_position,
-      revenue_share: r.revenue_share,
-      total_orders_analyzed: r.total_orders_analyzed,
-      needs_review: r.needs_review,
-      manual_override: false,
-      last_analyzed: now,
-      updated_at: now,
-    }));
+    .map(r => {
+      const adSig = adSignalMap?.get(r.product_id);
+      return {
+        store_id: storeId,
+        product_id: r.product_id,
+        product_title: r.product_title,
+        product_type: r.product_type || '',
+        product_handle: deriveHandle(r.product_title),
+        classification: r.classification,
+        confidence: r.confidence,
+        classification_method: r.method,
+        detection_method: r.method,
+        signals_used: r.signals || {},
+        alone_pct: r.alone_pct,
+        first_position_pct: r.first_position_pct,
+        avg_position: r.avg_position,
+        revenue_share: r.revenue_share,
+        total_orders_analyzed: r.total_orders_analyzed,
+        needs_review: r.needs_review,
+        manual_override: false,
+        has_own_campaigns: adSig?.has_own_campaigns ?? false,
+        ad_landing_rate: adSig?.landing_page_rate ?? 0,
+        ad_signal_confidence: (r.method === 'ad_campaign_detected' || r.method === 'ad_traffic_landing') ? r.confidence : 0,
+        ad_signal_method: (r.method === 'ad_campaign_detected' || r.method === 'ad_traffic_landing') ? r.method : null,
+        last_analyzed: now,
+        updated_at: now,
+      };
+    });
 
   if (rows.length === 0) return;
 
