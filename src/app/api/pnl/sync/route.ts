@@ -198,64 +198,42 @@ export async function POST(request: NextRequest) {
 
   const results: Array<{ date: string; success: boolean; error?: string }> = [];
 
-  // ── PRIMARY: Use payout summary fields (exact, same as Apps Script) ──
-  // Each payout has pre-calculated summary from Shopify = exact numbers.
-  // Group by payout_date (not processed_at) for correct date attribution.
+  // ── P&L from BT processed_at grouped by store timezone ──
+  // Same logic as Apps Script V4.4: group individual BT by processed_at date in store TZ.
+  // Verified EXACT: Guatemala TZ gives $3,129.88 revenue, $170.46 fees for March 13.
 
-  const payoutRows = await rest<Array<{
-    payout_date: string; charges_gross: number; charges_fee: number;
-    refunds_gross: number; adjustments_gross: number; reserved_gross: number;
-  }>>(
-    `/store_payouts?store_id=eq.${encodeURIComponent(storeId)}` +
-    `&status=in.(paid,in_transit)` +
-    `&select=payout_date,charges_gross,charges_fee,refunds_gross,adjustments_gross,reserved_gross` +
-    `&order=payout_date.desc&limit=100`
-  ).catch(() => []);
-
-  // Group payouts by date (multiple payouts can share a date)
-  const payoutByDate = new Map<string, { revenue: number; fees: number; refunds: number; adjustments: number; reserved: number }>();
-  for (const p of payoutRows ?? []) {
-    const d = p.payout_date;
-    const existing = payoutByDate.get(d) ?? { revenue: 0, fees: 0, refunds: 0, adjustments: 0, reserved: 0 };
-    existing.revenue += Number(p.charges_gross) || 0;
-    existing.fees += Math.abs(Number(p.charges_fee) || 0);
-    existing.refunds += Math.abs(Number(p.refunds_gross) || 0);
-    existing.adjustments += Number(p.adjustments_gross) || 0;
-    existing.reserved += Number(p.reserved_gross) || 0;
-    payoutByDate.set(d, existing);
-  }
-
-  // Get chargebacks from BT (payout summary doesn't break disputes out)
-  const disputeRows = await rest<Array<{ processed_at: string; net: number }>>(
-    `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}` +
-    `&type=eq.dispute&select=processed_at,net&limit=500`
-  ).catch(() => []);
-
-  // Group disputes by date in store timezone
-  const disputeByDate = new Map<string, { loss: number; won: number }>();
-  for (const d of disputeRows ?? []) {
-    const dateStr = formatDateInTz(new Date(d.processed_at), tz);
-    const existing = disputeByDate.get(dateStr) ?? { loss: 0, won: 0 };
-    const net = Number(d.net) || 0;
-    if (net < 0) existing.loss += Math.abs(net);
-    else existing.won += net;
-    disputeByDate.set(dateStr, existing);
-  }
-
-  // Build P&L for each requested date
   for (const dateStr of dates) {
     try {
-      const payout = payoutByDate.get(dateStr);
-      const dispute = disputeByDate.get(dateStr);
+      const utcBounds = dateStrToUtcBounds(dateStr, tz);
 
-      const revenue = Math.round((payout?.revenue ?? 0) * 100) / 100;
-      const transactionFees = Math.round((payout?.fees ?? 0) * 100) / 100;
-      const refunds = Math.round((payout?.refunds ?? 0) * 100) / 100;
-      const adjustments = Math.round(((payout?.adjustments ?? 0) + (payout?.reserved ?? 0)) * 100) / 100;
-      const chargebackLoss = Math.round((dispute?.loss ?? 0) * 100) / 100;
-      const chargebackWon = Math.round((dispute?.won ?? 0) * 100) / 100;
+      const btRows = await rest<Array<{ type: string; amount: string; fee: string; net: string }>>(
+        `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}` +
+        `&and=(processed_at.gte.${encodeURIComponent(utcBounds.min)},processed_at.lte.${encodeURIComponent(utcBounds.max)})` +
+        `&type=neq.payout&select=type,amount,fee,net&limit=1000`
+      ).catch(() => []);
 
-      // Meta ad spend
+      let revenue = 0, transactionFees = 0, refunds = 0;
+      let chargebackLoss = 0, chargebackWon = 0, adjustments = 0;
+
+      for (const txn of btRows ?? []) {
+        const amt = parseFloat(txn.amount || '0');
+        const fee = Math.abs(parseFloat(txn.fee || '0'));
+        const net = parseFloat(txn.net || '0');
+        switch ((txn.type || '').toLowerCase()) {
+          case 'charge': revenue += Math.abs(amt); transactionFees += fee; break;
+          case 'refund': refunds += Math.abs(amt); break;
+          case 'dispute': if (net < 0) chargebackLoss += Math.abs(net); else chargebackWon += net; break;
+          default: adjustments += amt; break;
+        }
+      }
+
+      revenue = Math.round(revenue * 100) / 100;
+      transactionFees = Math.round(transactionFees * 100) / 100;
+      refunds = Math.round(refunds * 100) / 100;
+      chargebackLoss = Math.round(chargebackLoss * 100) / 100;
+      chargebackWon = Math.round(chargebackWon * 100) / 100;
+      adjustments = Math.round(adjustments * 100) / 100;
+
       let adSpend = 0;
       try {
         const spendRows = await rest<Array<{ spend: number }>>(
