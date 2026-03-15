@@ -45,22 +45,22 @@ export async function GET(request: NextRequest) {
     const audits: Record<string, any> = {};
 
     // ═══ AUDIT 1: Balance Transactions ═══════════════════════
+    // PostgREST: must use and() for range queries on same column (duplicate param keys override)
+    const dateFilter = `and=(processed_at.gte.${enc(dateFrom + 'T00:00:00Z')},processed_at.lte.${enc(dateTo + 'T23:59:59Z')})`;
+
     const btCharges = await rest<Array<{ amount: number; fee: number; payout_status: string }>>(
       `/shopify_balance_transactions?store_id=eq.${enc(store.id)}&type=eq.charge` +
-      `&processed_at=gte.${enc(dateFrom + 'T00:00:00Z')}&processed_at=lt.${enc(dateTo + 'T23:59:59Z')}` +
-      `&select=amount,fee,payout_status`
+      `&${dateFilter}&select=amount,fee,payout_status`
     ).catch(() => []);
 
     const btRefunds = await rest<Array<{ amount: number; payout_status: string }>>(
       `/shopify_balance_transactions?store_id=eq.${enc(store.id)}&type=eq.refund` +
-      `&processed_at=gte.${enc(dateFrom + 'T00:00:00Z')}&processed_at=lt.${enc(dateTo + 'T23:59:59Z')}` +
-      `&select=amount,payout_status`
+      `&${dateFilter}&select=amount,payout_status`
     ).catch(() => []);
 
     const btDisputes = await rest<Array<{ amount: number; fee: number; net: number; payout_status: string; processed_at: string }>>(
       `/shopify_balance_transactions?store_id=eq.${enc(store.id)}&type=eq.dispute` +
-      `&processed_at=gte.${enc(dateFrom + 'T00:00:00Z')}&processed_at=lt.${enc(dateTo + 'T23:59:59Z')}` +
-      `&select=amount,fee,net,payout_status,processed_at`
+      `&${dateFilter}&select=amount,fee,net,payout_status,processed_at`
     ).catch(() => []);
 
     const paidCharges = btCharges.filter(c => c.payout_status === 'paid');
