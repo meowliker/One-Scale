@@ -858,7 +858,7 @@ async function fetchTransactionFees(storeId: string, dateFrom: string, dateTo: s
 async function fetchBalanceTransactions(storeId: string, tzStart: string, tzEnd: string): Promise<BalanceTxnRow[]> {
   try {
     return await rest<BalanceTxnRow[]>(
-      `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&processed_at=gte.${enc(tzStart)}&processed_at=lte.${enc(tzEnd)}&select=type,amount,fee,net,source_order_id,processed_at`
+      `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&and=(processed_at.gte.${enc(tzStart)},processed_at.lte.${enc(tzEnd)})&select=type,amount,fee,net,source_order_id,processed_at`
     );
   } catch {
     return [];

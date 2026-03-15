@@ -157,12 +157,13 @@ export async function GET(request: NextRequest) {
         `/order_attributions?store_id=eq.${enc(storeId)}&attributed_at=gte.${enc(tzStart)}&attributed_at=lte.${enc(tzEnd)}&select=order_id,utm_campaign,utm_source,fbclid,attribution_method`
       ).catch(() => [] as OrderAttribution[]),
       // Fetch actual balance transaction fees for the date range (more accurate than estimated rates)
+      // MUST use and=() for range queries — duplicate URL params override each other in PostgREST
       rest<Array<{ fee: number; amount: number; source_order_id: string | null }>>(
-        `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&type=eq.charge&processed_at=gte.${enc(tzStart)}&processed_at=lte.${enc(tzEnd)}&select=fee,amount,source_order_id`
+        `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&type=eq.charge&and=(processed_at.gte.${enc(tzStart)},processed_at.lte.${enc(tzEnd)})&select=fee,amount,source_order_id`
       ).catch(() => [] as Array<{ fee: number; amount: number; source_order_id: string | null }>),
       // Query 9: Refund balance transactions
       rest<Array<{ amount: number; source_order_id: string | null }>>(
-        `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&type=eq.refund&processed_at=gte.${enc(tzStart)}&processed_at=lte.${enc(tzEnd)}&select=amount,source_order_id`
+        `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&type=eq.refund&and=(processed_at.gte.${enc(tzStart)},processed_at.lte.${enc(tzEnd)})&select=amount,source_order_id`
       ).catch(() => [] as Array<{ amount: number; source_order_id: string | null }>),
       // Query 10: Chargebacks
       rest<Array<{ amount: number; status: string; order_id: string | null }>>(
@@ -636,7 +637,7 @@ export async function GET(request: NextRequest) {
         const singleItemCount = totalAppearances - multiItemTotal;
 
         if (totalAppearances === 0 || multiItemTotal === 0) {
-          mostCommonCategory = 'main';
+          mostCommonCategory = 'pending';
         } else {
           const productRevenueShare = totalRevenue > 0 ? agg.revenue / totalRevenue : 0;
           const upsellSignals = (mic.upsell || 0) + (mic.addon || 0) + (mic.downsell || 0);

@@ -310,7 +310,7 @@ export async function POST(request: NextRequest) {
       let hasBalanceTxns = false;
       try {
         const btRows = await rest<Array<{ type: string; amount: string; fee: string; net: string }>>(
-          `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}&processed_at=gte.${encodeURIComponent(utcBounds.min)}&processed_at=lte.${encodeURIComponent(utcBounds.max)}&select=type,amount,fee,net`
+          `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}&and=(processed_at.gte.${encodeURIComponent(utcBounds.min)},processed_at.lte.${encodeURIComponent(utcBounds.max)})&select=type,amount,fee,net`
         );
         if (btRows && btRows.length > 0) {
           hasBalanceTxns = true;
