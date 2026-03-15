@@ -24,6 +24,7 @@ import { PnLHourlyTrend } from '@/components/pnl/PnLHourlyTrend';
 import { RefundBreakdown } from '@/components/pnl/RefundBreakdown';
 import { ChargebackSection } from '@/components/pnl/ChargebackSection';
 import { AOVSummary } from '@/components/pnl/AOVSummary';
+import { MetricsBar } from '@/components/pnl/MetricsBar';
 import { SectionWrapper } from '@/components/pnl/SectionWrapper';
 import { ExpenseBreakdownRow } from '@/components/pnl/ExpenseBreakdownRow';
 
@@ -382,7 +383,14 @@ export function PnLDashboardClient({
         <PnLHourlyTrend hourlyPnL={filteredHourlyPnL} previousHourlyPnL={previousHourlyPnL} comparisonDateLabel={comparisonDateLabel} currency={currency} />
       </SectionWrapper>
 
-      {/* S6: Product Performance + AOV */}
+      {/* S6: Key Metrics Bar (AOV, Orders, Upsell Rate, ROAS) */}
+      {effectiveProductPnL.length > 0 && (
+        <SectionWrapper label="Key Metrics">
+          <MetricsBar summary={summary} products={effectiveProductPnL} currency={currency} />
+        </SectionWrapper>
+      )}
+
+      {/* S7: Product Performance */}
       <SectionWrapper label="Product Performance">
         {productLoading ? (
           <div className="apple-card p-10 text-center">
@@ -405,13 +413,7 @@ export function PnLDashboardClient({
             </button>
           </div>
         ) : effectiveProductPnL.length > 0 ? (
-          <>
-            <ProductPnLSection products={effectiveProductPnL} isDigital={isDigital} currency={currency} />
-            <div className="mt-5">
-              <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wide mb-3">AOV Metrics</h3>
-              <AOVSummary products={effectiveProductPnL} currency={currency} />
-            </div>
-          </>
+          <ProductPnLSection products={effectiveProductPnL} isDigital={isDigital} currency={currency} />
         ) : (
           <div className="apple-card p-10 text-center">
             <p className="text-sm font-medium text-text-secondary">No products found for this period</p>
