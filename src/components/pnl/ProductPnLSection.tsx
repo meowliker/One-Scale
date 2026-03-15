@@ -147,9 +147,9 @@ export function ProductPnLSection({ products, isDigital = false, currency = 'USD
   }
 
   return (
-    <div className="rounded-lg border border-border bg-surface-elevated p-6 shadow-sm">
+    <div className="rounded-lg border border-border bg-surface-elevated px-6 pt-2 pb-4 shadow-sm">
       {/* Classification filter pills */}
-      <div className="flex items-center justify-end mb-3">
+      <div className="flex items-center justify-end mb-2">
         <div className="flex items-center gap-1 rounded-lg bg-surface p-0.5">
           {([
             { key: 'main' as const, label: 'Main' },

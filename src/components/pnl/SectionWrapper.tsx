@@ -16,9 +16,9 @@ export function SectionWrapper({ label, tag, toolbar, children }: SectionWrapper
       initial={{ opacity: 0, y: 18 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }}
-      className="pt-8 pb-8 border-t border-border"
+      className="pt-5 pb-5 border-t border-border"
     >
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2.5">
           <h2 className="text-base font-bold uppercase tracking-[0.1em] text-text-primary">
             {label}

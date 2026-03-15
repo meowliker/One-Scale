@@ -9,6 +9,8 @@ import {
   getPersistentProductCosts,
   getPersistentPaymentFees,
 } from '@/app/api/lib/supabase-persistence';
+import { getShopifyToken } from '@/app/api/lib/tokens';
+import { fetchShopifyProducts } from '@/app/api/lib/shopify-client';
 import {
   attributeSpend,
   type CampaignSpendData,
@@ -171,6 +173,21 @@ export async function GET(request: NextRequest) {
         `/shopify_chargebacks?store_id=eq.${enc(storeId)}&or=(and(finalized_at.gte.${enc(tzStart)},finalized_at.lte.${enc(tzEnd)}),and(finalized_at.is.null,created_at.gte.${enc(tzStart)},created_at.lte.${enc(tzEnd)}))&select=amount,status,order_id`
       ).catch(() => [] as Array<{ amount: number; status: string; order_id: string | null }>),
     ]);
+
+    // Fetch product images from Shopify (for card display)
+    const productImageMap = new Map<string, string>();
+    try {
+      const shopToken = await getShopifyToken(storeId);
+      if (shopToken?.accessToken && shopToken?.shopDomain) {
+        const shopProducts = await fetchShopifyProducts(shopToken.accessToken, shopToken.shopDomain, { limit: 250 });
+        for (const p of shopProducts) {
+          const img = p.images?.[0]?.src;
+          if (img) productImageMap.set(String(p.id), img);
+        }
+      }
+    } catch {
+      // Images are non-critical — continue without them
+    }
 
     // Build stored classification lookup (from adaptive intelligence system)
     type StoredClassEntry = { classification: string; manual_override: boolean; confidence: number; classification_method: string; signals_used: Record<string, number> | null; behavioral_signals?: string[]; parent_product?: string | null; downsell_of?: string | null; needs_review: boolean; last_analyzed: string };
@@ -612,6 +629,46 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // ── FALLBACK: Distribute total spend to MAIN products by order count ─────
+    // When attribution (visitor or campaign matching) produced $0 for all products
+    // but we know there IS ad spend, distribute proportionally by order count.
+    {
+      let attributedTotal = 0;
+      for (const [, spend] of productSpendMap) attributedTotal += spend;
+
+      // Also try daily_pnl_snapshots ad_spend if meta_spend_cache was empty
+      let effectiveTotalSpend = totalSpend;
+      if (effectiveTotalSpend === 0) {
+        try {
+          const snapshots = await rest<Array<{ ad_spend: number }>>(
+            `/daily_pnl_snapshots?store_id=eq.${enc(storeId)}&date=gte.${from}&date=lte.${to}&select=ad_spend`
+          );
+          effectiveTotalSpend = (snapshots ?? []).reduce((s, r) => s + (Number(r.ad_spend) || 0), 0);
+          if (effectiveTotalSpend > 0) {
+            totalSpend = effectiveTotalSpend;
+          }
+        } catch { /* table may not exist */ }
+      }
+
+      if (attributedTotal === 0 && effectiveTotalSpend > 0 && productAgg.size > 0) {
+        // Identify MAIN products and distribute spend by order count
+        const mainProducts: Array<{ pid: string; orders: number }> = [];
+        for (const [pid, agg] of productAgg.entries()) {
+          const cls = classificationMap.get(pid)?.classification;
+          const isMain = !cls || cls === 'main' || cls === 'pending' || cls === 'unknown';
+          if (isMain) mainProducts.push({ pid, orders: agg.orderIds.size });
+        }
+        const totalMainOrders = mainProducts.reduce((s, m) => s + m.orders, 0);
+        if (totalMainOrders > 0) {
+          for (const m of mainProducts) {
+            productSpendMap.set(m.pid, round2(effectiveTotalSpend * (m.orders / totalMainOrders)));
+          }
+          unattributedSpend = 0;
+          console.log(`[PRISM:ProductPerf] Fallback: distributed $${effectiveTotalSpend} to ${mainProducts.length} MAIN products by order count`);
+        }
+      }
+    }
+
     // Build response
     const products = [];
     for (const [productId, agg] of productAgg.entries()) {
@@ -693,7 +750,7 @@ export async function GET(request: NextRequest) {
       products.push({
         productId,
         productName: agg.productName,
-        productImage: null,
+        productImage: productImageMap.get(productId) ?? null,
         shopifyUrl: productId.startsWith('unknown_') ? null : `/admin/products/${productId}`,
         sku: agg.sku,
         unitsSold: agg.unitsSold,
