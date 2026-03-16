@@ -168,14 +168,14 @@ export async function GET(request: NextRequest) {
 
   try {
     // ══════════════════════════════════════════════════════════════════════
-    // PRIMARY PATH: Apps Script matching + P&L ground truth distribution
-    // 1. Use Apps Script to match orders → products (get order count per product)
-    // 2. Distribute P&L snapshot totals (revenue/fees/ad_spend) by order share
-    // This GUARANTEES totals match the period view exactly.
+    // PRIMARY PATH: Apps Script V4.4 Port — EXACT line-for-line port
+    // Uses order.total_price for revenue (not line items).
+    // Results passed through directly. No normalization. No overrides.
+    // Ad spend normalized to P&L ground truth only.
     // ══════════════════════════════════════════════════════════════════════
     try {
       const appsScriptResults = await buildProductPerformance(storeId, from, to);
-      if (appsScriptResults.length > 0 && hasPnlData) {
+      if (appsScriptResults.length > 0) {
         // Fetch product images
         const imgMap = new Map<string, string>();
         try {
@@ -189,82 +189,65 @@ export async function GET(request: NextRequest) {
           }
         } catch { /* images non-critical */ }
 
-        // ── Distribute P&L totals by order share ──────────────────────────
-        // Each product gets revenue/fees proportional to its order count.
-        // Ad spend: only MAIN products, distributed by their order share.
+        // Pass through Apps Script results directly — revenue is already order.total_price
         const totalOrders = appsScriptResults.reduce((s, r) => s + r.orders, 0);
-        const mainResults = appsScriptResults.filter(r => r.classification === 'main');
-        const mainOrders = mainResults.reduce((s, r) => s + r.orders, 0);
+        const totalRevenue = round2(appsScriptResults.reduce((s, r) => s + r.revenue, 0));
+        const totalAdSpend = round2(appsScriptResults.reduce((s, r) => s + r.ad_spend, 0));
 
-        const data = appsScriptResults.map(r => {
-          const orderShare = totalOrders > 0 ? r.orders / totalOrders : 0;
-          const mainShare = mainOrders > 0 ? r.orders / mainOrders : 0;
-          const isMain = r.classification === 'main';
+        const data = appsScriptResults.map(r => ({
+          productId: r.product_id,
+          productName: r.product_name,
+          productImage: imgMap.get(r.product_id) ?? null,
+          shopifyUrl: r.product_id.startsWith('unknown_') ? null : `/admin/products/${r.product_id}`,
+          sku: '',
+          unitsSold: r.orders,
+          revenue: r.revenue,
+          cogs: r.cogs,
+          shipping: 0,
+          fees: r.fees,
+          feesEstimated: r.fees_estimated,
+          netProfit: r.net_profit,
+          margin: r.margin,
+          fbMetrics: {
+            roas: r.ad_spend > 0 ? Math.round((r.revenue / r.ad_spend) * 100) / 100 : 0,
+            cpc: 0, cpm: 0, ctr: 0, aov: 0, atcRate: 0,
+            spend: r.ad_spend,
+            impressions: 0, clicks: 0, purchases: 0,
+            costPerPurchase: 0, frequency: 0, reach: 0,
+          },
+          isAdvertised: r.ad_spend > 0,
+          adLandingPageUrl: null, adName: null, adSetName: null, campaignName: null,
+          category: r.classification as 'main' | 'upsell' | 'downsell' | 'addon',
+          classificationConfidence: r.classification === 'main' ? 95 : 80,
+          classificationMethod: 'product_config',
+          classificationSignals: null,
+          behavioralSignals: [],
+          parentProduct: r.parent_product_name,
+          downsellOf: null,
+          needsReview: false,
+          manualOverride: false,
+          lastAnalyzed: new Date().toISOString(),
+          _internal: {
+            attributionMethod: r.attribution_method,
+            totalSpend: totalAdSpend,
+            totalOrders,
+          },
+        }));
 
-          // Revenue & fees: distributed by order share across ALL products
-          const rev = round2(pnlRevenue * orderShare);
-          const fee = round2(pnlFees * orderShare);
-          // Ad spend: only main products
-          const ads = isMain ? round2(pnlAdSpend * mainShare) : 0;
-
-          const profit = round2(rev - fee - ads - r.cogs);
-          const margin = rev > 0 ? round2((profit / rev) * 100) : 0;
-
-          return {
-            productId: r.product_id,
-            productName: r.product_name,
-            productImage: imgMap.get(r.product_id) ?? null,
-            shopifyUrl: r.product_id.startsWith('unknown_') ? null : `/admin/products/${r.product_id}`,
-            sku: '',
-            unitsSold: r.orders,
-            revenue: rev,
-            cogs: r.cogs,
-            shipping: 0,
-            fees: fee,
-            feesEstimated: false,
-            netProfit: profit,
-            margin,
-            fbMetrics: {
-              roas: ads > 0 ? Math.round((rev / ads) * 100) / 100 : 0,
-              cpc: 0, cpm: 0, ctr: 0, aov: 0, atcRate: 0,
-              spend: ads,
-              impressions: 0, clicks: 0, purchases: 0,
-              costPerPurchase: 0, frequency: 0, reach: 0,
-            },
-            isAdvertised: ads > 0,
-            adLandingPageUrl: null, adName: null, adSetName: null, campaignName: null,
-            category: r.classification as 'main' | 'upsell' | 'downsell' | 'addon',
-            classificationConfidence: r.classification === 'main' ? 95 : 80,
-            classificationMethod: 'product_config',
-            classificationSignals: null,
-            behavioralSignals: [],
-            parentProduct: r.parent_product_name,
-            downsellOf: null,
-            needsReview: false,
-            manualOverride: false,
-            lastAnalyzed: new Date().toISOString(),
-            _internal: {
-              attributionMethod: r.attribution_method,
-              totalSpend: round2(pnlAdSpend),
-              totalOrders,
-            },
-          };
-        });
-
-        console.log(`[PRISM:ProductPerf] P&L-distributed: ${data.length} products, ${totalOrders} orders, rev=$${pnlRevenue.toFixed(2)}, ads=$${pnlAdSpend.toFixed(2)}`);
+        console.log(`[PRISM:ProductPerf] Apps Script direct: ${data.length} products, ${totalOrders} orders, rev=$${totalRevenue}, ads=$${totalAdSpend}`);
 
         return NextResponse.json({
           ok: true,
           data,
           meta: {
             totalOrders,
-            totalRevenue: round2(pnlRevenue),
-            totalSpend: round2(pnlAdSpend),
+            totalRevenue,
+            totalSpend: totalAdSpend,
             unattributedSpend: 0,
             dateFrom: from,
             dateTo: to,
-            source: 'pnl_distributed',
-            attributionMethod: appsScriptResults[0]?.attribution_method ?? 'order_share',
+            source: 'apps_script_port',
+            attributionMethod: appsScriptResults[0]?.attribution_method ?? 'none',
           },
         });
       }
