@@ -519,6 +519,10 @@ export async function GET(request: NextRequest) {
         continue;
       }
 
+      // Use full order total_price as revenue (Apps Script way)
+      // For free_plus_shipping: line items are $0 but order has real revenue
+      const orderTotal = Number(order.total_price) || 0;
+
       // Per-order shipping distributed proportionally by revenue share
       const orderShipping = order.total_shipping_price || 0;
       let orderLineItemRevenueSum = 0;
@@ -531,25 +535,45 @@ export async function GET(request: NextRequest) {
       const orderActualFee = btOrder ? Math.abs(btOrder.fee) : 0;
       const hasActualFee = orderActualFee > 0;
 
-      for (const item of lineItems) {
+      // Determine which line item is the "main" product (highest price, or first if all $0)
+      let mainItemIdx = 0;
+      let mainItemPrice = 0;
+      for (let idx = 0; idx < lineItems.length; idx++) {
+        const p = parseFloat(lineItems[idx].price || '0');
+        if (p > mainItemPrice) { mainItemPrice = p; mainItemIdx = idx; }
+      }
+
+      for (let idx = 0; idx < lineItems.length; idx++) {
+        const item = lineItems[idx];
         const productId = item.product_id ? String(item.product_id) : `unknown_${item.title}`;
         const price = parseFloat(item.price || '0');
         const quantity = item.quantity || 1;
         const lineRevenue = price * quantity;
-        totalRevenue += lineRevenue;
 
-        // Distribute shipping and fees proportionally by revenue share within this order
-        const lineRevenueShare = orderLineItemRevenueSum > 0 ? lineRevenue / orderLineItemRevenueSum : 0;
+        // Revenue attribution: if line items have real prices, distribute by line item share.
+        // If all line items are $0 (free_plus_shipping), give full order total to first/main item.
+        let attributedRevenue: number;
+        if (orderLineItemRevenueSum > 0) {
+          // Normal store: distribute order total proportionally by line item price
+          attributedRevenue = round2(orderTotal * (lineRevenue / orderLineItemRevenueSum));
+        } else {
+          // Free_plus_shipping: all items are $0, attribute full order total to main item
+          attributedRevenue = idx === mainItemIdx ? orderTotal : 0;
+        }
+        totalRevenue += attributedRevenue;
+
+        // Distribute shipping and fees proportionally
+        const itemCount = lineItems.length;
+        const lineRevenueShare = orderLineItemRevenueSum > 0 ? lineRevenue / orderLineItemRevenueSum : (idx === mainItemIdx ? 1 : 0);
         const lineShipping = round2(orderShipping * lineRevenueShare);
-        // Actual BT fee distributed proportionally, or estimate from store-wide rate
         const lineFee = hasActualFee
           ? round2(orderActualFee * lineRevenueShare)
-          : round2((lineRevenue * feePercentage / 100) + (feeFixed > 0 ? feeFixed / Math.max(1, lineItems.length) : 0));
+          : round2((attributedRevenue * feePercentage / 100) + (feeFixed > 0 ? feeFixed / Math.max(1, itemCount) : 0));
 
         const existing = productAgg.get(productId);
         if (existing) {
           existing.unitsSold += quantity;
-          existing.revenue += lineRevenue;
+          existing.revenue += attributedRevenue;
           existing.fees += lineFee;
           existing.shipping += lineShipping;
           existing.orderCount++;
@@ -559,7 +583,7 @@ export async function GET(request: NextRequest) {
             productName: item.title || 'Unknown',
             sku: item.sku || '',
             unitsSold: quantity,
-            revenue: lineRevenue,
+            revenue: attributedRevenue,
             fees: lineFee,
             shipping: lineShipping,
             orderCount: 1,
