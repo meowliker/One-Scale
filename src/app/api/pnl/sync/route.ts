@@ -212,19 +212,50 @@ export async function POST(request: NextRequest) {
         `&type=neq.payout&select=type,amount,fee,net&limit=1000`
       ).catch(() => []);
 
+      // Check for BT charges — if none, use orders fallback (e.g. Naiva without Shopify Payments)
+      const hasCharges = (btRows ?? []).some(t => (t.type || '').toLowerCase() === 'charge');
+
       let revenue = 0, transactionFees = 0, refunds = 0;
       let chargebackLoss = 0, chargebackWon = 0, adjustments = 0;
+      let orderCount = 0;
+      let revenueSource = 'balance_transactions';
 
-      for (const txn of btRows ?? []) {
-        const amt = parseFloat(txn.amount || '0');
-        const fee = Math.abs(parseFloat(txn.fee || '0'));
-        const net = parseFloat(txn.net || '0');
-        switch ((txn.type || '').toLowerCase()) {
-          case 'charge': revenue += Math.abs(amt); transactionFees += fee; break;
-          case 'refund': refunds += Math.abs(amt); break;
-          case 'dispute': if (net < 0) chargebackLoss += Math.abs(net); else chargebackWon += net; break;
-          default: adjustments += amt; break;
+      if (hasCharges) {
+        for (const txn of btRows ?? []) {
+          const amt = parseFloat(txn.amount || '0');
+          const fee = Math.abs(parseFloat(txn.fee || '0'));
+          const net = parseFloat(txn.net || '0');
+          switch ((txn.type || '').toLowerCase()) {
+            case 'charge': revenue += Math.abs(amt); transactionFees += fee; break;
+            case 'refund': refunds += Math.abs(amt); break;
+            case 'dispute': if (net < 0) chargebackLoss += Math.abs(net); else chargebackWon += net; break;
+            default: adjustments += amt; break;
+          }
         }
+      } else {
+        // Orders fallback for stores without Shopify Payments
+        revenueSource = 'orders_fallback';
+        const orders = await rest<Array<{ total_price: number; financial_status: string; refund_total: number }>>(
+          `/shopify_orders_cache?store_id=eq.${encodeURIComponent(storeId)}` +
+          `&and=(created_at.gte.${encodeURIComponent(utcBounds.min)},created_at.lte.${encodeURIComponent(utcBounds.max)})` +
+          `&order_status=neq.cancelled&select=total_price,financial_status,refund_total`
+        ).catch(() => []);
+
+        for (const order of orders ?? []) {
+          const fs = (order.financial_status || '').toLowerCase();
+          if (fs === 'voided') continue;
+          if (fs === 'refunded') {
+            refunds += Number(order.refund_total) || Number(order.total_price) || 0;
+            continue;
+          }
+          revenue += Number(order.total_price) || 0;
+          orderCount++;
+          if (fs === 'partially_refunded' && order.refund_total) {
+            refunds += Number(order.refund_total) || 0;
+          }
+        }
+        // Estimate fees at 2% for non-Shopify-Payments gateways
+        transactionFees = revenue * 0.02;
       }
 
       revenue = Math.round(revenue * 100) / 100;
@@ -255,6 +286,8 @@ export async function POST(request: NextRequest) {
             revenue, transaction_fees: transactionFees, refunds,
             chargeback_loss: chargebackLoss, chargeback_won: chargebackWon,
             ad_spend: adSpend, net_profit: netProfit, margin,
+            order_count: orderCount,
+            revenue_source: revenueSource,
             synced_at: new Date().toISOString(),
             shopify_synced: revenue > 0 || refunds > 0,
             meta_synced: adSpend > 0,

@@ -173,13 +173,112 @@ async function syncBalanceTransactionsForStore(storeId: string): Promise<number>
   return totalCount;
 }
 
-// ── BT-based P&L Compute (reused from /api/pnl/sync POST) ──────────────
+// ── P&L Compute — BT primary, orders fallback ──────────────────────────
 
-async function computePnLFromBT(
+async function getAdSpendForDate(storeId: string, dateStr: string): Promise<number> {
+  try {
+    const spendRows = await rest<Array<{ spend: number }>>(
+      `/meta_spend_cache?store_id=eq.${encodeURIComponent(storeId)}&date=eq.${dateStr}&select=spend`
+    );
+    return (spendRows ?? []).reduce((s, r) => s + (Number(r.spend) || 0), 0);
+  } catch { return 0; }
+}
+
+async function getLearnedFeeRate(storeId: string): Promise<number> {
+  try {
+    const recent = await rest<Array<{ amount: number; fee: number }>>(
+      `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}&type=eq.charge&select=amount,fee&limit=100&order=processed_at.desc`
+    );
+    if (recent && recent.length > 10) {
+      const totalAmt = recent.reduce((s, t) => s + Math.abs(Number(t.amount) || 0), 0);
+      const totalFee = recent.reduce((s, t) => s + Math.abs(Number(t.fee) || 0), 0);
+      if (totalAmt > 0) return totalFee / totalAmt;
+    }
+  } catch { /* use default */ }
+  return 0.02; // Conservative default for non-Shopify-Payments gateways
+}
+
+/**
+ * Orders-based P&L fallback for stores without Shopify Payments (e.g. Naiva).
+ * Uses shopify_orders_cache.total_price for revenue, learned fee rate for fees.
+ */
+async function computePnLFromOrders(
   storeId: string,
   dateStr: string,
   tz: string,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; source: string; error?: string }> {
+  const utcBounds = dateStrToUtcBounds(dateStr, tz);
+
+  const orders = await rest<Array<{
+    total_price: number; financial_status: string; refund_total: number;
+  }>>(
+    `/shopify_orders_cache?store_id=eq.${encodeURIComponent(storeId)}` +
+    `&and=(created_at.gte.${encodeURIComponent(utcBounds.min)},created_at.lte.${encodeURIComponent(utcBounds.max)})` +
+    `&order_status=neq.cancelled&select=total_price,financial_status,refund_total`
+  ).catch(() => []);
+
+  let revenue = 0, refunds = 0, orderCount = 0;
+  for (const order of orders ?? []) {
+    const fs = (order.financial_status || '').toLowerCase();
+    if (fs === 'voided') continue;
+    if (fs === 'refunded') {
+      refunds += Number(order.refund_total) || Number(order.total_price) || 0;
+      continue;
+    }
+    revenue += Number(order.total_price) || 0;
+    orderCount++;
+    if (fs === 'partially_refunded' && order.refund_total) {
+      refunds += Number(order.refund_total) || 0;
+    }
+  }
+
+  revenue = Math.round(revenue * 100) / 100;
+  refunds = Math.round(refunds * 100) / 100;
+
+  const feeRate = await getLearnedFeeRate(storeId);
+  const transactionFees = Math.round(revenue * feeRate * 100) / 100;
+  const adSpend = await getAdSpendForDate(storeId, dateStr);
+
+  const netProfit = Math.round((revenue - transactionFees - refunds - adSpend) * 100) / 100;
+  const margin = revenue > 0 ? Math.round((netProfit / revenue) * 10000) / 100 : 0;
+
+  await rest(
+    '/daily_pnl_snapshots?on_conflict=store_id,date',
+    {
+      method: 'POST',
+      headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify([{
+        store_id: storeId,
+        date: dateStr,
+        revenue,
+        transaction_fees: transactionFees,
+        refunds,
+        order_count: orderCount,
+        chargeback_loss: 0,
+        chargeback_won: 0,
+        ad_spend: adSpend,
+        net_profit: netProfit,
+        margin,
+        revenue_source: 'orders_fallback',
+        synced_at: new Date().toISOString(),
+        shopify_synced: revenue > 0,
+        meta_synced: adSpend > 0,
+      }]),
+    }
+  );
+
+  return { success: true, source: 'orders_fallback' };
+}
+
+/**
+ * BT-based P&L compute (primary path).
+ * If no BT charges found, falls back to orders-based computation.
+ */
+async function computePnLForStore(
+  storeId: string,
+  dateStr: string,
+  tz: string,
+): Promise<{ success: boolean; source: string; error?: string }> {
   const utcBounds = dateStrToUtcBounds(dateStr, tz);
 
   const btRows = await rest<Array<{ type: string; amount: string; fee: string; net: string }>>(
@@ -187,6 +286,13 @@ async function computePnLFromBT(
     `&and=(processed_at.gte.${encodeURIComponent(utcBounds.min)},processed_at.lte.${encodeURIComponent(utcBounds.max)})` +
     `&type=neq.payout&select=type,amount,fee,net&limit=1000`
   ).catch(() => []);
+
+  // Check if store has any BT charges — if not, use orders fallback
+  const hasCharges = (btRows ?? []).some(t => (t.type || '').toLowerCase() === 'charge');
+  if (!hasCharges) {
+    console.log(`[tz-sync] No BT charges for ${storeId} on ${dateStr}, using orders fallback`);
+    return computePnLFromOrders(storeId, dateStr, tz);
+  }
 
   let revenue = 0, transactionFees = 0, refunds = 0;
   let chargebackLoss = 0, chargebackWon = 0, adjustments = 0;
@@ -210,13 +316,7 @@ async function computePnLFromBT(
   chargebackWon = Math.round(chargebackWon * 100) / 100;
   adjustments = Math.round(adjustments * 100) / 100;
 
-  let adSpend = 0;
-  try {
-    const spendRows = await rest<Array<{ spend: number }>>(
-      `/meta_spend_cache?store_id=eq.${encodeURIComponent(storeId)}&date=eq.${dateStr}&select=spend`
-    );
-    adSpend = (spendRows ?? []).reduce((s, r) => s + (Number(r.spend) || 0), 0);
-  } catch { /* no meta spend */ }
+  const adSpend = await getAdSpendForDate(storeId, dateStr);
 
   const netProfit = Math.round(
     (revenue - transactionFees - refunds - chargebackLoss + chargebackWon + adjustments - adSpend) * 100
@@ -239,6 +339,7 @@ async function computePnLFromBT(
         ad_spend: adSpend,
         net_profit: netProfit,
         margin,
+        revenue_source: 'balance_transactions',
         synced_at: new Date().toISOString(),
         shopify_synced: revenue > 0 || refunds > 0,
         meta_synced: adSpend > 0,
@@ -246,7 +347,7 @@ async function computePnLFromBT(
     }
   );
 
-  return { success: true };
+  return { success: true, source: 'balance_transactions' };
 }
 
 // ── Resolve timezone for a store ────────────────────────────────────────
@@ -340,9 +441,10 @@ export async function GET(req: NextRequest) {
       const btCount = await syncBalanceTransactionsForStore(store.id);
       console.log(`[tz-sync] ${store.name || store.domain}: synced ${btCount} BTs`);
 
-      // 2. Compute P&L from BT and upsert into daily_pnl_snapshots
-      const result = await computePnLFromBT(store.id, targetDate, tz);
+      // 2. Compute P&L (BT primary, orders fallback for non-Shopify-Payments stores)
+      const result = await computePnLForStore(store.id, targetDate, tz);
       if (!result.success) throw new Error(result.error || 'P&L compute failed');
+      console.log(`[tz-sync] ${store.name || store.domain}: data source = ${result.source}`);
 
       const elapsed = Date.now() - storeStart;
       storesSynced.push({
