@@ -83,18 +83,25 @@ export async function GET(req: NextRequest) {
       const orderFeeMap = await getOrderFees(storeId, orderIds);
 
       // 3. Refunds/chargebacks by processed_at
-      let totalRefunds = 0, totalCbLoss = 0, totalCbWon = 0, totalAdjustments = 0;
-      const btByDate = await rest<Array<{ type: string; amount: string; net: string }>>(
-        `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&type=neq.charge&type=neq.payout&and=(processed_at.gte.${enc(tzStart)},processed_at.lte.${enc(tzEnd)})&select=type,amount,net`
+      let totalRefunds = 0, totalCbLoss = 0, totalCbWon = 0, totalCbFees = 0, totalDebits = 0, totalCredits = 0, totalReserve = 0;
+      const btByDate = await rest<Array<{ type: string; amount: string; fee: string; net: string }>>(
+        `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&type=neq.charge&type=neq.payout&and=(processed_at.gte.${enc(tzStart)},processed_at.lte.${enc(tzEnd)})&select=type,amount,fee,net`
       ).catch(() => []);
 
       for (const t of btByDate) {
-        const amount = Math.abs(parseFloat(t.amount || '0'));
+        const amount = parseFloat(t.amount || '0');
+        const fee = Math.abs(parseFloat(t.fee || '0'));
         const net = parseFloat(t.net || '0');
         switch (t.type) {
-          case 'refund': totalRefunds += amount; break;
-          case 'dispute': if (net < 0) totalCbLoss += Math.abs(net); else totalCbWon += net; break;
-          case 'adjustment': case 'debit': case 'credit': totalAdjustments += parseFloat(t.amount || '0'); break;
+          case 'refund': totalRefunds += Math.abs(amount); break;
+          case 'dispute':
+            if (fee > 0) totalCbFees += fee;
+            if (net < 0) totalCbLoss += Math.abs(net) - fee;
+            else totalCbWon += net;
+            break;
+          case 'reserve': totalReserve += amount; break;
+          case 'credit': totalCredits += amount; break;
+          case 'debit': case 'adjustment': totalDebits += Math.abs(amount); break;
         }
       }
 
@@ -147,10 +154,10 @@ export async function GET(req: NextRequest) {
         unitsSold: acc.units, fees: Math.round(acc.fees * 100) / 100, orders: acc.orders,
       })).sort((a, b) => b.revenue - a.revenue);
 
-      const netProfit = orderRevenue - totalFees - totalAdSpend - totalRefunds - totalCbLoss + totalCbWon + totalAdjustments;
+      const netProfit = orderRevenue - totalFees - totalAdSpend - totalRefunds - totalCbLoss - totalCbFees - totalDebits + totalCbWon + totalCredits;
       const margin = orderRevenue > 0 ? (netProfit / orderRevenue) * 100 : 0;
 
-      // 7. Save
+      // 7. Save — every cost type separate, nothing hidden
       await rest('/daily_pnl_snapshots?on_conflict=store_id,date', {
         method: 'POST',
         headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
@@ -162,7 +169,8 @@ export async function GET(req: NextRequest) {
           full_refund_count: 0, partial_refund_count: 0,
           full_refund_amount: 0, partial_refund_amount: 0,
           chargeback_loss: totalCbLoss, chargeback_won: totalCbWon,
-          adjustments: totalAdjustments,
+          chargeback_fees: totalCbFees, debits: totalDebits,
+          credits: totalCredits, reserve_hold: totalReserve,
           net_profit: netProfit, margin,
           warnings: '[]',
           product_breakdown: JSON.stringify(productBreakdownArr),
