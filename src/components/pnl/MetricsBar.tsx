@@ -1,24 +1,23 @@
 'use client';
 
 import type { ProductPnLData } from '@/types/productPnl';
-import type { PnLSummary } from '@/types/pnl';
+import type { PnLEntry } from '@/types/pnl';
 import { formatCurrency, cn } from '@/lib/utils';
 
 interface MetricsBarProps {
-  summary: PnLSummary;
+  entry: PnLEntry;
   products: ProductPnLData[];
   currency?: string;
 }
 
-export function MetricsBar({ summary, products, currency = 'USD' }: MetricsBarProps) {
+export function MetricsBar({ entry, products, currency = 'USD' }: MetricsBarProps) {
   const safeProducts = products ?? [];
-  const today = summary?.today;
 
-  // Calculate metrics from available data
-  const totalRevenue = today?.revenue ?? 0;
-  const totalAdSpend = today?.adSpend ?? 0;
-  const totalRefunds = today?.refunds ?? 0;
-  const totalOrders = today?.orderCount ?? 0;
+  // Calculate metrics from active date range entry
+  const totalRevenue = entry?.revenue ?? 0;
+  const totalAdSpend = entry?.adSpend ?? 0;
+  const totalRefunds = entry?.refunds ?? 0;
+  const totalOrders = entry?.orderCount ?? 0;
 
   const aov = totalOrders > 0 ? totalRevenue / totalOrders : 0;
   const roas = totalAdSpend > 0 ? totalRevenue / totalAdSpend : 0;

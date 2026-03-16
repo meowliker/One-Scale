@@ -224,6 +224,7 @@ export function PnLDashboardClient({
 
     setProductLoading(true);
     setProductError(null);
+    setLiveProductPnL(null); // Clear stale data immediately to prevent mismatched metrics
 
     try {
       const params = new URLSearchParams({ storeId: activeStoreId, from, to });
@@ -384,9 +385,9 @@ export function PnLDashboardClient({
       </SectionWrapper>
 
       {/* S6: Key Metrics Bar (AOV, Orders, Upsell Rate, ROAS) */}
-      {effectiveProductPnL.length > 0 && (
+      {!productLoading && effectiveProductPnL.length > 0 && (
         <SectionWrapper label="Key Metrics">
-          <MetricsBar summary={summary} products={effectiveProductPnL} currency={currency} />
+          <MetricsBar entry={activeEntry} products={effectiveProductPnL} currency={currency} />
         </SectionWrapper>
       )}
 
