@@ -924,8 +924,13 @@ export async function onStoreConnected(storeId: string): Promise<void> {
 
     // Auto-seed product_config for product performance (after classification)
     try {
-      const { autoSeedProductConfig } = await import('@/app/api/intelligence/seed-products/route');
-      const seedResult = await autoSeedProductConfig(storeId);
+      // Auto-seed via API call (can't import route handler functions directly)
+      const seedRes = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/intelligence/seed-products`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storeId }),
+      });
+      const seedResult = seedRes.ok ? await seedRes.json() : { seeded: 0 };
       if (seedResult.seeded > 0) {
         console.log(`[PRISM:Onboarding] Auto-seeded ${seedResult.seeded} products into product_config`);
       }

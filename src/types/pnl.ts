@@ -18,6 +18,7 @@ export interface PnLEntry {
   partialRefundAmount?: number;
   chargebackLoss?: number;
   chargebackWon?: number;
+  adjustments?: number;
   customExpenses?: number;
   expenseBreakdown?: { name: string; amount: number }[];
 }

@@ -42,7 +42,7 @@ function generateKeywords(title: string): string[][] {
 
 // ── Auto-seed product config for a store ─────────────────────────────
 
-export async function autoSeedProductConfig(storeId: string): Promise<{
+async function autoSeedProductConfig(storeId: string): Promise<{
   seeded: number;
   products: Array<{ productId: string; title: string; classification: string }>;
   skipped: boolean;

@@ -50,7 +50,7 @@ function computeEntryFromDaily(dailyPnL: PnLEntry[], range: DateRange, expenses?
   const filtered = dailyPnL.filter((day) => day.date >= startStr && day.date <= endStr);
 
   if (filtered.length === 0) {
-    return { date: startStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0, fullRefundCount: 0, partialRefundCount: 0, fullRefundAmount: 0, partialRefundAmount: 0, chargebackLoss: 0, chargebackWon: 0, customExpenses: 0, expenseBreakdown: [] };
+    return { date: startStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0, fullRefundCount: 0, partialRefundCount: 0, fullRefundAmount: 0, partialRefundAmount: 0, chargebackLoss: 0, chargebackWon: 0, adjustments: 0, customExpenses: 0, expenseBreakdown: [] };
   }
 
   const totals = filtered.reduce(
@@ -68,8 +68,9 @@ function computeEntryFromDaily(dailyPnL: PnLEntry[], range: DateRange, expenses?
       partialRefundAmount: acc.partialRefundAmount + (day.partialRefundAmount || 0),
       chargebackLoss: acc.chargebackLoss + (day.chargebackLoss || 0),
       chargebackWon: acc.chargebackWon + (day.chargebackWon || 0),
+      adjustments: acc.adjustments + (day.adjustments || 0),
     }),
-    { revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, orderCount: 0, fullRefundCount: 0, partialRefundCount: 0, fullRefundAmount: 0, partialRefundAmount: 0, chargebackLoss: 0, chargebackWon: 0 },
+    { revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, orderCount: 0, fullRefundCount: 0, partialRefundCount: 0, fullRefundAmount: 0, partialRefundAmount: 0, chargebackLoss: 0, chargebackWon: 0, adjustments: 0 },
   );
 
   let customExpensesTotal = 0;

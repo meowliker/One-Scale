@@ -148,6 +148,9 @@ export async function GET(request: NextRequest) {
       partialRefundAmount: Number(row.partial_refund_amount),
       chargebackLoss: Number(row.chargeback_loss),
       chargebackWon: Number(row.chargeback_won),
+      // Compute adjustments from the gap between netProfit and known line items
+      // adjustments = netProfit - (revenue - fees - refunds - cbLoss + cbWon - adSpend - cogs - shipping)
+      adjustments: Math.round((Number(row.net_profit) - (Number(row.revenue) - Number(row.transaction_fees) - Number(row.refunds) - Number(row.chargeback_loss) + Number(row.chargeback_won) - Number(row.ad_spend) - Number(row.cogs) - Number(row.shipping_cost))) * 100) / 100,
     }));
 
     const lastRow = data?.[data.length - 1];

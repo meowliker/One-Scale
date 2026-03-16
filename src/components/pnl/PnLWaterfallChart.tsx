@@ -46,6 +46,16 @@ export function PnLWaterfallChart({ entry, isDigital = false, currency = 'USD' }
       });
     }
 
+    // Adjustments (debits, credits, seller protection — non-standard BT types)
+    if ((entry.adjustments || 0) !== 0) {
+      const adj = entry.adjustments!;
+      if (adj < 0) {
+        addCost('Adjustments', Math.abs(adj));
+      } else {
+        result.push({ name: 'Adjustments', amount: adj, pct: (adj / rev) * 100, type: 'add' });
+      }
+    }
+
     if ((entry.customExpenses || 0) > 0) {
       result.push({ name: 'Custom Expenses', amount: entry.customExpenses!, pct: (entry.customExpenses! / rev) * 100, type: 'cost' });
     }
