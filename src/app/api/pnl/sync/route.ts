@@ -206,35 +206,44 @@ export async function POST(request: NextRequest) {
     try {
       const utcBounds = dateStrToUtcBounds(dateStr, tz);
 
-      const btRows = await rest<Array<{ type: string; amount: string; fee: string; net: string }>>(
+      // Fetch BT data (includes description for universal classification)
+      const btRows = await rest<Array<{ type: string; amount: string; fee: string; net: string; description?: string }>>(
         `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}` +
         `&and=(processed_at.gte.${encodeURIComponent(utcBounds.min)},processed_at.lte.${encodeURIComponent(utcBounds.max)})` +
         `&type=neq.payout&select=type,amount,fee,net&limit=1000`
       ).catch(() => []);
 
-      // Check for BT charges — if none, use orders fallback (e.g. Naiva without Shopify Payments)
       const hasCharges = (btRows ?? []).some(t => (t.type || '').toLowerCase() === 'charge');
 
       let revenue = 0, transactionFees = 0, refunds = 0;
-      let chargebackLoss = 0, chargebackWon = 0, adjustments = 0;
+      let chargebackLoss = 0, chargebackWon = 0;
       let orderCount = 0;
-      let revenueSource = 'balance_transactions';
 
       if (hasCharges) {
-        for (const txn of btRows ?? []) {
-          const amt = parseFloat(txn.amount || '0');
-          const fee = Math.abs(parseFloat(txn.fee || '0'));
-          const net = parseFloat(txn.net || '0');
-          switch ((txn.type || '').toLowerCase()) {
-            case 'charge': revenue += Math.abs(amt); transactionFees += fee; break;
-            case 'refund': refunds += Math.abs(amt); break;
-            case 'dispute': if (net < 0) chargebackLoss += Math.abs(net); else chargebackWon += net; break;
-            default: adjustments += amt; break;
+        // ── Universal BT calculator ──
+        const { calculateFromBT } = await import('@/lib/pnl/btCalculator');
+        const pnl = calculateFromBT(btRows ?? []);
+        revenue = pnl.revenue;
+        transactionFees = pnl.fees;
+        refunds = pnl.refunds;
+        chargebackLoss = pnl.chargebackLoss;
+        chargebackWon = pnl.chargebackWon;
+
+        // Log unknown types to prism_alerts
+        if (pnl.unknownTypes.length > 0) {
+          for (const uType of pnl.unknownTypes) {
+            await rest('/prism_alerts', {
+              method: 'POST',
+              headers: { Prefer: 'return=minimal' },
+              body: JSON.stringify({
+                store_id: storeId, alert_type: 'unknown_bt_type', severity: 'low',
+                message: `New BT type: ${uType}`, details: { type: uType, date: dateStr },
+              }),
+            }).catch(() => null);
           }
         }
       } else {
         // Orders fallback for stores without Shopify Payments
-        revenueSource = 'orders_fallback';
         const orders = await rest<Array<{ total_price: number; financial_status: string; refund_total: number }>>(
           `/shopify_orders_cache?store_id=eq.${encodeURIComponent(storeId)}` +
           `&and=(created_at.gte.${encodeURIComponent(utcBounds.min)},created_at.lte.${encodeURIComponent(utcBounds.max)})` +
@@ -254,16 +263,10 @@ export async function POST(request: NextRequest) {
             refunds += Number(order.refund_total) || 0;
           }
         }
-        // Estimate fees at 2% for non-Shopify-Payments gateways
-        transactionFees = revenue * 0.02;
+        revenue = Math.round(revenue * 100) / 100;
+        refunds = Math.round(refunds * 100) / 100;
+        transactionFees = Math.round(revenue * 0.02 * 100) / 100;
       }
-
-      revenue = Math.round(revenue * 100) / 100;
-      transactionFees = Math.round(transactionFees * 100) / 100;
-      refunds = Math.round(refunds * 100) / 100;
-      chargebackLoss = Math.round(chargebackLoss * 100) / 100;
-      chargebackWon = Math.round(chargebackWon * 100) / 100;
-      adjustments = Math.round(adjustments * 100) / 100;
 
       let adSpend = 0;
       try {
@@ -273,7 +276,7 @@ export async function POST(request: NextRequest) {
         adSpend = (spendRows ?? []).reduce((s, r) => s + (Number(r.spend) || 0), 0);
       } catch { /* no meta */ }
 
-      const netProfit = Math.round((revenue - transactionFees - refunds - chargebackLoss + chargebackWon + adjustments - adSpend) * 100) / 100;
+      const netProfit = Math.round((revenue - transactionFees - refunds - chargebackLoss + chargebackWon - adSpend) * 100) / 100;
       const margin = revenue > 0 ? Math.round((netProfit / revenue) * 10000) / 100 : 0;
 
       await rest(

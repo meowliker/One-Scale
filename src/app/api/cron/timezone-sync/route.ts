@@ -294,34 +294,14 @@ async function computePnLForStore(
     return computePnLFromOrders(storeId, dateStr, tz);
   }
 
-  let revenue = 0, transactionFees = 0, refunds = 0;
-  let chargebackLoss = 0, chargebackWon = 0, adjustments = 0;
-
-  for (const txn of btRows ?? []) {
-    const amt = parseFloat(txn.amount || '0');
-    const fee = Math.abs(parseFloat(txn.fee || '0'));
-    const net = parseFloat(txn.net || '0');
-    switch ((txn.type || '').toLowerCase()) {
-      case 'charge': revenue += Math.abs(amt); transactionFees += fee; break;
-      case 'refund': refunds += Math.abs(amt); break;
-      case 'dispute': if (net < 0) chargebackLoss += Math.abs(net); else chargebackWon += net; break;
-      default: adjustments += amt; break;
-    }
-  }
-
-  revenue = Math.round(revenue * 100) / 100;
-  transactionFees = Math.round(transactionFees * 100) / 100;
-  refunds = Math.round(refunds * 100) / 100;
-  chargebackLoss = Math.round(chargebackLoss * 100) / 100;
-  chargebackWon = Math.round(chargebackWon * 100) / 100;
-  adjustments = Math.round(adjustments * 100) / 100;
+  // ── Universal BT calculator ──
+  const { calculateFromBT } = await import('@/lib/pnl/btCalculator');
+  const pnl = calculateFromBT(btRows ?? []);
 
   const adSpend = await getAdSpendForDate(storeId, dateStr);
 
-  const netProfit = Math.round(
-    (revenue - transactionFees - refunds - chargebackLoss + chargebackWon + adjustments - adSpend) * 100
-  ) / 100;
-  const margin = revenue > 0 ? Math.round((netProfit / revenue) * 10000) / 100 : 0;
+  const netProfit = Math.round((pnl.netRevenue - adSpend) * 100) / 100;
+  const margin = pnl.revenue > 0 ? Math.round((netProfit / pnl.revenue) * 10000) / 100 : 0;
 
   await rest(
     '/daily_pnl_snapshots?on_conflict=store_id,date',
@@ -331,17 +311,16 @@ async function computePnLForStore(
       body: JSON.stringify([{
         store_id: storeId,
         date: dateStr,
-        revenue,
-        transaction_fees: transactionFees,
-        refunds,
-        chargeback_loss: chargebackLoss,
-        chargeback_won: chargebackWon,
+        revenue: pnl.revenue,
+        transaction_fees: pnl.fees,
+        refunds: pnl.refunds,
+        chargeback_loss: pnl.chargebackLoss,
+        chargeback_won: pnl.chargebackWon,
         ad_spend: adSpend,
         net_profit: netProfit,
         margin,
-        // balance_transactions source
         synced_at: new Date().toISOString(),
-        shopify_synced: revenue > 0 || refunds > 0,
+        shopify_synced: pnl.revenue > 0 || pnl.refunds > 0,
         meta_synced: adSpend > 0,
       }]),
     }
