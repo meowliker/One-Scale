@@ -1239,17 +1239,24 @@ async function realGetDailyPnL(): Promise<PnLEntry[]> {
   return memoizePromise(key, 30_000, fastGetDailyPnL);
 }
 
-export const getPnLSummary = createServiceFn<PnLSummary>(
-  'meta',
-  mockGetPnLSummary,
-  realGetPnLSummary
-);
+// DB-first P&L functions bypass the connection check — they read from
+// daily_pnl_snapshots which don't need Meta/Shopify to be connected.
+// This makes store switches instant (no waiting for connection status).
+export const getPnLSummary = async (): Promise<PnLSummary> => {
+  try {
+    return await realGetPnLSummary();
+  } catch {
+    return mockGetPnLSummary();
+  }
+};
 
-export const getDailyPnL = createServiceFn<PnLEntry[]>(
-  'meta',
-  mockGetDailyPnL,
-  realGetDailyPnL
-);
+export const getDailyPnL = async (): Promise<PnLEntry[]> => {
+  try {
+    return await realGetDailyPnL();
+  } catch {
+    return mockGetDailyPnL();
+  }
+};
 
 async function mockGetProducts(): Promise<ProductCOGS[]> {
   await new Promise((resolve) => setTimeout(resolve, 100));

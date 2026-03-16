@@ -118,20 +118,26 @@ export default function PnLPage() {
   // Connection status starts as null before the first refreshStatus() call resolves.
   const connectionReady = !connectionLoading && connectionStatus !== null;
 
-  // ── BUG FIX: Reset ALL P&L state when active store changes ──────────────
+  // ── Store switch: keep showing old data with loading indicator, don't wipe ──
   useEffect(() => {
     if (prevStoreIdRef.current && prevStoreIdRef.current !== activeStoreId) {
-      // Store switched — clear everything immediately
-      setSummary(emptySummary);
-      setDailyPnL([]);
-      setProducts([]);
-      setProductPnL([]);
-      setHourlyPnL([]);
-      setCurrency('USD');
+      // Don't clear data — keep showing previous store's data as skeleton
+      // New data replaces it as soon as it arrives (no blank screen)
       setLoading(true);
-      setLastRefreshed(null);
-      setLastRefreshedLabel('');
       setEmptyReason(null);
+
+      // Try to instantly show cached data for the new store
+      if (activeStoreId) {
+        const cached = readPnLCache(activeStoreId);
+        if (cached) {
+          setSummary(cached.summary);
+          setDailyPnL(cached.dailyPnL);
+          setProducts(cached.products);
+          setProductPnL(cached.productPnL);
+          if (cached.currency) setCurrency(cached.currency);
+          setLoading(false);
+        }
+      }
     }
     prevStoreIdRef.current = activeStoreId;
   }, [activeStoreId]);
@@ -304,9 +310,21 @@ export default function PnLPage() {
 
   if ((!connectionReady || loading) && dailyPnL.length === 0 && !emptyReason) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        <span className="ml-3 text-text-muted">Loading P&L data...</span>
+      <div className="space-y-5 animate-pulse">
+        {/* Skeleton: summary cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {[1,2,3,4].map(i => (
+            <div key={i} className="h-24 rounded-xl bg-surface-secondary/60" />
+          ))}
+        </div>
+        {/* Skeleton: chart area */}
+        <div className="h-64 rounded-xl bg-surface-secondary/60" />
+        {/* Skeleton: product table */}
+        <div className="space-y-2">
+          {[1,2,3].map(i => (
+            <div key={i} className="h-12 rounded-lg bg-surface-secondary/40" />
+          ))}
+        </div>
       </div>
     );
   }
