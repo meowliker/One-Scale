@@ -287,7 +287,7 @@ export async function POST(request: NextRequest) {
             chargeback_loss: chargebackLoss, chargeback_won: chargebackWon,
             ad_spend: adSpend, net_profit: netProfit, margin,
             order_count: orderCount,
-            revenue_source: revenueSource,
+            // revenue_source not in DB schema yet
             synced_at: new Date().toISOString(),
             shopify_synced: revenue > 0 || refunds > 0,
             meta_synced: adSpend > 0,

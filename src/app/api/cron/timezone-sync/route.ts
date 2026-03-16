@@ -259,7 +259,7 @@ async function computePnLFromOrders(
         ad_spend: adSpend,
         net_profit: netProfit,
         margin,
-        revenue_source: 'orders_fallback',
+        // orders_fallback source
         synced_at: new Date().toISOString(),
         shopify_synced: revenue > 0,
         meta_synced: adSpend > 0,
@@ -339,7 +339,7 @@ async function computePnLForStore(
         ad_spend: adSpend,
         net_profit: netProfit,
         margin,
-        revenue_source: 'balance_transactions',
+        // balance_transactions source
         synced_at: new Date().toISOString(),
         shopify_synced: revenue > 0 || refunds > 0,
         meta_synced: adSpend > 0,
