@@ -81,7 +81,7 @@ function computeEntryFromDaily(dailyPnL: PnLEntry[], range: DateRange, expenses?
     expenseBreakdown = result.breakdown.map(b => ({ name: b.name, amount: b.allocated }));
   }
 
-  const netProfit = totals.revenue - totals.cogs - totals.adSpend - totals.shipping - totals.fees - totals.refunds - totals.chargebackLoss + totals.chargebackWon - customExpensesTotal;
+  const netProfit = totals.revenue - totals.cogs - totals.adSpend - totals.shipping - totals.fees - totals.refunds - totals.chargebackLoss + totals.chargebackWon + totals.adjustments - customExpensesTotal;
   const margin = totals.revenue > 0 ? (netProfit / totals.revenue) * 100 : 0;
 
   return {
