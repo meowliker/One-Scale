@@ -922,6 +922,17 @@ export async function onStoreConnected(storeId: string): Promise<void> {
       }
     });
 
+    // Auto-seed product_config for product performance (after classification)
+    try {
+      const { autoSeedProductConfig } = await import('@/app/api/intelligence/seed-products/route');
+      const seedResult = await autoSeedProductConfig(storeId);
+      if (seedResult.seeded > 0) {
+        console.log(`[PRISM:Onboarding] Auto-seeded ${seedResult.seeded} products into product_config`);
+      }
+    } catch (err) {
+      console.warn('[PRISM:Onboarding] Auto-seed product_config failed (non-fatal):', err instanceof Error ? err.message : err);
+    }
+
     // Stage 4: Products — populated by classification above
     const productCheck = await rest<Array<{ product_id: string }>>(
       `/product_behaviors?store_id=eq.${encodeURIComponent(storeId)}&select=product_id&limit=1`,
