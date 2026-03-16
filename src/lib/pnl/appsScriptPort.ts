@@ -592,18 +592,20 @@ export async function buildProductPerformance(
   for (const p of productConfigs) mainNameMap.set(p.product_id, p.product_name);
 
   for (const [pid, agg] of upsellAgg.entries()) {
+    // Upsell revenue is $0 here — it's already included in main product's order.total_price.
+    // Upsells are listed for classification/display only, not for P&L totals.
     results.push({
       product_id: pid,
       product_name: agg.title,
       classification: 'upsell',
-      revenue: round2(agg.revenue),
+      revenue: 0,
       orders: agg.orders,
       fees: 0,
       fees_estimated: false,
       ad_spend: 0,
       cogs: 0,
-      net_profit: round2(agg.revenue),
-      margin: 100,
+      net_profit: 0,
+      margin: 0,
       attribution_method: 'upsell_no_cost',
       parent_product_id: agg.parentId,
       parent_product_name: agg.parentId ? (mainNameMap.get(agg.parentId) ?? null) : null,

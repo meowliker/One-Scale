@@ -1,24 +1,26 @@
 -- ═══════════════════════════════════════════════════════════════
 -- Migration 027: Move all crons to Supabase pg_cron
 -- Run this in Supabase SQL Editor (requires pg_cron + pg_net extensions)
+--
+-- Values are hardcoded inline. To change URL or secret, unschedule
+-- and re-create the affected cron jobs.
 -- ═══════════════════════════════════════════════════════════════
 
 -- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS pg_cron;
 CREATE EXTENSION IF NOT EXISTS pg_net;
 
--- ── Set app config vars ──────────────────────────────────────
--- UPDATE THESE before running:
-ALTER DATABASE postgres SET app.url = 'https://one-scale-nine.vercel.app';
-ALTER DATABASE postgres SET app.cron_secret = 'sync-secret-20260304-onescale';
-
 -- ── Remove any existing cron jobs first ──────────────────────
-SELECT cron.unschedule(jobname) FROM cron.job
-WHERE jobname IN (
-  'timezone-pnl-sync', 'meta-spend-sync', 'product-classification',
-  'exchange-rates-sync', 'cleanup-old-data', 'health-check',
-  'store-config-sync'
-);
+DO $$
+BEGIN
+  PERFORM cron.unschedule(jobname) FROM cron.job
+  WHERE jobname IN (
+    'timezone-pnl-sync', 'meta-spend-sync', 'product-classification',
+    'exchange-rates-sync', 'cleanup-old-data', 'health-check',
+    'store-config-sync'
+  );
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
 
 -- ═══════════════════════════════════════════════════════════════
 -- 1. TIMEZONE P&L SYNC (every hour)
@@ -29,11 +31,8 @@ SELECT cron.schedule(
   '0 * * * *',
   $$
   SELECT net.http_post(
-    url := current_setting('app.url') || '/api/cron/timezone-sync',
-    headers := jsonb_build_object(
-      'Authorization', 'Bearer ' || current_setting('app.cron_secret'),
-      'Content-Type', 'application/json'
-    ),
+    url := 'https://one-scale-nine.vercel.app/api/cron/timezone-sync',
+    headers := '{"Authorization": "Bearer sync-secret-20260304-onescale", "Content-Type": "application/json"}'::jsonb,
     body := '{}'::jsonb
   );
   $$
@@ -47,11 +46,8 @@ SELECT cron.schedule(
   '0 */6 * * *',
   $$
   SELECT net.http_post(
-    url := current_setting('app.url') || '/api/cron/sync-meta-spend',
-    headers := jsonb_build_object(
-      'Authorization', 'Bearer ' || current_setting('app.cron_secret'),
-      'Content-Type', 'application/json'
-    ),
+    url := 'https://one-scale-nine.vercel.app/api/cron/sync-meta-spend',
+    headers := '{"Authorization": "Bearer sync-secret-20260304-onescale", "Content-Type": "application/json"}'::jsonb,
     body := '{}'::jsonb
   );
   $$
@@ -65,11 +61,8 @@ SELECT cron.schedule(
   '0 3 * * *',
   $$
   SELECT net.http_post(
-    url := current_setting('app.url') || '/api/cron/classify-products',
-    headers := jsonb_build_object(
-      'Authorization', 'Bearer ' || current_setting('app.cron_secret'),
-      'Content-Type', 'application/json'
-    ),
+    url := 'https://one-scale-nine.vercel.app/api/cron/classify-products',
+    headers := '{"Authorization": "Bearer sync-secret-20260304-onescale", "Content-Type": "application/json"}'::jsonb,
     body := '{}'::jsonb
   );
   $$
@@ -83,11 +76,8 @@ SELECT cron.schedule(
   '0 1 * * *',
   $$
   SELECT net.http_post(
-    url := current_setting('app.url') || '/api/cron/refresh-exchange-rates',
-    headers := jsonb_build_object(
-      'Authorization', 'Bearer ' || current_setting('app.cron_secret'),
-      'Content-Type', 'application/json'
-    ),
+    url := 'https://one-scale-nine.vercel.app/api/cron/refresh-exchange-rates',
+    headers := '{"Authorization": "Bearer sync-secret-20260304-onescale", "Content-Type": "application/json"}'::jsonb,
     body := '{}'::jsonb
   );
   $$
@@ -101,11 +91,8 @@ SELECT cron.schedule(
   '0 2 * * *',
   $$
   SELECT net.http_post(
-    url := current_setting('app.url') || '/api/cron/sync-store-configs',
-    headers := jsonb_build_object(
-      'Authorization', 'Bearer ' || current_setting('app.cron_secret'),
-      'Content-Type', 'application/json'
-    ),
+    url := 'https://one-scale-nine.vercel.app/api/cron/sync-store-configs',
+    headers := '{"Authorization": "Bearer sync-secret-20260304-onescale", "Content-Type": "application/json"}'::jsonb,
     body := '{}'::jsonb
   );
   $$
