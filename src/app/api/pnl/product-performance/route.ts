@@ -426,10 +426,11 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // If balance txns exist but no orders in cache for this date range,
-    // fetch line items for the settlement orders from the cache by order ID
+    // When BT data exists, ALWAYS use BT-sourced orders (settlement-based)
+    // so product breakdown matches P&L numbers (both use BT processed_at).
+    // Only fall back to created_at orders when no BT data exists.
     let effectiveOrders = orders ?? [];
-    if (effectiveOrders.length === 0 && btOrderMap.size > 0) {
+    if (btOrderMap.size > 0) {
       // Look up orders by source_order_id from balance transactions
       const orderIds = [...btOrderMap.keys()];
       const batchSize = 50;
@@ -443,7 +444,7 @@ export async function GET(request: NextRequest) {
         fetchedOrders.push(...batchOrders);
       }
       effectiveOrders = fetchedOrders;
-      console.log(`[PRISM:ProductPerf] Settlement mode: ${btOrderMap.size} txns, ${fetchedOrders.length} orders found in cache`);
+      console.log(`[PRISM:ProductPerf] Settlement mode: ${btOrderMap.size} BT txns → ${fetchedOrders.length} orders from cache (matches P&L)`);
     }
 
     for (const order of effectiveOrders) {
