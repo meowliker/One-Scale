@@ -603,18 +603,43 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Async P&L snapshot update — fire and forget
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL ?? '';
-    if (baseUrl) {
-      fetch(`${baseUrl}/api/pnl/sync`, {
+    // ── Real-time P&L: cache order + recompute today's snapshot ──
+    // This makes live data available in <100ms on next page load.
+    if (sb) {
+      // 1. Cache order in shopify_orders_cache (instant)
+      const lineItems = Array.isArray(payload.line_items) ? payload.line_items : [];
+      rest('/shopify_orders_cache?on_conflict=store_id,shopify_order_id', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          storeId: store.id,
-          secret: process.env.PNL_SYNC_SECRET,
-          daysBack: 1,
-        }),
-      }).catch(() => {});
+        headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
+        body: JSON.stringify([{
+          store_id: store.id,
+          shopify_order_id: orderId,
+          total_price: Number(payload.total_price || 0),
+          subtotal_price: Number(payload.subtotal_price || 0),
+          total_tax: Number(payload.total_tax || 0),
+          total_discounts: Number(payload.total_discounts || 0),
+          total_shipping_price: Number(((payload.total_shipping_price_set as Record<string, unknown>)?.shop_money as Record<string, unknown>)?.amount ?? 0),
+          financial_status: financialStatus,
+          order_status: String(payload.cancel_reason ? 'cancelled' : 'open'),
+          line_items: JSON.stringify(lineItems),
+          refund_total: 0,
+          currency: currency,
+          created_at: createdAt,
+        }]),
+      }).catch(() => null);
+
+      // 2. Recompute today's P&L snapshot (fire-and-forget, ~200ms)
+      import('@/lib/pnl/computeDayPnL').then(async ({ computeAndSaveDayPnL }) => {
+        try {
+          const tzRows = await rest<Array<{ timezone: string | null }>>(
+            `/store_ad_accounts?store_id=eq.${encodeURIComponent(store.id)}&is_active=eq.true&select=timezone&limit=1`
+          );
+          const tz = tzRows?.[0]?.timezone || 'America/New_York';
+          const today = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' })
+            .format(new Date()).replace(/\//g, '-');
+          await computeAndSaveDayPnL(store.id, today, tz);
+        } catch { /* fire and forget */ }
+      }).catch(() => null);
     }
 
     return NextResponse.json({ ok: true });

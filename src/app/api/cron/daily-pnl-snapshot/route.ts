@@ -7,7 +7,9 @@ import {
   logStoreError,
 } from '@/app/api/lib/supabase-persistence';
 import { daysAgoInTimezone } from '@/lib/timezone';
-import { calculatePnL } from '@/lib/pnl/universalCalculator';
+import { getStoreDateRangeForPeriod } from '@/lib/pnl/dateUtils';
+import { getOrderFees } from '@/lib/pnl/orderFeeSync';
+import { runAutoSync } from '@/lib/pnl/autoProductConfig';
 import { getShopifyToken } from '@/app/api/lib/tokens';
 import { fetchFromShopify } from '@/app/api/lib/shopify-client';
 
@@ -167,79 +169,174 @@ export async function GET(req: NextRequest) {
         console.warn(`[daily-pnl] Balance txn sync failed for ${store.id}:`, err instanceof Error ? err.message : err);
       }
 
-      // Yesterday in store timezone
-      const yesterday = daysAgoInTimezone(1, tz);
-
-      // Use universal calculator — single source of truth
-      const pnl = await calculatePnL(store.id, yesterday, yesterday, {
-        includeProductBreakdown: true,
-      });
-
-      // Build product breakdown JSON for pnl_snapshots
-      const productBreakdown: Record<string, { revenue: number; quantity: number; cogs: number }> = {};
-      for (const p of pnl.products) {
-        productBreakdown[p.productId] = {
-          revenue: p.revenue,
-          quantity: p.unitsSold,
-          cogs: p.cogs,
-        };
+      // Auto-sync: discover ad accounts → detect products → map accounts to products
+      try {
+        const syncResult = await runAutoSync(store.id);
+        if (syncResult.adAccountsDiscovered > 0 || syncResult.productsDetected > 0 || syncResult.adMappingsSynced > 0) {
+          console.log(`[daily-pnl] AutoSync ${store.id}: +${syncResult.adAccountsDiscovered} accounts, +${syncResult.productsDetected} products, +${syncResult.adMappingsSynced} mappings`);
+        }
+      } catch (err) {
+        console.warn(`[daily-pnl] AutoSync failed for ${store.id}:`, err instanceof Error ? err.message : err);
       }
 
-      // Upsert into pnl_snapshots
+      // Yesterday in store timezone
+      const yesterday = daysAgoInTimezone(1, tz);
+      const { start: tzStart, end: tzEnd } = getStoreDateRangeForPeriod(yesterday, yesterday, tz);
+      const enc = (v: string) => encodeURIComponent(v);
+
+      // ── Order-date P&L: get orders by date, match BT by order_id ──
+      // This matches what Shopify shows the merchant.
+
+      // 1. Orders for yesterday (store timezone)
+      const dayOrders = await rest<Array<{
+        shopify_order_id: string; total_price: number; subtotal_price: number;
+        financial_status: string; line_items: string;
+      }>>(
+        `/shopify_orders_cache?store_id=eq.${enc(store.id)}&and=(created_at.gte.${enc(tzStart)},created_at.lte.${enc(tzEnd)})&select=shopify_order_id,total_price,subtotal_price,financial_status,line_items&limit=1000`
+      ).catch(() => []);
+
+      const paidOrders = dayOrders.filter(o => o.financial_status !== 'refunded' && o.financial_status !== 'voided');
+      const orderIds = paidOrders.map(o => String(o.shopify_order_id));
+      const orderRevenue = paidOrders.reduce((s, o) => s + (Number(o.total_price) || 0), 0);
+
+      // 2. Exact fees for ALL orders (BT + Shopify API fallback — 100% coverage)
+      const orderFeeMap = await getOrderFees(store.id, orderIds);
+
+      // 3. Refunds, chargebacks, adjustments — by PROCESSED DATE (not order date).
+      // A refund/chargeback processed on March 15 affects March 15 P&L,
+      // even if the original order was from March 10.
+      let totalRefunds = 0, totalCbLoss = 0, totalCbWon = 0, totalAdjustments = 0;
+      const btByDate = await rest<Array<{ type: string; amount: string; fee: string; net: string }>>(
+        `/shopify_balance_transactions?store_id=eq.${enc(store.id)}&type=neq.charge&type=neq.payout&and=(processed_at.gte.${enc(tzStart)},processed_at.lte.${enc(tzEnd)})&select=type,amount,fee,net`
+      ).catch(() => []);
+
+      for (const t of btByDate) {
+        const amount = Math.abs(parseFloat(t.amount || '0'));
+        const net = parseFloat(t.net || '0');
+        switch (t.type) {
+          case 'refund':
+            totalRefunds += amount;
+            break;
+          case 'dispute':
+            if (net < 0) totalCbLoss += Math.abs(net);
+            else totalCbWon += net;
+            break;
+          case 'adjustment': case 'debit':
+            totalAdjustments += parseFloat(t.amount || '0'); // can be negative
+            break;
+          case 'credit':
+            totalAdjustments += parseFloat(t.amount || '0'); // positive
+            break;
+          // reserved_funds, marketplace_tax — tracked but don't affect net P&L directly
+        }
+      }
+
+      // 4. Compute totals — fees from exact per-order matching
+      let totalFees = 0;
+      for (const o of paidOrders) {
+        totalFees += orderFeeMap.get(String(o.shopify_order_id)) ?? 0;
+      }
+
+      // 4. Ad spend from meta_spend_cache
+      const spendRows = await rest<Array<{ spend: number }>>(
+        `/meta_spend_cache?store_id=eq.${enc(store.id)}&date=eq.${yesterday}&select=spend`
+      ).catch(() => []);
+      const totalAdSpend = spendRows.reduce((s, r) => s + (Number(r.spend) || 0), 0);
+
+      // 5. Product breakdown (using product_config classification)
+      const productConfigRows = await rest<Array<{ product_id: string }>>(
+        `/product_config?store_id=eq.${enc(store.id)}&is_active=eq.true&select=product_id`
+      ).catch(() => []);
+      const configMainIds = new Set(productConfigRows.map(r => r.product_id));
+
+      interface ProdAcc { title: string; units: number; revenue: number; fees: number; orders: number; classification: string; }
+      const prodMap = new Map<string, ProdAcc>();
+      let lineItemTotal = 0;
+
+      for (const o of paidOrders) {
+        let items: Array<{ product_id?: string | number; title?: string; price?: string; quantity?: number }>;
+        try { items = typeof o.line_items === 'string' ? JSON.parse(o.line_items) : o.line_items || []; } catch { continue; }
+
+        const oid = String(o.shopify_order_id);
+        const orderFee = orderFeeMap.get(oid) ?? 0;
+        const orderLineTotal = items.reduce((s, i) => s + parseFloat(i.price ?? '0') * (i.quantity ?? 1), 0);
+
+        for (const item of items) {
+          const pid = item.product_id ? String(item.product_id) : '';
+          if (!pid || pid === 'null' || pid === '0') continue;
+          const lineRev = parseFloat(item.price ?? '0') * (item.quantity ?? 1);
+          const lineFee = orderLineTotal > 0 ? orderFee * (lineRev / orderLineTotal) : 0;
+          lineItemTotal += lineRev;
+
+          const cls = configMainIds.size > 0 ? (configMainIds.has(pid) ? 'main' : 'upsell') : 'unknown';
+          const acc = prodMap.get(pid) || { title: item.title || '', units: 0, revenue: 0, fees: 0, orders: 0, classification: cls };
+          acc.units += item.quantity ?? 1;
+          acc.revenue += lineRev;
+          acc.fees += lineFee;
+          acc.orders++;
+          prodMap.set(pid, acc);
+        }
+      }
+
+      // Scale product revenue to match order total_price
+      const revScale = (orderRevenue > 0 && lineItemTotal > 0) ? orderRevenue / lineItemTotal : 1;
+      const productBreakdownArr = Array.from(prodMap.entries()).map(([pid, acc]) => ({
+        productId: pid, productTitle: acc.title, classification: acc.classification,
+        revenue: Math.round(acc.revenue * revScale * 100) / 100,
+        unitsSold: acc.units, fees: Math.round(acc.fees * 100) / 100,
+        orders: acc.orders,
+      })).sort((a, b) => b.revenue - a.revenue);
+
+      const netProfit = orderRevenue - totalFees - totalAdSpend - totalRefunds - totalCbLoss + totalCbWon + totalAdjustments;
+      const margin = orderRevenue > 0 ? (netProfit / orderRevenue) * 100 : 0;
+
+      // ── Save to both snapshot tables ──────────────────────────────────
+
       await rest('/pnl_snapshots', {
         method: 'POST',
         headers: { Prefer: 'resolution=merge-duplicates' },
         body: JSON.stringify({
-          store_id: store.id,
-          date: yesterday,
-          revenue: pnl.totalRevenue,
-          net_revenue: pnl.totalRevenue - pnl.totalRefunds,
-          ad_spend: pnl.totalAdSpend,
-          cogs: pnl.totalCogs,
-          payment_fees: pnl.totalFees,
-          handling_fees: 0,
-          chargebacks: pnl.totalChargebackLoss,
-          refunds: pnl.totalRefunds,
-          net_profit: pnl.totalNetProfit,
-          margin: Math.round(pnl.totalMargin * 100) / 100,
-          order_count: pnl.orderCount,
-          cancelled_count: 0,
+          store_id: store.id, date: yesterday,
+          revenue: orderRevenue,
+          net_revenue: orderRevenue - totalRefunds,
+          ad_spend: totalAdSpend, cogs: 0,
+          payment_fees: totalFees, handling_fees: 0,
+          chargebacks: totalCbLoss, refunds: totalRefunds,
+          net_profit: netProfit, margin: Math.round(margin * 100) / 100,
+          order_count: paidOrders.length, cancelled_count: 0,
           currency: 'USD',
-          product_breakdown: JSON.stringify(productBreakdown),
+          product_breakdown: JSON.stringify(productBreakdownArr),
           campaign_breakdown: '{}',
           computed_at: new Date().toISOString(),
         }),
       });
 
-      // Also upsert into daily_pnl_snapshots (the table used by /api/pnl/sync GET)
       await rest('/daily_pnl_snapshots?on_conflict=store_id,date', {
         method: 'POST',
         headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
         body: JSON.stringify([{
-          store_id: store.id,
-          date: yesterday,
-          revenue: pnl.totalRevenue,
-          order_count: pnl.orderCount,
-          cogs: pnl.totalCogs,
-          ad_spend: pnl.totalAdSpend,
-          shipping_cost: pnl.totalShipping,
-          transaction_fees: pnl.totalFees,
-          refunds: pnl.totalRefunds,
-          full_refund_count: 0,
-          partial_refund_count: 0,
-          full_refund_amount: 0,
-          partial_refund_amount: 0,
-          chargeback_loss: pnl.totalChargebackLoss,
-          chargeback_won: pnl.totalChargebackWon,
-          net_profit: pnl.totalNetProfit,
-          margin: pnl.totalMargin,
+          store_id: store.id, date: yesterday,
+          revenue: orderRevenue,
+          order_count: paidOrders.length,
+          cogs: 0,
+          ad_spend: totalAdSpend,
+          shipping_cost: 0,
+          transaction_fees: totalFees,
+          refunds: totalRefunds,
+          full_refund_count: 0, partial_refund_count: 0,
+          full_refund_amount: 0, partial_refund_amount: 0,
+          chargeback_loss: totalCbLoss,
+          chargeback_won: totalCbWon,
+          adjustments: totalAdjustments,
+          net_profit: netProfit,
+          margin,
           attribution_rate: 0,
-          warnings: JSON.stringify(pnl.warnings),
-          product_breakdown: JSON.stringify(pnl.products),
-          fee_method: pnl.feeMethod,
+          warnings: '[]',
+          product_breakdown: JSON.stringify(productBreakdownArr),
+          fee_method: orderFeeMap.size > 0 ? 'bt_exact' : 'none',
           synced_at: new Date().toISOString(),
-          shopify_synced: pnl.orderCount > 0,
-          meta_synced: pnl.totalAdSpend > 0,
+          shopify_synced: paidOrders.length > 0,
+          meta_synced: totalAdSpend > 0,
         }]),
       });
 
@@ -274,7 +371,7 @@ export async function GET(req: NextRequest) {
 
       const elapsed = Date.now() - start;
       await logCron('daily-pnl-snapshot', store.id, 'success', 1, null, elapsed);
-      results.push({ storeId: store.id, status: 'success', date: yesterday, warnings: pnl.warnings.length });
+      results.push({ storeId: store.id, status: 'success', date: yesterday, warnings: 0 });
     } catch (err) {
       const elapsed = Date.now() - start;
       const message = err instanceof Error ? err.message : 'Unknown error';

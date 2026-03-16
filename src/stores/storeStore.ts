@@ -70,11 +70,13 @@ export const useStoreStore = create<StoreState>()(
         const prev = get().activeStoreId;
         set({ activeStoreId: storeId });
         if (prev && prev !== storeId) {
-          // Flush all store-scoped caches so new store data loads immediately
+          // Flush ALL caches so new store data loads immediately — no stale data
           clearCachePrefix('pnl:');
           clearCachePrefix('product-pnl:');
           clearCachePrefix('insights:');
           clearCachePrefix('orders:');
+          // Also clear module-level caches in pnl.ts
+          import('@/services/pnl').then(m => m.clearPnLCaches?.()).catch(() => {});
         }
       },
 

@@ -764,9 +764,43 @@ async function realGetPnLSummaryUncached(): Promise<PnLSummary> {
   };
 }
 
+/**
+ * FAST: Read today's P&L from DB snapshot (updated by webhook on every order).
+ * Falls back to live computation only if no snapshot exists.
+ */
+async function fastGetPnLSummary(): Promise<PnLSummary> {
+  const { useStoreStore } = await import('@/stores/storeStore');
+  const storeId = useStoreStore.getState().activeStoreId;
+  const tz = getStoreTimezone();
+  const todayStr = todayInTimezone(tz);
+
+  if (storeId) {
+    try {
+      const params = new URLSearchParams({ storeId, days: '1' });
+      const res = await fetch(`/api/pnl/sync?${params}`);
+      if (res.ok) {
+        const json = await res.json() as { data?: PnLEntry[] };
+        const todaySnap = (json.data || []).find(e => e.date === todayStr);
+        if (todaySnap && todaySnap.orderCount > 0) {
+          return {
+            today: todaySnap,
+            thisWeek: { date: todayStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0, chargebackLoss: 0, chargebackWon: 0 },
+            thisMonth: { date: todayStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0, chargebackLoss: 0, chargebackWon: 0 },
+            allTime: { date: todayStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0, chargebackLoss: 0, chargebackWon: 0 },
+            productType: 'digital',
+          };
+        }
+      }
+    } catch { /* DB not available, fall back to live */ }
+  }
+
+  // Fallback: live computation (slow but works when DB has no data)
+  return realGetPnLSummaryUncached();
+}
+
 async function realGetPnLSummary(): Promise<PnLSummary> {
   const key = buildStoreScopedKey('pnl:summary');
-  return memoizePromise(key, 45_000, realGetPnLSummaryUncached);
+  return memoizePromise(key, 30_000, fastGetPnLSummary);
 }
 
 async function mockGetDailyPnL(): Promise<PnLEntry[]> {
@@ -1044,7 +1078,7 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
   }
 
   // Include extra dates from Meta insights that might be outside our window
-  for (const date of insightsByDate.keys()) {
+  for (const date of Array.from(insightsByDate.keys())) {
     if (!allDates.includes(date)) allDates.push(date);
   }
 
@@ -1162,9 +1196,47 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
   });
 }
 
+/**
+ * FAST: Read daily P&L from DB snapshots (instant <100ms).
+ * Snapshots are kept fresh by:
+ * - Webhook (real-time for today on each new order)
+ * - pg_cron timezone-sync (hourly at each store's midnight)
+ * - Backfill endpoint (for historical data)
+ *
+ * Falls back to live computation only if DB has no data.
+ */
+async function fastGetDailyPnL(): Promise<PnLEntry[]> {
+  const { useStoreStore } = await import('@/stores/storeStore');
+  const storeId = useStoreStore.getState().activeStoreId;
+
+  if (storeId) {
+    const snapshots = await fetchSnapshotEntries(storeId);
+    if (snapshots.length >= 5) {
+      // DB has good data — use it directly, no live API calls needed
+      const tz = getStoreTimezone();
+      const todayStr = todayInTimezone(tz);
+      // Generate all 31 dates
+      const allDates: string[] = [];
+      for (let i = 30; i >= 0; i--) allDates.push(daysAgoInTimezone(i, tz));
+      if (!allDates.includes(todayStr)) allDates.push(todayStr);
+      allDates.sort();
+
+      const snapMap = new Map(snapshots.map(s => [s.date, s]));
+      return allDates.map(d => snapMap.get(d) || {
+        date: d, revenue: 0, cogs: 0, adSpend: 0, shipping: 0,
+        fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0,
+        chargebackLoss: 0, chargebackWon: 0,
+      });
+    }
+  }
+
+  // Fallback: live computation
+  return realGetDailyPnLUncached();
+}
+
 async function realGetDailyPnL(): Promise<PnLEntry[]> {
   const key = buildStoreScopedKey('pnl:daily');
-  return memoizePromise(key, 45_000, realGetDailyPnLUncached);
+  return memoizePromise(key, 30_000, fastGetDailyPnL);
 }
 
 export const getPnLSummary = createServiceFn<PnLSummary>(

@@ -439,10 +439,16 @@ export async function GET(req: NextRequest) {
       const btCount = await syncBalanceTransactionsForStore(store.id);
       console.log(`[tz-sync] ${store.name || store.domain}: synced ${btCount} BTs`);
 
-      // 2. Compute P&L (BT primary, orders fallback for non-Shopify-Payments stores)
-      const result = await computePnLForStore(store.id, targetDate, tz);
-      if (!result.success) throw new Error(result.error || 'P&L compute failed');
-      console.log(`[tz-sync] ${store.name || store.domain}: data source = ${result.source}`);
+      // 2. Auto-sync (ad accounts, products, mappings)
+      try {
+        const { runAutoSync } = await import('@/lib/pnl/autoProductConfig');
+        await runAutoSync(store.id);
+      } catch { /* non-critical */ }
+
+      // 3. Compute P&L with order-date logic (revenue from orders, exact fees, all costs)
+      const { computeAndSaveDayPnL } = await import('@/lib/pnl/computeDayPnL');
+      const pnl = await computeAndSaveDayPnL(store.id, targetDate, tz);
+      console.log(`[tz-sync] ${store.name || store.domain}: rev=$${pnl.revenue.toFixed(2)} orders=${pnl.orderCount}`);
 
       const elapsed = Date.now() - storeStart;
       storesSynced.push({

@@ -318,9 +318,9 @@ export async function classifyAllProductsV2(storeId: string): Promise<Classifica
     }
 
     // ════════════════════════════════════════════════════════
-    // TIER 4: Weighted scoring (universal)
+    // TIER 4: Weighted scoring (uses learned weights if available)
     // ════════════════════════════════════════════════════════
-    const scored = scoreUniversal(product, model);
+    const scored = await scoreUniversalAsync(product, model, storeId);
     results.push(scored);
     if (scored.classification === 'main') mainProductIds.add(product.product_id);
   }
@@ -347,88 +347,132 @@ export async function classifyAllProductsV2(storeId: string): Promise<Classifica
   return results;
 }
 
-// ── Universal Weighted Scoring ──────────────────────────
+// ── Default Signal Weights ───────────────────────────────
+
+const DEFAULT_WEIGHTS: Record<string, number> = {
+  price_threshold: 25,
+  price_ratio: 10,
+  alone_rate: 30,
+  revenue_share: 25,
+  co_occurrence: 20,
+  first_purchase: 15,
+  order_position: 10,
+  mystery_title: 20,
+};
+
+// ── Self-Learning: Load Tuned Weights ────────────────────
+
+interface WeightRow { signal_name: string; weight: number; }
+const weightCache = new Map<string, { weights: Record<string, number>; ts: number }>();
+const WEIGHT_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+async function getLearnedWeights(storeId: string): Promise<Record<string, number>> {
+  const cached = weightCache.get(storeId);
+  if (cached && (Date.now() - cached.ts) < WEIGHT_CACHE_TTL) return cached.weights;
+
+  const weights = { ...DEFAULT_WEIGHTS };
+  try {
+    const rows = await rest<WeightRow[]>(
+      `/store_signal_weights?store_id=eq.${enc(storeId)}&select=signal_name,weight`
+    );
+    for (const r of rows) {
+      if (r.signal_name in weights) weights[r.signal_name] = r.weight;
+    }
+  } catch { /* table may not exist — use defaults */ }
+
+  weightCache.set(storeId, { weights, ts: Date.now() });
+  return weights;
+}
+
+// ── Universal Weighted Scoring (with learned weights) ────
+
+async function scoreUniversalAsync(product: ProductRow, model: StoreModel, storeId: string): Promise<ClassificationV2Result> {
+  const w = await getLearnedWeights(storeId);
+  return scoreWithWeights(product, model, w);
+}
 
 function scoreUniversal(product: ProductRow, model: StoreModel): ClassificationV2Result {
+  return scoreWithWeights(product, model, DEFAULT_WEIGHTS);
+}
+
+function scoreWithWeights(product: ProductRow, model: StoreModel, w: Record<string, number>): ClassificationV2Result {
   let score = 0;
   const signals: string[] = [];
-
-  // Alone rate weight — reduced for funnel stores where all products are free
   const aloneWeight = model === 'free_plus_shipping' ? 0.5 : 1.0;
 
-  // Price signal (±25)
+  // Price signal
   if (product.price_gap_class === 'above_threshold') {
-    score += 25;
-    signals.push('above_price_threshold +25');
+    score += w.price_threshold;
+    signals.push(`above_price_threshold +${w.price_threshold}`);
   } else if (product.avg_price > 0) {
-    score -= 20;
-    signals.push('below_price_threshold -20');
+    score -= Math.round(w.price_threshold * 0.8);
+    signals.push(`below_price_threshold -${Math.round(w.price_threshold * 0.8)}`);
   }
 
-  // Price ratio to order (±10)
+  // Price ratio
   if (product.price_ratio_to_order > 0.5) {
-    score += 10;
-    signals.push(`high_price_ratio ${product.price_ratio_to_order} +10`);
+    score += w.price_ratio;
+    signals.push(`high_price_ratio ${product.price_ratio_to_order} +${w.price_ratio}`);
   } else if (product.price_ratio_to_order < 0.15 && product.price_ratio_to_order > 0) {
-    score -= 10;
-    signals.push(`low_price_ratio ${product.price_ratio_to_order} -10`);
+    score -= w.price_ratio;
+    signals.push(`low_price_ratio ${product.price_ratio_to_order} -${w.price_ratio}`);
   }
 
-  // Alone rate (±30)
+  // Alone rate
   if (product.alone_rate > 0.4) {
-    score += Math.round(30 * aloneWeight);
-    signals.push(`alone_rate ${(product.alone_rate * 100).toFixed(0)}% +${Math.round(30 * aloneWeight)}`);
+    score += Math.round(w.alone_rate * aloneWeight);
+    signals.push(`alone_rate ${(product.alone_rate * 100).toFixed(0)}% +${Math.round(w.alone_rate * aloneWeight)}`);
   } else if (product.alone_rate > 0.2) {
-    score += Math.round(15 * aloneWeight);
-    signals.push(`alone_rate ${(product.alone_rate * 100).toFixed(0)}% +${Math.round(15 * aloneWeight)}`);
+    score += Math.round(w.alone_rate * 0.5 * aloneWeight);
+    signals.push(`alone_rate ${(product.alone_rate * 100).toFixed(0)}% +${Math.round(w.alone_rate * 0.5 * aloneWeight)}`);
   } else if (product.alone_rate < 0.05) {
-    score -= Math.round(25 * aloneWeight);
-    signals.push(`alone_rate ${(product.alone_rate * 100).toFixed(0)}% -${Math.round(25 * aloneWeight)}`);
+    score -= Math.round(w.alone_rate * 0.83 * aloneWeight);
+    signals.push(`alone_rate ${(product.alone_rate * 100).toFixed(0)}% -${Math.round(w.alone_rate * 0.83 * aloneWeight)}`);
   }
 
-  // Revenue share (±25)
+  // Revenue share
   if (product.revenue_share > 0.15) {
-    score += 25;
-    signals.push(`revenue_share ${(product.revenue_share * 100).toFixed(1)}% +25`);
+    score += w.revenue_share;
+    signals.push(`revenue_share ${(product.revenue_share * 100).toFixed(1)}% +${w.revenue_share}`);
   } else if (product.revenue_share > 0.05) {
-    score += 10;
-    signals.push(`revenue_share ${(product.revenue_share * 100).toFixed(1)}% +10`);
+    score += Math.round(w.revenue_share * 0.4);
+    signals.push(`revenue_share ${(product.revenue_share * 100).toFixed(1)}% +${Math.round(w.revenue_share * 0.4)}`);
   } else if (product.revenue_share < 0.02) {
-    score -= 20;
-    signals.push(`revenue_share ${(product.revenue_share * 100).toFixed(1)}% -20`);
+    score -= Math.round(w.revenue_share * 0.8);
+    signals.push(`revenue_share ${(product.revenue_share * 100).toFixed(1)}% -${Math.round(w.revenue_share * 0.8)}`);
   }
 
-  // Co-occurrence (±20)
+  // Co-occurrence
   if (product.co_occur_rate > 0.6) {
-    score -= 20;
-    signals.push(`often_co_occurs ${(product.co_occur_rate * 100).toFixed(0)}% -20`);
+    score -= w.co_occurrence;
+    signals.push(`often_co_occurs ${(product.co_occur_rate * 100).toFixed(0)}% -${w.co_occurrence}`);
   } else if (product.co_occur_rate < 0.1) {
-    score += 10;
-    signals.push('rarely_co_occurs +10');
+    score += Math.round(w.co_occurrence * 0.5);
+    signals.push(`rarely_co_occurs +${Math.round(w.co_occurrence * 0.5)}`);
   }
 
-  // First purchase rate (+15)
+  // First purchase rate
   if (product.first_purchase_rate > 0.4) {
-    score += 15;
-    signals.push(`first_purchase ${(product.first_purchase_rate * 100).toFixed(0)}% +15`);
+    score += w.first_purchase;
+    signals.push(`first_purchase ${(product.first_purchase_rate * 100).toFixed(0)}% +${w.first_purchase}`);
   } else if (product.first_purchase_rate < 0.05) {
-    score -= 10;
-    signals.push(`low_first_purchase -10`);
+    score -= Math.round(w.first_purchase * 0.67);
+    signals.push(`low_first_purchase -${Math.round(w.first_purchase * 0.67)}`);
   }
 
-  // Order position (±10)
+  // Order position
   if (product.avg_position_in_order <= 1.2) {
-    score += 10;
-    signals.push('first_in_order +10');
+    score += w.order_position;
+    signals.push(`first_in_order +${w.order_position}`);
   } else if (product.always_last) {
-    score -= 10;
-    signals.push('always_last_in_order -10');
+    score -= w.order_position;
+    signals.push(`always_last_in_order -${w.order_position}`);
   }
 
-  // Mystery box title bonus
+  // Mystery box title
   if (/mystery|blind.?box|surprise|grab.?bag/i.test(product.title)) {
-    score += 20;
-    signals.push('mystery_box_title +20');
+    score += w.mystery_title;
+    signals.push(`mystery_box_title +${w.mystery_title}`);
   }
 
   // Decision
@@ -460,7 +504,7 @@ function detectDownsells(
     const product = productMap.get(result.product_id);
     if (!product) continue;
 
-    for (const mainId of mainIds) {
+    for (const mainId of Array.from(mainIds)) {
       const mainProduct = productMap.get(mainId);
       if (!mainProduct || mainProduct.avg_price === 0) continue;
       if (product.avg_price === 0) continue;
@@ -576,13 +620,26 @@ async function validateV2(storeId: string, model: StoreModel, results: Classific
   if (warnings.length > 0) console.warn(`[PRISM:V2] Warnings ${storeId}:`, warnings);
 }
 
-// ── Learning ────────────────────────────────────────────
+// ── Self-Learning Engine ─────────────────────────────────
+//
+// When a merchant manually overrides a classification, PRISM:
+// 1. Records the correction (what was wrong and what's right)
+// 2. Analyzes which signals led to the wrong answer
+// 3. Adjusts per-store signal weights to avoid the same mistake
+// 4. Next classification run uses tuned weights automatically
+//
+// This creates a feedback loop:
+//   Merchant corrects → PRISM learns → better accuracy → fewer corrections
 
+/**
+ * Record a merchant override and tune signal weights.
+ */
 export async function learnFromOverride(
   storeId: string, productId: string,
   correctClassification: string, previousClassification: string,
   signals: string[],
 ): Promise<void> {
+  // 1. Record the learning
   try {
     await rest('/classification_learnings', {
       method: 'POST',
@@ -591,8 +648,156 @@ export async function learnFromOverride(
         store_id: storeId, product_id: productId,
         correct_classification: correctClassification,
         previous_classification: previousClassification,
-        signals_at_time: signals, learned_at: new Date().toISOString(),
+        signals_at_time: { v2_signals: signals },
+        learned_at: new Date().toISOString(),
       }),
     });
   } catch { /* table may not exist */ }
+
+  // 2. Analyze and adjust weights
+  try {
+    await tuneWeightsFromCorrection(storeId, signals, previousClassification, correctClassification);
+  } catch { /* non-critical */ }
+
+  // 3. Clear weight cache so next run uses new weights
+  weightCache.delete(storeId);
+}
+
+/**
+ * Tune per-store signal weights based on a correction.
+ *
+ * Logic: if PRISM said "main" but correct is "upsell":
+ *   - Signals that pushed score UP were WRONG → decrease their weight
+ *   - Signals that pushed score DOWN were RIGHT → increase their weight
+ * And vice versa.
+ */
+async function tuneWeightsFromCorrection(
+  storeId: string,
+  signals: string[],
+  previousClass: string,
+  correctClass: string,
+): Promise<void> {
+  // Determine if the score was too high (false main) or too low (false upsell)
+  const scoredTooHigh = previousClass === 'main' && (correctClass === 'upsell' || correctClass === 'downsell');
+  const scoredTooLow = previousClass === 'upsell' && correctClass === 'main';
+  if (!scoredTooHigh && !scoredTooLow) return;
+
+  // Parse signal names from signal strings like "alone_rate 45% +15"
+  const signalNames = new Set<string>();
+  for (const s of signals) {
+    const match = s.match(/^(\w+)/);
+    if (match) signalNames.add(match[1]);
+  }
+
+  // Map signal strings to weight keys
+  const signalToWeight: Record<string, string> = {
+    above_price_threshold: 'price_threshold', below_price_threshold: 'price_threshold',
+    high_price_ratio: 'price_ratio', low_price_ratio: 'price_ratio',
+    alone_rate: 'alone_rate',
+    revenue_share: 'revenue_share',
+    often_co_occurs: 'co_occurrence', rarely_co_occurs: 'co_occurrence',
+    first_purchase: 'first_purchase', low_first_purchase: 'first_purchase',
+    first_in_order: 'order_position', always_last_in_order: 'order_position',
+    mystery_box_title: 'mystery_title',
+  };
+
+  // Load current weights
+  const currentWeights = await getLearnedWeights(storeId);
+  const LEARNING_RATE = 0.15; // 15% adjustment per correction
+
+  for (const signalStr of signals) {
+    const nameMatch = signalStr.match(/^(\w+)/);
+    if (!nameMatch) continue;
+    const signalName = nameMatch[1];
+    const weightKey = signalToWeight[signalName];
+    if (!weightKey) continue;
+
+    const isPositiveSignal = signalStr.includes('+');
+    const currentWeight = currentWeights[weightKey] ?? DEFAULT_WEIGHTS[weightKey] ?? 10;
+
+    let newWeight: number;
+    if (scoredTooHigh) {
+      // Score was too high → positive signals should weigh less, negative signals more
+      newWeight = isPositiveSignal
+        ? currentWeight * (1 - LEARNING_RATE)   // decrease
+        : currentWeight * (1 + LEARNING_RATE);   // increase
+    } else {
+      // Score was too low → positive signals should weigh more, negative signals less
+      newWeight = isPositiveSignal
+        ? currentWeight * (1 + LEARNING_RATE)   // increase
+        : currentWeight * (1 - LEARNING_RATE);   // decrease
+    }
+
+    // Clamp between 1 and 50 (never zero, never extreme)
+    newWeight = Math.max(1, Math.min(50, Math.round(newWeight * 100) / 100));
+
+    const isCorrect = (scoredTooHigh && !isPositiveSignal) || (scoredTooLow && isPositiveSignal);
+
+    await rest('/store_signal_weights?on_conflict=store_id,signal_name', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({
+        store_id: storeId,
+        signal_name: weightKey,
+        weight: newWeight,
+        correct_count: isCorrect ? 1 : 0,
+        wrong_count: isCorrect ? 0 : 1,
+        updated_at: new Date().toISOString(),
+      }),
+    }).catch(() => null);
+  }
+
+  console.log(`[PRISM:Learn] ${storeId}: tuned weights from ${previousClass}→${correctClass} correction (${signals.length} signals adjusted)`);
+}
+
+/**
+ * Auto-learn: compare product_config (merchant truth) with PRISM's behavioral classification.
+ * If they disagree, treat product_config as ground truth and tune weights.
+ *
+ * Called during daily sync — PRISM evolves automatically without merchant doing anything.
+ */
+export async function autoLearnFromProductConfig(storeId: string): Promise<number> {
+  // Get merchant-configured main products (ground truth)
+  const configs = await rest<Array<{ product_id: string }>>(
+    `/product_config?store_id=eq.${enc(storeId)}&is_active=eq.true&select=product_id`
+  ).catch(() => []);
+  if (configs.length === 0) return 0;
+  const configMainIds = new Set(configs.map(r => r.product_id));
+
+  // Get PRISM's behavioral classifications
+  const classifications = await rest<Array<{
+    product_id: string; classification: string; signals_used: { v2_signals?: string[] } | null;
+    manual_override: boolean;
+  }>>(
+    `/product_classifications?store_id=eq.${enc(storeId)}&classification_method=eq.universal_scoring&select=product_id,classification,signals_used,manual_override`
+  ).catch(() => []);
+
+  let corrections = 0;
+
+  for (const cls of classifications) {
+    if (cls.manual_override) continue; // don't learn from manual overrides (circular)
+
+    const isConfigMain = configMainIds.has(cls.product_id);
+    const prismSaysMain = cls.classification === 'main';
+
+    // Disagreement = learning opportunity
+    if (isConfigMain && !prismSaysMain) {
+      // PRISM missed a main product → score was too low
+      const signals = cls.signals_used?.v2_signals || [];
+      await tuneWeightsFromCorrection(storeId, signals, cls.classification, 'main');
+      corrections++;
+    } else if (!isConfigMain && prismSaysMain) {
+      // PRISM falsely detected main → score was too high
+      const signals = cls.signals_used?.v2_signals || [];
+      await tuneWeightsFromCorrection(storeId, signals, 'main', 'upsell');
+      corrections++;
+    }
+  }
+
+  if (corrections > 0) {
+    weightCache.delete(storeId);
+    console.log(`[PRISM:AutoLearn] ${storeId}: ${corrections} corrections from product_config comparison`);
+  }
+
+  return corrections;
 }
