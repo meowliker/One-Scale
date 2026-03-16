@@ -84,8 +84,8 @@ export function calculateFromBT(transactions: BTInput[]): PnLResult {
 
     switch (type) {
       case 'charge':
-        b.revenue += Math.abs(amount);
-        b.fees += fee;
+        b.revenue += round2(Math.abs(amount));
+        b.fees += round2(fee);
         break;
 
       case 'refund':

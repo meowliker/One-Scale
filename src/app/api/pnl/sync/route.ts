@@ -216,30 +216,19 @@ export async function POST(request: NextRequest) {
       const hasCharges = (btRows ?? []).some(t => (t.type || '').toLowerCase() === 'charge');
 
       let revenue = 0, transactionFees = 0, refunds = 0;
-      let chargebackLoss = 0, chargebackWon = 0;
+      let chargebackLoss = 0, chargebackWon = 0, adjustments = 0;
       let orderCount = 0;
 
       if (hasCharges) {
-        // ── Universal BT calculator ──
-        const { calculateFromBT } = await import('@/lib/pnl/btCalculator');
-        const pnl = calculateFromBT(btRows ?? []);
-        revenue = pnl.revenue;
-        transactionFees = pnl.fees;
-        refunds = pnl.refunds;
-        chargebackLoss = pnl.chargebackLoss;
-        chargebackWon = pnl.chargebackWon;
-
-        // Log unknown types to prism_alerts
-        if (pnl.unknownTypes.length > 0) {
-          for (const uType of pnl.unknownTypes) {
-            await rest('/prism_alerts', {
-              method: 'POST',
-              headers: { Prefer: 'return=minimal' },
-              body: JSON.stringify({
-                store_id: storeId, alert_type: 'unknown_bt_type', severity: 'low',
-                message: `New BT type: ${uType}`, details: { type: uType, date: dateStr },
-              }),
-            }).catch(() => null);
+        for (const txn of btRows ?? []) {
+          const amt = parseFloat(txn.amount || '0');
+          const fee = Math.abs(parseFloat(txn.fee || '0'));
+          const net = parseFloat(txn.net || '0');
+          switch ((txn.type || '').toLowerCase()) {
+            case 'charge': revenue += Math.abs(amt); transactionFees += fee; break;
+            case 'refund': refunds += Math.abs(amt); break;
+            case 'dispute': if (net < 0) chargebackLoss += Math.abs(net); else chargebackWon += net; break;
+            default: adjustments += amt; break;
           }
         }
       } else {
@@ -276,7 +265,7 @@ export async function POST(request: NextRequest) {
         adSpend = (spendRows ?? []).reduce((s, r) => s + (Number(r.spend) || 0), 0);
       } catch { /* no meta */ }
 
-      const netProfit = Math.round((revenue - transactionFees - refunds - chargebackLoss + chargebackWon - adSpend) * 100) / 100;
+      const netProfit = Math.round((revenue - transactionFees - refunds - chargebackLoss + chargebackWon + adjustments - adSpend) * 100) / 100;
       const margin = revenue > 0 ? Math.round((netProfit / revenue) * 10000) / 100 : 0;
 
       await rest(
