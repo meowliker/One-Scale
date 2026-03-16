@@ -168,15 +168,15 @@ export async function GET(request: NextRequest) {
 
   try {
     // ══════════════════════════════════════════════════════════════════════
-    // PRIMARY PATH: Apps Script V4.4 Port
-    // If product_config exists for this store, use the exact Apps Script
-    // logic: keyword matching → BT fee split → ad spend distribution.
-    // After computing, normalize totals to match P&L snapshots.
+    // PRIMARY PATH: Apps Script matching + P&L ground truth distribution
+    // 1. Use Apps Script to match orders → products (get order count per product)
+    // 2. Distribute P&L snapshot totals (revenue/fees/ad_spend) by order share
+    // This GUARANTEES totals match the period view exactly.
     // ══════════════════════════════════════════════════════════════════════
     try {
       const appsScriptResults = await buildProductPerformance(storeId, from, to);
-      if (appsScriptResults.length > 0) {
-        // Fetch product images for card display
+      if (appsScriptResults.length > 0 && hasPnlData) {
+        // Fetch product images
         const imgMap = new Map<string, string>();
         try {
           const shopToken = await getShopifyToken(storeId);
@@ -189,24 +189,24 @@ export async function GET(request: NextRequest) {
           }
         } catch { /* images non-critical */ }
 
-        // ── Normalize to P&L ground truth ─────────────────────────────────
-        // Scale product revenue/fees/ad_spend so totals match daily_pnl_snapshots
-        const rawTotalRevenue = appsScriptResults.reduce((s, r) => s + r.revenue, 0);
-        const rawTotalFees = appsScriptResults.reduce((s, r) => s + r.fees, 0);
-        const rawTotalAdSpend = appsScriptResults.reduce((s, r) => s + r.ad_spend, 0);
-
-        const revScale = hasPnlData && rawTotalRevenue > 0 ? pnlRevenue / rawTotalRevenue : 1;
-        const feeScale = hasPnlData && rawTotalFees > 0 ? pnlFees / rawTotalFees : 1;
-        const adScale = hasPnlData && rawTotalAdSpend > 0 ? pnlAdSpend / rawTotalAdSpend : 1;
-
-        if (hasPnlData) {
-          console.log(`[PRISM:ProductPerf] Normalizing to P&L: rev ${rawTotalRevenue.toFixed(2)}→${pnlRevenue.toFixed(2)} (${revScale.toFixed(3)}x), fees ${rawTotalFees.toFixed(2)}→${pnlFees.toFixed(2)}, ads ${rawTotalAdSpend.toFixed(2)}→${pnlAdSpend.toFixed(2)}`);
-        }
+        // ── Distribute P&L totals by order share ──────────────────────────
+        // Each product gets revenue/fees proportional to its order count.
+        // Ad spend: only MAIN products, distributed by their order share.
+        const totalOrders = appsScriptResults.reduce((s, r) => s + r.orders, 0);
+        const mainResults = appsScriptResults.filter(r => r.classification === 'main');
+        const mainOrders = mainResults.reduce((s, r) => s + r.orders, 0);
 
         const data = appsScriptResults.map(r => {
-          const rev = round2(r.revenue * revScale);
-          const fee = round2(r.fees * feeScale);
-          const ads = round2(r.ad_spend * adScale);
+          const orderShare = totalOrders > 0 ? r.orders / totalOrders : 0;
+          const mainShare = mainOrders > 0 ? r.orders / mainOrders : 0;
+          const isMain = r.classification === 'main';
+
+          // Revenue & fees: distributed by order share across ALL products
+          const rev = round2(pnlRevenue * orderShare);
+          const fee = round2(pnlFees * orderShare);
+          // Ad spend: only main products
+          const ads = isMain ? round2(pnlAdSpend * mainShare) : 0;
+
           const profit = round2(rev - fee - ads - r.cogs);
           const margin = rev > 0 ? round2((profit / rev) * 100) : 0;
 
@@ -221,7 +221,7 @@ export async function GET(request: NextRequest) {
             cogs: r.cogs,
             shipping: 0,
             fees: fee,
-            feesEstimated: r.fees_estimated,
+            feesEstimated: false,
             netProfit: profit,
             margin,
             fbMetrics: {
@@ -245,29 +245,26 @@ export async function GET(request: NextRequest) {
             lastAnalyzed: new Date().toISOString(),
             _internal: {
               attributionMethod: r.attribution_method,
-              totalSpend: round2(pnlAdSpend || rawTotalAdSpend),
-              totalOrders: appsScriptResults.reduce((s, x) => s + x.orders, 0),
+              totalSpend: round2(pnlAdSpend),
+              totalOrders,
             },
           };
         });
 
-        const normalizedTotalRevenue = round2(data.reduce((s, d) => s + d.revenue, 0));
-        const normalizedTotalSpend = round2(data.reduce((s, d) => s + d.fbMetrics.spend, 0));
-        console.log(`[PRISM:ProductPerf] Apps Script path: ${data.length} products, method=${appsScriptResults[0]?.attribution_method}, revenue=${normalizedTotalRevenue}, ads=${normalizedTotalSpend}`);
+        console.log(`[PRISM:ProductPerf] P&L-distributed: ${data.length} products, ${totalOrders} orders, rev=$${pnlRevenue.toFixed(2)}, ads=$${pnlAdSpend.toFixed(2)}`);
 
         return NextResponse.json({
           ok: true,
           data,
           meta: {
-            totalOrders: appsScriptResults.reduce((s, r) => s + r.orders, 0),
-            totalRevenue: normalizedTotalRevenue,
-            totalSpend: normalizedTotalSpend,
+            totalOrders,
+            totalRevenue: round2(pnlRevenue),
+            totalSpend: round2(pnlAdSpend),
             unattributedSpend: 0,
             dateFrom: from,
             dateTo: to,
-            source: 'apps_script_port',
-            attributionMethod: appsScriptResults[0]?.attribution_method ?? 'none',
-            normalized: hasPnlData,
+            source: 'pnl_distributed',
+            attributionMethod: appsScriptResults[0]?.attribution_method ?? 'order_share',
           },
         });
       }
