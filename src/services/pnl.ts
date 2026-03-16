@@ -781,7 +781,7 @@ async function fastGetPnLSummary(): Promise<PnLSummary> {
       if (res.ok) {
         const json = await res.json() as { data?: PnLEntry[] };
         const todaySnap = (json.data || []).find(e => e.date === todayStr);
-        if (todaySnap && todaySnap.orderCount > 0) {
+        if (todaySnap && (todaySnap.orderCount ?? 0) > 0) {
           return {
             today: todaySnap,
             thisWeek: { date: todayStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0, chargebackLoss: 0, chargebackWon: 0 },
