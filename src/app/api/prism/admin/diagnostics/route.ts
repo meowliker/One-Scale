@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
 
   const requestedStoreId = new URL(request.url).searchParams.get('storeId');
   const enc = (v: string) => encodeURIComponent(v);
-  const ninetyDaysAgo = new Date(Date.now() - 90 * 86400000).toISOString();
+  const ninetyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString();
   const ninetyDaysAgoDate = ninetyDaysAgo.split('T')[0];
   const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
 
@@ -86,9 +86,9 @@ export async function GET(request: NextRequest) {
       pass: btCharges.length > 0,
       charges: btCharges.length,
       refunds: btRefunds.length,
-      revenue_90d: Math.round(btRevenue * 100) / 100,
-      fees_90d: Math.round(btFees * 100) / 100,
-      refunds_90d: Math.round(btRefundTotal * 100) / 100,
+      revenue_30d: Math.round(btRevenue * 100) / 100,
+      fees_30d: Math.round(btFees * 100) / 100,
+      refunds_30d: Math.round(btRefundTotal * 100) / 100,
       fee_rate: feeRate.toFixed(2) + '%',
       issue: btCharges.length === 0 ? 'No balance transactions — run backfill' : null,
     };

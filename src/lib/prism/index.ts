@@ -27,7 +27,7 @@ export const PRISM = {
   // Data windows
   dataWindows: {
     behavioralAnalysisDays: 60,   // orderPatternAnalyzer lookback
-    recentOrdersDays: 90,         // Track 1 backfill window
+    recentOrdersDays: 30,         // Track 1 backfill window
     metaBackfillMonths: 37,       // Meta Ads historical depth
   },
 

@@ -3,7 +3,7 @@
  * OneScale's behavioral intelligence and data infrastructure engine
  *
  * Financial Profiler — learns revenue, fee, refund, chargeback, and ad spend
- * baselines from each store's own 90-day history. All thresholds are store-specific.
+ * baselines from each store's own 30-day history. All thresholds are store-specific.
  */
 
 import { rest } from '@/app/api/lib/supabase-persistence';
@@ -62,7 +62,7 @@ interface SnapshotRow {
 
 export async function buildStoreFinancialProfile(storeId: string): Promise<StoreFinancialProfile> {
   const enc = (v: string) => encodeURIComponent(v);
-  const ninetyDaysAgo = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0];
+  const ninetyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
 
   const snapshots = await rest<SnapshotRow[]>(
     `/daily_pnl_snapshots?store_id=eq.${enc(storeId)}&date=gte.${ninetyDaysAgo}&select=date,revenue,order_count,ad_spend,transaction_fees,refunds,chargeback_loss&order=date.asc`

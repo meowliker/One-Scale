@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
     ? [{ id: requestedStoreId, name: requestedStoreId }]
     : await listPersistentStores();
 
-  const ninetyDaysAgo = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0];
+  const ninetyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const report: any[] = [];
 
@@ -108,7 +108,7 @@ export async function GET(request: NextRequest) {
         total_campaigns: spendByCampaign.size,
         attributed_campaigns: attributions.length,
         unattributed_campaigns: spendByCampaign.size - attributedCampaignIds.size,
-        total_spend_90d: Math.round(totalSpend * 100) / 100,
+        total_spend_30d: Math.round(totalSpend * 100) / 100,
         attributed_spend: Math.round(attributedSpend * 100) / 100,
         unattributed_spend: Math.round(unattributedSpend * 100) / 100,
         attribution_rate: totalSpend > 0 ? Math.round(attributedSpend / totalSpend * 100) + '%' : 'N/A',

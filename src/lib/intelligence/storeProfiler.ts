@@ -109,7 +109,7 @@ export async function buildStoreProfile(
   // Compute avg_items_per_order from actual order data
   // Fetch orders to count total line items vs total orders
   const ninetyDaysAgo = new Date();
-  ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+  ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 30);
   const sinceISO = ninetyDaysAgo.toISOString();
 
   const orderRows = await rest<OrderCountRow[]>(

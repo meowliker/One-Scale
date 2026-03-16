@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
       if (row?.store_type_detected_at) {
         const lastRun = new Date(row.store_type_detected_at).getTime();
         const storeAge = Date.now() - new Date(row.created_at).getTime();
-        const isYoung = storeAge < 90 * 86400000; // < 90 days
+        const isYoung = storeAge < 30 * 86400000; // < 30 days
         const interval = isYoung ? 7 * 86400000 : 30 * 86400000;
         if (Date.now() - lastRun < interval) {
           results.push({ storeId: store.id, status: 'skipped' });

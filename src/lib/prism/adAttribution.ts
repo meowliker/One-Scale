@@ -45,8 +45,8 @@ export async function computeAdAttributions(
   storeId: string,
   metaToken?: string,
 ): Promise<AttributionReport> {
-  // Get all campaigns with spend in last 90 days
-  const ninetyDaysAgo = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0];
+  // Get all campaigns with spend in last 30 days
+  const ninetyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
   const campaigns = await rest<Array<{
     campaign_id: string; campaign_name: string;
   }>>(

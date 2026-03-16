@@ -3,7 +3,7 @@
  * OneScale's behavioral intelligence and data infrastructure engine
  *
  * Anomaly Detector — flags deviations from a store's own financial baseline.
- * All thresholds are learned from the store's 90-day history.
+ * All thresholds are learned from the store's 30-day history.
  */
 
 import type { StoreFinancialProfile } from './financialProfiler';

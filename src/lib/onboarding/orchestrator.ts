@@ -152,7 +152,7 @@ async function discoverFirstOrderDate(
   return { firstOrderDate, totalOrders };
 }
 
-// ── Stage: Backfill RECENT Orders (last 90 days) ──────────────
+// ── Stage: Backfill RECENT Orders (last 30 days) ──────────────
 // Track 1: Fetches newest orders first using created_at_min.
 // Completes in seconds — unblocks classification immediately.
 
@@ -830,7 +830,7 @@ export async function onStoreConnected(storeId: string): Promise<void> {
       }).catch(() => null);
     }
 
-    // Stage 2: TRACK 1 — Recent orders only (last 90 days, fast)
+    // Stage 2: TRACK 1 — Recent orders only (last 30 days, fast)
     // Unblocks classification immediately without waiting for full history
     await runStage(storeId, 'shopify_orders_recent', () =>
       backfillRecentOrders(storeId, accessToken, shopDomain),
