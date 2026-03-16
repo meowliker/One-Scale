@@ -139,12 +139,39 @@ export async function GET(request: NextRequest) {
   // Compute timezone-aware date boundaries
   const { start: tzStart, end: tzEnd } = getStoreDateRangeForPeriod(from, to, storeTz);
 
+  // ── P&L GROUND TRUTH — fetch from daily_pnl_snapshots so product totals match period view ──
+  let pnlRevenue = 0;
+  let pnlFees = 0;
+  let pnlAdSpend = 0;
+  let pnlRefunds = 0;
+  let pnlChargebackLoss = 0;
+  let pnlChargebackWon = 0;
+  let pnlOrderCount = 0;
+  try {
+    const snapshots = await rest<Array<{
+      revenue: number; transaction_fees: number; ad_spend: number;
+      refunds: number; chargeback_loss: number; chargeback_won: number; order_count: number;
+    }>>(
+      `/daily_pnl_snapshots?store_id=eq.${enc(storeId)}&date=gte.${from}&date=lte.${to}&select=revenue,transaction_fees,ad_spend,refunds,chargeback_loss,chargeback_won,order_count`
+    );
+    for (const s of snapshots ?? []) {
+      pnlRevenue += Number(s.revenue) || 0;
+      pnlFees += Number(s.transaction_fees) || 0;
+      pnlAdSpend += Number(s.ad_spend) || 0;
+      pnlRefunds += Number(s.refunds) || 0;
+      pnlChargebackLoss += Number(s.chargeback_loss) || 0;
+      pnlChargebackWon += Number(s.chargeback_won) || 0;
+      pnlOrderCount += Number(s.order_count) || 0;
+    }
+  } catch { /* table may not exist */ }
+  const hasPnlData = pnlRevenue > 0 || pnlFees > 0;
+
   try {
     // ══════════════════════════════════════════════════════════════════════
     // PRIMARY PATH: Apps Script V4.4 Port
     // If product_config exists for this store, use the exact Apps Script
     // logic: keyword matching → BT fee split → ad spend distribution.
-    // This guarantees SUM(product ad_spend) = P&L ad_spend.
+    // After computing, normalize totals to match P&L snapshots.
     // ══════════════════════════════════════════════════════════════════════
     try {
       const appsScriptResults = await buildProductPerformance(storeId, from, to);
@@ -162,60 +189,85 @@ export async function GET(request: NextRequest) {
           }
         } catch { /* images non-critical */ }
 
-        const data = appsScriptResults.map(r => ({
-          productId: r.product_id,
-          productName: r.product_name,
-          productImage: imgMap.get(r.product_id) ?? null,
-          shopifyUrl: r.product_id.startsWith('unknown_') ? null : `/admin/products/${r.product_id}`,
-          sku: '',
-          unitsSold: r.orders,
-          revenue: r.revenue,
-          cogs: r.cogs,
-          shipping: 0,
-          fees: r.fees,
-          feesEstimated: r.fees_estimated,
-          netProfit: r.net_profit,
-          margin: r.margin,
-          fbMetrics: {
-            roas: r.ad_spend > 0 ? Math.round((r.revenue / r.ad_spend) * 100) / 100 : 0,
-            cpc: 0, cpm: 0, ctr: 0, aov: 0, atcRate: 0,
-            spend: r.ad_spend,
-            impressions: 0, clicks: 0, purchases: 0,
-            costPerPurchase: 0, frequency: 0, reach: 0,
-          },
-          isAdvertised: r.ad_spend > 0,
-          adLandingPageUrl: null, adName: null, adSetName: null, campaignName: null,
-          category: r.classification as 'main' | 'upsell' | 'downsell' | 'addon',
-          classificationConfidence: r.classification === 'main' ? 95 : 80,
-          classificationMethod: 'product_config',
-          classificationSignals: null,
-          behavioralSignals: [],
-          parentProduct: r.parent_product_name,
-          downsellOf: null,
-          needsReview: false,
-          manualOverride: false,
-          lastAnalyzed: new Date().toISOString(),
-          _internal: {
-            attributionMethod: r.attribution_method,
-            totalSpend: appsScriptResults.reduce((s, x) => s + x.ad_spend, 0),
-            totalOrders: appsScriptResults.reduce((s, x) => s + x.orders, 0),
-          },
-        }));
+        // ── Normalize to P&L ground truth ─────────────────────────────────
+        // Scale product revenue/fees/ad_spend so totals match daily_pnl_snapshots
+        const rawTotalRevenue = appsScriptResults.reduce((s, r) => s + r.revenue, 0);
+        const rawTotalFees = appsScriptResults.reduce((s, r) => s + r.fees, 0);
+        const rawTotalAdSpend = appsScriptResults.reduce((s, r) => s + r.ad_spend, 0);
 
-        console.log(`[PRISM:ProductPerf] Apps Script path: ${data.length} products, method=${appsScriptResults[0]?.attribution_method}`);
+        const revScale = hasPnlData && rawTotalRevenue > 0 ? pnlRevenue / rawTotalRevenue : 1;
+        const feeScale = hasPnlData && rawTotalFees > 0 ? pnlFees / rawTotalFees : 1;
+        const adScale = hasPnlData && rawTotalAdSpend > 0 ? pnlAdSpend / rawTotalAdSpend : 1;
+
+        if (hasPnlData) {
+          console.log(`[PRISM:ProductPerf] Normalizing to P&L: rev ${rawTotalRevenue.toFixed(2)}→${pnlRevenue.toFixed(2)} (${revScale.toFixed(3)}x), fees ${rawTotalFees.toFixed(2)}→${pnlFees.toFixed(2)}, ads ${rawTotalAdSpend.toFixed(2)}→${pnlAdSpend.toFixed(2)}`);
+        }
+
+        const data = appsScriptResults.map(r => {
+          const rev = round2(r.revenue * revScale);
+          const fee = round2(r.fees * feeScale);
+          const ads = round2(r.ad_spend * adScale);
+          const profit = round2(rev - fee - ads - r.cogs);
+          const margin = rev > 0 ? round2((profit / rev) * 100) : 0;
+
+          return {
+            productId: r.product_id,
+            productName: r.product_name,
+            productImage: imgMap.get(r.product_id) ?? null,
+            shopifyUrl: r.product_id.startsWith('unknown_') ? null : `/admin/products/${r.product_id}`,
+            sku: '',
+            unitsSold: r.orders,
+            revenue: rev,
+            cogs: r.cogs,
+            shipping: 0,
+            fees: fee,
+            feesEstimated: r.fees_estimated,
+            netProfit: profit,
+            margin,
+            fbMetrics: {
+              roas: ads > 0 ? Math.round((rev / ads) * 100) / 100 : 0,
+              cpc: 0, cpm: 0, ctr: 0, aov: 0, atcRate: 0,
+              spend: ads,
+              impressions: 0, clicks: 0, purchases: 0,
+              costPerPurchase: 0, frequency: 0, reach: 0,
+            },
+            isAdvertised: ads > 0,
+            adLandingPageUrl: null, adName: null, adSetName: null, campaignName: null,
+            category: r.classification as 'main' | 'upsell' | 'downsell' | 'addon',
+            classificationConfidence: r.classification === 'main' ? 95 : 80,
+            classificationMethod: 'product_config',
+            classificationSignals: null,
+            behavioralSignals: [],
+            parentProduct: r.parent_product_name,
+            downsellOf: null,
+            needsReview: false,
+            manualOverride: false,
+            lastAnalyzed: new Date().toISOString(),
+            _internal: {
+              attributionMethod: r.attribution_method,
+              totalSpend: round2(pnlAdSpend || rawTotalAdSpend),
+              totalOrders: appsScriptResults.reduce((s, x) => s + x.orders, 0),
+            },
+          };
+        });
+
+        const normalizedTotalRevenue = round2(data.reduce((s, d) => s + d.revenue, 0));
+        const normalizedTotalSpend = round2(data.reduce((s, d) => s + d.fbMetrics.spend, 0));
+        console.log(`[PRISM:ProductPerf] Apps Script path: ${data.length} products, method=${appsScriptResults[0]?.attribution_method}, revenue=${normalizedTotalRevenue}, ads=${normalizedTotalSpend}`);
 
         return NextResponse.json({
           ok: true,
           data,
           meta: {
             totalOrders: appsScriptResults.reduce((s, r) => s + r.orders, 0),
-            totalRevenue: Math.round(appsScriptResults.reduce((s, r) => s + r.revenue, 0) * 100) / 100,
-            totalSpend: Math.round(appsScriptResults.reduce((s, r) => s + r.ad_spend, 0) * 100) / 100,
+            totalRevenue: normalizedTotalRevenue,
+            totalSpend: normalizedTotalSpend,
             unattributedSpend: 0,
             dateFrom: from,
             dateTo: to,
             source: 'apps_script_port',
             attributionMethod: appsScriptResults[0]?.attribution_method ?? 'none',
+            normalized: hasPnlData,
           },
         });
       }
@@ -694,22 +746,47 @@ export async function GET(request: NextRequest) {
       unattributedSpend = 0; // all spend is now attributed
     }
 
+    // ── Normalize to P&L ground truth ───────────────────────────────────
+    // Scale product revenue/fees so totals match daily_pnl_snapshots (period view)
+    const fbRevScale = hasPnlData && totalRevenue > 0 ? pnlRevenue / totalRevenue : 1;
+    const rawTotalFees = [...productAgg.values()].reduce((s, a) => s + a.fees, 0);
+    const fbFeeScale = hasPnlData && rawTotalFees > 0 ? pnlFees / rawTotalFees : 1;
+    // Ad spend: use P&L ground truth if available
+    if (hasPnlData && pnlAdSpend > 0) {
+      const rawProductSpendTotal = [...productSpendMap.values()].reduce((s, v) => s + v, 0);
+      if (rawProductSpendTotal > 0) {
+        const adScale = pnlAdSpend / rawProductSpendTotal;
+        for (const [pid, val] of productSpendMap) {
+          productSpendMap.set(pid, round2(val * adScale));
+        }
+      }
+      totalSpend = pnlAdSpend;
+    }
+
+    if (hasPnlData) {
+      console.log(`[PRISM:ProductPerf] Fallback normalizing: rev ${totalRevenue.toFixed(2)}→${pnlRevenue.toFixed(2)} (${fbRevScale.toFixed(3)}x), fees ${rawTotalFees.toFixed(2)}→${pnlFees.toFixed(2)}, ads→${pnlAdSpend.toFixed(2)}`);
+    }
+
     // Build response
     const products = [];
     for (const [productId, agg] of productAgg.entries()) {
+      // Apply revenue normalization
+      const normalizedRevenue = round2(agg.revenue * fbRevScale);
+
       // COGS — never use silent fallback. $0 if not configured.
       const costData = cogsMap.get(productId);
       let cogs = 0;
       if (costData) {
         cogs = costData.costType === 'fixed'
           ? costData.costPerUnit * agg.unitsSold
-          : round2(agg.revenue * (costData.costPerUnit / 100));
+          : round2(normalizedRevenue * (costData.costPerUnit / 100));
       }
 
-      const revenueShare = totalRevenue > 0 ? agg.revenue / totalRevenue : 0;
+      const normalizedTotalRevenue = totalRevenue * fbRevScale;
+      const revenueShare = normalizedTotalRevenue > 0 ? normalizedRevenue / normalizedTotalRevenue : 0;
 
-      // Fees: already computed per-order proportionally during aggregation
-      const fees = round2(agg.fees);
+      // Fees: normalize to match P&L
+      const fees = round2(agg.fees * fbFeeScale);
       const shipping = round2(agg.shipping);
 
       // Use stored classification from adaptive intelligence if available
@@ -757,20 +834,20 @@ export async function GET(request: NextRequest) {
       }
 
       // Bug fix: free products ($0 revenue) get $0 for everything — never negative
-      const effectiveFees = agg.revenue > 0 ? fees : 0;
-      const effectiveCogs = agg.revenue > 0 ? cogs : 0;
-      const effectiveAdSpend = agg.revenue > 0 ? adSpend : 0;
-      const effectiveShipping = agg.revenue > 0 ? shipping : 0;
+      const effectiveFees = normalizedRevenue > 0 ? fees : 0;
+      const effectiveCogs = normalizedRevenue > 0 ? cogs : 0;
+      const effectiveAdSpend = normalizedRevenue > 0 ? adSpend : 0;
+      const effectiveShipping = normalizedRevenue > 0 ? shipping : 0;
 
-      const netProfit = round2(agg.revenue - effectiveCogs - effectiveAdSpend - effectiveFees - effectiveShipping - productRefunds - productCbLoss + productCbWon);
-      const margin = agg.revenue > 0 ? round2((netProfit / agg.revenue) * 100) : 0;
+      const netProfit = round2(normalizedRevenue - effectiveCogs - effectiveAdSpend - effectiveFees - effectiveShipping - productRefunds - productCbLoss + productCbWon);
+      const margin = normalizedRevenue > 0 ? round2((netProfit / normalizedRevenue) * 100) : 0;
 
       // Per-product FB metrics
-      const roas = adSpend > 0 ? round2(agg.revenue / adSpend) : 0;
+      const roas = adSpend > 0 ? round2(normalizedRevenue / adSpend) : 0;
       const cpc = totalClicks > 0 ? round2(totalSpend / totalClicks) : 0;
       const cpm = totalImpressions > 0 ? round2((totalSpend / totalImpressions) * 1000) : 0;
       const ctr = totalImpressions > 0 ? round2((totalClicks / totalImpressions) * 100) : 0;
-      const aov = totalOrders > 0 ? round2(totalRevenue / totalOrders) : 0;
+      const aov = totalOrders > 0 ? round2(normalizedTotalRevenue / totalOrders) : 0;
 
       products.push({
         productId,
@@ -779,7 +856,7 @@ export async function GET(request: NextRequest) {
         shopifyUrl: productId.startsWith('unknown_') ? null : `/admin/products/${productId}`,
         sku: agg.sku,
         unitsSold: agg.unitsSold,
-        revenue: round2(agg.revenue),
+        revenue: normalizedRevenue,
         cogs,
         shipping,
         fees,
@@ -840,19 +917,23 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    const finalTotalRevenue = round2(products.reduce((s, p) => s + p.revenue, 0));
+    const finalTotalSpend = round2(products.reduce((s, p) => s + p.fbMetrics.spend, 0));
+
     return NextResponse.json({
       ok: true,
       data: products,
       meta: {
         totalOrders,
-        totalRevenue: round2(totalRevenue),
-        totalSpend: round2(totalSpend),
+        totalRevenue: finalTotalRevenue,
+        totalSpend: finalTotalSpend,
         unattributedSpend: round2(unattributedSpend),
         dateFrom: from,
         dateTo: to,
         source: 'db_cache',
         feeSource: useActualBtFees ? 'balance_transactions' : (feeStructures.length > 0 ? 'fee_structures' : (activeGateways.length > 0 ? 'configured' : 'none')),
         attributionMethod,
+        normalized: hasPnlData,
         ...(lastOrderRange ? { lastOrderRange } : {}),
       },
     });
