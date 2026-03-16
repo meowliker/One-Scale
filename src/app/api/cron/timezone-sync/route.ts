@@ -399,6 +399,47 @@ export async function GET(req: NextRequest) {
     // What hour is it RIGHT NOW in this store's timezone?
     const storeHour = getHourInTz(nowUTC, tz);
 
+    // ── Check if this store needs initial 30-day backfill ──
+    // New stores or stores with <10 snapshots get a one-time backfill
+    // This runs at ANY hour, not just midnight (so new stores don't wait 24h)
+    let needsBackfill = false;
+    try {
+      const snapCount = await rest<Array<{ date: string }>>(
+        `/daily_pnl_snapshots?store_id=eq.${encodeURIComponent(store.id)}&select=date&limit=11`
+      );
+      needsBackfill = (snapCount?.length ?? 0) < 10;
+    } catch { /* assume no snapshots */ needsBackfill = true; }
+
+    if (needsBackfill) {
+      console.log(`[tz-sync] ${store.name || store.id}: NEW/INCOMPLETE store — running 30-day backfill`);
+      try {
+        // 1. Backfill orders (30 days)
+        const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || `https://${process.env.VERCEL_URL}` || 'http://localhost:3000';
+        await fetch(`${baseUrl}/api/cron/sync-shopify-orders?days=30`, {
+          headers: { Authorization: `Bearer ${process.env.CRON_SECRET}` },
+        }).catch(() => null);
+
+        // 2. Auto-sync (ad accounts, products, mappings, PRISM learning)
+        const { runAutoSync } = await import('@/lib/pnl/autoProductConfig');
+        await runAutoSync(store.id);
+
+        // 3. Backfill P&L for last 30 days
+        const thirtyDaysAgo = formatDateInTz(new Date(nowUTC.getTime() - 30 * 24 * 60 * 60 * 1000), tz);
+        const yesterdayStr = formatDateInTz(new Date(nowUTC.getTime() - 24 * 60 * 60 * 1000), tz);
+        const { computeAndSaveDayPnL } = await import('@/lib/pnl/computeDayPnL');
+        for (let i = 30; i >= 1; i--) {
+          const d = formatDateInTz(new Date(nowUTC.getTime() - i * 24 * 60 * 60 * 1000), tz);
+          await computeAndSaveDayPnL(store.id, d, tz);
+        }
+
+        storesSynced.push({ name: store.name || store.domain, storeId: store.id, date: `backfill ${thirtyDaysAgo}→${yesterdayStr}`, timezone: tz });
+        console.log(`[tz-sync] ${store.name || store.id}: 30-day backfill complete`);
+      } catch (err) {
+        console.error(`[tz-sync] Backfill failed for ${store.id}:`, err instanceof Error ? err.message : err);
+      }
+      continue; // skip the midnight check for this run — backfill covers it
+    }
+
     // Only sync when store time is hour 0 (midnight — the day just ended)
     if (storeHour !== 0) {
       storesSkipped.push({
