@@ -381,9 +381,13 @@ export async function buildProductPerformance(
   const orderStart = localDateToUtc(dateFrom, false);
   const orderEnd = localDateToUtc(dateTo, true);
 
-  // Load BT, spend, mappings, costs in parallel
-  const [btTxns, spendRows, adMappings, costRows] = await Promise.all([
-    // Balance transactions for date range (BT uses processed_at — settlement date = P&L date)
+  // Load all data in parallel
+  const [orders, btTxns, spendRows, adMappings, costRows] = await Promise.all([
+    // Orders for date range (created_at — has ALL orders with line items for matching)
+    rest<OrderRow[]>(
+      `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${enc(orderStart)}&created_at=lte.${enc(orderEnd)}&order_status=neq.cancelled&select=shopify_order_id,total_price,subtotal_price,financial_status,order_status,line_items`
+    ).catch(() => [] as OrderRow[]),
+    // Balance transactions for fees
     rest<BTRow[]>(
       `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&and=(processed_at.gte.${enc(orderStart)},processed_at.lte.${enc(orderEnd)})&select=transaction_id,type,amount,fee,net,source_order_id`
     ).catch(() => [] as BTRow[]),
@@ -400,38 +404,6 @@ export async function buildProductPerformance(
       `/pnl_product_costs?store_id=eq.${enc(storeId)}&select=product_id,cost_per_unit,cost_type`
     ).catch(() => []),
   ]);
-
-  // ── Fetch orders via BT source_order_id (settlement-based, matches P&L) ──
-  // This ensures product breakdown uses the SAME orders as the P&L period view.
-  const btCharges = btTxns.filter(t => t.type === 'charge' && t.source_order_id);
-  const btOrderIds = [...new Set(btCharges.map(t => t.source_order_id!))];
-
-  // Build BT revenue per order (what Shopify actually settled)
-  const btRevenueByOrder = new Map<string, number>();
-  for (const bt of btCharges) {
-    if (!bt.source_order_id) continue;
-    btRevenueByOrder.set(bt.source_order_id, (btRevenueByOrder.get(bt.source_order_id) ?? 0) + Math.abs(bt.amount));
-  }
-
-  let orders: OrderRow[] = [];
-  if (btOrderIds.length > 0) {
-    // Fetch orders by BT source_order_id in batches
-    const batchSize = 50;
-    for (let i = 0; i < btOrderIds.length; i += batchSize) {
-      const batch = btOrderIds.slice(i, i + batchSize);
-      const idFilter = batch.map(id => `"${id}"`).join(',');
-      const batchOrders = await rest<OrderRow[]>(
-        `/shopify_orders_cache?store_id=eq.${enc(storeId)}&shopify_order_id=in.(${idFilter})&select=shopify_order_id,total_price,subtotal_price,financial_status,order_status,line_items`
-      ).catch(() => [] as OrderRow[]);
-      orders.push(...batchOrders);
-    }
-    console.log(`[AppsScript] Settlement mode: ${btOrderIds.length} BT orders → ${orders.length} found in cache`);
-  } else {
-    // Fallback: no BT data, use created_at (e.g. today before settlement)
-    orders = await rest<OrderRow[]>(
-      `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${enc(orderStart)}&created_at=lte.${enc(orderEnd)}&order_status=neq.cancelled&select=shopify_order_id,total_price,subtotal_price,financial_status,order_status,line_items`
-    ).catch(() => [] as OrderRow[]);
-  }
 
   // Get ad spend from daily_pnl_snapshots (ground truth, matches P&L period view)
   let pnlAdSpend = 0;
@@ -462,11 +434,8 @@ export async function buildProductPerformance(
 
     const matched = matchOrderToProduct(lineItems, productConfigs);
     if (matched) {
-      const oid = String(order.shopify_order_id);
-      orderProductMap.set(oid, matched);
-      // Use BT settled amount when available (matches P&L), fall back to total_price
-      const orderRev = btRevenueByOrder.get(oid) ?? Number(order.total_price);
-      revenue.set(matched, (revenue.get(matched) ?? 0) + orderRev);
+      orderProductMap.set(String(order.shopify_order_id), matched);
+      revenue.set(matched, (revenue.get(matched) ?? 0) + Number(order.total_price));
       orderCounts.set(matched, (orderCounts.get(matched) ?? 0) + 1);
     }
   }
