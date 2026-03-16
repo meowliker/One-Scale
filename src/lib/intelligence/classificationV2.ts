@@ -801,3 +801,82 @@ export async function autoLearnFromProductConfig(storeId: string): Promise<numbe
 
   return corrections;
 }
+
+// ── Product Activity Tracking ────────────────────────────
+//
+// Scans order data to learn first_order_date and last_order_date per product.
+// Products with no orders in the last 14 days are marked is_active=false.
+// This runs daily during auto-sync.
+
+export async function updateProductActivityDates(storeId: string): Promise<number> {
+  // Scan recent orders (newest first) to find activity per product.
+  // Use 60-day cutoff to avoid scanning ancient data.
+  const sixtyDaysAgo = new Date();
+  sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+  const cutoffIso = sixtyDaysAgo.toISOString();
+
+  const orders = await rest<Array<{ line_items: string; created_at: string }>>(
+    `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${enc(cutoffIso)}&select=line_items,created_at&limit=5000&order=created_at.desc`
+  ).catch(() => []);
+
+  if (orders.length === 0) return 0;
+
+  // Track first and last order date per product_id
+  const activity = new Map<string, { firstDate: string; lastDate: string; title: string }>();
+
+  for (const order of orders) {
+    let items: Array<{ product_id?: string | number; title?: string }>;
+    try { items = typeof order.line_items === 'string' ? JSON.parse(order.line_items) : order.line_items || []; } catch { continue; }
+
+    const orderDate = order.created_at.slice(0, 10); // YYYY-MM-DD
+
+    for (const item of items) {
+      const pid = item.product_id ? String(item.product_id) : '';
+      if (!pid || pid === 'null' || pid === '0') continue;
+
+      const existing = activity.get(pid);
+      if (!existing) {
+        activity.set(pid, { firstDate: orderDate, lastDate: orderDate, title: item.title || '' });
+      } else {
+        if (orderDate < existing.firstDate) existing.firstDate = orderDate;
+        if (orderDate > existing.lastDate) existing.lastDate = orderDate;
+        if (!existing.title && item.title) existing.title = item.title;
+      }
+    }
+  }
+
+  // Determine active status: product had an order in last 14 days
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - 14);
+  const cutoffStr = cutoffDate.toISOString().slice(0, 10);
+
+  let updated = 0;
+  const now = new Date().toISOString();
+
+  // Batch upsert to product_classifications
+  const rows = Array.from(activity.entries()).map(([pid, a]) => ({
+    store_id: storeId,
+    product_id: pid,
+    product_title: a.title,
+    first_order_date: a.firstDate,
+    last_order_date: a.lastDate,
+    is_active: a.lastDate >= cutoffStr,
+    updated_at: now,
+  }));
+
+  // Upsert in batches of 50
+  for (let i = 0; i < rows.length; i += 50) {
+    await rest('/product_classifications?on_conflict=store_id,product_id', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify(rows.slice(i, i + 50)),
+    }).catch(() => null);
+    updated += Math.min(50, rows.length - i);
+  }
+
+  const activeCount = rows.filter(r => r.is_active).length;
+  const inactiveCount = rows.filter(r => !r.is_active).length;
+  console.log(`[PRISM:Activity] ${storeId}: ${updated} products tracked, ${activeCount} active, ${inactiveCount} inactive`);
+
+  return updated;
+}

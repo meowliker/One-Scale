@@ -4,7 +4,6 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import type { PnLSummary, PnLEntry, ProductCOGS, HourlyPnLEntry } from '@/types/pnl';
 import type { ProductPnLData } from '@/types/productPnl';
 import type { DateRange, DateRangePreset } from '@/types/analytics';
-import { Tabs } from '@/components/ui/Tabs';
 import { DateRangePicker } from '@/components/ui/DateRangePicker';
 import { getDateRange } from '@/lib/dateUtils';
 import { formatDateInTimezone } from '@/lib/timezone';
@@ -16,7 +15,6 @@ import { PnLSummaryCards } from '@/components/pnl/PnLSummaryCards';
 import { PnLWaterfallChart } from '@/components/pnl/PnLWaterfallChart';
 import { PnLTrendChart } from '@/components/pnl/PnLTrendChart';
 import { MarginIndicator } from '@/components/pnl/MarginIndicator';
-import { COGSManager } from '@/components/pnl/COGSManager';
 import { PnLDayPartChart } from '@/components/pnl/PnLDayPartChart';
 import { ProductPnLSection } from '@/components/pnl/ProductPnLSection';
 import { LivePulseRow } from '@/components/pnl/LivePulseRow';
@@ -38,10 +36,6 @@ interface PnLDashboardClientProps {
   currency?: string;
 }
 
-const allBottomTabs = [
-  { id: 'cogs', label: 'COGS Manager', digital: false },
-  { id: 'breakdown', label: 'Breakdown', digital: true },
-];
 
 function computeEntryFromDaily(dailyPnL: PnLEntry[], range: DateRange, expenses?: CustomExpense[]): PnLEntry {
   const startStr = formatDateInTimezone(range.start);
@@ -105,7 +99,6 @@ export function PnLDashboardClient({
 }: PnLDashboardClientProps) {
   const [datePreset, setDatePreset] = useState<DateRangePreset>('today');
   const [customRange, setCustomRange] = useState<DateRange | null>(null);
-  const [bottomTab, setBottomTab] = useState<string>(productType === 'digital' ? 'breakdown' : 'cogs');
   const [lastUpdated, setLastUpdated] = useState<Date>(() => new Date());
   const [customExpensesList, setCustomExpensesList] = useState<CustomExpense[]>([]);
 
@@ -311,11 +304,6 @@ export function PnLDashboardClient({
   const effectiveProductPnL = liveProductPnL ?? productPnL;
   // ── End product performance fetching ────────────────────────────────────────
 
-  useEffect(() => {
-    if (isDigital && bottomTab === 'cogs') {
-      setBottomTab('breakdown');
-    }
-  }, [isDigital, bottomTab]);
 
   return (
     <div className="space-y-1">
@@ -424,45 +412,6 @@ export function PnLDashboardClient({
         )}
       </SectionWrapper>
 
-      {/* S7: Settings — COGS / Breakdown tabs */}
-      <SectionWrapper label="Settings">
-        <Tabs
-          tabs={allBottomTabs.filter((t) => isDigital ? t.digital : true).map(({ id, label }) => ({ id, label }))}
-          activeTab={bottomTab}
-          onChange={setBottomTab}
-        />
-        {bottomTab === 'cogs' && <COGSManager products={products} currency={currency} />}
-        {bottomTab === 'breakdown' && (
-          <div className="apple-card p-5 mt-3">
-            <h3 className="mb-4 text-sm font-semibold text-text-primary">Cost Breakdown</h3>
-            <div className="space-y-4">
-              {[
-                ...(!isDigital ? [{ label: 'COGS', value: activeEntry.cogs, color: 'bg-red-500' }] : []),
-                { label: 'Ad Spend', value: activeEntry.adSpend, color: 'bg-orange-500' },
-                ...(!isDigital ? [{ label: 'Shipping', value: activeEntry.shipping, color: 'bg-amber-500' }] : []),
-                { label: 'Transaction Fees', value: activeEntry.fees, color: 'bg-yellow-500' },
-                { label: 'Refunds', value: activeEntry.refunds, color: 'bg-violet-500' },
-              ].map((costItem) => {
-                const pct = activeEntry.revenue > 0 ? (costItem.value / activeEntry.revenue) * 100 : 0;
-                return (
-                  <div key={costItem.label}>
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-text-secondary">{costItem.label}</span>
-                      <span className="font-semibold text-text-primary">
-                        {formatCurrency(costItem.value, currency)}
-                        <span className="ml-2 text-xs text-text-secondary/50">({pct.toFixed(1)}%)</span>
-                      </span>
-                    </div>
-                    <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-surface-hover">
-                      <div className={`h-full rounded-full ${costItem.color}`} style={{ width: `${Math.min(pct, 100)}%` }} />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </SectionWrapper>
     </div>
   );
 }

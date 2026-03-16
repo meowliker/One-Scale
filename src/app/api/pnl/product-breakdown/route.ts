@@ -61,6 +61,88 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'storeId, from, and to are required' }, { status: 400 });
   }
 
+  // ── Multi-day ranges: aggregate from daily snapshots (already computed, no limit issues) ──
+  if (dateFrom !== dateTo) {
+    try {
+      const snapshots = await rest<Array<{
+        date: string; revenue: number; ad_spend: number; transaction_fees: number;
+        refunds: number; chargeback_loss: number; chargeback_won: number;
+        chargeback_fees: number; debits: number; credits: number; reserve_hold: number;
+        order_count: number; product_breakdown: string;
+      }>>(
+        `/daily_pnl_snapshots?store_id=eq.${encodeURIComponent(storeId)}&date=gte.${dateFrom}&date=lte.${dateTo}&select=*&order=date.asc`
+      );
+
+      if (snapshots.length > 0) {
+        // Aggregate product breakdowns across days
+        const prodAgg = new Map<string, { title: string; classification: string; revenue: number; units: number; fees: number; orders: number }>();
+        let totalRev = 0, totalAd = 0, totalFees = 0, totalRefunds = 0;
+        let totalCbLoss = 0, totalCbWon = 0, totalCbFees = 0, totalDebits = 0, totalCredits = 0, totalReserve = 0;
+        let totalOrders = 0;
+
+        for (const snap of snapshots) {
+          totalRev += Number(snap.revenue) || 0;
+          totalAd += Number(snap.ad_spend) || 0;
+          totalFees += Number(snap.transaction_fees) || 0;
+          totalRefunds += Number(snap.refunds) || 0;
+          totalCbLoss += Number(snap.chargeback_loss) || 0;
+          totalCbWon += Number(snap.chargeback_won) || 0;
+          totalCbFees += Number(snap.chargeback_fees) || 0;
+          totalDebits += Number(snap.debits) || 0;
+          totalCredits += Number(snap.credits) || 0;
+          totalReserve += Number(snap.reserve_hold) || 0;
+          totalOrders += Number(snap.order_count) || 0;
+
+          // Merge product breakdowns
+          let pb: Array<{ productId: string; productTitle: string; classification: string; revenue: number; unitsSold: number; fees: number; orders: number }>;
+          try { pb = typeof snap.product_breakdown === 'string' ? JSON.parse(snap.product_breakdown) : snap.product_breakdown || []; } catch { pb = []; }
+
+          for (const p of pb) {
+            const pid = p.productId;
+            const existing = prodAgg.get(pid);
+            if (existing) {
+              existing.revenue += p.revenue || 0;
+              existing.units += p.unitsSold || 0;
+              existing.fees += p.fees || 0;
+              existing.orders += p.orders || 0;
+            } else {
+              prodAgg.set(pid, {
+                title: p.productTitle || '', classification: p.classification || 'upsell',
+                revenue: p.revenue || 0, units: p.unitsSold || 0, fees: p.fees || 0, orders: p.orders || 0,
+              });
+            }
+          }
+        }
+
+        const r2 = (n: number) => Math.round(n * 100) / 100;
+        const netProfit = totalRev - totalFees - totalAd - totalRefunds - totalCbLoss - totalCbFees - totalDebits + totalCbWon + totalCredits;
+
+        const breakdown: ProductBreakdownItem[] = Array.from(prodAgg.entries()).map(([pid, agg]) => ({
+          product_id: pid, title: agg.title, image: null, vendor: null, product_type: null, requires_shipping: true,
+          classification: (agg.classification === 'main' ? 'MAIN' : 'UPSELL') as 'MAIN' | 'UPSELL' | 'BUNDLE',
+          units_sold: agg.units, revenue: r2(agg.revenue), refunds: 0,
+          cogs: 0, cost_per_unit: 0, fees: r2(agg.fees), ad_spend: 0,
+          net_profit: r2(agg.revenue - agg.fees), margin_pct: agg.revenue > 0 ? r2((agg.revenue - agg.fees) / agg.revenue * 100) : 0,
+          order_count: agg.orders,
+        })).sort((a, b) => b.revenue - a.revenue);
+
+        return NextResponse.json({
+          ok: true, breakdown, dateFrom, dateTo, source: 'snapshots',
+          totals: { revenue: r2(totalRev), fees: r2(totalFees), adSpend: r2(totalAd), netProfit: r2(netProfit), orderCount: totalOrders },
+          costs: { refunds: r2(totalRefunds), chargebackLoss: r2(totalCbLoss), chargebackWon: r2(totalCbWon), chargebackFees: r2(totalCbFees), debits: r2(totalDebits), credits: r2(totalCredits), reserveHold: r2(totalReserve) },
+          verification: {
+            formula: 'Revenue - Fees - Ad Spend - Refunds - CB Loss - CB Fees - Debits + CB Won + Credits = Net Profit',
+            calculation: `${r2(totalRev)} - ${r2(totalFees)} - ${r2(totalAd)} - ${r2(totalRefunds)} - ${r2(totalCbLoss)} - ${r2(totalCbFees)} - ${r2(totalDebits)} + ${r2(totalCbWon)} + ${r2(totalCredits)} = ${r2(netProfit)}`,
+            balanced: Math.abs(netProfit - (totalRev - totalFees - totalAd - totalRefunds - totalCbLoss - totalCbFees - totalDebits + totalCbWon + totalCredits)) < 0.01,
+          },
+          cashFlow: { reserveHold: r2(totalReserve) },
+        });
+      }
+    } catch { /* snapshots not available, fall through to live computation */ }
+  }
+
+  // ── Single-day: live computation from orders + BT (accurate, no limit issue) ──
+
   // Check cache
   const cacheKey = `${storeId}:${dateFrom}:${dateTo}`;
   const cached = breakdownCache.get(cacheKey);

@@ -547,10 +547,29 @@ export async function buildProductPerformance(
     cogsMap.set(c.product_id, { costPerUnit: c.cost_per_unit, costType: c.cost_type });
   }
 
+  // ── Load product activity dates for filtering ──────────
+  // Only show products that were active during the requested date range.
+  // A product is "active" for a date if: first_order_date <= date <= last_order_date
+  const activityMap = new Map<string, { firstDate: string | null; lastDate: string | null }>();
+  try {
+    const activityRows = await rest<Array<{ product_id: string; first_order_date: string | null; last_order_date: string | null }>>(
+      `/product_classifications?store_id=eq.${enc(storeId)}&select=product_id,first_order_date,last_order_date`
+    );
+    for (const r of activityRows) activityMap.set(r.product_id, { firstDate: r.first_order_date, lastDate: r.last_order_date });
+  } catch { /* activity dates not available — show all products */ }
+
   // ── Build results ─────────────────────────────────────
   const results: ProductPnLResult[] = [];
 
   for (const product of productConfigs) {
+    // Filter by activity dates: skip products not active in the requested range
+    const activity = activityMap.get(product.product_id);
+    if (activity && activityMap.size > 0) {
+      // Product launched AFTER the date range → skip
+      if (activity.firstDate && activity.firstDate > dateTo) continue;
+      // Product was deactivated BEFORE the date range → skip
+      if (activity.lastDate && activity.lastDate < dateFrom) continue;
+    }
     const pid = product.product_id;
     const rev = round2(revenue.get(pid) ?? 0);
     const fee = round2(fees.get(pid) ?? 0);

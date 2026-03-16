@@ -109,11 +109,23 @@ export async function runAutoSync(storeId: string): Promise<AutoSyncResult> {
   }
 
   // Step 4: PRISM self-learning — compare product_config vs behavioral classification
-  // If PRISM's scoring disagrees with merchant config, auto-tune signal weights
   try {
-    const { autoLearnFromProductConfig } = await import('@/lib/intelligence/classificationV2');
+    const { autoLearnFromProductConfig, updateProductActivityDates } = await import('@/lib/intelligence/classificationV2');
     const corrections = await autoLearnFromProductConfig(storeId);
     if (corrections > 0) console.log(`[AutoSync] ${storeId}: PRISM learned ${corrections} corrections`);
+
+    // Step 5: Track product activity dates (first/last order, active status)
+    await updateProductActivityDates(storeId);
+  } catch { /* non-critical */ }
+
+  // Step 6: PRISM Intelligence — anomaly detection + weight guardrails + cross-store learning
+  try {
+    const { runPrismIntelligence } = await import('@/lib/intelligence/prismIntelligence');
+    const today = new Date().toISOString().slice(0, 10);
+    const intel = await runPrismIntelligence(storeId, today);
+    if (intel.anomalies.length > 0) {
+      console.log(`[AutoSync] ${storeId}: ${intel.anomalies.length} anomalies detected`);
+    }
   } catch { /* non-critical */ }
 
   if (result.adAccountsDiscovered > 0 || result.productsDetected > 0 || result.adMappingsSynced > 0) {
