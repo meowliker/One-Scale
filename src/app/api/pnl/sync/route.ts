@@ -35,18 +35,34 @@ function formatDateInTz(date: Date, tz: string): string {
  * E.g., "2026-03-12" in "America/New_York" → "2026-03-12T05:00:00Z" to "2026-03-13T04:59:59Z"
  */
 function dateStrToUtcBounds(dateStr: string, tz: string): { min: string; max: string } {
+  // Use Intl to find the UTC offset for midnight in the target timezone
+  // toLocaleString round-trip is unreliable on Windows — use formatter instead
   const [year, month, day] = dateStr.split('-').map(Number);
-  const startLocal = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
 
-  // Find timezone offset: compare midnight UTC with how it renders in the target TZ
-  const utcDate = new Date(`${dateStr}T00:00:00Z`);
-  const inTzStr = utcDate.toLocaleString('en-US', { timeZone: tz });
-  const inTzDate = new Date(inTzStr);
-  const offsetMs = utcDate.getTime() - inTzDate.getTime();
+  // Create a date at midnight UTC on the target date
+  const probe = new Date(Date.UTC(year, month - 1, day, 12, 0, 0)); // noon UTC for safety
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(probe);
+  const tzHour = parseInt(parts.find(p => p.type === 'hour')?.value ?? '12', 10);
+  const tzDay = parseInt(parts.find(p => p.type === 'day')?.value ?? String(day), 10);
 
-  // Midnight in target TZ as UTC
-  const midnightUtc = new Date(startLocal.getTime() + offsetMs);
-  const endUtc = new Date(midnightUtc.getTime() + 24 * 60 * 60 * 1000 - 1000); // 23:59:59
+  // Offset = how many hours ahead the TZ is from UTC
+  // If probe is noon UTC and TZ shows 6am → offset is -6 (behind UTC)
+  // If probe is noon UTC and TZ shows 5:30pm → offset is +5.5 (ahead of UTC)
+  let offsetHours = tzHour - 12;
+  if (tzDay > day) offsetHours += 24; // crossed midnight forward
+  if (tzDay < day) offsetHours -= 24; // crossed midnight backward
+  const tzMin = parseInt(parts.find(p => p.type === 'minute')?.value ?? '0', 10);
+  const offsetMs = (offsetHours * 60 + tzMin) * 60 * 1000;
+
+  // Midnight in target TZ = midnight UTC minus the offset
+  const midnightUtc = new Date(Date.UTC(year, month - 1, day, 0, 0, 0) - offsetMs);
+  const endUtc = new Date(midnightUtc.getTime() + 24 * 60 * 60 * 1000 - 1000);
 
   return {
     min: midnightUtc.toISOString(),

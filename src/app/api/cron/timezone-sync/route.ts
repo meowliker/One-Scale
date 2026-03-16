@@ -50,14 +50,24 @@ function getHourInTz(date: Date, tz: string): number {
  */
 function dateStrToUtcBounds(dateStr: string, tz: string): { min: string; max: string } {
   const [year, month, day] = dateStr.split('-').map(Number);
-  const startLocal = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+  const probe = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(probe);
+  const tzHour = parseInt(parts.find(p => p.type === 'hour')?.value ?? '12', 10);
+  const tzDay = parseInt(parts.find(p => p.type === 'day')?.value ?? String(day), 10);
 
-  const utcDate = new Date(`${dateStr}T00:00:00Z`);
-  const inTzStr = utcDate.toLocaleString('en-US', { timeZone: tz });
-  const inTzDate = new Date(inTzStr);
-  const offsetMs = utcDate.getTime() - inTzDate.getTime();
+  let offsetHours = tzHour - 12;
+  if (tzDay > day) offsetHours += 24;
+  if (tzDay < day) offsetHours -= 24;
+  const tzMin = parseInt(parts.find(p => p.type === 'minute')?.value ?? '0', 10);
+  const offsetMs = (offsetHours * 60 + tzMin) * 60 * 1000;
 
-  const midnightUtc = new Date(startLocal.getTime() + offsetMs);
+  const midnightUtc = new Date(Date.UTC(year, month - 1, day, 0, 0, 0) - offsetMs);
   const endUtc = new Date(midnightUtc.getTime() + 24 * 60 * 60 * 1000 - 1000);
 
   return {
