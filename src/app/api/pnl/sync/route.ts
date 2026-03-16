@@ -120,7 +120,6 @@ export async function GET(request: NextRequest) {
       partial_refund_amount: number;
       chargeback_loss: number;
       chargeback_won: number;
-      adjustment: number;
       gross_revenue: number;
       settled_revenue: number;
       revenue_source: string;
@@ -149,7 +148,9 @@ export async function GET(request: NextRequest) {
       partialRefundAmount: Number(row.partial_refund_amount),
       chargebackLoss: Number(row.chargeback_loss),
       chargebackWon: Number(row.chargeback_won),
-      adjustments: Number(row.adjustment ?? 0),
+      // Compute adjustments from the gap between netProfit and known line items
+      // adjustments = netProfit - (revenue - fees - refunds - cbLoss + cbWon - adSpend - cogs - shipping)
+      adjustments: Math.round((Number(row.net_profit) - (Number(row.revenue) - Number(row.transaction_fees) - Number(row.refunds) - Number(row.chargeback_loss) + Number(row.chargeback_won) - Number(row.ad_spend) - Number(row.cogs) - Number(row.shipping_cost))) * 100) / 100,
     }));
 
     const lastRow = data?.[data.length - 1];
@@ -256,12 +257,6 @@ export async function POST(request: NextRequest) {
               store_id: storeId, date: dateStr,
               revenue: r.revenue, transaction_fees: r.fees, refunds: r.refunds,
               chargeback_loss: r.chargebackLoss, chargeback_won: r.chargebackWon,
-              adjustment: r.adjustment, credit: r.credit,
-              reserved_funds: r.reservedFunds, marketplace_tax: r.marketplaceTax,
-              seller_protection: r.sellerProtection,
-              other_income: r.otherIncome, other_expense: r.otherExpense,
-              capital_repayment: r.capitalRepayment,
-              net_revenue: r.netRevenue,
               ad_spend: adSpend, net_profit: netProfit, margin,
               synced_at: new Date().toISOString(),
               shopify_synced: r.revenue > 0 || r.refunds > 0,
