@@ -225,56 +225,13 @@ export async function POST(request: NextRequest) {
     try {
       const utcBounds = dateStrToUtcBounds(dateStr, tz);
 
-      // Fetch BT data (includes description for universal classification)
-      const btRows = await rest<Array<{ type: string; amount: string; fee: string; net: string; description?: string }>>(
+      const btRows = await rest<Array<{ type: string; amount: string; fee: string; net: string }>>(
         `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}` +
         `&and=(processed_at.gte.${encodeURIComponent(utcBounds.min)},processed_at.lte.${encodeURIComponent(utcBounds.max)})` +
         `&type=neq.payout&select=type,amount,fee,net&limit=1000`
       ).catch(() => []);
 
       const hasCharges = (btRows ?? []).some(t => (t.type || '').toLowerCase() === 'charge');
-
-      let revenue = 0, transactionFees = 0, refunds = 0;
-      let chargebackLoss = 0, chargebackWon = 0, adjustments = 0;
-      let orderCount = 0;
-
-      if (hasCharges) {
-        for (const txn of btRows ?? []) {
-          const amt = parseFloat(txn.amount || '0');
-          const fee = Math.abs(parseFloat(txn.fee || '0'));
-          const net = parseFloat(txn.net || '0');
-          switch ((txn.type || '').toLowerCase()) {
-            case 'charge': revenue += Math.abs(amt); transactionFees += fee; break;
-            case 'refund': refunds += Math.abs(amt); break;
-            case 'dispute': if (net < 0) chargebackLoss += Math.abs(net); else chargebackWon += net; break;
-            default: adjustments += amt; break;
-          }
-        }
-      } else {
-        // Orders fallback for stores without Shopify Payments
-        const orders = await rest<Array<{ total_price: number; financial_status: string; refund_total: number }>>(
-          `/shopify_orders_cache?store_id=eq.${encodeURIComponent(storeId)}` +
-          `&and=(created_at.gte.${encodeURIComponent(utcBounds.min)},created_at.lte.${encodeURIComponent(utcBounds.max)})` +
-          `&order_status=neq.cancelled&select=total_price,financial_status,refund_total`
-        ).catch(() => []);
-
-        for (const order of orders ?? []) {
-          const fs = (order.financial_status || '').toLowerCase();
-          if (fs === 'voided') continue;
-          if (fs === 'refunded') {
-            refunds += Number(order.refund_total) || Number(order.total_price) || 0;
-            continue;
-          }
-          revenue += Number(order.total_price) || 0;
-          orderCount++;
-          if (fs === 'partially_refunded' && order.refund_total) {
-            refunds += Number(order.refund_total) || 0;
-          }
-        }
-        revenue = Math.round(revenue * 100) / 100;
-        refunds = Math.round(refunds * 100) / 100;
-        transactionFees = Math.round(revenue * 0.02 * 100) / 100;
-      }
 
       let adSpend = 0;
       try {
@@ -284,27 +241,69 @@ export async function POST(request: NextRequest) {
         adSpend = (spendRows ?? []).reduce((s, r) => s + (Number(r.spend) || 0), 0);
       } catch { /* no meta */ }
 
-      const netProfit = Math.round((revenue - transactionFees - refunds - chargebackLoss + chargebackWon + adjustments - adSpend) * 100) / 100;
-      const margin = revenue > 0 ? Math.round((netProfit / revenue) * 10000) / 100 : 0;
+      if (hasCharges) {
+        // ── Universal BT calculator ──
+        const { calculateFromBT } = await import('@/lib/pnl/btCalculator');
+        const r = calculateFromBT(btRows ?? []);
+        const netProfit = Math.round((r.netRevenue - adSpend) * 100) / 100;
+        const margin = r.revenue > 0 ? Math.round((netProfit / r.revenue) * 10000) / 100 : 0;
 
-      await rest(
-        '/daily_pnl_snapshots?on_conflict=store_id,date',
-        {
-          method: 'POST',
-          headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-          body: JSON.stringify([{
-            store_id: storeId, date: dateStr,
-            revenue, transaction_fees: transactionFees, refunds,
-            chargeback_loss: chargebackLoss, chargeback_won: chargebackWon,
-            ad_spend: adSpend, net_profit: netProfit, margin,
-            order_count: orderCount,
-            // revenue_source not in DB schema yet
-            synced_at: new Date().toISOString(),
-            shopify_synced: revenue > 0 || refunds > 0,
-            meta_synced: adSpend > 0,
-          }]),
+        await rest(
+          '/daily_pnl_snapshots?on_conflict=store_id,date',
+          {
+            method: 'POST',
+            headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+            body: JSON.stringify([{
+              store_id: storeId, date: dateStr,
+              revenue: r.revenue, transaction_fees: r.fees, refunds: r.refunds,
+              chargeback_loss: r.chargebackLoss, chargeback_won: r.chargebackWon,
+              ad_spend: adSpend, net_profit: netProfit, margin,
+              synced_at: new Date().toISOString(),
+              shopify_synced: r.revenue > 0 || r.refunds > 0,
+              meta_synced: adSpend > 0,
+            }]),
+          }
+        );
+      } else {
+        // Orders fallback for stores without Shopify Payments (e.g. Naiva)
+        const orders = await rest<Array<{ total_price: number; financial_status: string; refund_total: number }>>(
+          `/shopify_orders_cache?store_id=eq.${encodeURIComponent(storeId)}` +
+          `&and=(created_at.gte.${encodeURIComponent(utcBounds.min)},created_at.lte.${encodeURIComponent(utcBounds.max)})` +
+          `&order_status=neq.cancelled&select=total_price,financial_status,refund_total`
+        ).catch(() => []);
+
+        let revenue = 0, refunds = 0, orderCount = 0;
+        for (const order of orders ?? []) {
+          const fs = (order.financial_status || '').toLowerCase();
+          if (fs === 'voided') continue;
+          if (fs === 'refunded') { refunds += Number(order.refund_total) || Number(order.total_price) || 0; continue; }
+          revenue += Number(order.total_price) || 0;
+          orderCount++;
+          if (fs === 'partially_refunded' && order.refund_total) refunds += Number(order.refund_total) || 0;
         }
-      );
+        revenue = Math.round(revenue * 100) / 100;
+        refunds = Math.round(refunds * 100) / 100;
+        const fees = Math.round(revenue * 0.02 * 100) / 100;
+        const netProfit = Math.round((revenue - fees - refunds - adSpend) * 100) / 100;
+        const margin = revenue > 0 ? Math.round((netProfit / revenue) * 10000) / 100 : 0;
+
+        await rest(
+          '/daily_pnl_snapshots?on_conflict=store_id,date',
+          {
+            method: 'POST',
+            headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+            body: JSON.stringify([{
+              store_id: storeId, date: dateStr,
+              revenue, transaction_fees: fees, refunds,
+              chargeback_loss: 0, chargeback_won: 0,
+              ad_spend: adSpend, net_profit: netProfit, margin,
+              order_count: orderCount,
+              synced_at: new Date().toISOString(),
+              shopify_synced: revenue > 0, meta_synced: adSpend > 0,
+            }]),
+          }
+        );
+      }
 
       results.push({ date: dateStr, success: true });
     } catch (err) {
