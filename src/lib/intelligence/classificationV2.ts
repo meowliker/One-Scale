@@ -845,6 +845,14 @@ export async function updateProductActivityDates(storeId: string): Promise<numbe
     }
   }
 
+  // Merge with existing DB dates (in case older scans had earlier first_order_dates)
+  const existingRows = await rest<Array<{ product_id: string; first_order_date: string | null; last_order_date: string | null }>>(
+    `/product_classifications?store_id=eq.${enc(storeId)}&select=product_id,first_order_date,last_order_date`
+  ).catch(() => []);
+
+  const existingMap = new Map<string, { first: string | null; last: string | null }>();
+  for (const r of existingRows) existingMap.set(r.product_id, { first: r.first_order_date, last: r.last_order_date });
+
   // Determine active status: product had an order in last 14 days
   const cutoffDate = new Date();
   cutoffDate.setDate(cutoffDate.getDate() - 14);
@@ -853,25 +861,35 @@ export async function updateProductActivityDates(storeId: string): Promise<numbe
   let updated = 0;
   const now = new Date().toISOString();
 
-  // Batch upsert to product_classifications
-  const rows = Array.from(activity.entries()).map(([pid, a]) => ({
-    store_id: storeId,
-    product_id: pid,
-    product_title: a.title,
-    first_order_date: a.firstDate,
-    last_order_date: a.lastDate,
-    is_active: a.lastDate >= cutoffStr,
-    updated_at: now,
-  }));
+  // Build rows with merged dates (take earliest first, latest last)
+  const rows = Array.from(activity.entries()).map(([pid, a]) => {
+    const existing = existingMap.get(pid);
+    const firstDate = existing?.first && existing.first < a.firstDate ? existing.first : a.firstDate;
+    const lastDate = existing?.last && existing.last > a.lastDate ? existing.last : a.lastDate;
+    return {
+      store_id: storeId,
+      product_id: pid,
+      product_title: a.title,
+      first_order_date: firstDate,
+      last_order_date: lastDate,
+      is_active: lastDate >= cutoffStr,
+      updated_at: now,
+    };
+  });
 
-  // Upsert in batches of 50
-  for (let i = 0; i < rows.length; i += 50) {
-    await rest('/product_classifications?on_conflict=store_id,product_id', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify(rows.slice(i, i + 50)),
+  // Update via PATCH per product (ensures dates always move forward, never backward)
+  for (const row of rows) {
+    await rest(`/product_classifications?store_id=eq.${enc(storeId)}&product_id=eq.${enc(row.product_id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({
+        first_order_date: row.first_order_date,
+        last_order_date: row.last_order_date,
+        is_active: row.is_active,
+        updated_at: row.updated_at,
+      }),
     }).catch(() => null);
-    updated += Math.min(50, rows.length - i);
+    updated++;
   }
 
   const activeCount = rows.filter(r => r.is_active).length;
