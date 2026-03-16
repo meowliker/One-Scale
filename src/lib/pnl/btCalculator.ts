@@ -113,7 +113,9 @@ export function calculateFromBT(transactions: BTInput[]): PnLResult {
         } else if (desc.includes('tax')) {
           b.marketplaceTax += Math.abs(amount);
         } else {
-          if (amount > 0) b.adjustment -= amount;
+          // positive = Shopify crediting you = income
+          // negative = Shopify debiting you = expense
+          if (amount > 0) b.credit += amount;
           else b.adjustment += Math.abs(amount);
         }
         break;

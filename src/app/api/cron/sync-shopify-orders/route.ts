@@ -97,23 +97,39 @@ export async function GET(req: NextRequest) {
       const accessToken = shopifyConn.access_token;
       const shopDomain = shopifyConn.shop_domain;
 
-      // Fetch orders updated in the last 20 minutes
-      const twentyMinAgo = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+      // Fetch orders — default 20 minutes, or ?days=N for backfill
+      const backfillDays = parseInt(new URL(req.url).searchParams.get('days') || '0', 10);
+      const sinceMs = backfillDays > 0 ? backfillDays * 24 * 60 * 60 * 1000 : 20 * 60 * 1000;
+      const twentyMinAgo = new Date(Date.now() - sinceMs).toISOString();
 
-      // Shopify rate limit check: fetch with awareness
-      // fetchFromShopify already handles rate limiting via shopify-rate-limiter
-      const data = await fetchFromShopify<{ orders: ShopifyOrderRaw[] }>(
-        accessToken,
-        shopDomain,
-        '/orders.json',
-        {
-          updated_at_min: twentyMinAgo,
+      // Fetch with pagination (for backfill mode)
+      let allOrders: ShopifyOrderRaw[] = [];
+      let sinceId: string | undefined;
+      let hasMore = true;
+      const maxPages = backfillDays > 0 ? 100 : 1; // Paginate only for backfill
+      let page = 0;
+
+      while (hasMore && page < maxPages) {
+        const params: Record<string, string> = {
+          created_at_min: twentyMinAgo,
           status: 'any',
           limit: '250',
-        }
-      );
+        };
+        if (sinceId) params.since_id = sinceId;
 
-      const orders = data?.orders || [];
+        const data = await fetchFromShopify<{ orders: ShopifyOrderRaw[] }>(
+          accessToken, shopDomain, '/orders.json', params,
+        );
+
+        const batch = data?.orders || [];
+        allOrders.push(...batch);
+        page++;
+
+        if (batch.length < 250) { hasMore = false; }
+        else { sinceId = String(batch[batch.length - 1].id); }
+      }
+
+      const orders = allOrders;
       let upserted = 0;
 
       for (const order of orders) {
@@ -146,7 +162,7 @@ export async function GET(req: NextRequest) {
         );
 
         // Upsert into shopify_orders_cache (idempotent: store_id + shopify_order_id is unique)
-        await rest('/shopify_orders_cache', {
+        await rest('/shopify_orders_cache?on_conflict=store_id,shopify_order_id', {
           method: 'POST',
           headers: {
             Prefer: 'resolution=merge-duplicates',
