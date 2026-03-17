@@ -1,30 +1,22 @@
 'use client';
 
-import type { ProductPnLData } from '@/types/productPnL';
+import type { ProductPnLData, ProductCategory } from '@/types/productPnl';
 import { formatCurrency, formatPercentage, cn } from '@/lib/utils';
-import { ExternalLink, Package, Megaphone, Globe } from 'lucide-react';
+import { ExternalLink, Package, Megaphone } from 'lucide-react';
+import { ClassificationBadge } from './ClassificationBadge';
 
 interface ProductPnLListRowProps {
   product: ProductPnLData;
+  isDigital?: boolean;
+  storeId: string;
+  onClassificationChange?: (productId: string, newClassification: ProductCategory) => void;
 }
 
-function fmtMetric(key: string, value: number): string {
-  if (key === 'roas') return `${value.toFixed(2)}x`;
-  if (key === 'cpc' || key === 'cpm' || key === 'aov' || key === 'spend' || key === 'costPerPurchase')
-    return formatCurrency(value);
-  if (key === 'ctr' || key === 'atcRate') return formatPercentage(value);
-  if (key === 'impressions' || key === 'clicks' || key === 'purchases' || key === 'reach')
-    return value.toLocaleString();
-  if (key === 'frequency') return value.toFixed(2);
-  return value.toFixed(2);
-}
-
-export function ProductPnLListRow({ product }: ProductPnLListRowProps) {
+export function ProductPnLListRow({ product, isDigital = false, storeId, onClassificationChange }: ProductPnLListRowProps) {
   const isPositiveProfit = product.netProfit >= 0;
-  const isPositiveMargin = product.margin >= 0;
 
   return (
-    <tr className="border-b border-border hover:bg-surface-hover transition-colors">
+    <tr className={cn('border-b border-border hover:bg-surface-hover transition-colors', product.category === 'excluded' && 'opacity-50')}>
       {/* Product */}
       <td className="py-3 pl-4 pr-2">
         <div className="flex items-center gap-3">
@@ -41,52 +33,45 @@ export function ProductPnLListRow({ product }: ProductPnLListRowProps) {
           )}
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="truncate text-sm font-medium text-text-primary">
+              <span className={cn('truncate text-sm font-medium text-text-primary', product.category === 'excluded' && 'line-through')}>
                 {product.productName}
               </span>
               {product.isAdvertised && (
-                <span className="inline-flex items-center gap-0.5 rounded-full bg-brand/15 px-1.5 py-0.5 text-[9px] font-medium text-brand flex-shrink-0">
+                <span className="inline-flex items-center gap-0.5 text-[9px] font-medium text-text-secondary flex-shrink-0">
                   <Megaphone className="h-2.5 w-2.5" />
                   Ad
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-2 text-[10px] text-text-muted">
-              <span className="font-mono">{product.sku}</span>
-              {product.isAdvertised && product.adName && (
-                <>
-                  <span className="text-border">|</span>
-                  <Globe className="h-2.5 w-2.5 text-brand" />
-                  <span className="truncate max-w-[200px]">{product.adName}</span>
-                </>
-              )}
-            </div>
+            {product.sku && (
+              <span className="text-[10px] text-text-muted font-mono">{product.sku}</span>
+            )}
           </div>
         </div>
       </td>
 
       {/* Revenue */}
       <td className="px-2 py-3 text-right">
-        <span className="text-sm font-medium text-emerald-400">
-          {formatCurrency(product.revenue)}
-        </span>
+        <span className="text-sm font-medium text-text-primary">{formatCurrency(product.revenue)}</span>
       </td>
 
       {/* COGS */}
+      {!isDigital && (
       <td className="px-2 py-3 text-right">
-        <span className="text-sm text-red-400">{formatCurrency(product.cogs)}</span>
+        <span className="text-sm text-text-primary">{formatCurrency(product.cogs)}</span>
       </td>
+      )}
 
       {/* Net Profit */}
       <td className="px-2 py-3 text-right">
-        <span className={cn('text-sm font-medium', isPositiveProfit ? 'text-emerald-400' : 'text-red-400')}>
+        <span className={cn('text-sm font-medium', isPositiveProfit ? 'text-emerald-500' : 'text-red-500')}>
           {formatCurrency(product.netProfit)}
         </span>
       </td>
 
       {/* Margin */}
       <td className="px-2 py-3 text-right">
-        <span className={cn('text-sm', isPositiveMargin ? 'text-emerald-400' : 'text-red-400')}>
+        <span className={cn('text-sm', isPositiveProfit ? 'text-emerald-500' : 'text-red-500')}>
           {formatPercentage(product.margin)}
         </span>
       </td>
@@ -96,10 +81,10 @@ export function ProductPnLListRow({ product }: ProductPnLListRowProps) {
         <span className="text-sm text-text-primary">{product.unitsSold.toLocaleString()}</span>
       </td>
 
-      {/* FB Spend */}
+      {/* Ad Spend */}
       <td className="px-2 py-3 text-right">
         {product.isAdvertised ? (
-          <span className="text-sm text-orange-400">{formatCurrency(product.fbMetrics.spend)}</span>
+          <span className="text-sm text-text-primary">{formatCurrency(product.fbMetrics.spend)}</span>
         ) : (
           <span className="text-xs text-text-muted">-</span>
         )}
@@ -108,10 +93,7 @@ export function ProductPnLListRow({ product }: ProductPnLListRowProps) {
       {/* ROAS */}
       <td className="px-2 py-3 text-right">
         {product.isAdvertised ? (
-          <span className={cn(
-            'text-sm font-medium',
-            product.fbMetrics.roas >= 2 ? 'text-emerald-400' : product.fbMetrics.roas >= 1 ? 'text-amber-400' : 'text-red-400'
-          )}>
+          <span className="text-sm font-medium text-text-primary">
             {product.fbMetrics.roas.toFixed(2)}x
           </span>
         ) : (
@@ -122,7 +104,7 @@ export function ProductPnLListRow({ product }: ProductPnLListRowProps) {
       {/* CPC */}
       <td className="px-2 py-3 text-right">
         {product.isAdvertised ? (
-          <span className="text-sm text-sky-400">{formatCurrency(product.fbMetrics.cpc)}</span>
+          <span className="text-sm text-text-primary">{formatCurrency(product.fbMetrics.cpc)}</span>
         ) : (
           <span className="text-xs text-text-muted">-</span>
         )}
@@ -131,7 +113,7 @@ export function ProductPnLListRow({ product }: ProductPnLListRowProps) {
       {/* CTR */}
       <td className="px-2 py-3 text-right">
         {product.isAdvertised ? (
-          <span className="text-sm text-amber-400">{formatPercentage(product.fbMetrics.ctr)}</span>
+          <span className="text-sm text-text-primary">{formatPercentage(product.fbMetrics.ctr)}</span>
         ) : (
           <span className="text-xs text-text-muted">-</span>
         )}
@@ -140,19 +122,56 @@ export function ProductPnLListRow({ product }: ProductPnLListRowProps) {
       {/* Purchases */}
       <td className="px-2 py-3 text-right">
         {product.isAdvertised ? (
-          <span className="text-sm text-teal-400">{product.fbMetrics.purchases}</span>
+          <span className="text-sm text-text-primary">{product.fbMetrics.purchases}</span>
         ) : (
           <span className="text-xs text-text-muted">-</span>
         )}
       </td>
 
       {/* Cost/Purchase */}
-      <td className="px-2 py-3 text-right pr-4">
+      <td className="px-2 py-3 text-right">
         {product.isAdvertised ? (
-          <span className="text-sm text-rose-400">{formatCurrency(product.fbMetrics.costPerPurchase)}</span>
+          <span className="text-sm text-text-primary">{formatCurrency(product.fbMetrics.costPerPurchase)}</span>
         ) : (
           <span className="text-xs text-text-muted">-</span>
         )}
+      </td>
+
+      {/* Attribution Method */}
+      <td className="px-2 py-3 text-center">
+        {product.attributionMethod ? (
+          <span className="text-[10px] font-medium text-text-secondary">{product.attributionMethod}</span>
+        ) : (
+          <span className="text-xs text-text-muted">-</span>
+        )}
+      </td>
+
+      {/* Confidence Score */}
+      <td className="px-2 py-3 text-right">
+        {product.confidenceScore != null ? (
+          <span className="text-sm text-text-primary">{product.confidenceScore}%</span>
+        ) : (
+          <span className="text-xs text-text-muted">-</span>
+        )}
+      </td>
+
+      {/* Type */}
+      <td className="px-2 py-3 text-center">
+        <ClassificationBadge
+          productId={product.productId}
+          storeId={storeId}
+          classification={product.category}
+          confidence={product.classificationConfidence}
+          method={product.classificationMethod}
+          signals={product.classificationSignals}
+          behavioralSignals={product.behavioralSignals}
+          parentProduct={product.parentProduct}
+          needsReview={product.needsReview}
+          manualOverride={product.manualOverride}
+          lastAnalyzed={product.lastAnalyzed}
+          shopifyUrl={product.shopifyUrl}
+          onClassificationChange={onClassificationChange}
+        />
       </td>
 
       {/* Link */}

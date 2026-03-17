@@ -15,12 +15,17 @@ const adCache = new Map<string, { at: number; data: Ad[] }>();
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const BACKGROUND_REFRESH_MS = 90 * 1000;
 
-function isYesterdayRange(since: string | null, until: string | null): boolean {
-  if (!since || !until || since !== until) return false;
-  const yesterday = new Date();
-  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-  const yStr = yesterday.toISOString().split('T')[0];
-  return since === yStr;
+function detectSingleDayPreset(since: string | null, until: string | null): 'today' | 'yesterday' | undefined {
+  if (!since || !until || since !== until) return undefined;
+  const target = new Date(`${since}T00:00:00Z`);
+  if (Number.isNaN(target.getTime())) return undefined;
+  const todayUtc = new Date();
+  const todayUtcStr = todayUtc.toISOString().split('T')[0];
+  const todayStart = new Date(`${todayUtcStr}T00:00:00Z`);
+  const diffDays = Math.round((todayStart.getTime() - target.getTime()) / 86_400_000);
+  if (diffDays === 0) return 'today';
+  if (diffDays === 1 || diffDays === 2) return 'yesterday';
+  return undefined;
 }
 
 function hasAdSignal(rows: Ad[]): boolean {
@@ -73,6 +78,7 @@ async function readCachedSnapshot(
   exactVariant: string,
   mode: string
 ): Promise<{ data: Ad[]; updatedAt?: string } | null> {
+  // First try exact variant match
   const exactSnapshot = useSupabase
     ? await getPersistentMetaEndpointSnapshot<Ad[]>(storeId, 'ads', adSetId, exactVariant)
     : getMetaEndpointSnapshot<Ad[]>(storeId, 'ads', adSetId, exactVariant);
@@ -80,6 +86,15 @@ async function readCachedSnapshot(
     return { data: exactSnapshot.data, updatedAt: exactSnapshot.updatedAt };
   }
 
+  // Always check 'latest' variant (populated by cron sync)
+  const latestSnapshot = useSupabase
+    ? await getPersistentMetaEndpointSnapshot<Ad[]>(storeId, 'ads', adSetId, 'latest')
+    : getMetaEndpointSnapshot<Ad[]>(storeId, 'ads', adSetId, 'latest');
+  if (latestSnapshot && latestSnapshot.data.length > 0) {
+    return { data: latestSnapshot.data, updatedAt: latestSnapshot.updatedAt };
+  }
+
+  // Try mode-specific snapshot
   const modeSnapshot = useSupabase
     ? await getPersistentMetaEndpointSnapshot<Ad[]>(storeId, 'ads', adSetId, `mode:${mode}`)
     : getMetaEndpointSnapshot<Ad[]>(storeId, 'ads', adSetId, `mode:${mode}`);
@@ -87,11 +102,12 @@ async function readCachedSnapshot(
     return { data: modeSnapshot.data, updatedAt: modeSnapshot.updatedAt };
   }
 
-  const latestSnapshot = useSupabase
+  // Try any available snapshot
+  const anySnapshot = useSupabase
     ? await getLatestPersistentMetaEndpointSnapshot<Ad[]>(storeId, 'ads', adSetId)
     : getLatestMetaEndpointSnapshot<Ad[]>(storeId, 'ads', adSetId);
-  if (latestSnapshot && latestSnapshot.data.length > 0) {
-    return { data: latestSnapshot.data, updatedAt: latestSnapshot.updatedAt };
+  if (anySnapshot && anySnapshot.data.length > 0) {
+    return { data: anySnapshot.data, updatedAt: anySnapshot.updatedAt };
   }
 
   return null;
@@ -116,7 +132,7 @@ function queueAdsRefresh(args: {
     const token = await getMetaToken(storeId);
     if (!token) return;
 
-    const bgDetectedDatePreset = isYesterdayRange(since, until) ? 'yesterday' : undefined;
+    const bgDetectedDatePreset = detectSingleDayPreset(since, until);
     const dateRange = !bgDetectedDatePreset && since && until ? { since, until } : undefined;
     const exactVariant = `mode:${mode}|since:${since || ''}|until:${until || ''}|strict:${strictDate ? '1' : '0'}`;
 
@@ -159,7 +175,7 @@ export async function GET(request: NextRequest) {
   }
 
   const useSupabase = isSupabasePersistenceEnabled();
-  const detectedDatePreset = presetParam || (isYesterdayRange(since, until) ? 'yesterday' : undefined);
+  const detectedDatePreset = detectSingleDayPreset(since, until);
   const dateRange = !detectedDatePreset && since && until ? { since, until } : undefined;
   const cacheKey = [storeId, adsetId, since || '', until || '', strictDate ? 'strict' : 'flex', mode].join('|');
   const exactVariant = `mode:${mode}|since:${since || ''}|until:${until || ''}|strict:${strictDate ? '1' : '0'}`;
@@ -182,7 +198,7 @@ export async function GET(request: NextRequest) {
 
   if (preferCache && !forceLive) {
     const snap = await readCachedSnapshot(useSupabase, storeId, adsetId, exactVariant, mode);
-    if (snap && snap.data.length > 0) {
+    if (snap && snap.data.length > 0 && (!strictDate || hasAdSignal(snap.data))) {
       adCache.set(cacheKey, { at: Date.now(), data: snap.data });
       queueAdsRefresh({
         storeId,
@@ -202,6 +218,8 @@ export async function GET(request: NextRequest) {
       });
     }
   }
+
+  // No cache available - fetch live data (user is actively expanding this ad set)
 
   if (isMetaCallBlocked(storeId)) {
     if (cached || cachedByAdSet) {

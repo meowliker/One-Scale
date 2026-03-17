@@ -19,12 +19,18 @@ function isApproxLast30Range(since?: string | null, until?: string | null): bool
   return days >= 28 && days <= 32;
 }
 
-function isYesterdayRange(since: string | null, until: string | null): boolean {
-  if (!since || !until || since !== until) return false;
-  const yesterday = new Date();
-  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-  const yStr = yesterday.toISOString().split('T')[0];
-  return since === yStr;
+function detectSingleDayPreset(since: string | null, until: string | null): 'today' | 'yesterday' | undefined {
+  if (!since || !until || since !== until) return undefined;
+  const target = new Date(`${since}T00:00:00Z`);
+  if (Number.isNaN(target.getTime())) return undefined;
+  const todayUtc = new Date();
+  const todayUtcStr = todayUtc.toISOString().split('T')[0];
+  const todayStart = new Date(`${todayUtcStr}T00:00:00Z`);
+  const diffDays = Math.round((todayStart.getTime() - target.getTime()) / 86_400_000);
+  if (diffDays === 0) return 'today';
+  // Allow a ±1 day drift from store/account timezone vs server UTC.
+  if (diffDays === 1 || diffDays === 2) return 'yesterday';
+  return undefined;
 }
 
 function hasCampaignSignal(rows: Campaign[]): boolean {
@@ -43,8 +49,9 @@ export async function GET(request: NextRequest) {
   const since = searchParams.get('since');
   const until = searchParams.get('until');
   const strictDate = searchParams.get('strictDate') === '1';
-  const preferCache = searchParams.get('preferCache') === '1';
-  const presetParam = searchParams.get('preset') || undefined;
+  // Default to cache-first behavior - only fetch live data when explicitly requested
+  const forceLive = searchParams.get('forceLive') === '1';
+  const preferCache = searchParams.get('preferCache') === '1' || !forceLive;
 
   if (!storeId) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
@@ -76,21 +83,42 @@ export async function GET(request: NextRequest) {
   const exactVariant = `range:since:${since || ''}|until:${until || ''}|strict:${strictDate ? '1' : '0'}`;
   const isStrictRangeRequest = strictDate && !!since && !!until;
 
+  // Always try to serve from cache first (unless forceLive is set)
   if (preferCache) {
+    // First try exact variant match
     const exactSnapshot = useSupabase
       ? await getPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, exactVariant)
       : getMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, exactVariant);
-    if (exactSnapshot && exactSnapshot.data.length > 0) {
+    if (
+      exactSnapshot &&
+      exactSnapshot.data.length > 0 &&
+      (!isStrictRangeRequest || hasCampaignSignal(exactSnapshot.data))
+    ) {
       return NextResponse.json({
         data: exactSnapshot.data,
         cached: true,
-        stale: true,
+        stale: !forceLive,
         snapshotAt: exactSnapshot.updatedAt,
         staleReason: 'snapshot_exact_fast',
       });
     }
 
-    if (!isStrictRangeRequest && !isApproxLast30Range(since, until)) {
+    // Always check 'latest' variant (populated by cron sync)
+    const latestSnapshot = useSupabase
+      ? await getPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'latest')
+      : getMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'latest');
+    if (latestSnapshot && latestSnapshot.data.length > 0) {
+      return NextResponse.json({
+        data: latestSnapshot.data,
+        cached: true,
+        stale: !forceLive,
+        snapshotAt: latestSnapshot.updatedAt,
+        staleReason: 'snapshot_latest_fast',
+      });
+    }
+
+    // Try last_30d preset
+    if (!isApproxLast30Range(since, until)) {
       const last30Snapshot = useSupabase
         ? await getPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'preset:last_30d')
         : getMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'preset:last_30d');
@@ -98,31 +126,38 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({
           data: last30Snapshot.data,
           cached: true,
-          stale: true,
+          stale: !forceLive,
           snapshotAt: last30Snapshot.updatedAt,
           staleReason: 'snapshot_last_30d_fast',
         });
       }
     }
 
-    if (!isStrictRangeRequest) {
-      const latestExact = useSupabase
-        ? await getPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'latest')
-        : getMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'latest');
-      const latestSnapshot = latestExact
-        || (useSupabase
-          ? await getLatestPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId)
-          : getLatestMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId));
-      if (latestSnapshot && latestSnapshot.data.length > 0) {
-        return NextResponse.json({
-          data: latestSnapshot.data,
-          cached: true,
-          stale: true,
-          snapshotAt: latestSnapshot.updatedAt,
-          staleReason: 'snapshot_latest_fast',
-        });
-      }
+    // Try any available snapshot
+    const anySnapshot = useSupabase
+      ? await getLatestPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId)
+      : getLatestMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId);
+    if (anySnapshot && anySnapshot.data.length > 0) {
+      return NextResponse.json({
+        data: anySnapshot.data,
+        cached: true,
+        stale: !forceLive,
+        snapshotAt: anySnapshot.updatedAt,
+        staleReason: 'snapshot_any_fast',
+      });
     }
+  }
+
+  // If not forcing live data and we have no cache, return empty with a hint to wait for sync
+  if (!forceLive) {
+    return NextResponse.json({
+      data: [],
+      cached: true,
+      stale: true,
+      snapshotAt: null,
+      staleReason: 'no_cache_available',
+      hint: 'Data will be available after the next background sync (runs every 10 minutes)',
+    });
   }
 
   const token = await getMetaToken(storeId);
@@ -130,9 +165,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Not authenticated with Meta' }, { status: 401 });
   }
 
-  // Use explicit preset param first (most reliable — avoids UTC/store-tz mismatch).
-  // Fall back to isYesterdayRange heuristic for backwards compatibility.
-  const detectedDatePreset = presetParam || (isYesterdayRange(since, until) ? 'yesterday' : undefined);
+  // Detect "yesterday" pattern: single day = today - 1; use date_preset to avoid rate limiting
+  const detectedDatePreset = detectSingleDayPreset(since, until);
   // Build date range if both since and until are provided (skip when using a date_preset)
   const dateRange = !detectedDatePreset && since && until ? { since, until } : undefined;
 

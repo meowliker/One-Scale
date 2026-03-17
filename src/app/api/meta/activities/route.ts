@@ -25,8 +25,36 @@ function mapEventType(eventType: string): string | null {
     'funding_event_initiate': 'budget_increase',
     'update_ad_labels': 'creative_update',
     'update_adset_optimization_goal': 'ai_optimization',
+    // Additional event types for broader coverage
+    'update_campaign': 'ai_optimization',
+    'update_adset': 'ai_optimization',
+    'update_ad': 'creative_update',
+    'update_campaign_name': 'ai_optimization',
+    'update_adset_name': 'ai_optimization',
+    'update_ad_name': 'creative_update',
+    'update_campaign_objective': 'ai_optimization',
+    'update_adset_daily_budget': 'budget_increase',
+    'update_adset_lifetime_budget': 'budget_increase',
+    'update_campaign_daily_budget': 'budget_increase',
+    'update_campaign_lifetime_budget': 'budget_increase',
   };
-  return map[eventType] || null;
+  
+  // Check exact match first
+  if (map[eventType]) return map[eventType];
+  
+  // Fallback: infer action type from event_type keywords
+  const lowerEvent = eventType.toLowerCase();
+  if (lowerEvent.includes('budget')) return 'budget_increase';
+  if (lowerEvent.includes('bid')) return 'bid_change';
+  if (lowerEvent.includes('status') || lowerEvent.includes('run_status')) return 'status_pause';
+  if (lowerEvent.includes('creative') || lowerEvent.includes('ad_')) return 'creative_update';
+  if (lowerEvent.includes('targeting') || lowerEvent.includes('audience')) return 'audience_change';
+  if (lowerEvent.includes('schedule')) return 'schedule_change';
+  if (lowerEvent.includes('create')) return 'status_enable';
+  if (lowerEvent.includes('update')) return 'ai_optimization';
+  
+  // Return null only for truly unrecognized events
+  return null;
 }
 
 // Determine if a status change was pause or enable
@@ -86,17 +114,23 @@ function buildActivityDescription(eventType: string): string {
 }
 
 // Meta system-internal status values that are NOT meaningful user actions.
-// Transitions FROM these states are automatically filtered out.
+// Any transition involving these states will be filtered out.
 const META_SYSTEM_STATUS_VALUES = new Set([
   'IN_PROCESS',
   'PENDING_REVIEW',
   'WITH_ISSUES',
   'PENDING_BILLING_INFO',
+  'CAMPAIGN_PAUSED',
+  'ADSET_PAUSED',
+  'PREAPPROVED',
   // Canonical human-readable forms (used after formatStatusValue)
   'Pending Process',
   'Pending Review',
   'With Issues',
   'Pending Billing Info',
+  'Campaign Paused',
+  'Ad Set Paused',
+  'Preapproved',
 ]);
 
 // Actor name patterns that indicate a system/automated actor (not a real user)
@@ -148,8 +182,17 @@ function buildActivityDetails(
   try {
     if (extraData) {
       const extra = typeof extraData === 'string' ? JSON.parse(extraData) : extraData;
-      if (extra.old_value !== undefined) oldValue = String(extra.old_value);
-      if (extra.new_value !== undefined) newValue = String(extra.new_value);
+      // Handle cases where old_value or new_value might be objects
+      if (extra.old_value !== undefined) {
+        oldValue = typeof extra.old_value === 'object' 
+          ? JSON.stringify(extra.old_value) 
+          : String(extra.old_value);
+      }
+      if (extra.new_value !== undefined) {
+        newValue = typeof extra.new_value === 'object'
+          ? JSON.stringify(extra.new_value)
+          : String(extra.new_value);
+      }
 
       if (eventType.includes('run_status') && oldValue && newValue) {
         // Status changes: "From Pending Process to Active"
@@ -266,6 +309,7 @@ async function fetchAccountActivities(
   });
 
   const activities: ActivityEntry[] = data.data || [];
+  console.log(`[Activities] Account ${accountId}: fetched ${activities.length} raw activities from Meta`);
 
   // Follow pagination to get more results (up to fetchLimit total, max 3 pages)
   let nextCursor = data.paging?.cursors?.after;
@@ -332,9 +376,8 @@ async function fetchAccountActivities(
     // Filter: old and new values are identical (no real change)
     if (oldValue && newValue && oldValue === newValue) continue;
 
-    // Filter: purely system-internal status transitions (both sides are system states).
-    // Keep transitions where at least one side is a user-facing state (Active, Paused, etc.)
-    // so we show meaningful changes like "Pending Review → Active" or "Active → With Issues".
+    // Filter: purely internal system status transitions (both sides are system states)
+    // Keep transitions where at least one side is user-facing (Active, Paused)
     if (activity.event_type.includes('run_status')) {
       try {
         const extra = typeof activity.extra_data === 'string'
@@ -344,6 +387,7 @@ async function fetchAccountActivities(
         const rawNew = String(extra.new_value || '');
         const oldIsSystem = META_SYSTEM_STATUS_VALUES.has(rawOld) || META_SYSTEM_STATUS_VALUES.has(formatStatusValue(rawOld));
         const newIsSystem = META_SYSTEM_STATUS_VALUES.has(rawNew) || META_SYSTEM_STATUS_VALUES.has(formatStatusValue(rawNew));
+        // Only filter out if BOTH sides are system states (purely internal transition)
         if (oldIsSystem && newIsSystem) {
           continue;
         }
@@ -431,6 +475,7 @@ export async function GET(request: NextRequest) {
 
     // Merge all results into a single map
     const mergedMap: Record<string, MappedAction[]> = {};
+    let totalActivities = 0;
     for (const result of results) {
       if (result.status !== 'fulfilled') continue;
       for (const [entityId, actions] of Object.entries(result.value)) {
@@ -438,6 +483,7 @@ export async function GET(request: NextRequest) {
           mergedMap[entityId] = [];
         }
         mergedMap[entityId].push(...actions);
+        totalActivities += actions.length;
       }
     }
 
@@ -447,8 +493,11 @@ export async function GET(request: NextRequest) {
       mergedMap[id] = mergedMap[id].slice(0, 7);
     }
 
+    console.log(`[Activities] Fetched ${totalActivities} activities for ${Object.keys(mergedMap).length} entities from ${accountIds.length} accounts`);
+
     return NextResponse.json({ data: mergedMap });
-  } catch {
+  } catch (err) {
+    console.error('[Activities] Error fetching activities:', err);
     // Return empty map if activity API fails
     return NextResponse.json({ data: {} });
   }

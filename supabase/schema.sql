@@ -232,3 +232,59 @@ create table if not exists oauth_states (
 
 create index if not exists idx_oauth_states_token
   on oauth_states(state_token) where not used;
+
+-- Transaction fees from Shopify Payments webhooks
+-- Replaces paginated balance-transactions API calls
+create table if not exists shopify_transaction_fees (
+  id bigserial primary key,
+  store_id text not null references stores(id) on delete cascade,
+  order_id text not null,
+  transaction_type text not null,
+  amount numeric(12,2) not null,
+  fee numeric(12,2) not null,
+  net numeric(12,2) not null,
+  processed_at timestamptz not null,
+  raw jsonb,
+  created_at timestamptz not null default now(),
+  unique (store_id, order_id, transaction_type)
+);
+
+create index if not exists idx_txn_fees_store_order
+  on shopify_transaction_fees(store_id, order_id);
+
+create index if not exists idx_txn_fees_store_date
+  on shopify_transaction_fees(store_id, processed_at desc);
+
+-- Chargebacks from Shopify webhooks
+create table if not exists shopify_chargebacks (
+  id bigserial primary key,
+  store_id text not null references stores(id) on delete cascade,
+  order_id text not null,
+  amount numeric(12,2) not null,
+  currency text not null default 'USD',
+  reason text,
+  status text not null,
+  created_at timestamptz,
+  updated_at timestamptz,
+  synced_at timestamptz not null default now(),
+  unique (store_id, order_id)
+);
+-- Creative assets cache (for instant loading of ad previews)
+create table if not exists creative_assets (
+  id bigserial primary key,
+  store_id text not null references stores(id) on delete cascade,
+  ad_id text not null,
+  creative_type text not null check (creative_type in ('image', 'video')),
+  media_url text,
+  thumbnail_url text,
+  video_id text,
+  headline text,
+  body text,
+  cta_type text,
+  destination_url text,
+  cached_at timestamptz not null default now(),
+  unique (store_id, ad_id)
+);
+
+create index if not exists idx_creative_assets_store_ad
+  on creative_assets(store_id, ad_id);

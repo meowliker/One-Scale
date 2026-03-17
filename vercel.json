@@ -8,7 +8,7 @@
   },
   "crons": [
     {
-      "path": "/api/tracking/cron-backfill",
+      "path": "/api/cron/daily-pnl-snapshot",
       "schedule": "0 6 * * *"
     }
   ],

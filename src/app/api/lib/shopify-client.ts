@@ -9,6 +9,8 @@ import type {
   ShopifyRefund,
 } from '@/types/shopify';
 
+import { getRateLimiter } from '@/lib/shopify-rate-limiter';
+
 const SHOPIFY_API_VERSION = '2024-01';
 
 // ------ Client Credentials Grant ------
@@ -86,62 +88,39 @@ export async function fetchFromShopify<T>(
     url.searchParams.set(key, value);
   }
 
-  const MAX_RETRIES = 3;
+  // Use per-store rate limiter — tracks Shopify's leaky bucket via
+  // X-Shopify-Shop-Api-Call-Limit header and proactively throttles at 80%.
+  const limiter = getRateLimiter(shopDomain);
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    if (attempt > 0) {
-      console.log(`[Shopify] Retry ${attempt}/${MAX_RETRIES} for ${endpoint}`);
-    } else {
-      console.log('[Shopify] Fetching:', url.toString());
+  console.log('[Shopify] Fetching:', url.toString());
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const response = await limiter.fetch(url.toString(), {
+      headers: {
+        'X-Shopify-Access-Token': token,
+        'Content-Type': 'application/json',
+      },
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`Shopify API error (${response.status}): ${errorBody}`);
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-
-    try {
-      const response = await fetch(url.toString(), {
-        headers: {
-          'X-Shopify-Access-Token': token,
-          'Content-Type': 'application/json',
-        },
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeout);
-
-      // Retry on 429 (rate limit) and 503 (service unavailable)
-      if (response.status === 429 || response.status === 503) {
-        if (attempt < MAX_RETRIES) {
-          const retryAfter = response.headers.get('Retry-After');
-          const waitMs = retryAfter ? parseFloat(retryAfter) * 1000 : Math.min(1000 * Math.pow(2, attempt), 8000);
-          console.warn(`[Shopify] Rate limited (${response.status}) on ${endpoint}, waiting ${Math.round(waitMs)}ms`);
-          await new Promise((r) => setTimeout(r, waitMs));
-          continue;
-        }
-      }
-
-      if (!response.ok) {
-        const errorBody = await response.text();
-        throw new Error(`Shopify API error (${response.status}): ${errorBody}`);
-      }
-
-      return response.json() as Promise<T>;
-    } catch (err) {
-      clearTimeout(timeout);
-      if (err instanceof Error && err.name === 'AbortError') {
-        if (attempt < MAX_RETRIES) {
-          console.warn(`[Shopify] Timeout on ${endpoint}, retrying...`);
-          await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
-          continue;
-        }
-        throw new Error(`Shopify API request timed out for ${endpoint}`);
-      }
-      throw err;
+    return response.json() as Promise<T>;
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error(`Shopify API request timed out for ${endpoint}`);
     }
+    throw err;
   }
-
-  // Should never reach here, but TypeScript needs it
-  throw new Error(`Shopify API failed after ${MAX_RETRIES} retries for ${endpoint}`);
 }
 
 // ------ Mappers (snake_case to camelCase) ------
@@ -267,6 +246,7 @@ function mapVariant(raw: Record<string, any>): ShopifyVariant {
     compareAtPrice: raw.compare_at_price,
     sku: raw.sku || '',
     inventoryQuantity: raw.inventory_quantity || 0,
+    requiresShipping: raw.requires_shipping ?? true,
   };
 }
 

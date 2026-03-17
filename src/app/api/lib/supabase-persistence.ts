@@ -40,7 +40,7 @@ function headers(extra?: Record<string, string>): Record<string, string> {
   return out;
 }
 
-async function rest<T>(path: string, init?: RequestInit): Promise<T> {
+export async function rest<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
     ...init,
     headers: {
@@ -1167,72 +1167,27 @@ export async function consumePersistentOAuthState(stateToken: string): Promise<O
   };
 }
 
-// ------ Third-Party Token Persistence (ClickUp, etc.) ------
+// ---- Store Error Logging ----
 
-interface SupabaseThirdPartyToken {
-  store_id: string;
-  platform: string;
-  access_token: string;
-  metadata: string | null;
-  connected_at: string;
-  updated_at: string;
-}
-
-export async function getPersistentThirdPartyToken(
+export async function logStoreError(
   storeId: string,
-  platform: string
-): Promise<{ access_token: string; metadata: string | null; connected_at: string } | null> {
+  errorType: string,
+  message: string,
+  actionRequired?: string
+): Promise<void> {
+  if (!isSupabasePersistenceEnabled()) return;
   try {
-    const rows = await rest<SupabaseThirdPartyToken[]>(
-      `/third_party_tokens?store_id=eq.${encodeURIComponent(storeId)}&platform=eq.${encodeURIComponent(platform)}&select=*&limit=1`
-    );
-    if (!rows || rows.length === 0) return null;
-    const row = rows[0];
-    return {
-      access_token: decryptSecret(row.access_token),
-      metadata: row.metadata,
-      connected_at: row.connected_at,
-    };
+    await rest('/store_errors', {
+      method: 'POST',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({
+        store_id: storeId,
+        error_type: errorType,
+        message: message.substring(0, 1000),
+        action_required: actionRequired || null,
+      }),
+    });
   } catch {
-    return null;
-  }
-}
-
-export async function upsertPersistentThirdPartyToken(data: {
-  storeId: string;
-  platform: string;
-  accessToken: string;
-  metadata?: Record<string, unknown>;
-}): Promise<void> {
-  try {
-    const encrypted = encryptSecret(data.accessToken);
-    const metaJson = data.metadata ? JSON.stringify(data.metadata) : null;
-    await rest(
-      '/third_party_tokens',
-      {
-        method: 'POST',
-        headers: headers({ Prefer: 'resolution=merge-duplicates,return=minimal' }),
-        body: JSON.stringify({
-          store_id: data.storeId,
-          platform: data.platform,
-          access_token: encrypted,
-          metadata: metaJson,
-          updated_at: new Date().toISOString(),
-        }),
-      }
-    );
-  } catch {
-    // Table may not exist yet — silently ignore
-  }
-}
-
-export async function deletePersistentThirdPartyToken(storeId: string, platform: string): Promise<void> {
-  try {
-    await rest(
-      `/third_party_tokens?store_id=eq.${encodeURIComponent(storeId)}&platform=eq.${encodeURIComponent(platform)}`,
-      { method: 'DELETE', headers: headers({ Prefer: 'return=minimal' }) }
-    );
-  } catch {
-    // Silently ignore
+    // Best-effort — don't let error logging break the caller
   }
 }
