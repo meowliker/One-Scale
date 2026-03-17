@@ -155,12 +155,14 @@ interface AttributionCoveragePayload {
 
 function applyAppPixelMetrics(
   baseMetrics: Record<string, number>,
-  appPixel: AppPixelMetricSummary | undefined
+  _appPixel: AppPixelMetricSummary | undefined
 ): Record<string, number> {
+  // Use Meta's native conversion data for Pixel columns to match Triple Whale
+  // Meta API returns: conversions (purchase count), revenue (purchase value)
   const spend = Number(baseMetrics.spend || 0);
-  const appPixelResults = Number(appPixel?.results || 0);
-  const appPixelPurchases = Number(appPixel?.purchases || 0);
-  const appPixelPurchaseValue = Number(appPixel?.purchaseValue || 0);
+  const appPixelResults = Number(baseMetrics.conversions || 0);
+  const appPixelPurchases = Number(baseMetrics.purchases || baseMetrics.conversions || 0);
+  const appPixelPurchaseValue = Number(baseMetrics.purchaseValue || baseMetrics.revenue || 0);
 
   return {
     ...baseMetrics,
