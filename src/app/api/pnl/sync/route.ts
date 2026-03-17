@@ -247,6 +247,56 @@ export async function POST(request: NextRequest) {
         const netProfit = Math.round((r.netRevenue - adSpend) * 100) / 100;
         const margin = r.revenue > 0 ? Math.round((netProfit / r.revenue) * 10000) / 100 : 0;
 
+        // CRITICAL: BT path must also set order_count from orders cache.
+        // Without this, Key Metrics (AOV, Total Orders) show 0.
+        let orderCount = 0;
+        try {
+          const orderCountRows = await rest<Array<{ count: number }>>(
+            `/shopify_orders_cache?store_id=eq.${encodeURIComponent(storeId)}` +
+            `&and=(created_at.gte.${encodeURIComponent(utcBounds.min)},created_at.lte.${encodeURIComponent(utcBounds.max)})` +
+            `&order_status=neq.cancelled&financial_status=neq.refunded&financial_status=neq.voided` +
+            `&select=shopify_order_id`,
+            { headers: { Prefer: 'count=exact' } }
+          );
+          orderCount = orderCountRows?.length ?? 0;
+        } catch { /* orders cache may not be populated yet */ }
+
+        // Also build per-product breakdown for multi-day aggregation
+        let productBreakdown: string | null = null;
+        try {
+          const orderRows = await rest<Array<{ shopify_order_id: string; total_price: number; line_items: string; financial_status: string }>>(
+            `/shopify_orders_cache?store_id=eq.${encodeURIComponent(storeId)}` +
+            `&and=(created_at.gte.${encodeURIComponent(utcBounds.min)},created_at.lte.${encodeURIComponent(utcBounds.max)})` +
+            `&order_status=neq.cancelled&financial_status=neq.refunded&financial_status=neq.voided` +
+            `&select=shopify_order_id,total_price,line_items,financial_status&limit=1000`
+          );
+          if (orderRows && orderRows.length > 0) {
+            const prodMap = new Map<string, { productTitle: string; revenue: number; unitsSold: number; fees: number; orders: Set<string>; classification: string }>();
+            for (const order of orderRows) {
+              let items: Array<{ product_id?: string | number; title?: string; price?: string; quantity?: number }>;
+              try { items = typeof order.line_items === 'string' ? JSON.parse(order.line_items) : order.line_items || []; } catch { continue; }
+              for (const item of items) {
+                const pid = item.product_id ? String(item.product_id) : '';
+                if (!pid || pid === 'null' || pid === '0') continue;
+                const lineRev = parseFloat(item.price ?? '0') * (item.quantity ?? 1);
+                const existing = prodMap.get(pid);
+                if (existing) {
+                  existing.revenue += lineRev;
+                  existing.unitsSold += item.quantity ?? 1;
+                  existing.orders.add(String(order.shopify_order_id));
+                } else {
+                  prodMap.set(pid, { productTitle: item.title ?? 'Unknown', revenue: lineRev, unitsSold: item.quantity ?? 1, fees: 0, orders: new Set([String(order.shopify_order_id)]), classification: 'main' });
+                }
+              }
+            }
+            productBreakdown = JSON.stringify(Array.from(prodMap.entries()).map(([pid, agg]) => ({
+              productId: pid, productTitle: agg.productTitle, classification: agg.classification,
+              revenue: Math.round(agg.revenue * 100) / 100, unitsSold: agg.unitsSold,
+              fees: 0, orders: agg.orders.size,
+            })));
+          }
+        } catch { /* product breakdown is optional */ }
+
         await rest(
           '/daily_pnl_snapshots?on_conflict=store_id,date',
           {
@@ -262,6 +312,8 @@ export async function POST(request: NextRequest) {
               other_income: r.otherIncome, other_expense: r.otherExpense,
               capital_repayment: r.capitalRepayment, net_revenue: r.netRevenue,
               ad_spend: adSpend, net_profit: netProfit, margin,
+              order_count: orderCount,
+              product_breakdown: productBreakdown,
               synced_at: new Date().toISOString(),
               shopify_synced: r.revenue > 0 || r.refunds > 0,
               meta_synced: adSpend > 0,
