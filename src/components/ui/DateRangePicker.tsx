@@ -16,14 +16,13 @@ export interface DateRangePickerProps {
 const presets: { label: string; value: DateRangePreset }[] = [
   { label: 'Today', value: 'today' },
   { label: 'Yesterday', value: 'yesterday' },
-  { label: 'Last 7 days', value: 'last7' },
-  { label: 'Last 14 days', value: 'last14' },
-  { label: 'Last 28 days', value: 'last3' },
-  { label: 'Last 30 days', value: 'last30' },
-  { label: 'This week', value: 'last7today' },
-  { label: 'Last week', value: 'lastMonth' },
-  { label: 'This month', value: 'thisMonth' },
-  { label: 'Last month', value: 'lastMonth' },
+  { label: 'Last 3 Days', value: 'last3' },
+  { label: 'Last 7 Days', value: 'last7' },
+  { label: '7 Days + Today', value: 'last7today' },
+  { label: 'Last 14 Days', value: 'last14' },
+  { label: 'Last 30 Days', value: 'last30' },
+  { label: 'This Month', value: 'thisMonth' },
+  { label: 'Last Month', value: 'lastMonth' },
 ];
 
 

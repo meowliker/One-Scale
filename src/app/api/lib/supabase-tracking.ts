@@ -597,23 +597,41 @@ export async function getPersistentTrackingEntityMetrics(
     source: string | null;
     occurred_at: string | null;
   }>>(
-    `/tracking_events?store_id=eq.${encodeURIComponent(storeId)}&occurred_at=gte.${encodeURIComponent(sinceIso)}&occurred_at=lte.${encodeURIComponent(untilIso)}&or=(campaign_id.not.is.null,adset_id.not.is.null,ad_id.not.is.null)&select=campaign_id,adset_id,ad_id,event_name,value,order_id,event_id,source,occurred_at`
+    `/tracking_events?store_id=eq.${encodeURIComponent(storeId)}&occurred_at=gte.${encodeURIComponent(sinceIso)}&occurred_at=lte.${encodeURIComponent(untilIso)}&event_name=neq.Refund&or=(campaign_id.not.is.null,adset_id.not.is.null,ad_id.not.is.null)&select=campaign_id,adset_id,ad_id,event_name,value,order_id,event_id,source,occurred_at`
   );
 
   // Deduplicate by order_id to prevent double-counting when both browser pixel
   // and Shopify webhook/backfill create Purchase events for the same order.
-  // Group by COALESCE(order_id, event_id), keep shopify-source preferred.
+  // Priority: Prefer events WITH entity mapping (campaign_id/adset_id/ad_id) over those without.
+  // If both have mapping, prefer browser > server > shopify (browser pixel is most accurate).
+  // If neither has mapping, prefer shopify (authoritative order value).
   const dedupMap = new Map<string, typeof rows[number]>();
-  const sourceRank = (s: string | null) => s === 'shopify' ? 0 : s === 'server' ? 1 : 2;
+  
+  const hasEntityMapping = (r: typeof rows[number]) => !!(r.campaign_id || r.adset_id || r.ad_id);
+  // Lower rank = higher priority. Browser pixel with mapping is most accurate.
+  const sourceRank = (r: typeof rows[number]) => {
+    const hasMapped = hasEntityMapping(r);
+    if (hasMapped) {
+      // Prefer browser pixel data when it has entity mapping (most accurate click attribution)
+      if (r.source === 'browser') return 0;
+      if (r.source === 'server') return 1;
+      return 2; // shopify with mapping
+    } else {
+      // Without mapping, prefer shopify (has authoritative order value)
+      if (r.source === 'shopify') return 3;
+      if (r.source === 'server') return 4;
+      return 5; // browser without mapping
+    }
+  };
+  
   for (const row of rows) {
     const dedupKey = row.order_id || row.event_id || '';
     const existing = dedupMap.get(dedupKey);
     if (!existing) {
       dedupMap.set(dedupKey, row);
     } else {
-      // Prefer shopify source, then more recent
-      const existingRank = sourceRank(existing.source);
-      const newRank = sourceRank(row.source);
+      const existingRank = sourceRank(existing);
+      const newRank = sourceRank(row);
       if (newRank < existingRank || (newRank === existingRank && (row.occurred_at || '') > (existing.occurred_at || ''))) {
         dedupMap.set(dedupKey, row);
       }
