@@ -373,12 +373,10 @@ export function PnLDashboardClient({
         <PnLHourlyTrend hourlyPnL={filteredHourlyPnL} previousHourlyPnL={previousHourlyPnL} comparisonDateLabel={comparisonDateLabel} currency={currency} />
       </SectionWrapper>
 
-      {/* S6: Key Metrics Bar (AOV, Orders, Upsell Rate, ROAS) */}
-      {!productLoading && effectiveProductPnL.length > 0 && (
-        <SectionWrapper label="Key Metrics">
-          <MetricsBar entry={activeEntry} products={effectiveProductPnL} currency={currency} />
-        </SectionWrapper>
-      )}
+      {/* S6: Key Metrics Bar (AOV, Orders, Upsell Rate, ROAS) — always visible */}
+      <SectionWrapper label="Key Metrics">
+        <MetricsBar entry={activeEntry} products={productLoading ? [] : effectiveProductPnL} currency={currency} />
+      </SectionWrapper>
 
       {/* S7: Product Performance */}
       <SectionWrapper label="Product Performance">
