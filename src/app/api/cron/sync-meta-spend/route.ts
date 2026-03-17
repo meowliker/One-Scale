@@ -140,8 +140,9 @@ export async function GET(req: NextRequest) {
           const today = todayInTimezone(tz);
           const sevenDaysAgo = daysAgoInTimezone(6, tz);
 
-          // ONE Meta API call for all 7 days (today + 6 historical) instead of 7 calls
-          const data = await fetchFromMeta<{
+          // ONE Meta API call for all 7 days with full pagination (handles >500 ads)
+          const allInsightRows: MetaInsightRow[] = [];
+          let pageData = await fetchFromMeta<{
             data: MetaInsightRow[];
             paging?: { next?: string };
           }>(metaConn.access_token, `/${adAccountId}/insights`, {
@@ -152,8 +153,23 @@ export async function GET(req: NextRequest) {
             limit: '500',
             action_attribution_windows: '7d_click,1d_view',
           });
+          allInsightRows.push(...(pageData?.data || []));
 
-          const rows = (data?.data || []).map(row => mapRowToUpsert(store.id, adAccountId, row, today));
+          // Follow pagination — accounts with >500 ads need multiple pages
+          let nextUrl = pageData?.paging?.next;
+          let pageCount = 1;
+          while (nextUrl && pageCount < 20) {
+            try {
+              const nextRes = await fetch(nextUrl);
+              if (!nextRes.ok) break;
+              const nextData = await nextRes.json() as { data: MetaInsightRow[]; paging?: { next?: string } };
+              allInsightRows.push(...(nextData?.data || []));
+              nextUrl = nextData?.paging?.next;
+              pageCount++;
+            } catch { break; }
+          }
+
+          const rows = allInsightRows.map(row => mapRowToUpsert(store.id, adAccountId, row, today));
           if (rows.length === 0) return 0;
 
           // ── BATCH upsert ALL rows at once (not one-by-one) ──
