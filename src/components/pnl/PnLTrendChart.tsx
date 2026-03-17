@@ -18,6 +18,7 @@ interface PnLTrendChartProps {
   dailyPnL: PnLEntry[];
   previousDailyPnL?: PnLEntry[];
   comparisonDateLabel?: { current: string; previous: string };
+  currency?: string;
 }
 
 interface TrendDataPoint {
@@ -37,7 +38,7 @@ function formatDateLabel(dateStr: string): string {
 }
 
 type TrendMetric = 'netProfit' | 'revenue' | 'costs';
-export function PnLTrendChart({ dailyPnL, previousDailyPnL = [], comparisonDateLabel }: PnLTrendChartProps) {
+export function PnLTrendChart({ dailyPnL, previousDailyPnL = [], comparisonDateLabel, currency = 'USD' }: PnLTrendChartProps) {
   const [metric, setMetric] = useState<TrendMetric>('netProfit');
   const [showComparison, setShowComparison] = useState(false);
 
@@ -95,16 +96,16 @@ export function PnLTrendChart({ dailyPnL, previousDailyPnL = [], comparisonDateL
         <div className="flex justify-between text-xs">
           <span className="text-text-secondary">Net Profit</span>
           <span className={`font-bold ${item.netProfit >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-            {formatCurrency(item.netProfit)}
+            {formatCurrency(item.netProfit, currency)}
           </span>
         </div>
         <div className="flex justify-between text-xs mt-0.5">
           <span className="text-text-secondary">Revenue</span>
-          <span className="font-semibold text-text-primary">{formatCurrency(item.revenue)}</span>
+          <span className="font-semibold text-text-primary">{formatCurrency(item.revenue, currency)}</span>
         </div>
         <div className="flex justify-between text-xs mt-0.5">
           <span className="text-text-secondary">Costs</span>
-          <span className="font-semibold text-red-500">{formatCurrency(item.costs)}</span>
+          <span className="font-semibold text-red-500">{formatCurrency(item.costs, currency)}</span>
         </div>
         {showComparison && (() => {
           const prevVal = metric === 'netProfit' ? item.prevNetProfit : metric === 'revenue' ? item.prevRevenue : item.prevCosts;
@@ -116,11 +117,11 @@ export function PnLTrendChart({ dailyPnL, previousDailyPnL = [], comparisonDateL
             <div className="mt-1 pt-1 border-t border-border space-y-0.5">
               <div className="flex justify-between text-xs">
                 <span className="text-amber-500 font-medium">{comparisonDateLabel?.previous ?? 'Prev Period'}</span>
-                <span className="font-semibold text-amber-500">{formatCurrency(prevVal)}</span>
+                <span className="font-semibold text-amber-500">{formatCurrency(prevVal, currency)}</span>
               </div>
               <div className="flex justify-end text-xs">
                 <span className={diff >= 0 ? 'text-emerald-500' : 'text-red-500'}>
-                  {diff >= 0 ? '+' : ''}{formatCurrency(diff)} ({pct}%)
+                  {diff >= 0 ? '+' : ''}{formatCurrency(diff, currency)} ({pct}%)
                 </span>
               </div>
             </div>
@@ -174,14 +175,15 @@ export function PnLTrendChart({ dailyPnL, previousDailyPnL = [], comparisonDateL
           <div key={s.label} className="text-center">
             <div className="text-xs font-semibold text-text-secondary/50 uppercase tracking-wide">{s.label}</div>
             <div className={`text-sm font-bold tabular-nums ${s.value >= 0 ? 'text-text-primary' : 'text-red-500'}`}>
-              {formatCurrency(s.value)}
+              {formatCurrency(s.value, currency)}
             </div>
           </div>
         ))}
       </div>
 
       {/* Chart */}
-      <ResponsiveContainer width="100%" height={280}>
+      <div style={{ width: '100%', minHeight: 280 }}>
+      <ResponsiveContainer width="100%" height={280} minHeight={280}>
         <AreaChart data={data} margin={{ top: 8, right: 16, left: 16, bottom: 8 }}>
           <defs>
             <linearGradient id="trendGradient" x1="0" y1="0" x2="0" y2="1">
@@ -233,6 +235,7 @@ export function PnLTrendChart({ dailyPnL, previousDailyPnL = [], comparisonDateL
           />
         </AreaChart>
       </ResponsiveContainer>
+      </div>
 
       {/* Legend with date ranges */}
       {showComparison && (

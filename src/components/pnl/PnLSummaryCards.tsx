@@ -22,6 +22,7 @@ interface PnLSummaryCardsProps {
   comparison?: PnLEntry;
   isDigital?: boolean;
   lastUpdated?: Date | string;
+  currency?: string;
 }
 
 interface CardConfig {
@@ -90,7 +91,7 @@ const item = {
   show: { opacity: 1, y: 0 },
 };
 
-export function PnLSummaryCards({ entry, comparison, isDigital = false, lastUpdated }: PnLSummaryCardsProps) {
+export function PnLSummaryCards({ entry, comparison, isDigital = false, lastUpdated, currency = 'USD' }: PnLSummaryCardsProps) {
   const shippingAndFees = entry.shipping + entry.fees;
   const visibleCards = isDigital ? cards.filter((c) => !c.hideForDigital) : cards;
   const isPositiveProfit = entry.netProfit >= 0;
@@ -135,7 +136,7 @@ export function PnLSummaryCards({ entry, comparison, isDigital = false, lastUpda
                   card.isCost ? 'text-red-500 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'
                 }`}
               >
-                {formatCurrency(rawValue)}
+                {formatCurrency(rawValue, currency)}
               </span>
             </div>
             {comparison && (
@@ -153,22 +154,31 @@ export function PnLSummaryCards({ entry, comparison, isDigital = false, lastUpda
                 />
               </div>
             )}
-            {card.key === 'revenue' && entry.orderCount != null && entry.orderCount > 0 && (
-              <div className="mt-1.5 flex items-center gap-1 text-xs text-text-secondary/50">
-                <ShoppingCart className="h-3 w-3" />
-                <span>{entry.orderCount.toLocaleString()} orders</span>
+            {card.key === 'revenue' && (
+              <div className="mt-1.5 space-y-0.5">
+                {entry.orderCount != null && entry.orderCount > 0 && (
+                  <div className="flex items-center gap-1 text-xs text-text-secondary/50">
+                    <ShoppingCart className="h-3 w-3" />
+                    <span>{entry.orderCount.toLocaleString()} orders</span>
+                  </div>
+                )}
+                {entry.grossRevenue != null && entry.settledRevenue != null && entry.settledRevenue > 0 && entry.grossRevenue !== entry.settledRevenue && (
+                  <div className="text-[10px] text-text-secondary/40">
+                    Gross: {formatCurrency(entry.grossRevenue, currency)}
+                  </div>
+                )}
               </div>
             )}
             {card.key === 'refunds' && ((entry.fullRefundCount || 0) > 0 || (entry.partialRefundCount || 0) > 0) && (
               <div className="mt-1.5 space-y-0.5">
                 {(entry.fullRefundCount || 0) > 0 && (
                   <div className="flex items-center gap-1 text-xs text-text-secondary/50">
-                    <span>{entry.fullRefundCount} full ({formatCurrency(entry.fullRefundAmount || 0)})</span>
+                    <span>{entry.fullRefundCount} full ({formatCurrency(entry.fullRefundAmount || 0, currency)})</span>
                   </div>
                 )}
                 {(entry.partialRefundCount || 0) > 0 && (
                   <div className="flex items-center gap-1 text-xs text-text-secondary/50">
-                    <span>{entry.partialRefundCount} partial ({formatCurrency(entry.partialRefundAmount || 0)})</span>
+                    <span>{entry.partialRefundCount} partial ({formatCurrency(entry.partialRefundAmount || 0, currency)})</span>
                   </div>
                 )}
               </div>
@@ -202,7 +212,7 @@ export function PnLSummaryCards({ entry, comparison, isDigital = false, lastUpda
               isPositiveProfit ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
             }`}
           >
-            {formatCurrency(entry.netProfit)}
+            {formatCurrency(entry.netProfit, currency)}
           </span>
         </div>
         {entry.revenue > 0 && (

@@ -26,19 +26,24 @@ export async function GET(request: NextRequest) {
   const maxUtc = dateStrToUtcBounds(endDate, tz).max;
 
   try {
+    // Query by finalized_at (balance-synced) or created_at (webhook-synced with no finalized_at)
+    const encMin = encodeURIComponent(minUtc);
+    const encMax = encodeURIComponent(maxUtc);
+    const orFilter = `finalized_at.gte.${encMin},finalized_at.lte.${encMax}`;
     const rows = await rest<Array<{
       amount: number;
       status: string;
+      finalized_at: string | null;
       created_at: string;
     }>>(
-      `/shopify_chargebacks?store_id=eq.${encodeURIComponent(storeId)}&created_at=gte.${encodeURIComponent(minUtc)}&created_at=lte.${encodeURIComponent(maxUtc)}&select=amount,status,created_at`
+      `/shopify_chargebacks?store_id=eq.${encodeURIComponent(storeId)}&or=(and(${orFilter}),and(finalized_at.is.null,created_at.gte.${encMin},created_at.lte.${encMax}))&select=amount,status,finalized_at,created_at`
     );
 
-    // Group by date in store timezone
+    // Group by date in store timezone — use finalized_at when available, else created_at
     // Status mapping: lost/charge_refunded/accepted → loss, won → won
     const byDate = new Map<string, { loss: number; won: number; pending: number }>();
     for (const row of rows ?? []) {
-      const dateStr = formatDateInTz(new Date(row.created_at), tz);
+      const dateStr = formatDateInTz(new Date(row.finalized_at || row.created_at), tz);
       if (!byDate.has(dateStr)) byDate.set(dateStr, { loss: 0, won: 0, pending: 0 });
       const entry = byDate.get(dateStr)!;
       const amount = Number(row.amount);

@@ -1,3 +1,7 @@
+/**
+ * PRISM — Pattern Recognition & Intelligence for Store Metrics
+ * OneScale's behavioral intelligence and data infrastructure engine
+ */
 import { rest } from '@/app/api/lib/supabase-persistence';
 
 /** A single line item parsed from the shopify_orders_cache JSON. */
@@ -84,7 +88,7 @@ interface ProductAccumulator {
 }
 
 /**
- * Extracts raw behavioral signals for every product sold in the last 90 days.
+ * Extracts raw behavioral signals for every product sold in the last 30 days.
  *
  * Performs a single DB query against `shopify_orders_cache`, then computes all
  * per-product metrics (alone rate, position, co-occurrence, value lift, etc.)
@@ -97,10 +101,10 @@ export async function extractAllProductBehaviors(
   storeId: string
 ): Promise<ProductBehavior[]> {
   const ninetyDaysAgo = new Date();
-  ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+  ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 30);
   const sinceISO = ninetyDaysAgo.toISOString();
 
-  // Single query: all non-cancelled, non-refunded orders from last 90 days
+  // Single query: all non-cancelled, non-refunded orders from last 30 days
   const orders = await rest<OrderRow[]>(
     `/shopify_orders_cache?store_id=eq.${encodeURIComponent(storeId)}` +
       `&created_at=gte.${encodeURIComponent(sinceISO)}` +

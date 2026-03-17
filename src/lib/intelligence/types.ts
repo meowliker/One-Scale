@@ -197,6 +197,8 @@ export interface ProductPnL {
   feeMethod: 'actual' | 'detected_rate' | 'configured_rate' | 'estimated';
   shipping: number;
   refunds: number;
+  chargebackLoss: number;
+  chargebackWon: number;
   netProfit: number;
   margin: number;
 }
@@ -209,6 +211,9 @@ export interface PnLResult {
 
   // Totals
   totalRevenue: number;
+  grossRevenue?: number;
+  settledRevenue?: number;
+  revenueSource?: 'settled' | 'orders_api';
   totalCogs: number;
   totalAdSpend: number;
   totalFees: number;
@@ -237,7 +242,27 @@ export interface PnLResult {
 
 // ── Signal Stack Classifier ─────────────────────────────────
 
-export type SignalStackMethod = 'signal_stack' | 'store_type_rule' | 'manual' | 'edge_case' | 'shopify_tag';
+export type SignalStackMethod = 'signal_stack' | 'store_type_rule' | 'manual' | 'edge_case' | 'shopify_tag' | 'insufficient_data' | 'bootstrap_alone_rate' | 'bootstrap_ambiguous' | 'bootstrap_insufficient' | 'bootstrap_title_hint'
+  | 'ad_campaign_detected'
+  | 'ad_traffic_landing';
+
+// ── Ad Attribution Types ────────────────────────────────────
+
+export interface AdSignals {
+  has_own_campaigns: boolean;
+  landing_page_rate: number;
+  landing_sessions: number;
+  direct_spend_share: number;
+  campaign_count: number;
+  total_meta_sessions: number;
+}
+
+export type AdAttributionMethod =
+  | 'pixel_session'
+  | 'ad_creative_url'
+  | 'revenue_correlation'
+  | 'campaign_name'
+  | 'proportional';
 
 export interface ClassificationSignals {
   alone_pct_score: number;
@@ -249,6 +274,8 @@ export interface ClassificationSignals {
   price_score: number;
   app_score: number;
   subscription_score: number;
+  ad_campaign_score: number;
+  ad_landing_score: number;
   main_score: number;
   upsell_score: number;
   confidence: number;

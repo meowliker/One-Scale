@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
       if (row?.store_type_detected_at) {
         const lastRun = new Date(row.store_type_detected_at).getTime();
         const storeAge = Date.now() - new Date(row.created_at).getTime();
-        const isYoung = storeAge < 90 * 86400000; // < 90 days
+        const isYoung = storeAge < 30 * 86400000; // < 30 days
         const interval = isYoung ? 7 * 86400000 : 30 * 86400000;
         if (Date.now() - lastRun < interval) {
           results.push({ storeId: store.id, status: 'skipped' });
@@ -118,15 +118,17 @@ export async function GET(req: NextRequest) {
             }).catch(() => null);
           }
 
-          // Persist behavioral classifications (skip manual overrides)
+          // Persist behavioral classifications (skip manual overrides, remap unknown → pending)
+          const VALID_CLS = new Set(['main', 'upsell', 'downsell', 'bundle', 'pending', 'excluded']);
           for (const r of behavioralResults) {
             if (r.method === 'manual_override') continue;
+            const cls = VALID_CLS.has(r.classification) ? r.classification : 'pending';
             await rest(`/product_classifications?on_conflict=store_id,product_id`, {
               method: 'POST',
               headers: { 'Prefer': 'resolution=merge-duplicates' },
               body: JSON.stringify({
                 store_id: store.id, product_id: r.product_id, product_title: r.product_title,
-                classification: r.classification, confidence: r.confidence,
+                classification: cls, confidence: r.confidence,
                 classification_method: r.method, behavioral_signals: r.signals,
                 parent_product: r.parent_product, downsell_of: r.downsell_of,
                 needs_review: r.needs_review,
@@ -136,7 +138,7 @@ export async function GET(req: NextRequest) {
           }
         }
       } catch (e) {
-        console.warn(`[classify-products] Behavioral classification failed for ${store.id}:`, e instanceof Error ? e.message : e);
+        console.warn(`[PRISM:Classify] Behavioral classification failed for ${store.id}:`, e instanceof Error ? e.message : e);
       }
 
       await logCron(store.id, 'completed', result.classified + behavioralCount, null, Date.now() - start);

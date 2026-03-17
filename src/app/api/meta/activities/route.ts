@@ -287,13 +287,13 @@ interface MappedAction {
  * Fetch activities from one ad account and return the raw mapped actions map.
  * Does NOT filter by entity IDs — returns all activities grouped by object_id.
  *
- * @param sinceDays - How many days back to fetch (default 90)
+ * @param sinceDays - How many days back to fetch (default 30)
  * @param fetchLimit - Max number of activity entries to request from Meta (default 500)
  */
 async function fetchAccountActivities(
   accessToken: string,
   accountId: string,
-  sinceDays: number = 90,
+  sinceDays: number = 30,
   fetchLimit: number = 500,
 ): Promise<Record<string, MappedAction[]>> {
   const since = Math.floor((Date.now() - sinceDays * 24 * 60 * 60 * 1000) / 1000);
@@ -426,8 +426,8 @@ export async function GET(request: NextRequest) {
   const accountIdsParam = searchParams.get('accountIds') || searchParams.get('accountId');
 
   // Optional: control time range (in days) and fetch limit for faster initial loads
-  // Default: 90 days, 500 entries — use since=7&limit=50 for fast initial load
-  const sinceDays = Math.min(Math.max(parseInt(searchParams.get('since') || '90', 10) || 90, 1), 365);
+  // Default: 30 days, 500 entries — use since=7&limit=50 for fast initial load
+  const sinceDays = Math.min(Math.max(parseInt(searchParams.get('since') || '30', 10) || 30, 1), 365);
   const fetchLimit = Math.min(Math.max(parseInt(searchParams.get('limit') || '500', 10) || 500, 1), 1000);
 
   // Auto-detect storeId if not provided — find first store with a Meta connection

@@ -22,4 +22,5 @@ export interface Store {
   metaConnected?: boolean;
   shopifyShopDomain?: string;
   metaAdAccountId?: string;
+  needsReauth?: boolean;
 }

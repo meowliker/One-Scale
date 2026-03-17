@@ -50,6 +50,7 @@ export async function GET(request: NextRequest) {
       createdAt: s.created_at,
       shopifyConnected: s.shopifyConnected,
       metaConnected: s.metaConnected,
+      needsReauth: (s as unknown as { needs_reauth?: boolean }).needs_reauth ?? false,
       adAccounts: s.adAccounts.map((a) => ({
         id: a.ad_account_id,
         name: a.ad_account_name,

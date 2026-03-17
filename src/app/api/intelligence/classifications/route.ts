@@ -43,7 +43,7 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: 'productId and classification required' }, { status: 400 });
   }
 
-  const validClassifications = ['main', 'upsell', 'bundle', 'excluded', 'pending', 'unknown'];
+  const validClassifications = ['main', 'upsell', 'downsell', 'bundle', 'excluded', 'pending', 'unknown'];
   if (!validClassifications.includes(classification)) {
     return NextResponse.json({ error: 'Invalid classification' }, { status: 400 });
   }

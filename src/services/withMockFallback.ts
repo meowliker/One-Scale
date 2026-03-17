@@ -41,10 +41,24 @@ export function createServiceFn<T, Args extends unknown[] = []>(
   return async (...args: Args) => {
     const store = useConnectionStore.getState();
 
-    // If connection status hasn't loaded yet, throw so the page stays in loading state.
-    // This prevents mock data from flashing before real data arrives.
+    // If connection status hasn't loaded yet (store switching or first load),
+    // wait briefly for it to resolve instead of throwing NotConnectedError.
+    // This prevents "Connect to Meta" from flashing during store switch.
     if (store.status === null) {
-      throw new NotConnectedError('not_connected', platform);
+      await new Promise<void>((resolve) => {
+        let attempts = 0;
+        const check = () => {
+          const s = useConnectionStore.getState();
+          if (s.status !== null || attempts++ > 20) { resolve(); return; }
+          setTimeout(check, 100);
+        };
+        check();
+      });
+      // Re-read after waiting
+      const refreshed = useConnectionStore.getState();
+      if (refreshed.status === null) {
+        throw new NotConnectedError('not_connected', platform);
+      }
     }
 
     const isConnected =

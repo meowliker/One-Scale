@@ -18,8 +18,10 @@ export function calculateExpenses(
   dateRange: { start: string; end: string },
   hourlyProfile?: number[]
 ): ExpenseResult {
-  const rangeStart = new Date(dateRange.start + 'T00:00:00Z');
-  const rangeEnd = new Date(dateRange.end + 'T23:59:59Z');
+  // Parse as UTC midnight — inputs are YYYY-MM-DD already in store timezone,
+  // we use UTC consistently here to avoid browser TZ drift during iteration
+  const rangeStart = new Date(dateRange.start + 'T12:00:00Z');
+  const rangeEnd = new Date(dateRange.end + 'T12:00:00Z');
 
   const breakdown: ExpenseBreakdownItem[] = [];
   const dailyMap = new Map<string, number>();
@@ -33,8 +35,8 @@ export function calculateExpenses(
   for (const expense of expenses) {
     if (!expense.isActive) continue;
 
-    const expStart = expense.startDate ? new Date(expense.startDate + 'T00:00:00Z') : rangeStart;
-    const expEnd = expense.endDate ? new Date(expense.endDate + 'T23:59:59Z') : rangeEnd;
+    const expStart = expense.startDate ? new Date(expense.startDate + 'T12:00:00Z') : rangeStart;
+    const expEnd = expense.endDate ? new Date(expense.endDate + 'T12:00:00Z') : rangeEnd;
     const effectiveStart = new Date(Math.max(expStart.getTime(), rangeStart.getTime()));
     const effectiveEnd = new Date(Math.min(expEnd.getTime(), rangeEnd.getTime()));
 

@@ -149,14 +149,21 @@ export function StoreSwitcher({ isCollapsed }: { isCollapsed: boolean }) {
                     </p>
                     <p className="truncate text-xs text-text-muted">{store.domain || ''}</p>
                   </div>
-                  <span
-                    className={cn(
-                      'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium capitalize',
-                      platformColors[store.platform || 'custom']
-                    )}
-                  >
-                    {store.platform || 'custom'}
-                  </span>
+                  {store.needsReauth ? (
+                    <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium bg-red-500/10 text-red-400">
+                      <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
+                      Expired
+                    </span>
+                  ) : (
+                    <span
+                      className={cn(
+                        'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium capitalize',
+                        platformColors[store.platform || 'custom']
+                      )}
+                    >
+                      {store.platform || 'custom'}
+                    </span>
+                  )}
                 </button>
               ))
             )}

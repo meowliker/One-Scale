@@ -7,16 +7,17 @@ import { formatCurrency } from '@/lib/utils';
 interface PnLWaterfallChartProps {
   entry: PnLEntry;
   isDigital?: boolean;
+  currency?: string;
 }
 
 interface WaterfallRow {
   name: string;
   amount: number;
   pct: number;
-  type: 'income' | 'cost' | 'total';
+  type: 'income' | 'cost' | 'add' | 'total';
 }
 
-export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChartProps) {
+export function PnLWaterfallChart({ entry, isDigital = false, currency = 'USD' }: PnLWaterfallChartProps) {
   const rows: WaterfallRow[] = useMemo(() => {
     const rev = entry.revenue || 1;
     const result: WaterfallRow[] = [];
@@ -33,7 +34,28 @@ export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChar
     if (!isDigital) addCost('Shipping', entry.shipping);
     addCost(isDigital ? 'Txn Fees' : 'Fees', entry.fees);
     addCost('Refunds', entry.refunds);
-    addCost('Chargebacks', entry.chargebackLoss || 0);
+
+    // Chargebacks — split into lost (deducted) and won (added back)
+    addCost('Chargeback Lost', entry.chargebackLoss || 0);
+    if ((entry.chargebackWon || 0) > 0) {
+      result.push({
+        name: 'Chargeback Won',
+        amount: entry.chargebackWon!,
+        pct: (entry.chargebackWon! / rev) * 100,
+        type: 'add',
+      });
+    }
+
+    // Adjustments (debits, credits, seller protection — non-standard BT types)
+    if ((entry.adjustments || 0) !== 0) {
+      const adj = entry.adjustments!;
+      if (adj < 0) {
+        addCost('Adjustments', Math.abs(adj));
+      } else {
+        result.push({ name: 'Adjustments', amount: adj, pct: (adj / rev) * 100, type: 'add' });
+      }
+    }
+
     if ((entry.customExpenses || 0) > 0) {
       result.push({ name: 'Custom Expenses', amount: entry.customExpenses!, pct: (entry.customExpenses! / rev) * 100, type: 'cost' });
     }
@@ -51,11 +73,30 @@ export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChar
 
   const netProfit = entry.netProfit;
   const costRows = rows.filter(r => r.type === 'cost');
+  const addRows = rows.filter(r => r.type === 'add');
   const totalCosts = costRows.reduce((s, r) => s + r.amount, 0);
+  const totalAdded = addRows.reduce((s, r) => s + r.amount, 0);
+  const middleRows = rows.filter(r => r.type === 'cost' || r.type === 'add');
 
   return (
     <div className="apple-card p-6">
-      <h3 className="text-base font-bold text-text-primary mb-5">Profit Waterfall</h3>
+      <h3 className="text-base font-bold text-text-primary mb-3">Profit Waterfall</h3>
+
+      {/* Legend */}
+      <div className="flex gap-4 mb-5 text-[11px] text-text-secondary/60">
+        <span className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-sm bg-emerald-500/50" />
+          Added
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-sm bg-red-400/35" />
+          Deducted
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-sm bg-blue-500/50" />
+          Result
+        </span>
+      </div>
 
       {/* Stacked overview bar */}
       <div className="h-2.5 rounded-full overflow-hidden flex bg-surface-hover mb-6">
@@ -63,6 +104,13 @@ export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChar
           <div
             key={i}
             className="h-full transition-all duration-500 bg-red-400/30"
+            style={{ width: `${row.pct}%` }}
+          />
+        ))}
+        {addRows.map((row, i) => (
+          <div
+            key={`add-${i}`}
+            className="h-full transition-all duration-500 bg-emerald-400/30"
             style={{ width: `${row.pct}%` }}
           />
         ))}
@@ -77,9 +125,12 @@ export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChar
       {/* Revenue row */}
       <div className="mb-4">
         <div className="flex items-center justify-between mb-1.5">
-          <span className="text-sm font-semibold text-text-primary">Revenue</span>
+          <span className="text-sm font-semibold text-text-primary flex items-center gap-1.5">
+            <span className="text-emerald-500 text-xs">▲</span>
+            Revenue
+          </span>
           <span className="text-sm font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
-            {formatCurrency(entry.revenue)}
+            {formatCurrency(entry.revenue, currency)}
           </span>
         </div>
         <div className="h-1.5 rounded-full bg-surface-hover overflow-hidden">
@@ -87,46 +138,65 @@ export function PnLWaterfallChart({ entry, isDigital = false }: PnLWaterfallChar
         </div>
       </div>
 
-      {/* Cost rows */}
+      {/* Cost + add rows */}
       <div className="space-y-3 mb-4">
-        {costRows.map((row, idx) => (
-          <div key={idx}>
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-sm text-text-secondary">{row.name}</span>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-text-secondary/40 tabular-nums">{row.pct.toFixed(1)}%</span>
-                <span className="text-sm font-semibold tabular-nums text-text-primary">−{formatCurrency(row.amount)}</span>
+        {middleRows.map((row, idx) => {
+          const isAdd = row.type === 'add';
+          return (
+            <div key={idx}>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm text-text-secondary flex items-center gap-1.5">
+                  <span className={`text-xs ${isAdd ? 'text-emerald-500' : 'text-red-400'}`}>
+                    {isAdd ? '▲' : '▼'}
+                  </span>
+                  {row.name}
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-text-secondary/40 tabular-nums">{row.pct.toFixed(1)}%</span>
+                  <span className={`text-sm font-semibold tabular-nums ${isAdd ? 'text-emerald-600 dark:text-emerald-400' : 'text-text-primary'}`}>
+                    {isAdd ? '+' : '−'}{formatCurrency(row.amount, currency)}
+                  </span>
+                </div>
+              </div>
+              <div className="h-1.5 rounded-full bg-surface-hover overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-700 ${isAdd ? 'bg-emerald-500/50' : 'bg-red-400/35'}`}
+                  style={{ width: `${Math.min(row.pct, 100)}%` }}
+                />
               </div>
             </div>
-            <div className="h-1.5 rounded-full bg-surface-hover overflow-hidden">
-              <div
-                className="h-full rounded-full bg-red-400/35 transition-all duration-700"
-                style={{ width: `${Math.min(row.pct, 100)}%` }}
-              />
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Divider + totals */}
       <div className="border-t border-border pt-3 mb-4">
         <div className="flex items-center justify-between text-xs text-text-secondary/50">
           <span>Total Costs</span>
-          <span className="font-semibold tabular-nums">−{formatCurrency(totalCosts)}</span>
+          <span className="font-semibold tabular-nums">−{formatCurrency(totalCosts, currency)}</span>
         </div>
+        {totalAdded > 0 && (
+          <div className="flex items-center justify-between text-xs text-text-secondary/50 mt-1">
+            <span>Total Recovered</span>
+            <span className="font-semibold tabular-nums text-emerald-600/60 dark:text-emerald-400/60">+{formatCurrency(totalAdded, currency)}</span>
+          </div>
+        )}
       </div>
 
       {/* Net Profit row */}
       <div>
         <div className="flex items-center justify-between mb-1.5">
-          <span className="text-sm font-semibold text-text-primary">Net Profit</span>
-          <span className={`text-sm font-bold tabular-nums ${netProfit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-            {formatCurrency(netProfit)}
+          <span className="text-sm font-semibold text-text-primary flex items-center gap-1.5">
+            <span className={`text-xs ${netProfit >= 0 ? 'text-blue-500' : 'text-orange-500'}`}>■</span>
+            Net Profit
+          </span>
+          <span className={`text-sm font-bold tabular-nums ${netProfit >= 0 ? 'text-blue-600 dark:text-blue-400' : 'text-orange-600 dark:text-orange-400'}`}>
+            {netProfit >= 0 ? '+' : '−'}{formatCurrency(Math.abs(netProfit), currency)}
           </span>
         </div>
         <div className="h-1.5 rounded-full bg-surface-hover overflow-hidden">
           <div
-            className={`h-full rounded-full transition-all duration-700 ${netProfit >= 0 ? 'bg-emerald-500/50' : 'bg-red-500/50'}`}
+            className={`h-full rounded-full transition-all duration-700 ${netProfit >= 0 ? 'bg-blue-500/50' : 'bg-orange-500/50'}`}
             style={{ width: `${Math.min(rows[rows.length - 1].pct, 100)}%` }}
           />
         </div>

@@ -1,3 +1,7 @@
+/**
+ * PRISM — Pattern Recognition & Intelligence for Store Metrics
+ * OneScale's behavioral intelligence and data infrastructure engine
+ */
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
 import { classifyAllProducts } from '@/lib/intelligence/classificationRouter';

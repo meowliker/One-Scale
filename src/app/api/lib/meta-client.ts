@@ -1073,3 +1073,41 @@ function mapIssuesInfo(value: unknown): string[] | undefined {
     return [String(value)];
   }
 }
+
+/**
+ * Fetch ad creative URLs for all ads in a campaign.
+ * Returns URLs that link to product pages (/products/handle).
+ */
+export async function fetchAdCreativeUrls(
+  token: string,
+  campaignId: string,
+): Promise<Array<{ adId: string; adName: string; url: string }>> {
+  const results: Array<{ adId: string; adName: string; url: string }> = [];
+
+  try {
+    const res = await fetch(
+      `https://graph.facebook.com/v18.0/${campaignId}/ads` +
+      `?fields=id,name,creative{object_story_spec,asset_feed_spec,effective_object_story_id,object_url,link_url}` +
+      `&limit=100&access_token=${token}`,
+    );
+    if (!res.ok) return results;
+    const data = await res.json();
+
+    for (const ad of data.data ?? []) {
+      const creative = ad.creative ?? {};
+      const url =
+        creative.object_url ??
+        creative.link_url ??
+        creative.object_story_spec?.link_data?.link ??
+        creative.object_story_spec?.video_data?.call_to_action?.value?.link ??
+        null;
+      if (url) {
+        results.push({ adId: ad.id, adName: ad.name ?? '', url });
+      }
+    }
+  } catch {
+    // Graceful failure — creative URL detection is best-effort
+  }
+
+  return results;
+}

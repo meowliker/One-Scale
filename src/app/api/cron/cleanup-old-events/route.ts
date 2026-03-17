@@ -102,8 +102,8 @@ export async function GET(req: NextRequest) {
   const cleanupResults: CleanupResult[] = [];
 
   try {
-    // 1. DELETE tracking_events older than 90 days
-    const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    // 1. DELETE tracking_events older than 30 days
+    const ninetyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     try {
       const trackingDeleted = await batchDelete(
         'tracking_events',

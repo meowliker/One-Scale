@@ -17,6 +17,9 @@ interface PixelPayload {
   referrer?: string;
   order_id?: string;
   order_value?: number;
+  product_id?: string;
+  product_title?: string;
+  variant_id?: string;
   fbclid?: string;
   gclid?: string;
   ttclid?: string;
@@ -89,6 +92,9 @@ export async function POST(request: NextRequest) {
         referrer: body.referrer?.slice(0, 500) ?? null,
         order_id: body.order_id ?? null,
         order_value: body.order_value ?? null,
+        product_id: body.product_id ?? null,
+        product_title: body.product_title?.slice(0, 200) ?? null,
+        variant_id: body.variant_id ?? null,
         fbclid: body.fbclid ?? null,
         gclid: body.gclid ?? null,
         ttclid: body.ttclid ?? null,
@@ -153,7 +159,12 @@ export async function POST(request: NextRequest) {
       }
     );
 
-    // ── 4. Purchase: write order attribution ─────────────────────────────
+    // ── 4. Build visitor_attribution session record ───────────────────────
+    if (body.event_type === 'view_content' || body.event_type === 'add_to_cart' || body.event_type === 'purchase') {
+      await upsertVisitorAttribution(body, now);
+    }
+
+    // ── 5. Purchase: write order attribution ─────────────────────────────
     if (body.event_type === 'purchase' && body.order_id) {
       // Get full visitor record (just upserted above)
       const vRows = await rest<VisitorIdentity[]>(
@@ -222,4 +233,90 @@ export async function POST(request: NextRequest) {
     console.error('[Pixel] Event write failed:', err);
     return NextResponse.json({ ok: true }, { headers: CORS }); // silent fail
   }
+}
+
+/**
+ * Upsert visitor_attribution to track the session journey:
+ * - view_content: update products viewed
+ * - add_to_cart: record which product was added
+ * - purchase: link order to session, populate products_viewed from pixel_events
+ */
+async function upsertVisitorAttribution(body: PixelPayload, now: string): Promise<void> {
+  const storeId = body.store_id;
+  const visitorId = body.visitor_id;
+  const sessionId = body.session_id;
+
+  // Fetch existing session record
+  const existing = await rest<Array<{
+    products_viewed: string[] | null;
+    first_product_viewed_id: string | null;
+  }>>(
+    `/visitor_attribution?store_id=eq.${enc(storeId)}&visitor_id=eq.${enc(visitorId)}&session_id=eq.${enc(sessionId)}&select=products_viewed,first_product_viewed_id&limit=1`
+  ).catch(() => []);
+
+  const prev = existing?.[0] ?? null;
+
+  const payload: Record<string, unknown> = {
+    store_id: storeId,
+    visitor_id: visitorId,
+    session_id: sessionId,
+    fbclid: body.fbclid ?? null,
+    gclid: body.gclid ?? null,
+    ttclid: body.ttclid ?? null,
+    utm_source: body.utm_source ?? null,
+    utm_medium: body.utm_medium ?? null,
+    utm_campaign: body.utm_campaign ?? null,
+    utm_content: body.utm_content ?? null,
+    utm_term: body.utm_term ?? null,
+    landing_page_url: prev ? undefined : body.page_url?.slice(0, 500) ?? null,
+    last_seen_at: now,
+  };
+
+  // Don't overwrite landing_page_url on subsequent events
+  if (prev) delete payload.landing_page_url;
+
+  if (body.event_type === 'view_content' && body.product_id) {
+    const currentViewed: string[] = Array.isArray(prev?.products_viewed) ? [...prev.products_viewed] : [];
+    if (!currentViewed.includes(body.product_id)) {
+      currentViewed.push(body.product_id);
+    }
+    payload.products_viewed = currentViewed;
+    payload.last_product_viewed_id = body.product_id;
+    if (!prev?.first_product_viewed_id) {
+      payload.first_product_viewed_id = body.product_id;
+      payload.first_product_viewed_title = body.product_title ?? null;
+    }
+  }
+
+  if (body.event_type === 'add_to_cart' && body.product_id) {
+    payload.product_added_to_cart_id = body.product_id;
+  }
+
+  if (body.event_type === 'purchase' && body.order_id) {
+    payload.order_id = body.order_id;
+    payload.order_total = body.order_value ?? null;
+    payload.attributed_at = now;
+
+    // Populate products_viewed from all view_content events in this session
+    const viewEvents = await rest<Array<{ product_id: string }>>(
+      `/pixel_events?store_id=eq.${enc(storeId)}&visitor_id=eq.${enc(visitorId)}&session_id=eq.${enc(sessionId)}&event_type=eq.view_content&product_id=not.is.null&select=product_id`
+    ).catch(() => []);
+
+    const allViewed = new Set<string>(
+      Array.isArray(prev?.products_viewed) ? prev.products_viewed : []
+    );
+    for (const ev of viewEvents ?? []) {
+      if (ev.product_id) allViewed.add(ev.product_id);
+    }
+    payload.products_viewed = Array.from(allViewed);
+  }
+
+  await rest(
+    '/visitor_attribution?on_conflict=store_id,visitor_id,session_id',
+    {
+      method: 'POST',
+      headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify([payload]),
+    }
+  ).catch(() => null);
 }

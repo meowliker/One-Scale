@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useEffect, useRef } from 'react';
 import type { PnLEntry } from '@/types/pnl';
 import { formatCurrency } from '@/lib/utils';
 import { motion } from 'framer-motion';
@@ -10,6 +11,43 @@ interface LivePulseRowProps {
   todayEntry: PnLEntry;
   summaryNetProfit: number;
   lastUpdated?: Date | string;
+  currency?: string;
+}
+
+/** Smoothly animate a number from its previous value to the target (ease-out cubic). */
+function useAnimatedNumber(target: number, duration = 600): number {
+  const [display, setDisplay] = useState(target);
+  const prevRef = useRef(target);
+
+  useEffect(() => {
+    const start = prevRef.current;
+    const diff = target - start;
+    if (Math.abs(diff) < 0.01) {
+      setDisplay(target);
+      prevRef.current = target;
+      return;
+    }
+
+    const startTime = performance.now();
+    let raf: number;
+
+    const animate = (now: number) => {
+      const elapsed = now - startTime;
+      const t = Math.min(elapsed / duration, 1);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setDisplay(Math.round((start + diff * eased) * 100) / 100);
+      if (t < 1) {
+        raf = requestAnimationFrame(animate);
+      } else {
+        prevRef.current = target;
+      }
+    };
+
+    raf = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(raf);
+  }, [target, duration]);
+
+  return display;
 }
 
 const container = {
@@ -25,7 +63,7 @@ const item = {
   show: { opacity: 1, y: 0 },
 };
 
-export function LivePulseRow({ todayEntry, summaryNetProfit, lastUpdated }: LivePulseRowProps) {
+export function LivePulseRow({ todayEntry, summaryNetProfit, lastUpdated, currency = 'USD' }: LivePulseRowProps) {
   const netProfit = todayEntry.netProfit || summaryNetProfit;
   const isPositive = netProfit >= 0;
   const margin =
@@ -33,10 +71,17 @@ export function LivePulseRow({ todayEntry, summaryNetProfit, lastUpdated }: Live
       ? (todayEntry.netProfit / todayEntry.revenue) * 100
       : 0;
 
+  // Animate numbers when they change (Shopify-style smooth counting)
+  const animNetProfit = useAnimatedNumber(netProfit);
+  const animRevenue = useAnimatedNumber(todayEntry.revenue);
+  const animAdSpend = useAnimatedNumber(todayEntry.adSpend);
+  const animMargin = useAnimatedNumber(margin);
+  const animOrders = useAnimatedNumber(todayEntry.orderCount ?? 0, 400);
+
   const marginColor =
-    margin >= 15
+    animMargin >= 15
       ? 'text-emerald-600 dark:text-emerald-400'
-      : margin < 5
+      : animMargin < 5
         ? 'text-red-600 dark:text-red-400'
         : 'text-amber-600 dark:text-amber-400';
 
@@ -67,7 +112,7 @@ export function LivePulseRow({ todayEntry, summaryNetProfit, lastUpdated }: Live
           {lastUpdated && <DataFreshness lastUpdated={lastUpdated} />}
         </div>
         <div className={`text-4xl font-black tabular-nums tracking-tight ${isPositive ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-          {formatCurrency(netProfit)}
+          {formatCurrency(animNetProfit, currency)}
         </div>
         <div className="text-sm font-medium text-text-secondary mt-1">Net Profit</div>
       </motion.div>
@@ -76,11 +121,11 @@ export function LivePulseRow({ todayEntry, summaryNetProfit, lastUpdated }: Live
       <motion.div variants={item} className="apple-card p-5">
         <div className="text-xs font-bold text-text-secondary/60 uppercase mb-2">Revenue</div>
         <div className="text-2xl font-bold tabular-nums tracking-tight text-emerald-600 dark:text-emerald-400">
-          {formatCurrency(todayEntry.revenue)}
+          {formatCurrency(animRevenue, currency)}
         </div>
         <div className="flex items-center gap-1 mt-2 text-xs text-text-secondary">
           <TrendingUp className="h-3.5 w-3.5" />
-          <span>{todayEntry.orderCount ?? 0} orders</span>
+          <span>{Math.round(animOrders)} orders</span>
         </div>
       </motion.div>
 
@@ -88,7 +133,7 @@ export function LivePulseRow({ todayEntry, summaryNetProfit, lastUpdated }: Live
       <motion.div variants={item} className="apple-card p-5">
         <div className="text-xs font-bold text-text-secondary/60 uppercase mb-2">Ad Spend</div>
         <div className="text-2xl font-bold tabular-nums tracking-tight text-red-600 dark:text-red-400">
-          {formatCurrency(todayEntry.adSpend)}
+          {formatCurrency(animAdSpend, currency)}
         </div>
         <div className="flex items-center gap-1 mt-2 text-xs text-text-secondary">
           <TrendingDown className="h-3.5 w-3.5" />
@@ -100,10 +145,10 @@ export function LivePulseRow({ todayEntry, summaryNetProfit, lastUpdated }: Live
       <motion.div variants={item} className="apple-card p-5">
         <div className="text-xs font-bold text-text-secondary/60 uppercase mb-2">Margin</div>
         <div className={`text-2xl font-bold tabular-nums tracking-tight ${marginColor}`}>
-          {margin.toFixed(1)}%
+          {animMargin.toFixed(1)}%
         </div>
         <div className="flex items-center gap-1 mt-2 text-xs text-text-secondary">
-          {margin >= 15 ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
+          {animMargin >= 15 ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
           <span>of revenue</span>
         </div>
       </motion.div>
@@ -112,7 +157,7 @@ export function LivePulseRow({ todayEntry, summaryNetProfit, lastUpdated }: Live
       <motion.div variants={item} className="apple-card p-5">
         <div className="text-xs font-bold text-text-secondary/60 uppercase mb-2">Orders</div>
         <div className="text-2xl font-bold tabular-nums tracking-tight text-text-primary">
-          {todayEntry.orderCount ?? 0}
+          {Math.round(animOrders)}
         </div>
         <div className="flex items-center gap-1 mt-2 text-xs text-text-secondary">
           <Activity className="h-3.5 w-3.5" />

@@ -101,46 +101,35 @@ export async function GET(request: NextRequest) {
       shopDomain: shop,
     });
 
-    // Auto-detect store config (timezone, currency, plan) from Shopify
+    // ── PRISM Fast-Track: pre-fetch data BEFORE merchant sees dashboard ──
+    // Runs synchronously during OAuth redirect. Fetches 30 days of orders,
+    // balance transactions, classifies products, builds P&L snapshots.
+    // Merchant waits 5-8 seconds here, but dashboard loads instantly after.
     if (isSupabasePersistenceEnabled()) {
       try {
-        const shopRes = await fetch(
-          `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/shop.json`,
-          {
-            headers: {
-              'X-Shopify-Access-Token': tokenData.access_token,
-              'Content-Type': 'application/json',
-            },
-          }
-        );
-        if (shopRes.ok) {
-          const { shop: shopData } = await shopRes.json();
-          await rest('/store_config', {
-            method: 'POST',
-            headers: { Prefer: 'resolution=merge-duplicates' },
-            body: JSON.stringify({
-              store_id: storeId,
-              shopify_domain: shop,
-              iana_timezone: shopData.iana_timezone || 'America/New_York',
-              shopify_plan: shopData.plan_name || null,
-              reporting_currency: shopData.currency || 'USD',
-            }),
-          });
-        }
-      } catch {
-        // Non-critical — store config can be set up later
+        const { fastTrackOnboarding } = await import('@/lib/onboarding/orchestrator');
+        const result = await fastTrackOnboarding(storeId, tokenData.access_token, shop);
+        console.log(`[PRISM:OAuth] Fast-track complete: ${result.orders} orders, ${result.classified} classified, ${result.pnlDays} P&L days`);
+      } catch (err) {
+        console.error('[PRISM:OAuth] Fast-track failed (will retry via onboarding):', err instanceof Error ? err.message : err);
       }
     }
 
-    // Trigger store intelligence initialization (fire-and-forget)
+    // Fire-and-forget: full historical onboarding continues in background
+    // Merchant already has 30 days of data — this fills the rest silently
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || appUrl;
+    fetch(`${baseUrl}/api/onboarding/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ storeId }),
+    }).catch(() => { /* resume cron will pick up stalled onboarding */ });
+
+    // Intelligence init (fire-and-forget)
     fetch(`${baseUrl}/api/intelligence/init`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ storeId }),
-    }).catch(() => {
-      // Non-critical — intelligence can be initialized later
-    });
+    }).catch(() => { /* can be initialized later */ });
 
     // Redirect to popup callback page (closes popup and notifies parent)
     return NextResponse.redirect(

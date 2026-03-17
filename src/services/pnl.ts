@@ -764,9 +764,43 @@ async function realGetPnLSummaryUncached(): Promise<PnLSummary> {
   };
 }
 
+/**
+ * FAST: Read today's P&L from DB snapshot (updated by webhook on every order).
+ * Falls back to live computation only if no snapshot exists.
+ */
+async function fastGetPnLSummary(): Promise<PnLSummary> {
+  const { useStoreStore } = await import('@/stores/storeStore');
+  const storeId = useStoreStore.getState().activeStoreId;
+  const tz = getStoreTimezone();
+  const todayStr = todayInTimezone(tz);
+
+  if (storeId) {
+    try {
+      const params = new URLSearchParams({ storeId, days: '1' });
+      const res = await fetch(`/api/pnl/sync?${params}`);
+      if (res.ok) {
+        const json = await res.json() as { data?: PnLEntry[] };
+        const todaySnap = (json.data || []).find(e => e.date === todayStr);
+        if (todaySnap && (todaySnap.orderCount ?? 0) > 0) {
+          return {
+            today: todaySnap,
+            thisWeek: { date: todayStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0, chargebackLoss: 0, chargebackWon: 0 },
+            thisMonth: { date: todayStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0, chargebackLoss: 0, chargebackWon: 0 },
+            allTime: { date: todayStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0, chargebackLoss: 0, chargebackWon: 0 },
+            productType: 'digital',
+          };
+        }
+      }
+    } catch { /* DB not available, fall back to live */ }
+  }
+
+  // Fallback: live computation (slow but works when DB has no data)
+  return realGetPnLSummaryUncached();
+}
+
 async function realGetPnLSummary(): Promise<PnLSummary> {
   const key = buildStoreScopedKey('pnl:summary');
-  return memoizePromise(key, 45_000, realGetPnLSummaryUncached);
+  return memoizePromise(key, 30_000, fastGetPnLSummary);
 }
 
 async function mockGetDailyPnL(): Promise<PnLEntry[]> {
@@ -794,39 +828,23 @@ async function fetchSnapshotEntries(storeId: string): Promise<PnLEntry[]> {
  * Fast path: use pre-computed snapshots for historical days, compute only today live.
  * Reduces API calls from ~15+ to ~5 (only today's orders + insights + fees).
  */
-async function computeSnapshotPlusTodayLive(
-  snapshots: PnLEntry[],
-  todayStr: string,
-  tz: string,
-): Promise<PnLEntry[]> {
-  const snapshotMap = new Map(snapshots.map(s => [s.date, s]));
-  console.log(`[P&L] Fast path: ${snapshots.length} snapshot entries, computing only today live`);
-
-  // Only fetch today's data live
-  const [todayOrders, todayInsightsRes, pnlSettings, realFees, chargebacksByDate] = await Promise.all([
-    fetchOrdersForDateRange(todayStr, todayStr, tz),
-    fetchInsightsDirectly('today'),
-    fetchPnLSettings(),
-    fetchRealTransactionFees(tz),
-    fetchChargebacks(todayStr, todayStr, tz),
-  ]);
-
-  // Cache today's orders for getPnLSummary reuse
-  _cachedTodayOrders = { orders: todayOrders, timestamp: Date.now(), tz };
-
-  const todayAdSpend = (todayInsightsRes.data || []).reduce(
-    (sum, d) => sum + (d.metrics.spend || 0), 0,
-  );
-
-  // Collect refunds for today
-  const refundedOlderOrders = await fetchAllRefundedOrders(todayStr, todayStr, todayStr, tz);
-  const allOrdersForRefunds = [...todayOrders, ...refundedOlderOrders];
-  const refundsByDate = collectRefundsByDate(allOrdersForRefunds, tz);
-  const todayRefunds = refundsByDate.get(todayStr);
-
-  let revenue = 0, shipping = 0, fees = 0, cogs = 0;
+/**
+ * Compute a single day's PnLEntry live from Shopify orders + Meta insights.
+ */
+function computeDayLive(
+  dateStr: string,
+  orders: import('@/types/shopify').ShopifyOrder[],
+  adSpend: number,
+  pnlSettings: import('@/types/pnlSettings').PnLSettings | null,
+  realFees: { feesByOrderId: Map<number, number>; feesByDate: Map<string, number> },
+  chargebacksByDate: Map<string, { loss: number; won: number }>,
+  refundsByDate: Map<string, { totalRefunds: number; fullRefundCount: number; partialRefundCount: number; fullRefundAmount: number; partialRefundAmount: number }>,
+): PnLEntry {
+  const dayRefunds = refundsByDate.get(dateStr);
   const isDigital = pnlSettings?.productType === 'digital';
-  for (const order of todayOrders) {
+  let revenue = 0, shipping = 0, fees = 0, cogs = 0;
+
+  for (const order of orders) {
     if (order.financialStatus === 'refunded') continue;
     const rev = getAdjustedRevenue(order, pnlSettings);
     revenue += rev;
@@ -838,40 +856,98 @@ async function computeSnapshotPlusTodayLive(
     }
     fees += calculateHandlingCost(order, pnlSettings);
 
-    // Per-line-item COGS using pnlSettings.productCosts
-    if (isDigital) {
-      // Digital products have zero COGS
-    } else {
+    if (!isDigital) {
       for (const li of order.lineItems) {
         const lineRevenue = parseFloat(li.price) * li.quantity;
         const productId = li.productId ? String(li.productId) : `unknown_${li.title}`;
-        const productCost = pnlSettings?.productCosts?.find(pc => pc.productId === productId);
+        const productCost = pnlSettings?.productCosts?.find((pc: { productId: string }) => pc.productId === productId);
         if (productCost) {
           cogs += productCost.costType === 'fixed'
             ? productCost.costPerUnit * li.quantity
             : lineRevenue * (productCost.costPerUnit / 100);
-        } else {
-          cogs += 0; // No COGS configured — show $0, never guess
         }
       }
     }
   }
-  const cb = chargebacksByDate.get(todayStr);
+
+  const cb = chargebacksByDate.get(dateStr);
   const chargebackLoss = cb?.loss || 0;
   const chargebackWon = cb?.won || 0;
-  const refunds = todayRefunds?.totalRefunds || 0;
-  const netProfit = revenue - cogs - todayAdSpend - shipping - fees - refunds - chargebackLoss + chargebackWon;
+  const refunds = dayRefunds?.totalRefunds || 0;
+  const netProfit = revenue - cogs - adSpend - shipping - fees - refunds - chargebackLoss + chargebackWon;
   const margin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
 
-  const todayEntry: PnLEntry = {
-    date: todayStr, revenue, cogs, adSpend: todayAdSpend, shipping, fees, refunds,
-    netProfit, margin, orderCount: todayOrders.length,
-    fullRefundCount: todayRefunds?.fullRefundCount || 0,
-    partialRefundCount: todayRefunds?.partialRefundCount || 0,
-    fullRefundAmount: todayRefunds?.fullRefundAmount || 0,
-    partialRefundAmount: todayRefunds?.partialRefundAmount || 0,
+  return {
+    date: dateStr, revenue, cogs, adSpend, shipping, fees, refunds,
+    netProfit, margin, orderCount: orders.filter((o: { financialStatus: string }) => o.financialStatus !== 'refunded').length,
+    fullRefundCount: dayRefunds?.fullRefundCount || 0,
+    partialRefundCount: dayRefunds?.partialRefundCount || 0,
+    fullRefundAmount: dayRefunds?.fullRefundAmount || 0,
+    partialRefundAmount: dayRefunds?.partialRefundAmount || 0,
     chargebackLoss, chargebackWon,
   };
+}
+
+async function computeSnapshotPlusTodayLive(
+  snapshots: PnLEntry[],
+  todayStr: string,
+  tz: string,
+): Promise<PnLEntry[]> {
+  const snapshotMap = new Map(snapshots.map(s => [s.date, s]));
+  const yesterdayStr = daysAgoInTimezone(1, tz);
+
+  // Compute today AND yesterday live — yesterday's BT/orders may still be settling
+  const liveDates = [yesterdayStr, todayStr];
+  const liveStart = yesterdayStr < todayStr ? yesterdayStr : todayStr;
+  console.log(`[P&L] Fast path: ${snapshots.length} snapshot entries, computing ${liveDates.join(' + ')} live`);
+
+  const [allOrders, todayInsightsRes, yesterdayInsightsRes, pnlSettings, realFees, chargebacksByDate] = await Promise.all([
+    fetchOrdersForDateRange(liveStart, todayStr, tz),
+    fetchInsightsDirectly('today'),
+    fetchInsightsDirectly('yesterday'),
+    fetchPnLSettings(),
+    fetchRealTransactionFees(tz),
+    fetchChargebacks(liveStart, todayStr, tz),
+  ]);
+
+  // Group orders by date
+  const ordersByDate = new Map<string, import('@/types/shopify').ShopifyOrder[]>();
+  for (const order of allOrders) {
+    const dateStr = shopifyDateToStoreDate(order.createdAt, tz);
+    if (!ordersByDate.has(dateStr)) ordersByDate.set(dateStr, []);
+    ordersByDate.get(dateStr)!.push(order);
+  }
+
+  // Cache today's orders for getPnLSummary reuse
+  _cachedTodayOrders = { orders: ordersByDate.get(todayStr) || [], timestamp: Date.now(), tz };
+
+  // Ad spend by date
+  const todayAdSpend = (todayInsightsRes.data || []).reduce(
+    (sum, d) => sum + (d.metrics.spend || 0), 0,
+  );
+  const yesterdayAdSpend = (yesterdayInsightsRes.data || []).reduce(
+    (sum, d) => sum + (d.metrics.spend || 0), 0,
+  );
+
+  // Collect refunds for both days
+  const refundedOlderOrders = await fetchAllRefundedOrders(liveStart, todayStr, liveStart, tz);
+  const allOrdersForRefunds = [...allOrders, ...refundedOlderOrders];
+  const refundsByDate = collectRefundsByDate(allOrdersForRefunds, tz);
+
+  // Compute live entries for today and yesterday
+  const liveEntryMap = new Map<string, PnLEntry>();
+
+  const todayEntry = computeDayLive(
+    todayStr, ordersByDate.get(todayStr) || [], todayAdSpend,
+    pnlSettings, realFees, chargebacksByDate, refundsByDate,
+  );
+  liveEntryMap.set(todayStr, todayEntry);
+
+  const yesterdayEntry = computeDayLive(
+    yesterdayStr, ordersByDate.get(yesterdayStr) || [], yesterdayAdSpend,
+    pnlSettings, realFees, chargebacksByDate, refundsByDate,
+  );
+  liveEntryMap.set(yesterdayStr, yesterdayEntry);
 
   // Generate all 31 dates and merge
   const allDates: string[] = [];
@@ -882,7 +958,9 @@ async function computeSnapshotPlusTodayLive(
   allDates.sort();
 
   return allDates.map(dateStr => {
-    if (dateStr === todayStr) return todayEntry;
+    // Live-computed days take priority (today + yesterday)
+    const liveEntry = liveEntryMap.get(dateStr);
+    if (liveEntry) return liveEntry;
     const snap = snapshotMap.get(dateStr);
     if (snap) return snap;
     return {
@@ -1000,7 +1078,7 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
   }
 
   // Include extra dates from Meta insights that might be outside our window
-  for (const date of insightsByDate.keys()) {
+  for (const date of Array.from(insightsByDate.keys())) {
     if (!allDates.includes(date)) allDates.push(date);
   }
 
@@ -1118,22 +1196,67 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
   });
 }
 
-async function realGetDailyPnL(): Promise<PnLEntry[]> {
-  const key = buildStoreScopedKey('pnl:daily');
-  return memoizePromise(key, 45_000, realGetDailyPnLUncached);
+/**
+ * FAST: Read daily P&L from DB snapshots (instant <100ms).
+ * Snapshots are kept fresh by:
+ * - Webhook (real-time for today on each new order)
+ * - pg_cron timezone-sync (hourly at each store's midnight)
+ * - Backfill endpoint (for historical data)
+ *
+ * Falls back to live computation only if DB has no data.
+ */
+async function fastGetDailyPnL(): Promise<PnLEntry[]> {
+  const { useStoreStore } = await import('@/stores/storeStore');
+  const storeId = useStoreStore.getState().activeStoreId;
+
+  if (storeId) {
+    const snapshots = await fetchSnapshotEntries(storeId);
+    if (snapshots.length >= 5) {
+      // DB has good data — use it directly, no live API calls needed
+      const tz = getStoreTimezone();
+      const todayStr = todayInTimezone(tz);
+      // Generate all 31 dates
+      const allDates: string[] = [];
+      for (let i = 30; i >= 0; i--) allDates.push(daysAgoInTimezone(i, tz));
+      if (!allDates.includes(todayStr)) allDates.push(todayStr);
+      allDates.sort();
+
+      const snapMap = new Map(snapshots.map(s => [s.date, s]));
+      return allDates.map(d => snapMap.get(d) || {
+        date: d, revenue: 0, cogs: 0, adSpend: 0, shipping: 0,
+        fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0,
+        chargebackLoss: 0, chargebackWon: 0,
+      });
+    }
+  }
+
+  // Fallback: live computation
+  return realGetDailyPnLUncached();
 }
 
-export const getPnLSummary = createServiceFn<PnLSummary>(
-  'meta',
-  mockGetPnLSummary,
-  realGetPnLSummary
-);
+async function realGetDailyPnL(): Promise<PnLEntry[]> {
+  const key = buildStoreScopedKey('pnl:daily');
+  return memoizePromise(key, 30_000, fastGetDailyPnL);
+}
 
-export const getDailyPnL = createServiceFn<PnLEntry[]>(
-  'meta',
-  mockGetDailyPnL,
-  realGetDailyPnL
-);
+// DB-first P&L functions bypass the connection check — they read from
+// daily_pnl_snapshots which don't need Meta/Shopify to be connected.
+// This makes store switches instant (no waiting for connection status).
+export const getPnLSummary = async (): Promise<PnLSummary> => {
+  try {
+    return await realGetPnLSummary();
+  } catch {
+    return mockGetPnLSummary();
+  }
+};
+
+export const getDailyPnL = async (): Promise<PnLEntry[]> => {
+  try {
+    return await realGetDailyPnL();
+  } catch {
+    return mockGetDailyPnL();
+  }
+};
 
 async function mockGetProducts(): Promise<ProductCOGS[]> {
   await new Promise((resolve) => setTimeout(resolve, 100));

@@ -6,12 +6,7 @@
       "maxDuration": 60
     }
   },
-  "crons": [
-    {
-      "path": "/api/cron/daily-pnl-snapshot",
-      "schedule": "0 6 * * *"
-    }
-  ],
+  "crons": [],
   "headers": [
     {
       "source": "/(.*)",

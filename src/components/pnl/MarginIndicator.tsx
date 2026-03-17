@@ -5,6 +5,7 @@ import { cn, formatCurrency } from '@/lib/utils';
 interface MarginIndicatorProps {
   margin: number;
   netProfit: number;
+  currency?: string;
 }
 
 function getMarginConfig(margin: number) {
@@ -17,7 +18,7 @@ function getMarginConfig(margin: number) {
   return { stroke: '#ef4444', textClass: 'text-red-600 dark:text-red-400', label: 'Low', badgeClass: 'bg-red-500/10 text-red-600 dark:text-red-400' };
 }
 
-export function MarginIndicator({ margin, netProfit }: MarginIndicatorProps) {
+export function MarginIndicator({ margin, netProfit, currency = 'USD' }: MarginIndicatorProps) {
   const { stroke, textClass, label, badgeClass } = getMarginConfig(margin);
 
   const size = 140;
@@ -71,7 +72,7 @@ export function MarginIndicator({ margin, netProfit }: MarginIndicatorProps) {
       <div className="mt-3 text-center">
         <p className="text-xs text-text-secondary/50 uppercase tracking-wide">Net Profit</p>
         <p className={cn('text-lg font-bold tabular-nums', netProfit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400')}>
-          {formatCurrency(netProfit)}
+          {formatCurrency(netProfit, currency)}
         </p>
       </div>
     </div>

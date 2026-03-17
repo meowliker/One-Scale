@@ -150,7 +150,6 @@ function toMetaDatePreset(range?: DateRange): string {
   if (daySpan <= 7) return 'last_7d';
   if (daySpan <= 14) return 'last_14d';
   if (daySpan <= 30) return 'last_30d';
-  if (daySpan <= 90) return 'last_90d';
   return 'maximum';
 }
 

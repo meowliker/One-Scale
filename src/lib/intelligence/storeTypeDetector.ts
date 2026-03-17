@@ -1,4 +1,8 @@
 /**
+ * PRISM — Pattern Recognition & Intelligence for Store Metrics
+ * OneScale's behavioral intelligence and data infrastructure engine
+ */
+/**
  * Store Type Detector
  *
  * Detects store structure (single_product, funnel, general, subscription, mixed)
@@ -158,7 +162,7 @@ export async function detectStoreType(storeId: string): Promise<StoreTypeResult>
   let hasUpsellApp = false;
 
   for (const [pid, stats] of productStats) {
-    const revShare = totalRevenue > 0 ? (stats.revenue / totalRevenue) * 100 : 0;
+    const revShare = totalRevenue > 0 ? Math.min((stats.revenue / totalRevenue) * 100, 100) : 0;
     if (revShare > topProductRevenueShare) topProductRevenueShare = revShare;
 
     const alonePct = stats.orderCount > 0 ? (stats.aloneCount / stats.orderCount) * 100 : 0;
@@ -195,25 +199,63 @@ export async function detectStoreType(storeId: string): Promise<StoreTypeResult>
   const hasHighAlone = alonePcts.some(p => p > 50);
 
   // ── Classify store type ────────────────────────────────────
+  // Priority: subscription → single_product → funnel → mixed
+  // 'general' is LAST resort and never triggers markAllAsMain
+
+  // Count distinct product types for catalog detection
+  const distinctProductTypes = new Set<string>();
+  for (const [, stats] of productStats) {
+    if (stats.productType) distinctProductTypes.add(stats.productType.toLowerCase());
+  }
+
+  // Funnel signals: any product with very high or very low alone rate
+  const anyHighAlone = alonePcts.some(p => p >= 70);
+  const anyLowAlone = alonePcts.some(p => p <= 10);
+  const hasFunnelSignal = (hasLowAlone && hasHighAlone) || anyHighAlone || anyLowAlone;
 
   let storeType: StoreType;
   let confidence: number;
 
-  if (uniqueProductCount <= 3 || topProductRevenueShare > 85) {
-    storeType = 'single_product';
-    confidence = topProductRevenueShare > 85 ? 90 : 85;
-  } else if (hasSubscriptions) {
+  // 1. Subscription — any requires_selling_plan
+  if (hasSubscriptions) {
     storeType = 'subscription';
     confidence = 80;
-  } else if (hasLowAlone && hasHighAlone) {
+  }
+  // 2. Single product — ≤3 products AND one product dominates >85% revenue
+  //    Revenue share must be capped at 100 to avoid overflow from multi-order accumulation
+  else if (uniqueProductCount <= 3 && Math.min(topProductRevenueShare, 100) > 85) {
+    storeType = 'single_product';
+    confidence = 85;
+  }
+  // 3. Funnel — clear funnel signals (high + low alone rates)
+  else if (hasLowAlone && hasHighAlone) {
     storeType = 'funnel';
     confidence = 75;
-  } else if (avgAlonePct > 60) {
-    storeType = 'general';
+  }
+  // 4. Digital products with any funnel signal → funnel (never general)
+  else if (hasDigitalProducts && hasFunnelSignal) {
+    storeType = 'funnel';
     confidence = 70;
-  } else {
+  }
+  // 5. Digital products default to funnel — digital stores almost always have funnels
+  else if (hasDigitalProducts) {
+    storeType = 'funnel';
+    confidence = 60;
+  }
+  // 6. Any funnel signal at all → mixed (runs behavioral classifier)
+  else if (hasFunnelSignal) {
     storeType = 'mixed';
     confidence = 60;
+  }
+  // 7. True catalog — 50+ product types AND uniform alone rates
+  else if (distinctProductTypes.size >= 50 && !hasFunnelSignal) {
+    storeType = 'general';
+    confidence = 65;
+  }
+  // 8. Default — mixed (runs behavioral classifier, never markAllAsMain)
+  else {
+    storeType = 'mixed';
+    confidence = 55;
   }
 
   const signals = {

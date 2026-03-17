@@ -1,4 +1,8 @@
 /**
+ * PRISM — Pattern Recognition & Intelligence for Store Metrics
+ * OneScale's behavioral intelligence and data infrastructure engine
+ */
+/**
  * Signal Stack Classifier
  *
  * 8 weighted signals combined into a main/upsell score.
@@ -58,6 +62,7 @@ const UPSELL_TITLE_KEYWORDS = [
 export function computeSignals(
   pattern: ProductOrderPattern,
   medianPrice: number,
+  adSignals?: { has_own_campaigns: boolean; landing_page_rate: number; direct_spend_share: number },
 ): ClassificationSignals {
   // Signal 1: Order patterns (40 points max)
   let alone_pct_score = 0;
@@ -109,11 +114,24 @@ export function computeSignals(
   let subscription_score = 0;
   if (pattern.requires_selling_plan) subscription_score = 50;
 
+  // Signal 9: Ad campaign ownership (25 points — strongest signal)
+  let ad_campaign_score = 0;
+  if (adSignals?.has_own_campaigns) ad_campaign_score = 25;
+  else if (adSignals && !adSignals.has_own_campaigns && adSignals.direct_spend_share === 0) ad_campaign_score = -15;
+
+  // Signal 10: Ad landing page rate (20 points)
+  let ad_landing_score = 0;
+  if (adSignals) {
+    if (adSignals.landing_page_rate > 0.1) ad_landing_score = 20;
+    else if (adSignals.landing_page_rate === 0) ad_landing_score = -10;
+  }
+
   // ── Aggregate scores ──────────────────────────────────────
 
   const rawSum = alone_pct_score + position_score + revenue_score + tag_score +
     (type_score === -999 ? 0 : type_score) + // exclude gift card sentinel from aggregate
-    title_score + price_score + app_score + subscription_score;
+    title_score + price_score + app_score + subscription_score +
+    ad_campaign_score + ad_landing_score;
 
   const main_score = Math.max(0, rawSum);
   const upsell_score = Math.max(0, -rawSum);
@@ -129,6 +147,8 @@ export function computeSignals(
     price_score,
     app_score,
     subscription_score,
+    ad_campaign_score,
+    ad_landing_score,
     main_score,
     upsell_score,
     confidence,
@@ -166,8 +186,10 @@ export function classifyProduct(
     };
   }
 
-  // Free gift with purchase: alone_pct < 2% AND $0 price
-  if (pattern.alone_pct < 2 && pattern.price === 0) {
+  // Free product: could be funnel main ($0 lead magnet) or gift with purchase
+  // Only exclude if very low alone rate AND very few orders (true gifts)
+  // Funnel mains have many orders even at $0
+  if (pattern.alone_pct < 2 && pattern.price === 0 && pattern.total_orders < 20) {
     return {
       ...base,
       classification: 'excluded',
@@ -185,6 +207,30 @@ export function classifyProduct(
       classification: 'pending',
       confidence: 0,
       method: 'edge_case',
+      signals,
+      needs_review: false,
+    };
+  }
+
+  // ── AD-BASED CLASSIFICATION (highest confidence) ────────
+
+  if (signals.ad_campaign_score >= 25) {
+    return {
+      ...base,
+      classification: 'main',
+      confidence: 95,
+      method: 'ad_campaign_detected',
+      signals,
+      needs_review: false,
+    };
+  }
+
+  if (signals.ad_landing_score >= 20) {
+    return {
+      ...base,
+      classification: 'main',
+      confidence: 85,
+      method: 'ad_traffic_landing',
       signals,
       needs_review: false,
     };

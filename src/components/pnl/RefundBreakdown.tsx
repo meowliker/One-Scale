@@ -6,6 +6,7 @@ import { motion } from 'framer-motion';
 
 interface RefundBreakdownProps {
   entry: PnLEntry;
+  currency?: string;
 }
 
 const container = {
@@ -21,7 +22,7 @@ const item = {
   show: { opacity: 1, y: 0 },
 };
 
-export function RefundBreakdown({ entry }: RefundBreakdownProps) {
+export function RefundBreakdown({ entry, currency = 'USD' }: RefundBreakdownProps) {
   const fullCount = entry.fullRefundCount || 0;
   const partialCount = entry.partialRefundCount || 0;
   const totalCount = fullCount + partialCount;
@@ -71,7 +72,7 @@ export function RefundBreakdown({ entry }: RefundBreakdownProps) {
                 hasValue ? 'text-red-500 dark:text-red-400' : 'text-text-secondary/30'
               }`}
             >
-              {formatCurrency(card.amount)}
+              {formatCurrency(card.amount, currency)}
             </div>
             <div
               className={`text-xs mt-1.5 ${

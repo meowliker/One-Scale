@@ -74,8 +74,19 @@ export function ClassificationBadge({
   const config = BADGE_CONFIG[effectiveClassification] || BADGE_CONFIG.unknown;
 
   if (isPending) {
+    // Contextual tooltip explaining why this product is pending
+    const totalOrders = (signals as Record<string, number> | null)?.total_orders_analyzed ?? 0;
+    let pendingReason: string;
+    if (totalOrders < 5) {
+      pendingReason = 'Needs more orders — will classify automatically';
+    } else if (totalOrders >= 20) {
+      pendingReason = 'Mixed buying signals — recommend manual review';
+    } else {
+      pendingReason = 'Buying pattern unclear — set manually or wait for more orders';
+    }
+
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium text-zinc-400">
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium text-zinc-400 cursor-help" title={pendingReason}>
         <Loader2 className="h-3 w-3 animate-spin" />
         PENDING
       </span>
@@ -122,6 +133,7 @@ export function ClassificationBadge({
           <>
             <span className={cn('h-[6px] w-[6px] rounded-full flex-shrink-0', config.dotClass)} />
             {config.label}
+            {manualOverride && <span title="Manually set" className="text-[9px] opacity-60">✎</span>}
           </>
         )}
       </button>

@@ -6,6 +6,7 @@ import { motion } from 'framer-motion';
 
 interface AOVSummaryProps {
   products: ProductPnLData[];
+  currency?: string;
 }
 
 const container = {
@@ -21,7 +22,7 @@ const item = {
   show: { opacity: 1, y: 0 },
 };
 
-export function AOVSummary({ products }: AOVSummaryProps) {
+export function AOVSummary({ products, currency = 'USD' }: AOVSummaryProps) {
   const safeProducts = products ?? [];
 
   const mainProducts = safeProducts.filter((p) => p.category === 'main');
@@ -43,12 +44,12 @@ export function AOVSummary({ products }: AOVSummaryProps) {
   const cards = [
     {
       label: 'AOV (Main)',
-      value: formatCurrency(mainAOV),
+      value: formatCurrency(mainAOV, currency),
       color: 'text-text-primary',
     },
     {
       label: 'AOV (With Upsells)',
-      value: formatCurrency(allAOV),
+      value: formatCurrency(allAOV, currency),
       color: 'text-emerald-500 dark:text-emerald-400',
     },
     {

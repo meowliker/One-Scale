@@ -505,8 +505,7 @@ async function realGetProductPnLUncached(): Promise<ProductPnLData[]> {
 }
 
 async function realGetProductPnL(): Promise<ProductPnLData[]> {
-  const key = buildStoreScopedKey('product-pnl:data');
-  return memoizePromise(key, 30_000, realGetProductPnLUncached);
+  return realGetProductPnLUncached();
 }
 
 // ------ Export ------

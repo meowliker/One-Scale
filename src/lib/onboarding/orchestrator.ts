@@ -1,10 +1,17 @@
+/**
+ * PRISM — Pattern Recognition & Intelligence for Store Metrics
+ * OneScale's behavioral intelligence and data infrastructure engine
+ */
 import { rest } from '@/app/api/lib/supabase-persistence';
+import { PRISM } from '@/lib/prism';
 
 export type OnboardingStage =
   | 'store_metadata'
   | 'shopify_products'
+  | 'shopify_orders_recent'
   | 'shopify_orders'
   | 'shopify_transactions'
+  | 'balance_transactions'
   | 'shopify_chargebacks'
   | 'meta_ads'
   | 'fee_learning'
@@ -31,14 +38,18 @@ export interface OnboardingProgress {
 const DEFAULT_STAGES: Record<OnboardingStage, StageStatus> = {
   store_metadata: 'pending',
   shopify_products: 'pending',
+  shopify_orders_recent: 'pending',
   shopify_orders: 'pending',
   shopify_transactions: 'pending',
+  balance_transactions: 'pending',
   shopify_chargebacks: 'pending',
   meta_ads: 'pending',
   fee_learning: 'pending',
   classification: 'pending',
   pnl_snapshots: 'pending',
 };
+
+// ── Progress Helpers ─────────────────────────────────────────
 
 export async function getOnboardingProgress(storeId: string): Promise<OnboardingProgress | null> {
   const rows = await rest<OnboardingProgress[]>(
@@ -54,6 +65,7 @@ async function updateStageStatus(storeId: string, stage: OnboardingStage, status
   const stages = { ...progress.stages, [stage]: status };
   const stageErrors = { ...progress.stage_errors };
   if (error) stageErrors[stage] = error;
+  else delete stageErrors[stage];
 
   await rest(`/onboarding_progress?store_id=eq.${encodeURIComponent(storeId)}`, {
     method: 'PATCH',
@@ -91,142 +103,883 @@ export async function updateStageProgress(storeId: string, stage: string, fetche
   }).catch(() => null);
 }
 
+// ── Stage Runner (resumable) ─────────────────────────────────
+
 async function runStage(storeId: string, stage: OnboardingStage, fn: () => Promise<void>): Promise<void> {
   const progress = await getOnboardingProgress(storeId);
   if (progress?.stages[stage] === 'complete') {
-    console.log(`[Onboarding] Stage "${stage}" already complete — skipping`);
+    console.log(`[PRISM:Onboarding] Stage "${stage}" already complete — skipping`);
     return;
   }
 
+  // Re-run 'running' (interrupted) and 'failed' stages — cursor-based logic handles resumption
   await updateStageStatus(storeId, stage, 'running');
   try {
     await fn();
     await updateStageStatus(storeId, stage, 'complete');
-    console.log(`[Onboarding] Stage "${stage}" complete for ${storeId}`);
+    console.log(`[PRISM:Onboarding] Stage "${stage}" complete for ${storeId}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await updateStageStatus(storeId, stage, 'failed', msg);
-    throw err;
+    if (msg.startsWith('skip:')) {
+      await updateStageStatus(storeId, stage, 'skipped', msg.slice(5));
+      console.log(`[PRISM:Onboarding] Stage "${stage}" skipped: ${msg.slice(5)}`);
+    } else {
+      await updateStageStatus(storeId, stage, 'failed', msg);
+      throw err;
+    }
   }
 }
 
-// Discover store history — find first order and total count
-async function discoverStoreHistory(storeId: string): Promise<{ firstOrderDate: string; totalOrders: number }> {
-  const oldest = await rest<Array<{ created_at: string }>>(
-    `/shopify_orders_cache?store_id=eq.${encodeURIComponent(storeId)}&select=created_at&order=created_at.asc&limit=1`
-  ).catch(() => []);
+// ── Discover First Order Date (from Shopify API) ─────────────
 
-  const firstOrderDate = oldest[0]?.created_at?.split('T')[0] || new Date().toISOString().split('T')[0];
+async function discoverFirstOrderDate(
+  accessToken: string,
+  shopDomain: string,
+): Promise<{ firstOrderDate: string; totalOrders: number }> {
+  const { fetchFromShopify, fetchShopifyOrderCount } = await import('@/app/api/lib/shopify-client');
 
-  // Estimate total from what's in cache
-  const all = await rest<Array<{ shopify_order_id: string }>>(
-    `/shopify_orders_cache?store_id=eq.${encodeURIComponent(storeId)}&select=shopify_order_id`
-  ).catch(() => []);
+  const totalOrders = await fetchShopifyOrderCount(accessToken, shopDomain, { status: 'any' });
 
-  return { firstOrderDate, totalOrders: all.length };
+  // Get oldest order using since_id=1 (ascending by ID)
+  const oldestData = await fetchFromShopify<{ orders: Array<{ created_at: string }> }>(
+    accessToken, shopDomain, '/orders.json',
+    { limit: '1', status: 'any', since_id: '1' },
+  );
+
+  const firstOrderDate = oldestData.orders?.[0]?.created_at?.split('T')[0]
+    || new Date().toISOString().split('T')[0];
+
+  return { firstOrderDate, totalOrders };
 }
 
-// Main entry point — called when OAuth completes
-export async function onStoreConnected(storeId: string): Promise<void> {
-  // Initialize progress record
-  await rest('/onboarding_progress?on_conflict=store_id', {
-    method: 'POST',
-    headers: { 'Prefer': 'resolution=merge-duplicates' },
-    body: JSON.stringify({
-      store_id: storeId,
-      stages: DEFAULT_STAGES,
-      stage_progress: {},
-      cursors: {},
-      stage_errors: {},
-      overall_status: 'in_progress',
-      started_at: new Date().toISOString(),
-      last_activity_at: new Date().toISOString(),
-    }),
-  }).catch(() => null);
+// ── Stage: Backfill RECENT Orders (last 30 days) ──────────────
+// Track 1: Fetches newest orders first using created_at_min.
+// Completes in seconds — unblocks classification immediately.
 
+async function backfillRecentOrders(
+  storeId: string,
+  accessToken: string,
+  shopDomain: string,
+): Promise<void> {
+  const { fetchFromShopify } = await import('@/app/api/lib/shopify-client');
+
+  const ninetyDaysAgo = new Date(Date.now() - PRISM.dataWindows.recentOrdersDays * 86400000).toISOString();
+  let totalFetched = 0;
+  let hasMore = true;
+  let sinceId = '0';
+
+  while (hasMore) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = await fetchFromShopify<{ orders: any[] }>(
+      accessToken, shopDomain, '/orders.json', {
+        limit: '250',
+        status: 'any',
+        created_at_min: ninetyDaysAgo,
+        since_id: sinceId,
+      },
+    );
+
+    const orders = data.orders || [];
+    if (orders.length === 0) break;
+
+    for (const order of orders) {
+      let refundTotal = 0;
+      if (order.refunds?.length > 0) {
+        for (const refund of order.refunds) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          for (const transaction of refund.transactions || []) {
+            refundTotal += parseFloat(transaction.amount || '0');
+          }
+        }
+      }
+
+      let orderStatus = 'open';
+      if (order.cancelled_at) orderStatus = 'cancelled';
+      else if (order.financial_status === 'refunded') orderStatus = 'refunded';
+      else if (order.financial_status === 'partially_refunded') orderStatus = 'partially_refunded';
+      else if (order.closed_at) orderStatus = 'closed';
+
+      const totalShipping = (order.shipping_lines || []).reduce(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (sum: number, line: any) => sum + parseFloat(line.price || '0'), 0,
+      );
+
+      await rest('/shopify_orders_cache', {
+        method: 'POST',
+        headers: { Prefer: 'resolution=merge-duplicates' },
+        body: JSON.stringify({
+          store_id: storeId,
+          shopify_order_id: String(order.id),
+          order_name: order.name,
+          email: order.email,
+          created_at: order.created_at,
+          updated_at: order.updated_at,
+          cancelled_at: order.cancelled_at,
+          financial_status: order.financial_status,
+          fulfillment_status: order.fulfillment_status,
+          total_price: parseFloat(order.total_price) || 0,
+          subtotal_price: parseFloat(order.subtotal_price) || 0,
+          total_tax: parseFloat(order.total_tax) || 0,
+          total_discounts: parseFloat(order.total_discounts) || 0,
+          refund_total: refundTotal,
+          currency: order.currency,
+          line_items: JSON.stringify(order.line_items),
+          customer_id: order.customer?.id ? String(order.customer.id) : null,
+          customer_email: order.customer?.email || order.email,
+          order_status: orderStatus,
+          tags: order.tags || '',
+          landing_site: order.landing_site,
+          referring_site: order.referring_site,
+          discount_codes: JSON.stringify(order.discount_codes || []),
+          total_shipping_price: totalShipping,
+          synced_at: new Date().toISOString(),
+        }),
+      }).catch(() => null);
+    }
+
+    totalFetched += orders.length;
+    sinceId = String(orders[orders.length - 1].id);
+    hasMore = orders.length === 250;
+  }
+
+  console.log(`[PRISM:Onboarding] Recent orders (90d): ${totalFetched} fetched for ${storeId}`);
+}
+
+// ── Stage: Backfill ALL Historical Orders ────────────────────
+// Track 2: Continues the existing since_id cursor-based full history.
+
+async function backfillOrders(
+  storeId: string,
+  accessToken: string,
+  shopDomain: string,
+): Promise<void> {
+  const { fetchFromShopify } = await import('@/app/api/lib/shopify-client');
+
+  const progress = await getOnboardingProgress(storeId);
+  let sinceId = progress?.cursors?.['orders_since_id'] || '0';
+  let totalFetched = progress?.stage_progress?.shopify_orders?.fetched || 0;
+  const estimatedTotal = progress?.total_orders || 0;
+
+  let hasMore = true;
+
+  while (hasMore) {
+    const params: Record<string, string> = {
+      limit: '250',
+      status: 'any',
+      since_id: sinceId,
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = await fetchFromShopify<{ orders: any[] }>(
+      accessToken, shopDomain, '/orders.json', params,
+    );
+
+    const orders = data.orders || [];
+    if (orders.length === 0) break;
+
+    for (const order of orders) {
+      let refundTotal = 0;
+      if (order.refunds?.length > 0) {
+        for (const refund of order.refunds) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          for (const transaction of refund.transactions || []) {
+            refundTotal += parseFloat(transaction.amount || '0');
+          }
+        }
+      }
+
+      let orderStatus = 'open';
+      if (order.cancelled_at) orderStatus = 'cancelled';
+      else if (order.financial_status === 'refunded') orderStatus = 'refunded';
+      else if (order.financial_status === 'partially_refunded') orderStatus = 'partially_refunded';
+      else if (order.closed_at) orderStatus = 'closed';
+
+      const totalShipping = (order.shipping_lines || []).reduce(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (sum: number, line: any) => sum + parseFloat(line.price || '0'), 0,
+      );
+
+      await rest('/shopify_orders_cache', {
+        method: 'POST',
+        headers: { Prefer: 'resolution=merge-duplicates' },
+        body: JSON.stringify({
+          store_id: storeId,
+          shopify_order_id: String(order.id),
+          order_name: order.name,
+          email: order.email,
+          created_at: order.created_at,
+          updated_at: order.updated_at,
+          cancelled_at: order.cancelled_at,
+          financial_status: order.financial_status,
+          fulfillment_status: order.fulfillment_status,
+          total_price: parseFloat(order.total_price) || 0,
+          subtotal_price: parseFloat(order.subtotal_price) || 0,
+          total_tax: parseFloat(order.total_tax) || 0,
+          total_discounts: parseFloat(order.total_discounts) || 0,
+          refund_total: refundTotal,
+          currency: order.currency,
+          line_items: JSON.stringify(order.line_items),
+          customer_id: order.customer?.id ? String(order.customer.id) : null,
+          customer_email: order.customer?.email || order.email,
+          order_status: orderStatus,
+          tags: order.tags || '',
+          landing_site: order.landing_site,
+          referring_site: order.referring_site,
+          discount_codes: JSON.stringify(order.discount_codes || []),
+          total_shipping_price: totalShipping,
+          synced_at: new Date().toISOString(),
+        }),
+      }).catch(() => null);
+    }
+
+    totalFetched += orders.length;
+    sinceId = String(orders[orders.length - 1].id);
+
+    // Save cursor after each batch for resumability
+    await updateCursor(storeId, 'orders_since_id', sinceId);
+    await updateStageProgress(storeId, 'shopify_orders', totalFetched, estimatedTotal || totalFetched);
+
+    hasMore = orders.length === 250;
+  }
+
+  console.log(`[PRISM:Onboarding] Backfilled ${totalFetched} orders for ${storeId}`);
+}
+
+// ── Stage: Backfill ALL Balance Transactions ─────────────────
+
+async function backfillBalanceTransactions(
+  storeId: string,
+  accessToken: string,
+  shopDomain: string,
+  firstOrderDate: string,
+): Promise<void> {
+  const { fetchFromShopify } = await import('@/app/api/lib/shopify-client');
+
+  const progress = await getOnboardingProgress(storeId);
+  let sinceId = progress?.cursors?.['balance_txn_since_id'] || undefined;
+  let totalFetched = progress?.stage_progress?.balance_transactions?.fetched || 0;
+
+  let hasMore = true;
+
+  while (hasMore) {
+    const params: Record<string, string> = {
+      limit: '250',
+      processed_at_min: `${firstOrderDate}T00:00:00Z`,
+    };
+    if (sinceId) params.since_id = sinceId;
+
+    let data: { transactions?: Array<{
+      id: number | string; type: string; amount: string; fee: string;
+      net: string; currency: string; source_order_id?: number | string;
+      source_type?: string; processed_at: string; payout_id?: number | string;
+    }> };
+
+    try {
+      data = await fetchFromShopify(
+        accessToken, shopDomain,
+        '/shopify_payments/balance/transactions.json', params,
+      );
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('404')) {
+        throw new Error('skip:Store does not use Shopify Payments');
+      }
+      throw err;
+    }
+
+    const txns = data.transactions ?? [];
+    if (txns.length === 0) break;
+
+    for (const txn of txns) {
+      const txnType = (txn.type || '').toLowerCase();
+
+      await rest('/shopify_balance_transactions?on_conflict=store_id,transaction_id', {
+        method: 'POST', headers: { Prefer: 'resolution=merge-duplicates' },
+        body: JSON.stringify({
+          store_id: storeId, transaction_id: String(txn.id), type: txnType,
+          amount: parseFloat(txn.amount || '0'), fee: Math.abs(parseFloat(txn.fee || '0')),
+          net: parseFloat(txn.net || '0'), currency: txn.currency || 'USD',
+          source_order_id: txn.source_order_id ? String(txn.source_order_id) : null,
+          source_type: txn.source_type || null, processed_at: txn.processed_at,
+          payout_id: txn.payout_id ? String(txn.payout_id) : null,
+        }),
+      }).catch(() => null);
+
+      if (txnType === 'refund') {
+        await rest('/shopify_refunds?on_conflict=store_id,transaction_id', {
+          method: 'POST', headers: { Prefer: 'resolution=merge-duplicates' },
+          body: JSON.stringify({
+            store_id: storeId, transaction_id: String(txn.id),
+            order_id: txn.source_order_id ? String(txn.source_order_id) : null,
+            amount: Math.abs(parseFloat(txn.amount || '0')),
+            fee: Math.abs(parseFloat(txn.fee || '0')),
+            currency: txn.currency || 'USD', processed_at: txn.processed_at,
+          }),
+        }).catch(() => null);
+      }
+
+      if (txnType === 'dispute') {
+        const net = parseFloat(txn.net || '0');
+        await rest('/shopify_chargebacks?on_conflict=store_id,order_id', {
+          method: 'POST', headers: { Prefer: 'resolution=merge-duplicates' },
+          body: JSON.stringify({
+            store_id: storeId,
+            order_id: txn.source_order_id ? String(txn.source_order_id) : null,
+            status: net < 0 ? 'lost' : 'won', amount: Math.abs(net), net_amount: net,
+            currency: txn.currency || 'USD', finalized_at: txn.processed_at,
+            last_synced_at: new Date().toISOString(),
+          }),
+        }).catch(() => null);
+      }
+    }
+
+    totalFetched += txns.length;
+    sinceId = String(txns[txns.length - 1].id);
+
+    await updateCursor(storeId, 'balance_txn_since_id', sinceId);
+    await updateStageProgress(storeId, 'balance_transactions', totalFetched, totalFetched);
+
+    hasMore = txns.length === 250;
+  }
+
+  console.log(`[PRISM:Onboarding] Backfilled ${totalFetched} balance transactions for ${storeId}`);
+}
+
+// ── Stage: Backfill Meta Ads (37 months) ─────────────────────
+
+async function backfillMetaAds(storeId: string): Promise<void> {
+  const { getPersistentConnection, listPersistentStoreAdAccounts } = await import('@/app/api/lib/supabase-persistence');
+  const { fetchFromMeta } = await import('@/app/api/lib/meta-client');
+
+  const metaConn = await getPersistentConnection(storeId, 'meta');
+  if (!metaConn?.access_token) {
+    throw new Error('skip:No Meta ad account connected');
+  }
+
+  const adAccounts = await listPersistentStoreAdAccounts(storeId);
+  const activeAccounts = adAccounts.filter(a => a.is_active);
+  if (activeAccounts.length === 0) {
+    throw new Error('skip:No active Meta ad accounts');
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const extractPurchases = (arr: any[] | undefined): number => {
+    if (!arr) return 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const entry = arr.find((a: any) =>
+      a.action_type === 'purchase' || a.action_type === 'offsite_conversion.fb_pixel_purchase',
+    );
+    return entry ? parseFloat(entry.value) || 0 : 0;
+  };
+
+  const progress = await getOnboardingProgress(storeId);
+
+  for (const account of activeAccounts) {
+    const adAccountId = account.ad_account_id.startsWith('act_')
+      ? account.ad_account_id
+      : `act_${account.ad_account_id}`;
+
+    const cursorKey = `meta_ads_${adAccountId}_month`;
+    const startMonth = progress?.cursors?.[cursorKey] ? parseInt(progress.cursors[cursorKey]!) : 0;
+
+    for (let monthsAgo = startMonth; monthsAgo < 37; monthsAgo++) {
+      const monthStart = new Date();
+      monthStart.setMonth(monthStart.getMonth() - monthsAgo);
+      monthStart.setDate(1);
+      const since = monthStart.toISOString().split('T')[0];
+
+      const monthEnd = new Date(monthStart);
+      monthEnd.setMonth(monthEnd.getMonth() + 1);
+      monthEnd.setDate(0);
+      const until = monthEnd.toISOString().split('T')[0];
+
+      try {
+        const insightsData = await fetchFromMeta<{
+          data: Array<{
+            campaign_id: string; campaign_name: string;
+            adset_id: string; adset_name: string;
+            ad_id: string; ad_name: string;
+            spend: string; impressions: string; clicks: string;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            actions: any[]; action_values: any[];
+            date_start: string;
+          }>;
+        }>(metaConn.access_token, `/${adAccountId}/insights`, {
+          time_range: JSON.stringify({ since, until }),
+          time_increment: '1',
+          fields: 'campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,actions,action_values',
+          level: 'ad',
+          limit: '500',
+          action_attribution_windows: '7d_click,1d_view',
+        });
+
+        for (const row of insightsData?.data || []) {
+          const purchases = extractPurchases(row.actions);
+          const purchaseValue = extractPurchases(row.action_values);
+
+          await rest('/meta_spend_cache', {
+            method: 'POST',
+            headers: { Prefer: 'resolution=merge-duplicates' },
+            body: JSON.stringify({
+              store_id: storeId,
+              ad_account_id: adAccountId,
+              campaign_id: row.campaign_id,
+              campaign_name: row.campaign_name,
+              adset_id: row.adset_id,
+              adset_name: row.adset_name,
+              ad_id: row.ad_id,
+              ad_name: row.ad_name,
+              date: row.date_start,
+              spend: parseFloat(row.spend) || 0,
+              impressions: parseInt(row.impressions) || 0,
+              clicks: parseInt(row.clicks) || 0,
+              purchases: parseInt(String(purchases)) || 0,
+              purchase_value: parseFloat(String(purchaseValue)) || 0,
+              updated_at: new Date().toISOString(),
+            }),
+          }).catch(() => null);
+        }
+      } catch (err) {
+        console.warn(`[PRISM:Onboarding] Meta ads month ${since} failed:`, err instanceof Error ? err.message : err);
+      }
+
+      await updateCursor(storeId, cursorKey, String(monthsAgo + 1));
+      await updateStageProgress(storeId, 'meta_ads', monthsAgo + 1, 37);
+    }
+  }
+}
+
+// ── Stage: Backfill P&L Snapshots ────────────────────────────
+
+async function backfillPnlSnapshots(storeId: string, firstOrderDate: string): Promise<void> {
+  const { calculatePnL } = await import('@/lib/pnl/universalCalculator');
+
+  const progress = await getOnboardingProgress(storeId);
+  let currentDate = progress?.cursors?.['pnl_snapshot_date'] || firstOrderDate;
+  let daysProcessed = progress?.stage_progress?.pnl_snapshots?.fetched || 0;
+
+  const today = new Date().toISOString().split('T')[0];
+  const totalDays = Math.max(1, Math.ceil(
+    (new Date(today).getTime() - new Date(firstOrderDate).getTime()) / (1000 * 60 * 60 * 24),
+  ));
+
+  while (currentDate < today) {
+    try {
+      const pnl = await calculatePnL(storeId, currentDate, currentDate, {
+        includeProductBreakdown: true,
+      });
+
+      if (pnl.orderCount > 0 || pnl.totalAdSpend > 0) {
+        const productBreakdown: Record<string, { revenue: number; quantity: number; cogs: number }> = {};
+        for (const p of pnl.products) {
+          productBreakdown[p.productId] = {
+            revenue: p.revenue, quantity: p.unitsSold, cogs: p.cogs,
+          };
+        }
+
+        await rest('/pnl_snapshots', {
+          method: 'POST',
+          headers: { Prefer: 'resolution=merge-duplicates' },
+          body: JSON.stringify({
+            store_id: storeId,
+            date: currentDate,
+            revenue: pnl.totalRevenue,
+            net_revenue: pnl.totalRevenue - pnl.totalRefunds,
+            ad_spend: pnl.totalAdSpend,
+            cogs: pnl.totalCogs,
+            payment_fees: pnl.totalFees,
+            handling_fees: 0,
+            chargebacks: pnl.totalChargebackLoss,
+            refunds: pnl.totalRefunds,
+            net_profit: pnl.totalNetProfit,
+            margin: Math.round(pnl.totalMargin * 100) / 100,
+            order_count: pnl.orderCount,
+            cancelled_count: 0,
+            currency: 'USD',
+            product_breakdown: JSON.stringify(productBreakdown),
+            campaign_breakdown: '{}',
+            computed_at: new Date().toISOString(),
+          }),
+        }).catch(() => null);
+
+        await rest('/daily_pnl_snapshots?on_conflict=store_id,date', {
+          method: 'POST',
+          headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+          body: JSON.stringify([{
+            store_id: storeId,
+            date: currentDate,
+            revenue: pnl.totalRevenue,
+            order_count: pnl.orderCount,
+            cogs: pnl.totalCogs,
+            ad_spend: pnl.totalAdSpend,
+            shipping_cost: pnl.totalShipping,
+            transaction_fees: pnl.totalFees,
+            refunds: pnl.totalRefunds,
+            full_refund_count: 0,
+            partial_refund_count: 0,
+            full_refund_amount: 0,
+            partial_refund_amount: 0,
+            chargeback_loss: pnl.totalChargebackLoss,
+            chargeback_won: pnl.totalChargebackWon,
+            net_profit: pnl.totalNetProfit,
+            margin: pnl.totalMargin,
+            attribution_rate: 0,
+            warnings: JSON.stringify(pnl.warnings),
+            product_breakdown: JSON.stringify(pnl.products),
+            fee_method: pnl.feeMethod,
+            synced_at: new Date().toISOString(),
+            shopify_synced: pnl.orderCount > 0,
+            meta_synced: pnl.totalAdSpend > 0,
+          }]),
+        }).catch(() => null);
+      }
+    } catch (err) {
+      console.warn(`[PRISM:Onboarding] P&L snapshot ${currentDate} failed:`, err instanceof Error ? err.message : err);
+    }
+
+    daysProcessed++;
+    const nextDate = new Date(currentDate);
+    nextDate.setDate(nextDate.getDate() + 1);
+    currentDate = nextDate.toISOString().split('T')[0];
+
+    // Save cursor every 5 days for efficiency
+    if (daysProcessed % 5 === 0) {
+      await updateCursor(storeId, 'pnl_snapshot_date', currentDate);
+      await updateStageProgress(storeId, 'pnl_snapshots', daysProcessed, totalDays);
+    }
+  }
+
+  await updateCursor(storeId, 'pnl_snapshot_date', currentDate);
+  await updateStageProgress(storeId, 'pnl_snapshots', daysProcessed, totalDays);
+  console.log(`[PRISM:Onboarding] Backfilled ${daysProcessed} P&L snapshots for ${storeId}`);
+}
+
+// ── Fast-Track: synchronous pre-fetch for instant dashboard ──
+// Runs BEFORE the merchant sees the dashboard.
+// Fetches last 30 days of orders + balance txns, classifies, builds P&L.
+// Total: 5-8 seconds. Dashboard shows data immediately after.
+
+export async function fastTrackOnboarding(
+  storeId: string,
+  accessToken: string,
+  shopDomain: string,
+): Promise<{ orders: number; classified: number; pnlDays: number }> {
+  const start = Date.now();
+
+  // 1. Store metadata (currency, timezone) — ~1s
   try {
-    // Step 1: Mark store metadata complete (already saved during OAuth)
-    await updateStageStatus(storeId, 'store_metadata', 'complete');
+    const { detectAndSaveStoreConfig } = await import('@/lib/onboarding/stages/detectStoreConfig');
+    await detectAndSaveStoreConfig(storeId, accessToken, shopDomain);
+  } catch (e) {
+    console.warn('[PRISM:FastTrack] Config detection failed (non-critical):', e instanceof Error ? e.message : e);
+  }
 
-    // Step 2: Discover history
-    const history = await discoverStoreHistory(storeId);
+  // 2. Recent orders — last 30 days, 1 page (250 orders) — ~5s
+  // Single page keeps us well under Vercel's 60s timeout.
+  // More orders are fetched by the background onboarding pipeline.
+  const { fetchFromShopify } = await import('@/app/api/lib/shopify-client');
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString();
+  let totalOrders = 0;
+  let sinceId = '0';
+  const maxPages = 1;
+
+  for (let page = 0; page < maxPages; page++) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = await fetchFromShopify<{ orders: any[] }>(
+      accessToken, shopDomain, '/orders.json', {
+        limit: '250', status: 'any', created_at_min: thirtyDaysAgo, since_id: sinceId,
+      },
+    );
+    const orders = data.orders || [];
+    if (orders.length === 0) break;
+
+    for (const order of orders) {
+      let refundTotal = 0;
+      if (order.refunds?.length > 0) {
+        for (const refund of order.refunds) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          for (const txn of refund.transactions || []) {
+            refundTotal += parseFloat(txn.amount || '0');
+          }
+        }
+      }
+      let orderStatus = 'open';
+      if (order.cancelled_at) orderStatus = 'cancelled';
+      else if (order.financial_status === 'refunded') orderStatus = 'refunded';
+      else if (order.financial_status === 'partially_refunded') orderStatus = 'partially_refunded';
+      else if (order.closed_at) orderStatus = 'closed';
+      const totalShipping = (order.shipping_lines || []).reduce(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (sum: number, line: any) => sum + parseFloat(line.price || '0'), 0,
+      );
+      await rest('/shopify_orders_cache', {
+        method: 'POST',
+        headers: { Prefer: 'resolution=merge-duplicates' },
+        body: JSON.stringify({
+          store_id: storeId, shopify_order_id: String(order.id), order_name: order.name,
+          email: order.email, created_at: order.created_at, updated_at: order.updated_at,
+          cancelled_at: order.cancelled_at, financial_status: order.financial_status,
+          fulfillment_status: order.fulfillment_status,
+          total_price: parseFloat(order.total_price) || 0, subtotal_price: parseFloat(order.subtotal_price) || 0,
+          total_tax: parseFloat(order.total_tax) || 0, total_discounts: parseFloat(order.total_discounts) || 0,
+          refund_total: refundTotal, currency: order.currency, line_items: JSON.stringify(order.line_items),
+          customer_id: order.customer?.id ? String(order.customer.id) : null,
+          customer_email: order.customer?.email || order.email,
+          order_status: orderStatus, tags: order.tags || '', landing_site: order.landing_site,
+          referring_site: order.referring_site, discount_codes: JSON.stringify(order.discount_codes || []),
+          total_shipping_price: totalShipping, synced_at: new Date().toISOString(),
+        }),
+      }).catch(() => null);
+    }
+
+    totalOrders += orders.length;
+    sinceId = String(orders[orders.length - 1].id);
+    if (orders.length < 250) break;
+  }
+  console.log(`[PRISM:FastTrack] ${totalOrders} orders fetched in ${Date.now() - start}ms`);
+
+  // 3. Balance transactions skipped during fast-track — too slow.
+  // The background onboarding pipeline handles this.
+  // Dashboard P&L routes use order data + fee estimation when balance txns are missing.
+
+  // 4. Classify products — pure in-memory from cached orders — ~1s
+  let classified = 0;
+  try {
+    const { classifyAllProducts } = await import('@/lib/intelligence/classificationRouter');
+    const result = await classifyAllProducts(storeId);
+    classified = result.classified;
+    console.log(`[PRISM:FastTrack] Classified ${classified} products in ${Date.now() - start}ms`);
+  } catch (e) {
+    console.warn('[PRISM:FastTrack] Classification failed:', e instanceof Error ? e.message : e);
+  }
+
+  // P&L snapshots are NOT built during fast-track — too slow for synchronous flow.
+  // The full onboarding pipeline (fire-and-forget) builds them in background.
+  // Dashboard P&L routes already compute from raw data when snapshots are missing.
+
+  console.log(`[PRISM:FastTrack] Complete in ${Date.now() - start}ms — ${totalOrders} orders, ${classified} classified`);
+  return { orders: totalOrders, classified, pnlDays: 0 };
+}
+
+// ── Main Entry Point ─────────────────────────────────────────
+
+export async function onStoreConnected(storeId: string): Promise<void> {
+  // Create or update progress record — preserve already-complete stages
+  const existing = await getOnboardingProgress(storeId);
+  if (existing) {
+    // Preserve completed/skipped stages, only reset pending/failed/running ones
+    const mergedStages = { ...DEFAULT_STAGES };
+    for (const [key, status] of Object.entries(existing.stages)) {
+      if (status === 'complete' || status === 'skipped') {
+        mergedStages[key as OnboardingStage] = status;
+      }
+    }
     await rest(`/onboarding_progress?store_id=eq.${encodeURIComponent(storeId)}`, {
       method: 'PATCH',
       body: JSON.stringify({
-        first_order_date: history.firstOrderDate,
-        total_orders: history.totalOrders,
-        estimated_minutes: Math.max(1, Math.round(history.totalOrders / 500)),
+        stages: mergedStages,
+        overall_status: 'in_progress',
+        last_activity_at: new Date().toISOString(),
       }),
     }).catch(() => null);
+  } else {
+    await rest('/onboarding_progress?on_conflict=store_id', {
+      method: 'POST',
+      headers: { 'Prefer': 'resolution=merge-duplicates' },
+      body: JSON.stringify({
+        store_id: storeId,
+        stages: DEFAULT_STAGES,
+        stage_progress: {},
+        cursors: {},
+        stage_errors: {},
+        overall_status: 'in_progress',
+        started_at: new Date().toISOString(),
+        last_activity_at: new Date().toISOString(),
+      }),
+    }).catch(() => null);
+  }
 
-    // Step 3: Run stages in dependency order
-    // Products and orders should already be in cache from sync crons
-    // Mark them complete if data exists
-    const hasProducts = await rest<Array<{ product_id: string }>>(
-      `/product_behaviors?store_id=eq.${encodeURIComponent(storeId)}&select=product_id&limit=1`
+  try {
+    // Get Shopify credentials
+    const { getShopifyToken } = await import('@/app/api/lib/tokens');
+    const token = await getShopifyToken(storeId);
+    if (!token?.accessToken || !token?.shopDomain) {
+      throw new Error('No Shopify connection — cannot run onboarding');
+    }
+    const { accessToken, shopDomain } = token;
+
+    // Stage 1: Detect and save full store config (currency, timezone, tax, etc.)
+    await runStage(storeId, 'store_metadata', async () => {
+      const { detectAndSaveStoreConfig } = await import('@/lib/onboarding/stages/detectStoreConfig');
+      await detectAndSaveStoreConfig(storeId, accessToken, shopDomain);
+    });
+
+    // Discover first order date from Shopify API (not cache)
+    const progress = await getOnboardingProgress(storeId);
+    let firstOrderDate = progress?.first_order_date;
+
+    if (!firstOrderDate) {
+      const history = await discoverFirstOrderDate(accessToken, shopDomain);
+      firstOrderDate = history.firstOrderDate;
+      await rest(`/onboarding_progress?store_id=eq.${encodeURIComponent(storeId)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          first_order_date: history.firstOrderDate,
+          total_orders: history.totalOrders,
+          estimated_minutes: Math.max(1, Math.round(history.totalOrders / 500)),
+        }),
+      }).catch(() => null);
+    }
+
+    // Stage 2: TRACK 1 — Recent orders only (last 30 days, fast)
+    // Unblocks classification immediately without waiting for full history
+    await runStage(storeId, 'shopify_orders_recent', () =>
+      backfillRecentOrders(storeId, accessToken, shopDomain),
+    );
+
+    // Stage 3: Classification — runs on recent orders (does NOT wait for full history)
+    // Bootstrap classifier handles <30 orders; full signal stack for 30+
+    await runStage(storeId, 'classification', async () => {
+      // 1. Run the real classifier (detects store type → signal stack → persists to product_classifications)
+      const { classifyAllProducts } = await import('@/lib/intelligence/classificationRouter');
+      const result = await classifyAllProducts(storeId);
+      console.log(`[PRISM:Onboarding] Signal-stack: ${result.classified} classified, ${result.needsReview} need review`);
+
+      // 2. Run behavioral analysis on top (same pattern as cron/classify-products)
+      try {
+        const { extractAllProductBehaviors } = await import('@/lib/intelligence/behaviorExtractor');
+        const { buildStoreProfile } = await import('@/lib/intelligence/storeProfiler');
+        const { classifyAllProducts: behavioralClassify } = await import('@/lib/intelligence/relativeClassifier');
+
+        const behaviors = await extractAllProductBehaviors(storeId);
+        if (behaviors.length > 0) {
+          const profile = await buildStoreProfile(storeId, behaviors);
+
+          // Load manual overrides — never overwrite these
+          const stored = await rest<Array<{ product_id: string; classification: string; manual_override: boolean }>>(
+            `/product_classifications?store_id=eq.${encodeURIComponent(storeId)}&select=product_id,classification,manual_override`
+          ).catch(() => [] as Array<{ product_id: string; classification: string; manual_override: boolean }>);
+          const manualOverrides = new Map<string, string>();
+          for (const sc of stored) {
+            if (sc.manual_override) manualOverrides.set(sc.product_id, sc.classification);
+          }
+
+          const behavioralResults = behavioralClassify(behaviors, profile, manualOverrides, new Map());
+
+          // Persist store profile
+          await rest('/store_behavior_profiles?on_conflict=store_id', {
+            method: 'POST',
+            headers: { Prefer: 'resolution=merge-duplicates' },
+            body: JSON.stringify({ ...profile }),
+          }).catch(() => null);
+
+          // Persist product behaviors
+          for (const b of behaviors) {
+            await rest('/product_behaviors?on_conflict=store_id,product_id', {
+              method: 'POST',
+              headers: { Prefer: 'resolution=merge-duplicates' },
+              body: JSON.stringify({
+                store_id: b.store_id, product_id: b.product_id, product_title: b.product_title,
+                total_orders: b.total_orders, alone_orders: b.alone_orders, alone_rate: b.alone_rate,
+                first_position_orders: b.first_position_orders, first_rate: b.first_rate,
+                avg_position: b.avg_position, total_revenue: b.total_revenue,
+                revenue_share: b.revenue_share, avg_order_value_with: b.avg_order_value_with,
+                avg_order_value_without: b.avg_order_value_without, co_occurrence_rate: b.co_occurrence_rate,
+                value_lift: b.value_lift, top_companions: b.top_companions,
+                mutual_exclusions: b.mutual_exclusions,
+                first_seen: b.first_seen, last_seen: b.last_seen, active_days: b.active_days,
+                computed_at: new Date().toISOString(),
+              }),
+            }).catch(() => null);
+          }
+
+          // Persist behavioral classifications (skip manual overrides, remap unknown → pending)
+          const VALID_CLS = new Set(['main', 'upsell', 'downsell', 'bundle', 'pending', 'excluded']);
+          for (const r of behavioralResults) {
+            if (r.method === 'manual_override') continue;
+            const cls = VALID_CLS.has(r.classification) ? r.classification : 'pending';
+            await rest('/product_classifications?on_conflict=store_id,product_id', {
+              method: 'POST',
+              headers: { Prefer: 'resolution=merge-duplicates' },
+              body: JSON.stringify({
+                store_id: storeId, product_id: r.product_id, product_title: r.product_title,
+                classification: cls, confidence: r.confidence,
+                classification_method: r.method, behavioral_signals: r.signals,
+                parent_product: r.parent_product, downsell_of: r.downsell_of,
+                needs_review: cls === 'pending' ? true : r.needs_review,
+                manual_override: false, last_analyzed: new Date().toISOString(),
+              }),
+            }).catch(() => null);
+          }
+
+          console.log(`[PRISM:Onboarding] Behavioral: ${behavioralResults.length} products enriched`);
+        }
+      } catch (e) {
+        console.warn('[PRISM:Onboarding] Behavioral analysis failed (non-critical):', e instanceof Error ? e.message : e);
+      }
+
+      if (result.classified === 0) {
+        throw new Error('skip:No products with enough order data to classify');
+      }
+    });
+
+    // Auto-seed product_config for product performance (after classification)
+    try {
+      // Auto-seed via API call (can't import route handler functions directly)
+      const seedRes = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/intelligence/seed-products`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storeId }),
+      });
+      const seedResult = seedRes.ok ? await seedRes.json() : { seeded: 0 };
+      if (seedResult.seeded > 0) {
+        console.log(`[PRISM:Onboarding] Auto-seeded ${seedResult.seeded} products into product_config`);
+      }
+    } catch (err) {
+      console.warn('[PRISM:Onboarding] Auto-seed product_config failed (non-fatal):', err instanceof Error ? err.message : err);
+    }
+
+    // Stage 4: Products — populated by classification above
+    const productCheck = await rest<Array<{ product_id: string }>>(
+      `/product_behaviors?store_id=eq.${encodeURIComponent(storeId)}&select=product_id&limit=1`,
     ).catch(() => []);
+    await updateStageStatus(storeId, 'shopify_products', productCheck.length > 0 ? 'complete' : 'skipped');
 
-    if (hasProducts.length > 0) {
-      await updateStageStatus(storeId, 'shopify_products', 'complete');
-    } else {
-      await updateStageStatus(storeId, 'shopify_products', 'skipped', 'No product data yet — will populate on next sync');
-    }
+    // Stage 5: TRACK 2 — Full historical orders (slow, cursor-based)
+    // Classification already ran on recent data — this fills the rest
+    await runStage(storeId, 'shopify_orders', () =>
+      backfillOrders(storeId, accessToken, shopDomain),
+    );
 
-    if (history.totalOrders > 0) {
-      await updateStageStatus(storeId, 'shopify_orders', 'complete');
-    } else {
-      await updateStageStatus(storeId, 'shopify_orders', 'skipped', 'No orders yet — will populate on next sync');
-    }
+    // Stage 6: Backfill ALL balance transactions (fees + refunds + chargebacks)
+    await runStage(storeId, 'balance_transactions', () =>
+      backfillBalanceTransactions(storeId, accessToken, shopDomain, firstOrderDate!),
+    );
 
-    // Fee learning
+    // Stage 7: Transactions — populated by balance_transactions
+    const txnCheck = await rest<Array<{ id: string }>>(
+      `/shopify_balance_transactions?store_id=eq.${encodeURIComponent(storeId)}&type=eq.charge&select=id&limit=1`,
+    ).catch(() => []);
+    await updateStageStatus(storeId, 'shopify_transactions', txnCheck.length > 0 ? 'complete' : 'skipped');
+
+    // Stage 8: Chargebacks — populated by balance_transactions
+    const cbCheck = await rest<Array<{ id: string }>>(
+      `/shopify_chargebacks?store_id=eq.${encodeURIComponent(storeId)}&select=id&limit=1`,
+    ).catch(() => []);
+    await updateStageStatus(storeId, 'shopify_chargebacks', cbCheck.length > 0 ? 'complete' : 'skipped');
+
+    // Stage 9: Meta ads (37-month backfill)
+    await runStage(storeId, 'meta_ads', () => backfillMetaAds(storeId));
+
+    // Stage 10: Fee learning
     await runStage(storeId, 'fee_learning', async () => {
       const { learnFeeRates } = await import('@/lib/pnl/feeIntelligence');
       await learnFeeRates(storeId);
     });
 
-    // Transactions — check if we have any
-    const txnCount = await rest<Array<{ id: string }>>(
-      `/shopify_transaction_fees?store_id=eq.${encodeURIComponent(storeId)}&select=id&limit=1`
-    ).catch(() => []);
-
-    if (txnCount.length > 0) {
-      await updateStageStatus(storeId, 'shopify_transactions', 'complete');
-    } else {
-      await updateStageStatus(storeId, 'shopify_transactions', 'skipped', 'No transaction data — sync will populate');
-    }
-
-    // Chargebacks
-    const cbCount = await rest<Array<{ id: string }>>(
-      `/shopify_chargebacks?store_id=eq.${encodeURIComponent(storeId)}&select=id&limit=1`
-    ).catch(() => []);
-    await updateStageStatus(storeId, 'shopify_chargebacks', cbCount.length > 0 ? 'complete' : 'skipped');
-
-    // Meta ads — non-blocking check
-    const metaConnections = await rest<Array<{ id: string }>>(
-      `/connections?store_id=eq.${encodeURIComponent(storeId)}&platform=eq.meta&select=id&limit=1`
-    ).catch(() => []);
-
-    if (metaConnections.length > 0) {
-      await updateStageStatus(storeId, 'meta_ads', 'complete');
-    } else {
-      await updateStageStatus(storeId, 'meta_ads', 'skipped', 'No Meta ad accounts connected');
-    }
-
-    // Classification
-    await runStage(storeId, 'classification', async () => {
-      const { extractAllProductBehaviors } = await import('@/lib/intelligence/behaviorExtractor');
-      const { buildStoreProfile } = await import('@/lib/intelligence/storeProfiler');
-      const { classifyAllProducts } = await import('@/lib/intelligence/relativeClassifier');
-
-      const behaviors = await extractAllProductBehaviors(storeId);
-      if (behaviors.length > 0) {
-        const profile = await buildStoreProfile(storeId, behaviors);
-        classifyAllProducts(behaviors, profile, new Map(), new Map());
-      }
-    });
-
-    // P&L snapshots — mark as pending for cron to handle
-    await updateStageStatus(storeId, 'pnl_snapshots', 'skipped', 'Will build on next daily snapshot cron');
+    // Stage 11: P&L snapshots — compute for every historical day
+    await runStage(storeId, 'pnl_snapshots', () =>
+      backfillPnlSnapshots(storeId, firstOrderDate!),
+    );
 
     // Mark overall complete
     await rest(`/onboarding_progress?store_id=eq.${encodeURIComponent(storeId)}`, {
@@ -237,8 +990,10 @@ export async function onStoreConnected(storeId: string): Promise<void> {
       }),
     }).catch(() => null);
 
+    console.log(`[PRISM:Onboarding] All stages complete for ${storeId}`);
+
   } catch (err) {
-    console.error(`[Onboarding] Failed for store ${storeId}:`, err);
+    console.error(`[PRISM:Onboarding] Failed for store ${storeId}:`, err);
     await rest(`/onboarding_progress?store_id=eq.${encodeURIComponent(storeId)}`, {
       method: 'PATCH',
       body: JSON.stringify({ overall_status: 'partial' }),

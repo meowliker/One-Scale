@@ -1,4 +1,8 @@
 /**
+ * PRISM — Pattern Recognition & Intelligence for Store Metrics
+ * OneScale's behavioral intelligence and data infrastructure engine
+ */
+/**
  * Order Pattern Analyzer
  *
  * For every active product, analyzes last 60 days of orders to produce

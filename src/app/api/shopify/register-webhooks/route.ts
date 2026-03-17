@@ -15,7 +15,9 @@ const REQUIRED_TOPICS = [
   'disputes/create',
   'shopify_payments/payouts',
   'orders/chargebacks',
+  'products/create',
   'products/update',
+  'shop/update',
 ] as const;
 
 interface ShopifyWebhook {

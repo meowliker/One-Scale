@@ -1,6 +1,9 @@
 export interface PnLEntry {
   date: string;
   revenue: number;
+  grossRevenue?: number;
+  settledRevenue?: number;
+  revenueSource?: 'settled' | 'orders_api';
   cogs: number;
   adSpend: number;
   shipping: number;
@@ -15,6 +18,7 @@ export interface PnLEntry {
   partialRefundAmount?: number;
   chargebackLoss?: number;
   chargebackWon?: number;
+  adjustments?: number;
   customExpenses?: number;
   expenseBreakdown?: { name: string; amount: number }[];
 }

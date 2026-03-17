@@ -22,9 +22,16 @@ export interface ProductData {
 
 export type AttributionMethod =
   | 'manual_mapping'
+  | 'prism_attribution'
   | 'keyword_match'
   | 'single_product'
   | 'unattributed';
+
+export interface PrismAttribution {
+  campaignId: string;
+  productId: string;
+  confidence: number;
+}
 
 export interface SpendAttribution {
   campaignId: string;
@@ -56,11 +63,17 @@ const KEYWORD_MATCH_MIN_SCORE = 0.3; // minimum score to prevent wrong matches
 export function attributeSpend(
   campaigns: CampaignSpendData[],
   products: ProductData[],
-  manualMappings: ManualMapping[] = []
+  manualMappings: ManualMapping[] = [],
+  prismAttributions: PrismAttribution[] = [],
 ): SpendAttribution[] {
   const manualMap = new Map<string, string>();
   for (const m of manualMappings) {
     manualMap.set(m.campaignId, m.productId);
+  }
+
+  const prismMap = new Map<string, PrismAttribution>();
+  for (const p of prismAttributions) {
+    prismMap.set(p.campaignId, p);
   }
 
   const results: SpendAttribution[] = [];
@@ -79,7 +92,21 @@ export function attributeSpend(
       continue;
     }
 
-    // Priority 2: Single-product store
+    // Priority 2: PRISM auto-attribution (pixel/creative/correlation)
+    const prism = prismMap.get(campaign.campaignId);
+    if (prism && prism.confidence >= 50) {
+      results.push({
+        campaignId: campaign.campaignId,
+        campaignName: campaign.campaignName,
+        productId: prism.productId,
+        spend: campaign.spend,
+        confidence: prism.confidence / 100,
+        method: 'prism_attribution',
+      });
+      continue;
+    }
+
+    // Priority 3: Single-product store
     if (products.length === 1) {
       results.push({
         campaignId: campaign.campaignId,
@@ -92,7 +119,7 @@ export function attributeSpend(
       continue;
     }
 
-    // Priority 3: Multi-product keyword matching
+    // Priority 4: Multi-product keyword matching
     const match = findBestKeywordMatch(campaign.campaignName, products);
     if (match && match.score >= KEYWORD_MATCH_MIN_SCORE) {
       results.push({
@@ -106,7 +133,7 @@ export function attributeSpend(
       continue;
     }
 
-    // Priority 4: Unattributed -- never silently distribute
+    // Priority 5: Unattributed -- never silently distribute
     results.push({
       campaignId: campaign.campaignId,
       campaignName: campaign.campaignName,

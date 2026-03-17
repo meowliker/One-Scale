@@ -22,6 +22,7 @@ import {
 interface PnLDayPartChartProps {
   isDigital?: boolean;
   dailyPnL: PnLEntry[];
+  currency?: string;
 }
 
 type ChartView = 'grouped' | 'stacked' | 'area' | 'table';
@@ -71,7 +72,7 @@ function formatYAxisTick(value: number): string {
   return `$${value.toFixed(0)}`;
 }
 
-export function PnLDayPartChart({ dailyPnL, isDigital = false }: PnLDayPartChartProps) {
+export function PnLDayPartChart({ dailyPnL, isDigital = false, currency = 'USD' }: PnLDayPartChartProps) {
   const [chartView, setChartView] = useState<ChartView>('grouped');
   const [sortField, setSortField] = useState<SortField>('date');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
@@ -169,14 +170,14 @@ export function PnLDayPartChart({ dailyPnL, isDigital = false }: PnLDayPartChart
               <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: '#10b981' }} />
               <span className="text-xs text-text-secondary">Revenue</span>
             </div>
-            <span className="text-xs font-semibold text-emerald-400">{formatCurrency(item.revenue)}</span>
+            <span className="text-xs font-semibold text-emerald-400">{formatCurrency(item.revenue, currency)}</span>
           </div>
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-2">
               <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: '#f97316' }} />
               <span className="text-xs text-text-secondary">Ad Spend</span>
             </div>
-            <span className="text-xs font-semibold text-text-primary">{formatCurrency(item.adSpend)}</span>
+            <span className="text-xs font-semibold text-text-primary">{formatCurrency(item.adSpend, currency)}</span>
           </div>
           {!isDigital && item.cogs > 0 && (
             <div className="flex items-center justify-between gap-4">
@@ -184,7 +185,7 @@ export function PnLDayPartChart({ dailyPnL, isDigital = false }: PnLDayPartChart
                 <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: '#ef4444' }} />
                 <span className="text-xs text-text-secondary">COGS</span>
               </div>
-              <span className="text-xs font-semibold text-text-primary">{formatCurrency(item.cogs)}</span>
+              <span className="text-xs font-semibold text-text-primary">{formatCurrency(item.cogs, currency)}</span>
             </div>
           )}
           {(item.shipping > 0 || item.fees > 0) && (
@@ -193,7 +194,7 @@ export function PnLDayPartChart({ dailyPnL, isDigital = false }: PnLDayPartChart
                 <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: '#8b5cf6' }} />
                 <span className="text-xs text-text-secondary">Ship + Fees</span>
               </div>
-              <span className="text-xs font-semibold text-text-primary">{formatCurrency(item.shipping + item.fees)}</span>
+              <span className="text-xs font-semibold text-text-primary">{formatCurrency(item.shipping + item.fees, currency)}</span>
             </div>
           )}
           {item.refunds > 0 && (
@@ -202,7 +203,7 @@ export function PnLDayPartChart({ dailyPnL, isDigital = false }: PnLDayPartChart
                 <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: '#f43f5e' }} />
                 <span className="text-xs text-text-secondary">Refunds</span>
               </div>
-              <span className="text-xs font-semibold text-text-primary">{formatCurrency(item.refunds)}</span>
+              <span className="text-xs font-semibold text-text-primary">{formatCurrency(item.refunds, currency)}</span>
             </div>
           )}
           <div className="my-1.5 border-t border-border" />
@@ -215,7 +216,7 @@ export function PnLDayPartChart({ dailyPnL, isDigital = false }: PnLDayPartChart
               <span className="text-xs font-medium text-text-secondary">Net Profit</span>
             </div>
             <span className={cn('text-xs font-bold', item.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400')}>
-              {formatCurrency(item.netProfit)}
+              {formatCurrency(item.netProfit, currency)}
             </span>
           </div>
           <div className="flex items-center justify-between gap-4">
@@ -256,7 +257,8 @@ export function PnLDayPartChart({ dailyPnL, isDigital = false }: PnLDayPartChart
   );
 
   const renderGroupedBarChart = () => (
-    <ResponsiveContainer width="100%" height={360}>
+    <div style={{ width: '100%', minHeight: 360 }}>
+    <ResponsiveContainer width="100%" height={360} minHeight={360}>
       <ComposedChart data={filteredData} margin={{ top: 8, right: 16, left: 16, bottom: 8 }}>
         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--color-border, #1e2235)" opacity={0.5} />
         <XAxis
@@ -289,10 +291,12 @@ export function PnLDayPartChart({ dailyPnL, isDigital = false }: PnLDayPartChart
         />
       </ComposedChart>
     </ResponsiveContainer>
+    </div>
   );
 
   const renderStackedBarChart = () => (
-    <ResponsiveContainer width="100%" height={360}>
+    <div style={{ width: '100%', minHeight: 360 }}>
+    <ResponsiveContainer width="100%" height={360} minHeight={360}>
       <ComposedChart data={filteredData} margin={{ top: 8, right: 16, left: 16, bottom: 8 }}>
         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--color-border, #1e2235)" opacity={0.5} />
         <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
@@ -309,10 +313,12 @@ export function PnLDayPartChart({ dailyPnL, isDigital = false }: PnLDayPartChart
         />
       </ComposedChart>
     </ResponsiveContainer>
+    </div>
   );
 
   const renderAreaChart = () => (
-    <ResponsiveContainer width="100%" height={360}>
+    <div style={{ width: '100%', minHeight: 360 }}>
+    <ResponsiveContainer width="100%" height={360} minHeight={360}>
       <AreaChart data={filteredData} margin={{ top: 8, right: 16, left: 16, bottom: 8 }}>
         <defs>
           <linearGradient id="gradRevenue" x1="0" y1="0" x2="0" y2="1">
@@ -336,6 +342,7 @@ export function PnLDayPartChart({ dailyPnL, isDigital = false }: PnLDayPartChart
         <Area type="monotone" dataKey="netProfit" name="Net Profit" stroke="#3b82f6" strokeWidth={2.5} fill="url(#gradNetProfit)" />
       </AreaChart>
     </ResponsiveContainer>
+    </div>
   );
 
   const SortIcon = ({ field }: { field: SortField }) => {
@@ -390,22 +397,22 @@ export function PnLDayPartChart({ dailyPnL, isDigital = false }: PnLDayPartChart
                 <div className="text-text-secondary">{row.label}</div>
               </td>
               <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs font-semibold text-emerald-400">
-                {formatCurrency(row.revenue)}
+                {formatCurrency(row.revenue, currency)}
               </td>
               <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs font-medium text-orange-400">
-                {formatCurrency(row.adSpend)}
+                {formatCurrency(row.adSpend, currency)}
               </td>
               {!isDigital && <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs font-medium text-red-400">
-                {formatCurrency(row.cogs)}
+                {formatCurrency(row.cogs, currency)}
               </td>}
               <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs font-medium text-text-secondary">
-                {formatCurrency(row.shipping)}
+                {formatCurrency(row.shipping, currency)}
               </td>
               <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs font-medium text-text-secondary">
-                {formatCurrency(row.fees)}
+                {formatCurrency(row.fees, currency)}
               </td>
               <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs font-medium text-rose-400">
-                {row.refunds > 0 ? formatCurrency(row.refunds) : '-'}
+                {row.refunds > 0 ? formatCurrency(row.refunds, currency) : '-'}
               </td>
               <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs font-bold">
                 <span className={cn(
@@ -413,7 +420,7 @@ export function PnLDayPartChart({ dailyPnL, isDigital = false }: PnLDayPartChart
                   row.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'
                 )}>
                   {row.netProfit >= 0 ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />}
-                  {formatCurrency(Math.abs(row.netProfit))}
+                  {formatCurrency(Math.abs(row.netProfit), currency)}
                 </span>
               </td>
               <td className="whitespace-nowrap px-3 py-2.5 text-right text-xs">
@@ -489,28 +496,28 @@ export function PnLDayPartChart({ dailyPnL, isDigital = false }: PnLDayPartChart
       <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
         <div className="rounded-md border border-border bg-surface px-3 py-2">
           <p className="text-[10px] uppercase tracking-wider text-text-muted">Revenue</p>
-          <p className="text-sm font-bold text-emerald-400">{formatCurrency(summary.totalRevenue)}</p>
+          <p className="text-sm font-bold text-emerald-400">{formatCurrency(summary.totalRevenue, currency)}</p>
         </div>
         <div className="rounded-md border border-border bg-surface px-3 py-2">
           <p className="text-[10px] uppercase tracking-wider text-text-muted">Ad Spend</p>
-          <p className="text-sm font-bold text-orange-400">{formatCurrency(summary.totalAdSpend)}</p>
+          <p className="text-sm font-bold text-orange-400">{formatCurrency(summary.totalAdSpend, currency)}</p>
         </div>
         {!isDigital && (
           <div className="rounded-md border border-border bg-surface px-3 py-2">
             <p className="text-[10px] uppercase tracking-wider text-text-muted">COGS</p>
-            <p className="text-sm font-bold text-red-400">{formatCurrency(summary.totalCogs)}</p>
+            <p className="text-sm font-bold text-red-400">{formatCurrency(summary.totalCogs, currency)}</p>
           </div>
         )}
         <div className="rounded-md border border-border bg-surface px-3 py-2">
           <p className="text-[10px] uppercase tracking-wider text-text-muted">Net Profit</p>
           <p className={cn('text-sm font-bold', summary.totalNetProfit >= 0 ? 'text-emerald-400' : 'text-red-400')}>
-            {formatCurrency(summary.totalNetProfit)}
+            {formatCurrency(summary.totalNetProfit, currency)}
           </p>
         </div>
         <div className="rounded-md border border-border bg-surface px-3 py-2">
           <p className="text-[10px] uppercase tracking-wider text-text-muted">Daily Avg</p>
           <p className={cn('text-sm font-bold', summary.avgDailyProfit >= 0 ? 'text-blue-400' : 'text-red-400')}>
-            {formatCurrency(summary.avgDailyProfit)}
+            {formatCurrency(summary.avgDailyProfit, currency)}
           </p>
         </div>
       </div>
@@ -522,14 +529,14 @@ export function PnLDayPartChart({ dailyPnL, isDigital = false }: PnLDayPartChart
             <ArrowUp className="h-3 w-3 text-emerald-400" />
             <span className="text-text-muted">Best:</span>
             <span className="font-semibold text-emerald-400">
-              {formatDateLabel(summary.bestDay.date, true)} ({formatCurrency(summary.bestDay.netProfit)})
+              {formatDateLabel(summary.bestDay.date, true)} ({formatCurrency(summary.bestDay.netProfit, currency)})
             </span>
           </div>
           <div className="flex items-center gap-1.5 rounded-md bg-red-500/10 px-2.5 py-1">
             <ArrowDown className="h-3 w-3 text-red-400" />
             <span className="text-text-muted">Worst:</span>
             <span className="font-semibold text-red-400">
-              {formatDateLabel(summary.worstDay.date, true)} ({formatCurrency(summary.worstDay.netProfit)})
+              {formatDateLabel(summary.worstDay.date, true)} ({formatCurrency(summary.worstDay.netProfit, currency)})
             </span>
           </div>
         </div>

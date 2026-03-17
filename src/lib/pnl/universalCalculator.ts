@@ -15,6 +15,7 @@
 
 import { rest } from '@/app/api/lib/supabase-persistence';
 import { calculateExpenses } from '@/lib/pnl/expenseEngine';
+import { getStoreDateRangeForPeriod } from '@/lib/pnl/dateUtils';
 import type { CustomExpense } from '@/types/pnlSettings';
 import type {
   PnLResult,
@@ -89,6 +90,15 @@ interface TransactionFeeRow {
   gateway?: string;
 }
 
+interface BalanceTxnRow {
+  type: string;
+  amount: string;
+  fee: string;
+  net: string;
+  source_order_id: string | null;
+  processed_at: string;
+}
+
 // ── Options ──────────────────────────────────────────────────
 
 export interface CalculatorOptions {
@@ -121,7 +131,13 @@ export async function calculatePnL(
   const { includeProductBreakdown = true } = options;
   const warnings: PnLWarning[] = [];
 
-  // ── 1. Fetch all data in parallel ────────────────────────
+  // Trigger balance transaction backfill if empty (non-blocking)
+  ensureBalanceTransactions(storeId);
+
+  // ── 1. Fetch timezone first, then all data with tz-aware boundaries ──
+  const timezone = await fetchStoreTimezone(storeId);
+  const { start: tzStart, end: tzEnd } = getStoreDateRangeForPeriod(dateFrom, dateTo, timezone);
+
   const [
     orders,
     spendRows,
@@ -133,12 +149,12 @@ export async function calculatePnL(
     cogsSuggestions,
     campaignMappings,
     transactionFees,
-    timezone,
     customExpensesList,
+    balanceTxns,
   ] = await Promise.all([
-    fetchOrders(storeId, dateFrom, dateTo),
+    fetchOrders(storeId, tzStart, tzEnd),
     fetchMetaSpend(storeId, dateFrom, dateTo),
-    fetchChargebacks(storeId, dateFrom, dateTo),
+    fetchChargebacks(storeId, tzStart, tzEnd),
     fetchProductCosts(storeId),
     fetchPaymentFees(storeId),
     fetchFeeStructures(storeId),
@@ -146,8 +162,8 @@ export async function calculatePnL(
     fetchCogsSuggestions(storeId),
     fetchCampaignMappings(storeId),
     fetchTransactionFees(storeId, dateFrom, dateTo),
-    fetchStoreTimezone(storeId),
     fetchCustomExpenses(storeId),
+    fetchBalanceTransactions(storeId, tzStart, tzEnd),
   ]);
 
   // ── 2. Build lookup maps ─────────────────────────────────
@@ -215,6 +231,9 @@ export async function calculatePnL(
     feeMethod: 'actual' | 'detected_rate' | 'configured_rate' | 'estimated';
     shipping: number;
     refunds: number;
+    chargebackLoss: number;
+    chargebackWon: number;
+    orderIds: Set<string>;
   }>();
 
   let totalRevenue = 0;
@@ -294,11 +313,15 @@ export async function calculatePnL(
         feeMethod: 'estimated' as const,
         shipping: 0,
         refunds: 0,
+        chargebackLoss: 0,
+        chargebackWon: 0,
+        orderIds: new Set<string>(),
       };
 
       acc.revenue += netItemRevenue;
       acc.units += Number(item.quantity);
       acc.cogs += itemCogs;
+      acc.orderIds.add(String(order.shopify_order_id));
       if (cogsSource !== 'zero') acc.cogsSource = cogsSource;
       productAcc.set(productId, acc);
 
@@ -459,6 +482,129 @@ export async function calculatePnL(
     }
   }
 
+  // ── 5a. Balance transaction overrides ───────────────────────
+  // When balance transactions exist, use them for settled revenue, fees, refunds, chargebacks
+  // This matches the Apps Script approach (actual settled amounts)
+  let settledRevenue = 0;
+  let btFees = 0;
+  let btRefunds = 0;
+  let btChargebackLoss = 0;
+  let btChargebackWon = 0;
+  const hasBalanceTxns = balanceTxns.length > 0;
+
+  if (hasBalanceTxns) {
+    for (const txn of balanceTxns) {
+      const amount = Math.abs(parseFloat(txn.amount || '0'));
+      const fee = Math.abs(parseFloat(txn.fee || '0'));
+      const net = parseFloat(txn.net || '0');
+
+      switch (txn.type) {
+        case 'charge':
+          settledRevenue += amount;
+          btFees += fee;
+          break;
+        case 'refund':
+          btRefunds += amount;
+          break;
+        case 'dispute':
+          if (net < 0) btChargebackLoss += Math.abs(net);
+          else btChargebackWon += net;
+          break;
+        case 'adjustment':
+        case 'debit':
+          // V4.4: adjustments can be positive or negative
+          settledRevenue += parseFloat(txn.amount || '0');
+          break;
+        case 'credit':
+          settledRevenue += parseFloat(txn.amount || '0');
+          break;
+        case 'reserved_funds':
+        case 'reserve':
+          // Shopify holding money in reserve — deducted from settled revenue
+          settledRevenue += parseFloat(txn.amount || '0');
+          break;
+        case 'marketplace_tax':
+          // GST/VAT collected by Shopify on behalf of tax authorities
+          settledRevenue += parseFloat(txn.amount || '0');
+          break;
+        case 'payout':
+          // Payout summaries — skip (not a transaction, just a record of bank transfer)
+          break;
+        default:
+          // Unknown type — include as adjustment so money is never lost
+          settledRevenue += parseFloat(txn.amount || '0');
+          console.error(
+            `[PRISM:MONEY] UNKNOWN TRANSACTION TYPE: "${txn.type}"`,
+            `amount=${txn.amount} store=${storeId}`,
+            `— ADDED TO ADJUSTMENTS, needs proper handling`
+          );
+          // Save alert for review
+          rest('/prism_alerts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              store_id: storeId,
+              alert_type: 'unknown_transaction_type',
+              severity: 'high',
+              message: `Unknown BT type: ${txn.type}, amount: $${txn.amount}`,
+              details: { type: txn.type, amount: txn.amount, net: txn.net },
+            }),
+          }).catch(() => null);
+          break;
+      }
+    }
+
+    // Override with balance transaction values (more accurate)
+    totalFees = btFees;
+    totalRefunds = btRefunds;
+    totalChargebackLoss = btChargebackLoss;
+    totalChargebackWon = btChargebackWon;
+    overallFeeMethod = 'actual';
+    hasActualFees = true;
+    hasEstimatedFees = false;
+  }
+
+  // ── 5a-ii. Distribute refunds & chargebacks to products by order ID ──
+  // Build order→product lookup from balance transactions
+  if (hasBalanceTxns) {
+    const refundByOrder = new Map<string, number>();
+    const cbLossByOrder = new Map<string, number>();
+    const cbWonByOrder = new Map<string, number>();
+
+    for (const txn of balanceTxns) {
+      const orderId = txn.source_order_id;
+      if (!orderId) continue;
+      const amount = Math.abs(parseFloat(txn.amount || '0'));
+      const net = parseFloat(txn.net || '0');
+
+      if (txn.type === 'refund') {
+        refundByOrder.set(orderId, (refundByOrder.get(orderId) || 0) + amount);
+      } else if (txn.type === 'dispute') {
+        if (net < 0) cbLossByOrder.set(orderId, (cbLossByOrder.get(orderId) || 0) + Math.abs(net));
+        else cbWonByOrder.set(orderId, (cbWonByOrder.get(orderId) || 0) + net);
+      }
+    }
+
+    // Distribute to products based on which orders they appear in
+    for (const [, acc] of productAcc) {
+      let prodRefunds = 0;
+      let prodCbLoss = 0;
+      let prodCbWon = 0;
+      for (const oid of acc.orderIds) {
+        prodRefunds += refundByOrder.get(oid) || 0;
+        prodCbLoss += cbLossByOrder.get(oid) || 0;
+        prodCbWon += cbWonByOrder.get(oid) || 0;
+      }
+      acc.refunds = prodRefunds;
+      acc.chargebackLoss = prodCbLoss;
+      acc.chargebackWon = prodCbWon;
+    }
+  }
+
+  const grossRevenue = totalRevenue;
+  const revenueForPnL = hasBalanceTxns && settledRevenue > 0 ? settledRevenue : grossRevenue;
+  const revenueSource: 'settled' | 'orders_api' = hasBalanceTxns && settledRevenue > 0 ? 'settled' : 'orders_api';
+
   // ── 5b. Calculate custom expenses ──────────────────────────
   const expenseResult = calculateExpenses(customExpensesList, { start: dateFrom, end: dateTo });
   const totalCustomExpenses = expenseResult.totalExpenses;
@@ -542,7 +688,8 @@ export async function calculatePnL(
       const adSpend = isUpsellType ? 0 : (spendData?.spend || 0);
       const adSpendConfidence = spendData?.confidence || 0;
 
-      const netProfit = acc.revenue - acc.cogs - adSpend - acc.fees - acc.shipping - acc.refunds;
+      const netProfit = acc.revenue - acc.cogs - adSpend - acc.fees - acc.shipping
+        - acc.refunds - acc.chargebackLoss + acc.chargebackWon;
       const margin = acc.revenue > 0 ? (netProfit / acc.revenue) * 100 : 0;
 
       products.push({
@@ -559,6 +706,8 @@ export async function calculatePnL(
         feeMethod: acc.feeMethod,
         shipping: acc.shipping,
         refunds: acc.refunds,
+        chargebackLoss: acc.chargebackLoss,
+        chargebackWon: acc.chargebackWon,
         netProfit,
         margin,
       });
@@ -570,9 +719,9 @@ export async function calculatePnL(
 
   // ── 9. Calculate totals ───────────────────────────────────
 
-  const totalNetProfit = totalRevenue - totalCogs - totalAdSpend - totalFees
+  const totalNetProfit = revenueForPnL - totalCogs - totalAdSpend - totalFees
     - totalShipping - totalRefunds - totalChargebackLoss + totalChargebackWon - totalCustomExpenses;
-  const totalMargin = totalRevenue > 0 ? (totalNetProfit / totalRevenue) * 100 : 0;
+  const totalMargin = revenueForPnL > 0 ? (totalNetProfit / revenueForPnL) * 100 : 0;
 
   // Data completeness score
   let completeness = 0;
@@ -588,7 +737,10 @@ export async function calculatePnL(
     dateFrom,
     dateTo,
     timezone,
-    totalRevenue,
+    totalRevenue: revenueForPnL,
+    grossRevenue,
+    settledRevenue: hasBalanceTxns ? settledRevenue : undefined,
+    revenueSource,
     totalCogs,
     totalAdSpend,
     totalFees,
@@ -614,10 +766,10 @@ export async function calculatePnL(
 
 // ── Data Fetching Helpers ────────────────────────────────────
 
-async function fetchOrders(storeId: string, dateFrom: string, dateTo: string): Promise<OrderCacheRow[]> {
+async function fetchOrders(storeId: string, tzStart: string, tzEnd: string): Promise<OrderCacheRow[]> {
   try {
     return await rest<OrderCacheRow[]>(
-      `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${enc(dateFrom)}&created_at=lte.${enc(dateTo + 'T23:59:59Z')}&select=*&order=created_at.asc`
+      `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${enc(tzStart)}&created_at=lte.${enc(tzEnd)}&select=*&order=created_at.asc`
     );
   } catch {
     return [];
@@ -634,10 +786,15 @@ async function fetchMetaSpend(storeId: string, dateFrom: string, dateTo: string)
   }
 }
 
-async function fetchChargebacks(storeId: string, dateFrom: string, dateTo: string): Promise<ChargebackRow[]> {
+async function fetchChargebacks(storeId: string, tzStart: string, tzEnd: string): Promise<ChargebackRow[]> {
   try {
+    // Query by finalized_at first (most accurate for balance-synced disputes),
+    // fall back to created_at when finalized_at is null
+    const dateMin = enc(tzStart);
+    const dateMax = enc(tzEnd);
+    const orFilter = `finalized_at.gte.${dateMin},finalized_at.lte.${dateMax}`;
     return await rest<ChargebackRow[]>(
-      `/shopify_chargebacks?store_id=eq.${enc(storeId)}&created_at=gte.${enc(dateFrom)}&created_at=lte.${enc(dateTo + 'T23:59:59Z')}&select=order_id,amount,status,created_at`
+      `/shopify_chargebacks?store_id=eq.${enc(storeId)}&or=(and(${orFilter}),and(finalized_at.is.null,created_at.gte.${dateMin},created_at.lte.${dateMax}))&select=order_id,amount,status,created_at`
     );
   } catch {
     return [];
@@ -712,6 +869,33 @@ async function fetchTransactionFees(storeId: string, dateFrom: string, dateTo: s
   } catch {
     return [];
   }
+}
+
+async function fetchBalanceTransactions(storeId: string, tzStart: string, tzEnd: string): Promise<BalanceTxnRow[]> {
+  try {
+    return await rest<BalanceTxnRow[]>(
+      `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&and=(processed_at.gte.${enc(tzStart)},processed_at.lte.${enc(tzEnd)})&select=type,amount,fee,net,source_order_id,processed_at`
+    );
+  } catch {
+    return [];
+  }
+}
+
+async function ensureBalanceTransactions(storeId: string): Promise<void> {
+  try {
+    const rows = await rest<Array<{ store_id: string }>>(
+      `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&select=store_id&limit=1`
+    );
+    if (!rows || rows.length === 0) {
+      console.log(`[PnL] Balance transactions empty for ${storeId} — triggering backfill`);
+      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+      fetch(`${baseUrl}/api/cron/sync-balance-transactions`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${process.env.CRON_SECRET}` },
+      }).catch(() => null);
+    }
+  } catch { /* ignore */ }
 }
 
 async function fetchStoreTimezone(storeId: string): Promise<string> {
