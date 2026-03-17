@@ -154,7 +154,13 @@ export async function GET(req: NextRequest) {
         else { sinceId = String(batch[batch.length - 1].id); }
       }
 
-      const orders = allOrders;
+      // Deduplicate orders (Shopify pagination can return same order twice if updated mid-fetch)
+      const seenOrderIds = new Set<number>();
+      const orders = allOrders.filter(order => {
+        if (seenOrderIds.has(order.id)) return false;
+        seenOrderIds.add(order.id);
+        return true;
+      });
       const nowIso = new Date().toISOString();
 
       // Map all orders to upsert rows
