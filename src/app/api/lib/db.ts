@@ -265,6 +265,88 @@ function initDb(): Database.Database {
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       UNIQUE(store_id, platform)
     );
+
+    -- ── AI Agents ──────────────────────────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS agent_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      store_id TEXT NOT NULL,
+      agent_type TEXT NOT NULL DEFAULT 'media_buyer',
+      status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running', 'completed', 'failed')),
+      summary TEXT,
+      decisions_count INTEGER NOT NULL DEFAULT 0,
+      tokens_used INTEGER,
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_actions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      store_id TEXT NOT NULL,
+      run_id INTEGER REFERENCES agent_runs(id),
+      agent_type TEXT NOT NULL DEFAULT 'media_buyer',
+      action_type TEXT NOT NULL,
+      entity_type TEXT,
+      entity_id TEXT,
+      entity_name TEXT,
+      old_value TEXT,
+      new_value TEXT,
+      reasoning TEXT NOT NULL,
+      predicted_impact TEXT,
+      actual_impact TEXT,
+      confidence INTEGER NOT NULL DEFAULT 70,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'executed', 'rejected', 'auto_executed')),
+      requires_approval INTEGER NOT NULL DEFAULT 1,
+      approved_by TEXT,
+      executed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_agent_actions_store_status
+      ON agent_actions(store_id, status, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS agent_account_memory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      store_id TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      pattern_key TEXT NOT NULL,
+      pattern_value TEXT NOT NULL,
+      confidence INTEGER NOT NULL DEFAULT 50,
+      evidence_count INTEGER NOT NULL DEFAULT 1,
+      last_tested TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(store_id, account_id, pattern_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_experiments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      store_id TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      agent_type TEXT NOT NULL DEFAULT 'media_buyer',
+      hypothesis TEXT NOT NULL,
+      test_type TEXT NOT NULL,
+      control_entity_id TEXT,
+      control_entity_name TEXT,
+      test_entity_id TEXT,
+      test_entity_name TEXT,
+      metric TEXT NOT NULL DEFAULT 'roas',
+      predicted_outcome TEXT,
+      actual_outcome TEXT,
+      learning TEXT,
+      status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running', 'completed', 'inconclusive')),
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_knowledge_updates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source TEXT NOT NULL DEFAULT 'web_search',
+      topic TEXT NOT NULL,
+      content TEXT NOT NULL,
+      key_learnings TEXT,
+      applies_to TEXT DEFAULT 'all',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   // Migration: back-fill stores table from existing connections
