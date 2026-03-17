@@ -70,9 +70,13 @@ export async function GET(request: NextRequest) {
   const storeId = searchParams.get('storeId');
   const objectId = searchParams.get('objectId');
   const accountIds = searchParams.get('accountIds');
-  const datePreset = searchParams.get('datePreset') || 'last_30d';
+  const since = searchParams.get('since');
+  const until = searchParams.get('until');
+  const datePreset = (since && until) ? '' : (searchParams.get('datePreset') || 'last_30d');
   const breakdowns = searchParams.get('breakdowns');
   const preferCache = searchParams.get('preferCache') === '1';
+  // When since/until are provided, use Meta's time_range instead of date_preset
+  const timeRange = (since && until) ? JSON.stringify({ since, until }) : '';
 
   if (!storeId) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
@@ -105,10 +109,11 @@ export async function GET(request: NextRequest) {
   const variantKind = normalizedBreakdowns === 'hourly_stats_aggregated_by_advertiser_time_zone'
     ? 'hourly'
     : (normalizedBreakdowns ? `breakdown:${normalizedBreakdowns}` : 'daily');
-  const exactVariant = `${variantKind}|preset:${datePreset}`;
+  const variantLabel = timeRange ? `range:${since}_${until}` : `preset:${datePreset}`;
+  const exactVariant = `${variantKind}|${variantLabel}`;
   const last30Variant = `${variantKind}|preset:last_30d`;
   const latestVariant = `latest:${variantKind}`;
-  const isStrictPresetRequest = datePreset !== 'last_30d';
+  const isStrictPresetRequest = !!timeRange || datePreset !== 'last_30d';
 
   if (preferCache) {
     const exactSnapshot = useSupabase
@@ -317,9 +322,21 @@ export async function GET(request: NextRequest) {
 
     // Fetch insights from all accounts in parallel
     const allInsights = await Promise.all(
-      sortedTargetIds.map((id) =>
-        fetchMetaInsights(token.accessToken, id, datePreset).catch(() => [])
-      )
+      sortedTargetIds.map((id) => {
+        if (timeRange) {
+          // Use time_range for specific date ranges (e.g., from PnL sync)
+          return fetchFromMeta<{ data: Record<string, any>[] }>(
+            token.accessToken,
+            `/${id}/insights`,
+            {
+              fields: 'spend,impressions,reach,clicks,actions,action_values,ctr,cpc,cpm,unique_clicks,unique_ctr,quality_ranking,engagement_rate_ranking,conversion_rate_ranking,date_start,date_stop',
+              time_range: timeRange,
+              time_increment: '1',
+            },
+          ).then(r => r.data || []).catch(() => []);
+        }
+        return fetchMetaInsights(token.accessToken, id, datePreset).catch(() => []);
+      })
     );
 
     // Aggregate daily insights across all accounts

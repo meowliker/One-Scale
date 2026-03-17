@@ -1,0 +1,230 @@
+<h2>Product Performance Table — Classification Redesign</h2>
+<p class="subtitle">Silent auto-classify + inline editing replaces onboarding step & settings page</p>
+
+<div class="section">
+  <h3>Filter Pills</h3>
+  <div style="display:flex;gap:8px;margin-bottom:24px;flex-wrap:wrap;">
+    <span style="padding:6px 16px;border-radius:20px;font-size:13px;font-weight:600;cursor:pointer;background:#18181b;color:#fff;">All</span>
+    <span style="padding:6px 16px;border-radius:20px;font-size:13px;font-weight:500;cursor:pointer;background:#ecfdf5;color:#059669;border:1px solid #a7f3d0;">Main Only</span>
+    <span style="padding:6px 16px;border-radius:20px;font-size:13px;font-weight:500;cursor:pointer;background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;">Upsells</span>
+    <span style="padding:6px 16px;border-radius:20px;font-size:13px;font-weight:500;cursor:pointer;background:#fffbeb;color:#d97706;border:1px solid #fde68a;">Needs Review</span>
+  </div>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header" style="display:flex;justify-content:space-between;align-items:center;">
+    <span>Product Performance — All Products</span>
+    <span style="font-size:11px;color:#71717a;">
+      <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:4px;"></span>
+      Tag products in Shopify with <code style="background:#f4f4f5;padding:1px 4px;border-radius:3px;font-size:10px;">onescale:main</code> or <code style="background:#f4f4f5;padding:1px 4px;border-radius:3px;font-size:10px;">onescale:upsell</code> to control classification
+    </span>
+  </div>
+  <div class="mockup-body" style="padding:0;overflow-x:auto;">
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead>
+        <tr style="background:#fafafa;border-bottom:1px solid #e5e7eb;">
+          <th style="text-align:left;padding:10px 14px;font-weight:600;color:#52525b;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Product</th>
+          <th style="text-align:right;padding:10px 14px;font-weight:600;color:#52525b;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Revenue</th>
+          <th style="text-align:right;padding:10px 14px;font-weight:600;color:#52525b;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Orders</th>
+          <th style="text-align:right;padding:10px 14px;font-weight:600;color:#52525b;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">COGS</th>
+          <th style="text-align:right;padding:10px 14px;font-weight:600;color:#52525b;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">ROAS</th>
+          <th style="text-align:center;padding:10px 14px;font-weight:600;color:#52525b;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Type</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- MAIN product -->
+        <tr style="border-bottom:1px solid #f4f4f5;">
+          <td style="padding:12px 14px;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div style="width:36px;height:36px;border-radius:8px;background:#e0e7ff;display:flex;align-items:center;justify-content:center;font-size:16px;">📓</div>
+              <div>
+                <div style="font-weight:600;color:#18181b;">365 Day Journal</div>
+                <div style="font-size:11px;color:#a1a1aa;">SKU: JNL-365</div>
+              </div>
+            </div>
+          </td>
+          <td style="text-align:right;padding:12px 14px;font-weight:600;color:#18181b;">$12,450</td>
+          <td style="text-align:right;padding:12px 14px;color:#52525b;">847</td>
+          <td style="text-align:right;padding:12px 14px;color:#52525b;">$3,120</td>
+          <td style="text-align:right;padding:12px 14px;font-weight:600;color:#18181b;">3.2x</td>
+          <td style="text-align:center;padding:12px 14px;">
+            <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:600;color:#059669;cursor:pointer;" title="Click to change">
+              <span style="width:7px;height:7px;border-radius:50%;background:#059669;"></span>
+              MAIN
+            </span>
+          </td>
+        </tr>
+
+        <!-- UPSELL product -->
+        <tr style="border-bottom:1px solid #f4f4f5;">
+          <td style="padding:12px 14px;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div style="width:36px;height:36px;border-radius:8px;background:#dbeafe;display:flex;align-items:center;justify-content:center;font-size:16px;">📖</div>
+              <div>
+                <div style="font-weight:600;color:#18181b;">Bonus Workbook</div>
+                <div style="font-size:11px;color:#a1a1aa;">SKU: WBK-001</div>
+              </div>
+            </div>
+          </td>
+          <td style="text-align:right;padding:12px 14px;font-weight:600;color:#18181b;">$2,100</td>
+          <td style="text-align:right;padding:12px 14px;color:#52525b;">612</td>
+          <td style="text-align:right;padding:12px 14px;color:#52525b;">$420</td>
+          <td style="text-align:right;padding:12px 14px;color:#a1a1aa;">—</td>
+          <td style="text-align:center;padding:12px 14px;">
+            <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:600;color:#2563eb;cursor:pointer;" title="Click to change">
+              <span style="width:7px;height:7px;border-radius:50%;background:#2563eb;"></span>
+              UPSELL
+            </span>
+          </td>
+        </tr>
+
+        <!-- BUNDLE product -->
+        <tr style="border-bottom:1px solid #f4f4f5;">
+          <td style="padding:12px 14px;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div style="width:36px;height:36px;border-radius:8px;background:#fef3c7;display:flex;align-items:center;justify-content:center;font-size:16px;">📦</div>
+              <div>
+                <div style="font-weight:600;color:#18181b;">Starter Bundle Pack</div>
+                <div style="font-size:11px;color:#a1a1aa;">SKU: BDL-001</div>
+              </div>
+            </div>
+          </td>
+          <td style="text-align:right;padding:12px 14px;font-weight:600;color:#18181b;">$4,200</td>
+          <td style="text-align:right;padding:12px 14px;color:#52525b;">210</td>
+          <td style="text-align:right;padding:12px 14px;color:#52525b;">$1,050</td>
+          <td style="text-align:right;padding:12px 14px;font-weight:600;color:#18181b;">2.8x</td>
+          <td style="text-align:center;padding:12px 14px;">
+            <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:600;color:#7c3aed;cursor:pointer;" title="Click to change">
+              <span style="width:7px;height:7px;border-radius:50%;background:#7c3aed;"></span>
+              BUNDLE
+            </span>
+          </td>
+        </tr>
+
+        <!-- EXCLUDED product -->
+        <tr style="border-bottom:1px solid #f4f4f5;background:#fafafa;">
+          <td style="padding:12px 14px;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div style="width:36px;height:36px;border-radius:8px;background:#f4f4f5;display:flex;align-items:center;justify-content:center;font-size:16px;opacity:0.5;">🎁</div>
+              <div>
+                <div style="font-weight:600;color:#a1a1aa;text-decoration:line-through;">Gift Card</div>
+                <div style="font-size:11px;color:#d4d4d8;">SKU: GC-25</div>
+              </div>
+            </div>
+          </td>
+          <td style="text-align:right;padding:12px 14px;font-weight:600;color:#a1a1aa;text-decoration:line-through;">$450</td>
+          <td style="text-align:right;padding:12px 14px;color:#d4d4d8;">23</td>
+          <td style="text-align:right;padding:12px 14px;color:#d4d4d8;">—</td>
+          <td style="text-align:right;padding:12px 14px;color:#d4d4d8;">—</td>
+          <td style="text-align:center;padding:12px 14px;">
+            <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:600;color:#a1a1aa;cursor:pointer;" title="Click to change">
+              <span style="width:7px;height:7px;border-radius:50%;background:#d4d4d8;border:1px solid #a1a1aa;"></span>
+              EXCLUDED
+            </span>
+          </td>
+        </tr>
+
+        <!-- PENDING product -->
+        <tr style="border-bottom:1px solid #f4f4f5;">
+          <td style="padding:12px 14px;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div style="width:36px;height:36px;border-radius:8px;background:#f5f3ff;display:flex;align-items:center;justify-content:center;font-size:16px;">✨</div>
+              <div>
+                <div style="font-weight:600;color:#18181b;">New Product</div>
+                <div style="font-size:11px;color:#a1a1aa;">SKU: NP-001</div>
+              </div>
+            </div>
+          </td>
+          <td style="text-align:right;padding:12px 14px;font-weight:600;color:#18181b;">$120</td>
+          <td style="text-align:right;padding:12px 14px;color:#52525b;">8</td>
+          <td style="text-align:right;padding:12px 14px;color:#52525b;">—</td>
+          <td style="text-align:right;padding:12px 14px;color:#a1a1aa;">—</td>
+          <td style="text-align:center;padding:12px 14px;">
+            <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:500;color:#a1a1aa;cursor:default;">
+              <svg width="14" height="14" viewBox="0 0 14 14" style="animation:spin 1s linear infinite;">
+                <circle cx="7" cy="7" r="5.5" fill="none" stroke="#d4d4d8" stroke-width="1.5"/>
+                <path d="M 7 1.5 A 5.5 5.5 0 0 1 12.5 7" fill="none" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+              PENDING
+            </span>
+          </td>
+        </tr>
+
+        <!-- AUTO (low confidence) product -->
+        <tr style="border-bottom:1px solid #f4f4f5;">
+          <td style="padding:12px 14px;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div style="width:36px;height:36px;border-radius:8px;background:#fff7ed;display:flex;align-items:center;justify-content:center;font-size:16px;">🔮</div>
+              <div>
+                <div style="font-weight:600;color:#18181b;">Mystery Item</div>
+                <div style="font-size:11px;color:#a1a1aa;">SKU: MYS-001</div>
+              </div>
+            </div>
+          </td>
+          <td style="text-align:right;padding:12px 14px;font-weight:600;color:#18181b;">$340</td>
+          <td style="text-align:right;padding:12px 14px;color:#52525b;">45</td>
+          <td style="text-align:right;padding:12px 14px;color:#52525b;">$85</td>
+          <td style="text-align:right;padding:12px 14px;color:#a1a1aa;">—</td>
+          <td style="text-align:center;padding:12px 14px;">
+            <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:600;color:#d97706;background:#fffbeb;border:1px solid #fde68a;cursor:pointer;" title="Click to review — low confidence auto-detection">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2.5"><path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+              AUTO ▾
+            </span>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<style>
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  code { font-family: 'SF Mono', 'Fira Code', monospace; }
+</style>
+
+<div class="section" style="margin-top:32px;">
+  <h3>Badge Legend</h3>
+  <div style="display:grid;grid-template-columns:repeat(3, 1fr);gap:12px;">
+    <div style="padding:10px 14px;background:#f0fdf4;border-radius:8px;border:1px solid #bbf7d0;">
+      <span style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:#059669;">
+        <span style="width:7px;height:7px;border-radius:50%;background:#059669;"></span> MAIN
+      </span>
+      <div style="font-size:11px;color:#52525b;margin-top:4px;">Included in P&L, receives ad spend attribution</div>
+    </div>
+    <div style="padding:10px 14px;background:#eff6ff;border-radius:8px;border:1px solid #bfdbfe;">
+      <span style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:#2563eb;">
+        <span style="width:7px;height:7px;border-radius:50%;background:#2563eb;"></span> UPSELL
+      </span>
+      <div style="font-size:11px;color:#52525b;margin-top:4px;">Revenue shown as "Upsell Revenue" line, no ad spend</div>
+    </div>
+    <div style="padding:10px 14px;background:#f5f3ff;border-radius:8px;border:1px solid #ddd6fe;">
+      <span style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:#7c3aed;">
+        <span style="width:7px;height:7px;border-radius:50%;background:#7c3aed;"></span> BUNDLE
+      </span>
+      <div style="font-size:11px;color:#52525b;margin-top:4px;">Revenue as bundle total, no component breakdown</div>
+    </div>
+    <div style="padding:10px 14px;background:#f4f4f5;border-radius:8px;border:1px solid #e4e4e7;">
+      <span style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:#a1a1aa;">
+        <span style="width:7px;height:7px;border-radius:50%;background:#d4d4d8;border:1px solid #a1a1aa;"></span> EXCLUDED
+      </span>
+      <div style="font-size:11px;color:#52525b;margin-top:4px;">Removed from all P&L, row greyed out</div>
+    </div>
+    <div style="padding:10px 14px;background:#fafafa;border-radius:8px;border:1px solid #e4e4e7;">
+      <span style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:500;color:#a1a1aa;">
+        <svg width="12" height="12" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="#d4d4d8" stroke-width="1.5"/><path d="M 7 1.5 A 5.5 5.5 0 0 1 12.5 7" fill="none" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round"/></svg>
+        PENDING
+      </span>
+      <div style="font-size:11px;color:#52525b;margin-top:4px;">Need more data (&lt;10 orders), included with warning</div>
+    </div>
+    <div style="padding:10px 14px;background:#fffbeb;border-radius:8px;border:1px solid #fde68a;">
+      <span style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:#d97706;">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2.5"><path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+        AUTO ▾
+      </span>
+      <div style="font-size:11px;color:#52525b;margin-top:4px;">Confidence &lt;65%, clickable to review & override</div>
+    </div>
+  </div>
+</div>

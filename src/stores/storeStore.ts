@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Store } from '@/types/store';
+import { clearCachePrefix } from '@/services/perfCache';
 
 async function readJsonSafe<T>(res: Response): Promise<T> {
   const text = await res.text();
@@ -66,7 +67,15 @@ export const useStoreStore = create<StoreState>()(
       },
 
       setActiveStore: (storeId) => {
+        const prev = get().activeStoreId;
         set({ activeStoreId: storeId });
+        if (prev && prev !== storeId) {
+          // Flush all store-scoped caches so new store data loads immediately
+          clearCachePrefix('pnl:');
+          clearCachePrefix('product-pnl:');
+          clearCachePrefix('insights:');
+          clearCachePrefix('orders:');
+        }
       },
 
       addStore: async (data) => {

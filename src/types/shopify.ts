@@ -57,6 +57,7 @@ export interface ShopifyVariant {
   compareAtPrice: string | null;
   sku: string;
   inventoryQuantity: number;
+  requiresShipping: boolean;
 }
 
 export interface ShopifyImage {

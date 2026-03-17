@@ -1,48 +1,24 @@
 'use client';
 
-import type { ProductPnLData } from '@/types/productPnL';
+import type { ProductPnLData, ProductCategory } from '@/types/productPnl';
 import { formatCurrency, formatPercentage, cn } from '@/lib/utils';
-import { ExternalLink, Package, Megaphone, Globe } from 'lucide-react';
+import { Package, Megaphone } from 'lucide-react';
+import { ClassificationBadge } from './ClassificationBadge';
 
 interface ProductPnLCardProps {
   product: ProductPnLData;
+  isDigital?: boolean;
+  storeId: string;
+  onClassificationChange?: (productId: string, newClassification: ProductCategory) => void;
 }
 
-function fmtMetric(key: string, value: number): string {
-  if (key === 'roas') return `${value.toFixed(2)}x`;
-  if (key === 'cpc' || key === 'cpm' || key === 'aov' || key === 'spend' || key === 'costPerPurchase')
-    return formatCurrency(value);
-  if (key === 'ctr' || key === 'atcRate') return formatPercentage(value);
-  if (key === 'impressions' || key === 'clicks' || key === 'purchases' || key === 'reach')
-    return value.toLocaleString();
-  if (key === 'frequency') return value.toFixed(2);
-  return value.toFixed(2);
-}
-
-const fbMetricBadges = [
-  { key: 'roas' as const, label: 'ROAS', bg: 'bg-emerald-500/10 text-emerald-400' },
-  { key: 'spend' as const, label: 'Spend', bg: 'bg-orange-500/10 text-orange-400' },
-  { key: 'cpc' as const, label: 'CPC', bg: 'bg-sky-500/10 text-sky-400' },
-  { key: 'cpm' as const, label: 'CPM', bg: 'bg-violet-500/10 text-violet-400' },
-  { key: 'ctr' as const, label: 'CTR', bg: 'bg-amber-500/10 text-amber-400' },
-  { key: 'purchases' as const, label: 'Purchases', bg: 'bg-teal-500/10 text-teal-400' },
-  { key: 'costPerPurchase' as const, label: 'Cost/Purchase', bg: 'bg-rose-500/10 text-rose-400' },
-  { key: 'aov' as const, label: 'AOV', bg: 'bg-pink-500/10 text-pink-400' },
-  { key: 'impressions' as const, label: 'Impr.', bg: 'bg-blue-500/10 text-blue-400' },
-  { key: 'clicks' as const, label: 'Clicks', bg: 'bg-indigo-500/10 text-indigo-400' },
-  { key: 'reach' as const, label: 'Reach', bg: 'bg-fuchsia-500/10 text-fuchsia-400' },
-  { key: 'frequency' as const, label: 'Freq.', bg: 'bg-lime-500/10 text-lime-400' },
-  { key: 'atcRate' as const, label: 'ATC Rate', bg: 'bg-cyan-500/10 text-cyan-400' },
-];
-
-export function ProductPnLCard({ product }: ProductPnLCardProps) {
+export function ProductPnLCard({ product, isDigital = false, storeId, onClassificationChange }: ProductPnLCardProps) {
   const isPositiveProfit = product.netProfit >= 0;
-  const isPositiveMargin = product.margin >= 0;
   const shippingAndFees = product.shipping + product.fees;
 
   return (
-    <div className="rounded-lg border border-border bg-surface p-4 hover:bg-surface-hover transition-colors">
-      {/* Top row: Product info */}
+    <div className={cn('rounded-lg border border-border bg-surface p-4 hover:bg-surface-hover transition-colors', product.category === 'excluded' && 'opacity-50')}>
+      {/* Product info */}
       <div className="flex items-center gap-3">
         {product.productImage ? (
           <img
@@ -60,106 +36,99 @@ export function ProductPnLCard({ product }: ProductPnLCardProps) {
             {product.productName}
           </h4>
           <div className="flex items-center gap-2">
-            <span className="rounded bg-surface-elevated px-1.5 py-0.5 text-xs font-mono text-text-muted">
-              {product.sku}
-            </span>
+            {product.sku && (
+              <span className="text-xs text-text-muted font-mono">{product.sku}</span>
+            )}
             {product.isAdvertised && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-brand/15 px-1.5 py-0.5 text-[10px] font-medium text-brand">
+              <span className="inline-flex items-center gap-1 text-[10px] font-medium text-text-secondary">
                 <Megaphone className="h-2.5 w-2.5" />
-                Running Ads
+                Ad
               </span>
             )}
           </div>
         </div>
-        {product.shopifyUrl && (
-          <a
-            href={product.shopifyUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex-shrink-0 text-text-muted hover:text-text-secondary transition-colors"
-            title="View in Shopify"
-          >
-            <ExternalLink className="h-4 w-4" />
-          </a>
-        )}
+        <ClassificationBadge
+          productId={product.productId}
+          storeId={storeId}
+          classification={product.category}
+          confidence={product.classificationConfidence}
+          method={product.classificationMethod}
+          signals={product.classificationSignals}
+          behavioralSignals={product.behavioralSignals}
+          parentProduct={product.parentProduct}
+          needsReview={product.needsReview}
+          manualOverride={product.manualOverride}
+          lastAnalyzed={product.lastAnalyzed}
+          shopifyUrl={product.shopifyUrl}
+          onClassificationChange={onClassificationChange}
+        />
       </div>
 
-      {/* Ad info (if advertised) */}
-      {product.isAdvertised && product.adName && (
-        <div className="mt-2 rounded bg-brand/5 px-2.5 py-1.5 border border-brand/10">
-          <div className="flex items-center gap-1.5 text-[10px] text-text-muted">
-            <Globe className="h-3 w-3 text-brand" />
-            <span className="truncate font-medium text-text-secondary">
-              {product.adName}
-            </span>
+      {/* Confidence bar + parent product */}
+      {product.classificationConfidence != null && product.classificationConfidence > 0 && (
+        <div className="mt-2 flex items-center gap-2">
+          <div className="flex-1 h-1 rounded-full bg-surface overflow-hidden">
+            <div
+              className={cn(
+                'h-full rounded-full transition-all',
+                product.classificationConfidence >= 75 ? 'bg-emerald-500' :
+                product.classificationConfidence >= 50 ? 'bg-amber-500' : 'bg-red-400'
+              )}
+              style={{ width: `${product.classificationConfidence}%` }}
+            />
           </div>
-          <p className="mt-0.5 truncate text-[10px] text-text-muted">
-            {product.campaignName} &middot; {product.adSetName}
-          </p>
+          <span className="text-[9px] text-text-muted font-medium">{product.classificationConfidence}%</span>
+        </div>
+      )}
+      {product.parentProduct && (
+        <div className="mt-1 text-[10px] text-text-muted">
+          {product.category === 'downsell' ? 'Downsell of' : 'Upsell for'}: <span className="text-text-secondary font-medium">{product.parentProduct}</span>
         </div>
       )}
 
-      {/* Middle section: P&L stats grid */}
-      <div className="mt-3 grid grid-cols-3 gap-2">
-        <div className="rounded bg-surface-elevated px-2 py-1.5">
-          <p className="text-[10px] font-medium uppercase tracking-wide text-text-muted">Revenue</p>
-          <p className="text-sm font-semibold text-emerald-400">{formatCurrency(product.revenue)}</p>
+      {/* P&L grid */}
+      <div className="mt-3 grid grid-cols-3 gap-x-4 gap-y-2">
+        <div>
+          <p className="text-[10px] text-text-muted uppercase tracking-wide">Revenue</p>
+          <p className="text-sm font-semibold text-text-primary">{formatCurrency(product.revenue)}</p>
         </div>
-        <div className="rounded bg-surface-elevated px-2 py-1.5">
-          <p className="text-[10px] font-medium uppercase tracking-wide text-text-muted">COGS</p>
-          <p className="text-sm font-semibold text-red-400">{formatCurrency(product.cogs)}</p>
+        {!isDigital && (
+        <div>
+          <p className="text-[10px] text-text-muted uppercase tracking-wide">COGS</p>
+          <p className="text-sm font-semibold text-text-primary">{formatCurrency(product.cogs)}</p>
         </div>
-        <div className="rounded bg-surface-elevated px-2 py-1.5">
-          <p className="text-[10px] font-medium uppercase tracking-wide text-text-muted">Net Profit</p>
-          <p className={cn('text-sm font-semibold', isPositiveProfit ? 'text-emerald-400' : 'text-red-400')}>
+        )}
+        <div>
+          <p className="text-[10px] text-text-muted uppercase tracking-wide">Net Profit</p>
+          <p className={cn('text-sm font-semibold', isPositiveProfit ? 'text-emerald-500' : 'text-red-500')}>
             {formatCurrency(product.netProfit)}
           </p>
         </div>
-        <div className="rounded bg-surface-elevated px-2 py-1.5">
-          <p className="text-[10px] font-medium uppercase tracking-wide text-text-muted">Margin %</p>
-          <p className={cn('text-sm font-semibold', isPositiveMargin ? 'text-emerald-400' : 'text-red-400')}>
+        <div>
+          <p className="text-[10px] text-text-muted uppercase tracking-wide">Margin</p>
+          <p className={cn('text-sm font-semibold', isPositiveProfit ? 'text-emerald-500' : 'text-red-500')}>
             {formatPercentage(product.margin)}
           </p>
         </div>
-        <div className="rounded bg-surface-elevated px-2 py-1.5">
-          <p className="text-[10px] font-medium uppercase tracking-wide text-text-muted">Units Sold</p>
+        <div>
+          <p className="text-[10px] text-text-muted uppercase tracking-wide">Units</p>
           <p className="text-sm font-semibold text-text-primary">{product.unitsSold.toLocaleString()}</p>
         </div>
-        <div className="rounded bg-surface-elevated px-2 py-1.5">
-          <p className="text-[10px] font-medium uppercase tracking-wide text-text-muted">Ship + Fees</p>
-          <p className="text-sm font-semibold text-red-400">{formatCurrency(shippingAndFees)}</p>
+        <div>
+          <p className="text-[10px] text-text-muted uppercase tracking-wide">Fees</p>
+          <p className="text-sm font-semibold text-text-primary">{formatCurrency(shippingAndFees)}</p>
         </div>
       </div>
 
-      {/* Bottom section: FB metric badges */}
-      <div className="mt-3 border-t border-border pt-3">
-        <div className="mb-1.5 flex items-center gap-1">
-          <Megaphone className="h-3 w-3 text-text-muted" />
-          <span className="text-[10px] text-text-muted">
-            {product.isAdvertised ? 'Product-level FB metrics' : 'Not actively advertised'}
-          </span>
+      {/* Ad spend row — only if advertised */}
+      {product.isAdvertised && product.fbMetrics.spend > 0 && (
+        <div className="mt-2 pt-2 border-t border-border flex items-center justify-between text-xs">
+          <span className="text-text-muted">Ad Spend</span>
+          <span className="text-text-primary font-semibold">{formatCurrency(product.fbMetrics.spend)}</span>
+          <span className="text-text-muted">ROAS</span>
+          <span className="text-text-primary font-semibold">{product.fbMetrics.roas.toFixed(2)}x</span>
         </div>
-        {product.isAdvertised ? (
-          <div className="flex flex-wrap gap-1.5">
-            {fbMetricBadges.map((badge) => (
-              <span
-                key={badge.key}
-                className={cn(
-                  'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium',
-                  badge.bg
-                )}
-              >
-                <span className="opacity-70">{badge.label}</span>
-                <span>{fmtMetric(badge.key, product.fbMetrics[badge.key])}</span>
-              </span>
-            ))}
-          </div>
-        ) : (
-          <p className="text-[10px] text-text-muted italic">
-            No ads running for this product. Add it to a campaign to see per-product metrics.
-          </p>
-        )}
-      </div>
+      )}
     </div>
   );
 }

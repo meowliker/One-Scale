@@ -7,6 +7,7 @@ import { PixelSetupGuide } from '@/components/tracking/PixelSetupGuide';
 import { ServerSideConfig } from '@/components/tracking/ServerSideConfig';
 import { AttributionModelSelector } from '@/components/tracking/AttributionModelSelector';
 import { TrackingHealthDashboard } from '@/components/tracking/TrackingHealthDashboard';
+import { AttributionHealthDashboard } from '@/components/tracking/AttributionHealthDashboard';
 
 interface TrackingDashboardClientProps {
   config: TrackingConfig;
@@ -17,6 +18,7 @@ const tabs = [
   { id: 'pixel', label: 'Pixel Setup' },
   { id: 'server', label: 'Server-Side' },
   { id: 'attribution', label: 'Attribution' },
+  { id: 'attribution-health', label: 'Attribution Health' },
   { id: 'health', label: 'Health' },
 ];
 
@@ -35,6 +37,7 @@ export function TrackingDashboardClient({
       {activeTab === 'attribution' && (
         <AttributionModelSelector currentModel={config.attributionModel} />
       )}
+      {activeTab === 'attribution-health' && <AttributionHealthDashboard />}
       {activeTab === 'health' && <TrackingHealthDashboard health={health} />}
     </div>
   );
