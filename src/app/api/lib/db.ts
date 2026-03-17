@@ -1693,6 +1693,8 @@ export function getTrackingEntityMetrics(
   // ROW_NUMBER partitions by COALESCE(order_id, event_id) so events without
   // order_id fall back to event_id (always unique). Shopify source is preferred
   // over browser/server because it has the authoritative order value.
+  // Priority: Prefer events WITH entity mapping. If both have mapping, prefer browser > server > shopify.
+  // Browser pixel with mapping is most accurate for click attribution.
   return db.prepare(`
     WITH deduped AS (
       SELECT
@@ -1704,13 +1706,19 @@ export function getTrackingEntityMetrics(
         ROW_NUMBER() OVER (
           PARTITION BY COALESCE(order_id, event_id)
           ORDER BY
-            CASE WHEN source = 'shopify' THEN 0 WHEN source = 'server' THEN 1 ELSE 2 END,
+            CASE 
+              WHEN (campaign_id IS NOT NULL OR adset_id IS NOT NULL OR ad_id IS NOT NULL) THEN
+                CASE WHEN source = 'browser' THEN 0 WHEN source = 'server' THEN 1 ELSE 2 END
+              ELSE
+                CASE WHEN source = 'shopify' THEN 3 WHEN source = 'server' THEN 4 ELSE 5 END
+            END,
             datetime(occurred_at) DESC
         ) AS rn
       FROM tracking_events
       WHERE store_id = ?
         AND datetime(occurred_at) >= datetime(?)
         AND datetime(occurred_at) <= datetime(?)
+        AND event_name != 'Refund'
         AND (campaign_id IS NOT NULL OR adset_id IS NOT NULL OR ad_id IS NOT NULL)
     )
     SELECT

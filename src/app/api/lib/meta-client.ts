@@ -485,11 +485,14 @@ export async function fetchMetaCampaigns(
   // --- OPTIMIZED: Single account-level insights call with level=campaign ---
   // Instead of N individual calls (one per campaign), make ONE call that returns
   // insights for ALL campaigns at once. This is the key fix for rate limiting.
+  // IMPORTANT: action_attribution_windows is required to get accurate conversion data.
+  // Using 7d_click,1d_view matches Meta Ads Manager default and Triple Whale methodology.
   const insightsFields = 'campaign_id,campaign_name,spend,impressions,reach,clicks,actions,action_values,ctr,cpc,cpm,unique_clicks,unique_ctr,quality_ranking,engagement_rate_ranking,conversion_rate_ranking';
   const insightsParams: Record<string, string> = {
     fields: insightsFields,
     level: 'campaign',
     limit: '500',
+    action_attribution_windows: JSON.stringify(['7d_click', '1d_view']),
     ...(options?.datePreset
       ? { date_preset: options.datePreset }
       : dateRange
@@ -549,6 +552,7 @@ export async function fetchMetaCampaigns(
       fields: insightsFields,
       level: 'campaign',
       limit: '500',
+      action_attribution_windows: JSON.stringify(['7d_click', '1d_view']),
       date_preset: 'last_30d',
     };
     try {
@@ -636,11 +640,13 @@ export async function fetchMetaAdSets(
   const insightsMap = new Map<string, Record<string, any>>();
   if (!options?.basicOnly) {
     // --- OPTIMIZED: Single campaign-level insights call with level=adset ---
+    // IMPORTANT: action_attribution_windows is required to get accurate conversion data.
     const insightsFields = 'adset_id,adset_name,spend,impressions,reach,clicks,actions,action_values,ctr,cpc,cpm,unique_clicks,unique_ctr,quality_ranking,engagement_rate_ranking,conversion_rate_ranking';
     const insightsParams: Record<string, string> = {
       fields: insightsFields,
       level: 'adset',
       limit: '500',
+      action_attribution_windows: JSON.stringify(['7d_click', '1d_view']),
       ...(options?.datePreset
         ? { date_preset: options.datePreset }
         : dateRange
@@ -677,6 +683,7 @@ export async function fetchMetaAdSets(
           fields: insightsFields,
           level: 'adset',
           limit: '500',
+          action_attribution_windows: JSON.stringify(['7d_click', '1d_view']),
           date_preset: 'last_30d',
         });
         if (fallbackResponse.data) {
@@ -825,11 +832,13 @@ export async function fetchMetaAds(
   }
 
   // --- OPTIMIZED: Single adset-level insights call with level=ad ---
+  // IMPORTANT: action_attribution_windows is required to get accurate conversion data.
   const insightsFields = 'ad_id,ad_name,spend,impressions,reach,clicks,actions,action_values,ctr,cpc,cpm,unique_clicks,unique_ctr,quality_ranking,engagement_rate_ranking,conversion_rate_ranking';
   const insightsParams: Record<string, string> = {
     fields: insightsFields,
     level: 'ad',
     limit: '500',
+    action_attribution_windows: JSON.stringify(['7d_click', '1d_view']),
     ...(options?.datePreset
       ? { date_preset: options.datePreset }
       : dateRange
@@ -894,6 +903,7 @@ export async function fetchMetaAds(
         fields: insightsFields,
         level: 'ad',
         limit: '500',
+        action_attribution_windows: JSON.stringify(['7d_click', '1d_view']),
         date_preset: fallbackPreset,
       });
       if (fallbackResponse.data) {
