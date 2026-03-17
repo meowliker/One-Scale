@@ -69,6 +69,9 @@ interface MetaInsightRow {
 
 // ---- Main Handler ----
 
+// pg_cron uses net.http_post — accept both GET and POST
+export async function POST(req: NextRequest) { return GET(req); }
+
 export async function GET(req: NextRequest) {
   if (req.headers.get('authorization') !== `Bearer ${process.env.CRON_SECRET}`) {
     return new Response('Unauthorized', { status: 401 });
