@@ -100,21 +100,43 @@ export async function GET(req: NextRequest) {
       const accessToken = shopifyConn.access_token;
       const shopDomain = shopifyConn.shop_domain;
 
-      // Fetch orders — default 20 minutes, or ?days=N for backfill
+      // Smart lookback: check when last order was synced for this store.
+      // If cron was down, auto-recover by looking back further.
       const backfillDays = parseInt(new URL(req.url).searchParams.get('days') || '0', 10);
-      const sinceMs = backfillDays > 0 ? backfillDays * 24 * 60 * 60 * 1000 : 20 * 60 * 1000;
-      const twentyMinAgo = new Date(Date.now() - sinceMs).toISOString();
+      let sinceMs: number;
 
-      // Fetch with pagination (for backfill mode)
+      if (backfillDays > 0) {
+        // Explicit backfill mode
+        sinceMs = backfillDays * 24 * 60 * 60 * 1000;
+      } else {
+        // Auto-recovery: check last synced order timestamp
+        const lastSynced = await rest<Array<{ synced_at: string }>>(
+          `/shopify_orders_cache?store_id=eq.${encodeURIComponent(store.id)}&select=synced_at&order=synced_at.desc&limit=1`
+        ).catch(() => []);
+
+        if (lastSynced && lastSynced.length > 0) {
+          const lastSyncTime = new Date(lastSynced[0].synced_at).getTime();
+          const gap = Date.now() - lastSyncTime;
+          // Look back to last sync + 1 hour buffer, minimum 2 hours, maximum 48 hours
+          sinceMs = Math.max(2 * 60 * 60 * 1000, Math.min(gap + 60 * 60 * 1000, 48 * 60 * 60 * 1000));
+        } else {
+          // No orders synced yet — look back 48 hours
+          sinceMs = 48 * 60 * 60 * 1000;
+        }
+      }
+
+      const sinceDate = new Date(Date.now() - sinceMs).toISOString();
+
+      // Always paginate to handle large gaps
       let allOrders: ShopifyOrderRaw[] = [];
       let sinceId: string | undefined;
       let hasMore = true;
-      const maxPages = backfillDays > 0 ? 100 : 1; // Paginate only for backfill
+      const maxPages = 100;
       let page = 0;
 
       while (hasMore && page < maxPages) {
         const params: Record<string, string> = {
-          created_at_min: twentyMinAgo,
+          created_at_min: sinceDate,
           status: 'any',
           limit: '250',
         };
@@ -133,10 +155,10 @@ export async function GET(req: NextRequest) {
       }
 
       const orders = allOrders;
-      let upserted = 0;
+      const nowIso = new Date().toISOString();
 
-      for (const order of orders) {
-        // Calculate refund total
+      // Map all orders to upsert rows
+      const rows = orders.map(order => {
         let refundTotal = 0;
         if (order.refunds && order.refunds.length > 0) {
           for (const refund of order.refunds) {
@@ -147,60 +169,58 @@ export async function GET(req: NextRequest) {
           }
         }
 
-        // Determine order status
         let orderStatus = 'open';
-        if (order.cancelled_at) {
-          orderStatus = 'cancelled';
-        } else if (order.financial_status === 'refunded') {
-          orderStatus = 'refunded';
-        } else if (order.financial_status === 'partially_refunded') {
-          orderStatus = 'partially_refunded';
-        } else if (order.closed_at) {
-          orderStatus = 'closed';
-        }
+        if (order.cancelled_at) orderStatus = 'cancelled';
+        else if (order.financial_status === 'refunded') orderStatus = 'refunded';
+        else if (order.financial_status === 'partially_refunded') orderStatus = 'partially_refunded';
+        else if (order.closed_at) orderStatus = 'closed';
 
-        // Calculate total shipping from shipping lines
         const totalShipping = (order.shipping_lines || []).reduce(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (sum: number, line: any) => sum + parseFloat(line.price || '0'), 0
         );
 
-        // Upsert into shopify_orders_cache (idempotent: store_id + shopify_order_id is unique)
+        return {
+          store_id: store.id,
+          shopify_order_id: String(order.id),
+          order_name: order.name,
+          email: order.email,
+          created_at: order.created_at,
+          updated_at: order.updated_at,
+          cancelled_at: order.cancelled_at,
+          financial_status: order.financial_status,
+          fulfillment_status: order.fulfillment_status,
+          total_price: parseFloat(order.total_price) || 0,
+          subtotal_price: parseFloat(order.subtotal_price) || 0,
+          total_tax: parseFloat(order.total_tax) || 0,
+          total_discounts: parseFloat(order.total_discounts) || 0,
+          refund_total: refundTotal,
+          currency: order.currency,
+          line_items: JSON.stringify(order.line_items),
+          customer_id: order.customer?.id ? String(order.customer.id) : null,
+          customer_email: order.customer?.email || order.email,
+          order_status: orderStatus,
+          tags: order.tags || '',
+          landing_site: order.landing_site,
+          referring_site: order.referring_site,
+          discount_codes: JSON.stringify(order.discount_codes || []),
+          total_shipping_price: totalShipping,
+          synced_at: nowIso,
+        };
+      });
+
+      // BATCH upsert (200 at a time) instead of one-by-one
+      const BATCH_SIZE = 200;
+      for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+        const batch = rows.slice(i, i + BATCH_SIZE);
         await rest('/shopify_orders_cache?on_conflict=store_id,shopify_order_id', {
           method: 'POST',
-          headers: {
-            Prefer: 'resolution=merge-duplicates',
-          },
-          body: JSON.stringify({
-            store_id: store.id,
-            shopify_order_id: String(order.id),
-            order_name: order.name,
-            email: order.email,
-            created_at: order.created_at,
-            updated_at: order.updated_at,
-            cancelled_at: order.cancelled_at,
-            financial_status: order.financial_status,
-            fulfillment_status: order.fulfillment_status,
-            total_price: parseFloat(order.total_price) || 0,
-            subtotal_price: parseFloat(order.subtotal_price) || 0,
-            total_tax: parseFloat(order.total_tax) || 0,
-            total_discounts: parseFloat(order.total_discounts) || 0,
-            refund_total: refundTotal,
-            currency: order.currency,
-            line_items: JSON.stringify(order.line_items),
-            customer_id: order.customer?.id ? String(order.customer.id) : null,
-            customer_email: order.customer?.email || order.email,
-            order_status: orderStatus,
-            tags: order.tags || '',
-            landing_site: order.landing_site,
-            referring_site: order.referring_site,
-            discount_codes: JSON.stringify(order.discount_codes || []),
-            total_shipping_price: totalShipping,
-            synced_at: new Date().toISOString(),
-          }),
+          headers: { Prefer: 'resolution=merge-duplicates' },
+          body: JSON.stringify(batch),
         });
-
-        upserted++;
       }
+
+      const upserted = rows.length;
 
       // ---- Sync disputes/chargebacks via GraphQL ----
       let disputesSynced = 0;
