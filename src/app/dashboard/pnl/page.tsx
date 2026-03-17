@@ -302,85 +302,63 @@ export default function PnLPage() {
   }, [connectionReady, activeStoreId, fetchData]);
 
   // ── Auto-poll live data every 30s (Shopify-style real-time updates) ──────────
+  // Uses /api/pnl/sync (same snapshot source as dashboard) so Live section
+  // and Period View always show consistent numbers. Snapshots are updated
+  // in real-time by order webhooks and hourly by pg_cron.
   useEffect(() => {
     if (!activeStoreId || !connectionReady) return;
 
     let active = true;
+    let lastSyncedAt = '';
 
     const pollLive = async () => {
       if (!active || document.hidden) return;
 
       try {
         const res = await fetch(
-          `/api/prism/today-live?storeId=${encodeURIComponent(activeStoreId)}`
+          `/api/pnl/sync?storeId=${encodeURIComponent(activeStoreId)}&days=1`
         );
         if (!res.ok || !active) return;
-        const live = await res.json() as {
-          date: string;
-          orders: number;
-          estimated_revenue: number;
-          estimated_fees: number;
-          ad_spend: number;
-          estimated_net_profit: number;
+        const json = await res.json() as {
+          data?: PnLEntry[];
+          meta?: { lastSyncedAt: string | null };
         };
 
         // Discard if store switched during fetch
         if (!active || fetchStoreIdRef.current !== activeStoreId) return;
 
-        const revenue = live.estimated_revenue || 0;
-        const fees = live.estimated_fees || 0;
-        const adSpend = live.ad_spend || 0;
-        const orders = live.orders || 0;
+        const entries = json.data || [];
+        if (entries.length === 0) return;
 
+        // Skip if snapshot hasn't been updated since last poll
+        const newSyncedAt = json.meta?.lastSyncedAt || '';
+        if (newSyncedAt && newSyncedAt === lastSyncedAt) return;
+        lastSyncedAt = newSyncedAt;
+
+        // Merge fresh snapshot entries into dailyPnL
         setDailyPnL(prev => {
-          const idx = prev.findIndex(d => d.date === live.date);
-          const existing = idx >= 0 ? prev[idx] : null;
-
-          // Skip update if nothing changed (avoid unnecessary re-renders)
-          if (
-            existing &&
-            Math.abs(existing.revenue - revenue) < 0.01 &&
-            (existing.orderCount ?? 0) === orders &&
-            Math.abs(existing.adSpend - adSpend) < 0.01
-          ) {
-            return prev;
-          }
-
-          // Preserve deep-computed values from full getDailyPnL() computation
-          const cogs = existing?.cogs || 0;
-          const shipping = existing?.shipping || 0;
-          const refunds = existing?.refunds || 0;
-          const chargebackLoss = existing?.chargebackLoss || 0;
-          const chargebackWon = existing?.chargebackWon || 0;
-          const adjustments = existing?.adjustments || 0;
-
-          const netProfit = revenue - cogs - adSpend - shipping - fees
-            - refunds - chargebackLoss + chargebackWon + adjustments;
-          const margin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
-
-          const updated: PnLEntry = {
-            ...(existing || { date: live.date, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0 }),
-            date: live.date,
-            revenue,
-            cogs,
-            adSpend,
-            shipping,
-            fees,
-            refunds,
-            netProfit,
-            margin,
-            orderCount: orders,
-            chargebackLoss,
-            chargebackWon,
-            adjustments,
-          };
-
-          if (idx === -1) {
-            return [...prev, updated].sort((a, b) => a.date.localeCompare(b.date));
-          }
+          let changed = false;
           const next = [...prev];
-          next[idx] = updated;
-          return next;
+          for (const entry of entries) {
+            const idx = next.findIndex(d => d.date === entry.date);
+            if (idx >= 0) {
+              // Only update if values actually changed
+              if (
+                next[idx].revenue !== entry.revenue ||
+                (next[idx].orderCount ?? 0) !== (entry.orderCount ?? 0) ||
+                next[idx].adSpend !== entry.adSpend ||
+                next[idx].fees !== entry.fees
+              ) {
+                next[idx] = entry;
+                changed = true;
+              }
+            } else {
+              next.push(entry);
+              changed = true;
+            }
+          }
+          if (!changed) return prev;
+          return next.sort((a, b) => a.date.localeCompare(b.date));
         });
 
         const now = new Date();
