@@ -29,6 +29,7 @@ import { SlackConfig } from '@/components/integrations/SlackConfig';
 import { ImportCreativeModal } from '@/components/integrations/ImportCreativeModal';
 import { ShopifyConnectModal } from '@/components/integrations/ShopifyConnectModal';
 import { MetaConnectionDetails } from '@/components/integrations/MetaConnectionDetails';
+import { ClickUpConnectModal } from '@/components/integrations/ClickUpConnectModal';
 
 type PanelTab = 'clickup' | 'google_drive' | 'slack';
 
@@ -58,6 +59,7 @@ export function IntegrationsClient() {
 
   // Modal states
   const [shopifyModalOpen, setShopifyModalOpen] = useState(false);
+  const [clickupModalOpen, setClickupModalOpen] = useState(false);
   const [importModal, setImportModal] = useState<{
     isOpen: boolean;
     source: { type: 'clickup'; data: ClickUpTask } | { type: 'drive'; data: GoogleDriveFile } | null;
@@ -186,6 +188,44 @@ export function IntegrationsClient() {
     }
   };
 
+  // Handler: ClickUp connected successfully
+  const handleClickUpConnected = async () => {
+    setClickupModalOpen(false);
+    toast.success('ClickUp connected successfully!');
+    // Update integration card to show connected
+    setIntegrations((prev) =>
+      prev.map((intg) =>
+        intg.platform === 'clickup'
+          ? { ...intg, status: 'connected' as const, lastSynced: new Date().toISOString() }
+          : intg
+      )
+    );
+    // Reload tasks from real API
+    if (activeStoreId) {
+      try {
+        const res = await fetch(`/api/integrations/clickup/tasks?storeId=${encodeURIComponent(activeStoreId)}`);
+        if (res.ok) {
+          const data = await res.json() as { tasks?: Array<{ id: string; name: string; format: 'video' | 'image' | 'carousel'; notes: string }> };
+          if (data.tasks) {
+            setClickUpTasks(data.tasks.map((t) => ({
+              id: t.id,
+              name: t.name,
+              status: 'open' as const,
+              assignee: '',
+              dueDate: '',
+              priority: 'normal' as const,
+              creativeType: (t.format || 'video') as 'video' | 'image' | 'carousel',
+              description: t.notes || '',
+              tags: [],
+            })));
+          }
+        }
+      } catch {
+        // non-fatal
+      }
+    }
+  };
+
   useEffect(() => {
     async function loadData() {
       try {
@@ -202,6 +242,39 @@ export function IntegrationsClient() {
         setDriveFiles(files);
         setSlackChannels(channels);
         setSlackRules(rules);
+
+        // Check real ClickUp connection status and load real tasks if connected
+        if (activeStoreId) {
+          const statusRes = await fetch(`/api/integrations/clickup/connect?storeId=${encodeURIComponent(activeStoreId)}`);
+          if (statusRes.ok) {
+            const statusData = await statusRes.json() as { connected: boolean };
+            if (statusData.connected) {
+              setIntegrations((prev) =>
+                prev.map((intg) =>
+                  intg.platform === 'clickup' ? { ...intg, status: 'connected' as const } : intg
+                )
+              );
+              // Fetch real tasks from ClickUp
+              const tasksRes = await fetch(`/api/integrations/clickup/tasks?storeId=${encodeURIComponent(activeStoreId)}`);
+              if (tasksRes.ok) {
+                const tasksData = await tasksRes.json() as { tasks?: Array<{ id: string; name: string; format: 'video' | 'image' | 'carousel'; notes: string }> };
+                if (tasksData.tasks) {
+                  setClickUpTasks(tasksData.tasks.map((t) => ({
+                    id: t.id,
+                    name: t.name,
+                    status: 'open' as const,
+                    assignee: '',
+                    dueDate: '',
+                    priority: 'normal' as const,
+                    creativeType: (t.format || 'video') as 'video' | 'image' | 'carousel',
+                    description: t.notes || '',
+                    tags: [],
+                  })));
+                }
+              }
+            }
+          }
+        }
       } catch {
         toast.error('Failed to load integrations');
       } finally {
@@ -210,7 +283,7 @@ export function IntegrationsClient() {
     }
 
     loadData();
-  }, []);
+  }, [activeStoreId]);
 
   const handleSelectIntegration = (id: string) => {
     const integration = integrations.find((i) => i.id === id);
@@ -307,6 +380,33 @@ export function IntegrationsClient() {
       }
       // Connect — open shop domain modal first
       setShopifyModalOpen(true);
+      return;
+    }
+
+    // Handle ClickUp connect/disconnect
+    if (integration.platform === 'clickup') {
+      if (isConnected) {
+        // Disconnect
+        try {
+          await fetch('/api/integrations/clickup/connect', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ storeId: activeStoreId }),
+          });
+          toast.success('ClickUp disconnected');
+          setIntegrations((prev) =>
+            prev.map((intg) =>
+              intg.id === id ? { ...intg, status: 'disconnected' as const, lastSynced: null } : intg
+            )
+          );
+          if (activeIntegration === id) setActiveIntegration(null);
+        } catch {
+          toast.error('Failed to disconnect ClickUp');
+        }
+        return;
+      }
+      // Connect — open ClickUp token modal
+      setClickupModalOpen(true);
       return;
     }
 
@@ -501,6 +601,14 @@ export function IntegrationsClient() {
         storeId={activeStoreId}
         workspaceId={workspaceId}
       />
+
+      {clickupModalOpen && (
+        <ClickUpConnectModal
+          storeId={activeStoreId}
+          onSuccess={handleClickUpConnected}
+          onClose={() => setClickupModalOpen(false)}
+        />
+      )}
 
     </div>
   );

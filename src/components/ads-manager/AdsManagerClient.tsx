@@ -113,7 +113,7 @@ function SortableFixedHeader({
 
 export interface AdsManagerClientProps {
   initialCampaigns: Campaign[];
-  dateRange?: { since: string; until: string };
+  dateRange?: { since: string; until: string; preset?: string };
 }
 
 type SyncStageState = 'idle' | 'loading' | 'done';
@@ -1022,6 +1022,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         params.since = dateRange.since;
         params.until = dateRange.until;
         params.strictDate = '1';
+        if (dateRange.preset) params.preset = dateRange.preset;
       }
       params.mode = 'fast';
       if (!force) params.preferCache = '1';
@@ -1106,6 +1107,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         params.since = dateRange.since;
         params.until = dateRange.until;
         params.strictDate = '1';
+        if (dateRange.preset) params.preset = dateRange.preset;
       }
       params.mode = mode || 'fast';
       if (force) {
@@ -1139,6 +1141,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
           fallbackParams.since = dateRange.since;
           fallbackParams.until = dateRange.until;
           fallbackParams.strictDate = '1';
+          if (dateRange.preset) fallbackParams.preset = dateRange.preset;
         }
         const fallback = await apiClient<{ data: AdSet[] }>('/api/meta/adsets', {
           params: fallbackParams,
@@ -1218,6 +1221,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
         params.since = dateRange.since;
         params.until = dateRange.until;
         params.strictDate = '1';
+        if (dateRange.preset) params.preset = dateRange.preset;
       }
       params.mode = mode || 'fast';
       if (force) {

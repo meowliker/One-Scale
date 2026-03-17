@@ -254,6 +254,17 @@ function initDb(): Database.Database {
 
     CREATE INDEX IF NOT EXISTS idx_meta_endpoint_snapshots_lookup
       ON meta_endpoint_snapshots(store_id, endpoint, scope_id, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS third_party_tokens (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      store_id TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      access_token TEXT NOT NULL,
+      metadata TEXT,
+      connected_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(store_id, platform)
+    );
   `);
 
   // Migration: back-fill stores table from existing connections
@@ -2371,4 +2382,49 @@ export function getRecentMetaEndpointSnapshots<T>(
     }
   }
   return parsed;
+}
+
+// ------ Third-Party Token CRUD (ClickUp, etc.) ------
+
+export interface DbThirdPartyToken {
+  id: number;
+  store_id: string;
+  platform: string;
+  access_token: string;
+  metadata: string | null;
+  connected_at: string;
+  updated_at: string;
+}
+
+export function getThirdPartyToken(storeId: string, platform: string): DbThirdPartyToken | null {
+  const db = getDb();
+  const row = db.prepare(
+    'SELECT * FROM third_party_tokens WHERE store_id = ? AND platform = ?'
+  ).get(storeId, platform) as DbThirdPartyToken | undefined;
+  if (!row) return null;
+  return { ...row, access_token: decryptSecret(row.access_token) };
+}
+
+export function upsertThirdPartyToken(data: {
+  storeId: string;
+  platform: string;
+  accessToken: string;
+  metadata?: Record<string, unknown>;
+}): void {
+  const db = getDb();
+  const encrypted = encryptSecret(data.accessToken);
+  const metaJson = data.metadata ? JSON.stringify(data.metadata) : null;
+  db.prepare(`
+    INSERT INTO third_party_tokens (store_id, platform, access_token, metadata, updated_at)
+    VALUES (?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(store_id, platform) DO UPDATE SET
+      access_token = excluded.access_token,
+      metadata = COALESCE(excluded.metadata, third_party_tokens.metadata),
+      updated_at = datetime('now')
+  `).run(data.storeId, data.platform, encrypted, metaJson);
+}
+
+export function deleteThirdPartyToken(storeId: string, platform: string): void {
+  const db = getDb();
+  db.prepare('DELETE FROM third_party_tokens WHERE store_id = ? AND platform = ?').run(storeId, platform);
 }

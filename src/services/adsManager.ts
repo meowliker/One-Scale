@@ -22,6 +22,7 @@ async function realGetCampaigns(
     params.since = dateRange.since;
     params.until = dateRange.until;
     params.strictDate = '1';
+    if (dateRange.preset) params.preset = dateRange.preset;
   }
   if (options?.forceLive) {
     params.forceLive = '1';

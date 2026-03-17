@@ -34,6 +34,7 @@ export const sidebarConfig: SidebarConfig = {
     { label: 'P&L Tracking', href: '/dashboard/pnl', icon: DollarSign },
     { label: 'Expenses', href: '/dashboard/pnl/expenses', icon: Receipt },
     { label: 'Creative Testing', href: '/dashboard/creative-testing', icon: FlaskConical },
+    { label: 'Creative Launch', href: '/dashboard/creative-launch', icon: Rocket },
     { label: 'Automation', href: '/dashboard/automation', icon: Workflow },
     { label: 'Tracking', href: '/dashboard/tracking', icon: Crosshair },
     { label: 'Attribution', href: '/dashboard/attribution', icon: BarChart3 },
