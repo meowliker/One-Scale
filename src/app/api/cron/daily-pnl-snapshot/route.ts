@@ -182,15 +182,22 @@ export async function GET(req: NextRequest) {
         console.warn(`[daily-pnl] AutoSync failed for ${store.id}:`, err instanceof Error ? err.message : err);
       }
 
-      // Yesterday in store timezone
-      const yesterday = daysAgoInTimezone(1, tz);
-      const { start: tzStart, end: tzEnd } = getStoreDateRangeForPeriod(yesterday, yesterday, tz);
+      // Recompute last 7 days to catch retroactive BT changes:
+      // - Chargebacks won/lost (disputes resolved days/weeks later)
+      // - Refund adjustments (partial refunds, reversals)
+      // - Settlement corrections (1-3 day delay)
+      // - Meta attribution retroactive updates (up to 7 days)
+      const RETROACTIVE_DAYS = 7;
       const enc = (v: string) => encodeURIComponent(v);
+
+      for (let daysBack = 1; daysBack <= RETROACTIVE_DAYS; daysBack++) {
+      const dayDate = daysAgoInTimezone(daysBack, tz);
+      const { start: tzStart, end: tzEnd } = getStoreDateRangeForPeriod(dayDate, dayDate, tz);
 
       // ── Order-date P&L: get orders by date, match BT by order_id ──
       // This matches what Shopify shows the merchant.
 
-      // 1. Orders for yesterday (store timezone)
+      // 1. Orders for this day (store timezone)
       const dayOrders = await rest<Array<{
         shopify_order_id: string; total_price: number; subtotal_price: number;
         financial_status: string; line_items: string;
@@ -242,7 +249,7 @@ export async function GET(req: NextRequest) {
 
       // 4. Ad spend from meta_spend_cache
       const spendRows = await rest<Array<{ spend: number }>>(
-        `/meta_spend_cache?store_id=eq.${enc(store.id)}&date=eq.${yesterday}&select=spend`
+        `/meta_spend_cache?store_id=eq.${enc(store.id)}&date=eq.${dayDate}&select=spend`
       ).catch(() => []);
       const totalAdSpend = spendRows.reduce((s, r) => s + (Number(r.spend) || 0), 0);
 
@@ -299,7 +306,7 @@ export async function GET(req: NextRequest) {
         method: 'POST',
         headers: { Prefer: 'resolution=merge-duplicates' },
         body: JSON.stringify({
-          store_id: store.id, date: yesterday,
+          store_id: store.id, date: dayDate,
           revenue: orderRevenue,
           net_revenue: orderRevenue - totalRefunds,
           ad_spend: totalAdSpend, cogs: 0,
@@ -318,7 +325,7 @@ export async function GET(req: NextRequest) {
         method: 'POST',
         headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
         body: JSON.stringify([{
-          store_id: store.id, date: yesterday,
+          store_id: store.id, date: dayDate,
           revenue: orderRevenue,
           order_count: paidOrders.length,
           cogs: 0,
@@ -343,7 +350,9 @@ export async function GET(req: NextRequest) {
         }]),
       });
 
-      // Compute hourly sales profile from last 30 days of orders
+      } // end retroactive days loop
+
+      // Compute hourly sales profile from last 30 days of orders (once per store)
       try {
         const thirtyDaysAgo = daysAgoInTimezone(30, tz);
         const orderHours = await rest<Array<{ created_at: string }>>(
@@ -373,8 +382,8 @@ export async function GET(req: NextRequest) {
       }
 
       const elapsed = Date.now() - start;
-      await logCron('daily-pnl-snapshot', store.id, 'success', 1, null, elapsed);
-      results.push({ storeId: store.id, status: 'success', date: yesterday, warnings: 0 });
+      await logCron('daily-pnl-snapshot', store.id, 'success', RETROACTIVE_DAYS, null, elapsed);
+      results.push({ storeId: store.id, status: 'success', date: `last ${RETROACTIVE_DAYS} days`, warnings: 0 });
     } catch (err) {
       const elapsed = Date.now() - start;
       const message = err instanceof Error ? err.message : 'Unknown error';
