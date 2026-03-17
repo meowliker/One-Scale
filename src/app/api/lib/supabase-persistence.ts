@@ -1191,3 +1191,73 @@ export async function logStoreError(
     // Best-effort — don't let error logging break the caller
   }
 }
+
+// ------ Third-Party Token Persistence (ClickUp, etc.) ------
+
+interface SupabaseThirdPartyToken {
+  store_id: string;
+  platform: string;
+  access_token: string;
+  metadata: string | null;
+  connected_at: string;
+  updated_at: string;
+}
+
+export async function getPersistentThirdPartyToken(
+  storeId: string,
+  platform: string
+): Promise<{ access_token: string; metadata: string | null; connected_at: string } | null> {
+  try {
+    const rows = await rest<SupabaseThirdPartyToken[]>(
+      `/third_party_tokens?store_id=eq.${encodeURIComponent(storeId)}&platform=eq.${encodeURIComponent(platform)}&select=*&limit=1`
+    );
+    if (!rows || rows.length === 0) return null;
+    const row = rows[0];
+    return {
+      access_token: decryptSecret(row.access_token),
+      metadata: row.metadata,
+      connected_at: row.connected_at,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function upsertPersistentThirdPartyToken(data: {
+  storeId: string;
+  platform: string;
+  accessToken: string;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    const encrypted = encryptSecret(data.accessToken);
+    const metaJson = data.metadata ? JSON.stringify(data.metadata) : null;
+    await rest(
+      '/third_party_tokens',
+      {
+        method: 'POST',
+        headers: headers({ Prefer: 'resolution=merge-duplicates,return=minimal' }),
+        body: JSON.stringify({
+          store_id: data.storeId,
+          platform: data.platform,
+          access_token: encrypted,
+          metadata: metaJson,
+          updated_at: new Date().toISOString(),
+        }),
+      }
+    );
+  } catch {
+    // Table may not exist yet — silently ignore
+  }
+}
+
+export async function deletePersistentThirdPartyToken(storeId: string, platform: string): Promise<void> {
+  try {
+    await rest(
+      `/third_party_tokens?store_id=eq.${encodeURIComponent(storeId)}&platform=eq.${encodeURIComponent(platform)}`,
+      { method: 'DELETE', headers: headers({ Prefer: 'return=minimal' }) }
+    );
+  } catch {
+    // Silently ignore
+  }
+}

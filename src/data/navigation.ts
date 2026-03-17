@@ -19,6 +19,7 @@ import {
   FileText,
   Shield,
   Receipt,
+  Rocket,
 } from 'lucide-react';
 import type { SidebarConfig } from '@/types/navigation';
 
