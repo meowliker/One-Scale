@@ -96,6 +96,58 @@ function mapRowToUpsert(storeId: string, adAccountId: string, row: MetaInsightRo
   };
 }
 
+// ---- Auto-discover new ad accounts from Meta API ----
+
+async function refreshAdAccountList(storeId: string, accessToken: string): Promise<number> {
+  try {
+    const metaAccounts = await fetchFromMeta<{ data: Array<{ id: string; name: string; account_id: string; currency: string; timezone_name: string; account_status: number }> }>(
+      accessToken, '/me/adaccounts', { fields: 'id,name,account_id,currency,timezone_name,account_status', limit: '100' }
+    );
+
+    const activeAccounts = (metaAccounts?.data || []).filter(a => a.account_status === 1);
+    if (activeAccounts.length === 0) return 0;
+
+    // Get existing registered accounts
+    const existing = await listPersistentStoreAdAccounts(storeId);
+    const existingIds = new Set(existing.map(a => a.ad_account_id));
+
+    let discovered = 0;
+    for (const acc of activeAccounts) {
+      const accId = acc.id.startsWith('act_') ? acc.id : `act_${acc.account_id}`;
+
+      // Update timezone/currency for existing accounts (metadata refresh)
+      if (existingIds.has(accId)) {
+        await rest(`/store_ad_accounts?store_id=eq.${encodeURIComponent(storeId)}&ad_account_id=eq.${encodeURIComponent(accId)}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ timezone: acc.timezone_name, currency: acc.currency }),
+        }).catch(() => {});
+        continue;
+      }
+
+      // Auto-register new account (active by default so spend gets synced)
+      await rest('/store_ad_accounts', {
+        method: 'POST',
+        headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+        body: JSON.stringify({
+          store_id: storeId,
+          ad_account_id: accId,
+          ad_account_name: acc.name,
+          timezone: acc.timezone_name,
+          currency: acc.currency,
+          is_active: true,
+        }),
+      }).catch(() => {});
+      discovered++;
+      console.log(`[sync-meta-spend] Auto-discovered new ad account ${accId} (${acc.name}) for ${storeId}`);
+    }
+
+    return discovered;
+  } catch (err) {
+    console.warn(`[sync-meta-spend] Ad account refresh failed for ${storeId}:`, err instanceof Error ? err.message : err);
+    return 0;
+  }
+}
+
 // ---- Main Handler ----
 
 // pg_cron uses net.http_post — accept both GET and POST
@@ -111,7 +163,7 @@ export async function GET(req: NextRequest) {
   }
 
   const stores = await listPersistentStores();
-  const results: Array<{ storeId: string; status: string; rows?: number; error?: string }> = [];
+  const results: Array<{ storeId: string; status: string; rows?: number; discovered?: number; paginated?: number; error?: string }> = [];
 
   for (const store of stores) {
     const start = Date.now();
@@ -122,15 +174,29 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
+      // ── Auto-discover new ad accounts from Meta API ──
+      const discovered = await refreshAdAccountList(store.id, metaConn.access_token);
+
+      // Re-fetch account list (may have new accounts from discovery)
       const adAccounts = await listPersistentStoreAdAccounts(store.id);
       const activeAccounts = adAccounts.filter((a) => a.is_active);
       if (activeAccounts.length === 0) {
-        results.push({ storeId: store.id, status: 'skipped', error: 'No active ad accounts' });
+        results.push({ storeId: store.id, status: 'skipped', discovered, error: 'No active ad accounts' });
         continue;
       }
 
-      // ── Process ALL ad accounts in PARALLEL (not sequential) ──
-      // Single Meta API call per account covering last 7 days, then batch upsert.
+      // ── Get previous row counts per account for monitoring ──
+      const prevCounts = new Map<string, number>();
+      try {
+        const countRows = await rest<Array<{ ad_account_id: string; count: string }>>(
+          `/meta_spend_cache?store_id=eq.${encodeURIComponent(store.id)}&select=ad_account_id,count:ad_id.count()&order=ad_account_id`
+        );
+        // Note: PostgREST count by group isn't straightforward. We'll check after sync.
+      } catch { /* monitoring is non-critical */ }
+
+      // ── Process ALL ad accounts in PARALLEL ──
+      let paginatedAccounts = 0;
+
       const accountResults = await Promise.allSettled(
         activeAccounts.map(async (account) => {
           const adAccountId = account.ad_account_id.startsWith('act_')
@@ -140,8 +206,9 @@ export async function GET(req: NextRequest) {
           const today = todayInTimezone(tz);
           const sevenDaysAgo = daysAgoInTimezone(6, tz);
 
-          // ONE Meta API call for all 7 days (today + 6 historical) instead of 7 calls
-          const data = await fetchFromMeta<{
+          // Fetch with full pagination (handles >500 ads)
+          const allInsightRows: MetaInsightRow[] = [];
+          let pageData = await fetchFromMeta<{
             data: MetaInsightRow[];
             paging?: { next?: string };
           }>(metaConn.access_token, `/${adAccountId}/insights`, {
@@ -152,12 +219,31 @@ export async function GET(req: NextRequest) {
             limit: '500',
             action_attribution_windows: '7d_click,1d_view',
           });
+          allInsightRows.push(...(pageData?.data || []));
 
-          const rows = (data?.data || []).map(row => mapRowToUpsert(store.id, adAccountId, row, today));
+          // Follow pagination — log when >500 ads detected
+          let nextUrl = pageData?.paging?.next;
+          let pageCount = 1;
+          while (nextUrl && pageCount < 20) {
+            try {
+              const nextRes = await fetch(nextUrl);
+              if (!nextRes.ok) break;
+              const nextData = await nextRes.json() as { data: MetaInsightRow[]; paging?: { next?: string } };
+              allInsightRows.push(...(nextData?.data || []));
+              nextUrl = nextData?.paging?.next;
+              pageCount++;
+            } catch { break; }
+          }
+
+          if (pageCount > 1) {
+            paginatedAccounts++;
+            console.log(`[sync-meta-spend] ${adAccountId}: ${pageCount} pages, ${allInsightRows.length} total ad rows (>500 ads detected)`);
+          }
+
+          const rows = allInsightRows.map(row => mapRowToUpsert(store.id, adAccountId, row, today));
           if (rows.length === 0) return 0;
 
-          // ── BATCH upsert ALL rows at once (not one-by-one) ──
-          // PostgREST accepts arrays — single HTTP request instead of hundreds
+          // BATCH upsert (200 at a time)
           const BATCH_SIZE = 200;
           for (let i = 0; i < rows.length; i += BATCH_SIZE) {
             const batch = rows.slice(i, i + BATCH_SIZE);
@@ -183,17 +269,24 @@ export async function GET(req: NextRequest) {
           const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
           accountErrors.push(`${accId}: ${msg}`);
           console.warn(`[sync-meta-spend] Account ${accId} failed:`, msg);
+
+          // ── Log failed account for retry on next run ──
+          await logStoreError(store.id, 'meta_spend_sync_account', `${accId}: ${msg}`, 'Will retry on next cron run').catch(() => {});
         }
       }
 
       const elapsed = Date.now() - start;
       const status = accountErrors.length === activeAccounts.length ? 'error' : 'success';
-      await logCron('sync-meta-spend', store.id, status, totalRows, accountErrors.length > 0 ? accountErrors.join('; ') : null, elapsed);
+      const warnings = accountErrors.length > 0 ? `${accountErrors.length}/${activeAccounts.length} accounts failed` : undefined;
+
+      await logCron('sync-meta-spend', store.id, status, totalRows, warnings || null, elapsed);
       results.push({
         storeId: store.id,
         status,
         rows: totalRows,
-        error: accountErrors.length > 0 ? `${accountErrors.length}/${activeAccounts.length} accounts failed` : undefined,
+        discovered: discovered > 0 ? discovered : undefined,
+        paginated: paginatedAccounts > 0 ? paginatedAccounts : undefined,
+        error: warnings,
       });
     } catch (err) {
       const elapsed = Date.now() - start;

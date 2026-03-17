@@ -347,10 +347,17 @@ export default function PnLPage() {
               // Snapshot data may be stale (last sync hours ago). Only accept the
               // snapshot update if it shows MORE orders or MORE revenue — meaning
               // a webhook/cron has processed new data since our initial load.
+              // Only skip if snapshot data is identical (no change since last poll).
+              // Don't block revenue decreases — they could be legitimate refunds.
               const pollOrders = entry.orderCount ?? 0;
               const currOrders = existing.orderCount ?? 0;
-              if (pollOrders <= currOrders && entry.revenue <= existing.revenue) {
-                continue; // Snapshot is stale or same — preserve fresh data
+              if (
+                pollOrders === currOrders &&
+                Math.abs(entry.revenue - existing.revenue) < 0.01 &&
+                Math.abs(entry.adSpend - existing.adSpend) < 0.01 &&
+                Math.abs(entry.fees - existing.fees) < 0.01
+              ) {
+                continue; // No change — skip re-render
               }
               next[idx] = entry;
               changed = true;

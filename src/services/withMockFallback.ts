@@ -39,24 +39,24 @@ export function createServiceFn<T, Args extends unknown[] = []>(
   realFn: (...args: Args) => Promise<T>
 ): (...args: Args) => Promise<T> {
   return async (...args: Args) => {
-    const store = useConnectionStore.getState();
+    let store = useConnectionStore.getState();
 
-    // If connection status hasn't loaded yet (store switching or first load),
-    // wait briefly for it to resolve instead of throwing NotConnectedError.
-    // This prevents "Connect to Meta" from flashing during store switch.
-    if (store.status === null) {
+    // If connection status hasn't loaded yet OR is refreshing (store switch),
+    // wait for it to resolve instead of throwing NotConnectedError.
+    // This prevents "Connect to Meta" from flashing during store/section switch.
+    if (store.status === null || store.loading) {
       await new Promise<void>((resolve) => {
         let attempts = 0;
         const check = () => {
           const s = useConnectionStore.getState();
-          if (s.status !== null || attempts++ > 20) { resolve(); return; }
+          if ((s.status !== null && !s.loading) || attempts++ > 40) { resolve(); return; }
           setTimeout(check, 100);
         };
         check();
       });
       // Re-read after waiting
-      const refreshed = useConnectionStore.getState();
-      if (refreshed.status === null) {
+      store = useConnectionStore.getState();
+      if (store.status === null) {
         throw new NotConnectedError('not_connected', platform);
       }
     }

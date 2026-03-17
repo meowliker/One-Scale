@@ -23,7 +23,8 @@ export function MetricsBar({ entry, products, currency = 'USD' }: MetricsBarProp
   const roas = totalAdSpend > 0 ? totalRevenue / totalAdSpend : 0;
   const refundRate = totalRevenue > 0 ? (totalRefunds / totalRevenue) * 100 : 0;
 
-  // Upsell metrics from product data
+  // Upsell metrics from product data (empty during date-range loading)
+  const hasProducts = safeProducts.length > 0;
   const upsellProducts = safeProducts.filter(p => {
     const cat = (p.category || '').toLowerCase();
     return cat === 'upsell' || cat === 'downsell' || cat === 'addon';
@@ -45,11 +46,11 @@ export function MetricsBar({ entry, products, currency = 'USD' }: MetricsBarProp
     },
     {
       label: 'UPSELL RATE',
-      value: `${upsellRate.toFixed(0)}%`,
+      value: hasProducts ? `${upsellRate.toFixed(0)}%` : '—',
     },
     {
       label: 'UPSELL REVENUE',
-      value: formatCurrency(upsellRevenue, currency),
+      value: hasProducts ? formatCurrency(upsellRevenue, currency) : '—',
     },
     {
       label: 'REFUND RATE',

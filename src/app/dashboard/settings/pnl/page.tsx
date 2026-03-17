@@ -312,12 +312,7 @@ export default function PnLSettingsPage() {
             />
           )}
           {activeTab === 'custom_expenses' && (
-            <CustomExpensesTab
-              expenses={settings.customExpenses}
-              onAdd={handleExpenseAdd}
-              onUpdate={handleExpenseUpdate}
-              onDelete={handleExpenseDelete}
-            />
+            <CustomExpensesTab />
           )}
           {activeTab === 'handling' && !isDigital && (
             <HandlingFeesTab
