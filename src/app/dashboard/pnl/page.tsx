@@ -302,9 +302,9 @@ export default function PnLPage() {
   }, [connectionReady, activeStoreId, fetchData]);
 
   // ── Auto-poll live data every 30s (Shopify-style real-time updates) ──────────
-  // Uses /api/pnl/sync (same snapshot source as dashboard) so Live section
-  // and Period View always show consistent numbers. Snapshots are updated
-  // in real-time by order webhooks and hourly by pg_cron.
+  // Polls snapshot DB for updates from webhooks/crons. CRITICAL: never downgrade
+  // fresh Shopify API data (from getDailyPnL) with stale snapshot data.
+  // Only accept poll data if it shows MORE activity (higher orders/revenue).
   useEffect(() => {
     if (!activeStoreId || !connectionReady) return;
 
@@ -335,23 +335,25 @@ export default function PnLPage() {
         if (newSyncedAt && newSyncedAt === lastSyncedAt) return;
         lastSyncedAt = newSyncedAt;
 
-        // Merge fresh snapshot entries into dailyPnL
+        // Merge snapshot entries — NEVER downgrade fresh data
         setDailyPnL(prev => {
           let changed = false;
           const next = [...prev];
           for (const entry of entries) {
             const idx = next.findIndex(d => d.date === entry.date);
             if (idx >= 0) {
-              // Only update if values actually changed
-              if (
-                next[idx].revenue !== entry.revenue ||
-                (next[idx].orderCount ?? 0) !== (entry.orderCount ?? 0) ||
-                next[idx].adSpend !== entry.adSpend ||
-                next[idx].fees !== entry.fees
-              ) {
-                next[idx] = entry;
-                changed = true;
+              const existing = next[idx];
+              // CRITICAL: getDailyPnL() fetches directly from Shopify API (fresh).
+              // Snapshot data may be stale (last sync hours ago). Only accept the
+              // snapshot update if it shows MORE orders or MORE revenue — meaning
+              // a webhook/cron has processed new data since our initial load.
+              const pollOrders = entry.orderCount ?? 0;
+              const currOrders = existing.orderCount ?? 0;
+              if (pollOrders <= currOrders && entry.revenue <= existing.revenue) {
+                continue; // Snapshot is stale or same — preserve fresh data
               }
+              next[idx] = entry;
+              changed = true;
             } else {
               next.push(entry);
               changed = true;
@@ -369,8 +371,8 @@ export default function PnLPage() {
       }
     };
 
-    // Start polling after initial data loads (5s delay)
-    const startTimeout = setTimeout(pollLive, 5_000);
+    // Start polling after initial data loads (10s delay to let getDailyPnL finish)
+    const startTimeout = setTimeout(pollLive, 10_000);
     const interval = setInterval(pollLive, 30_000);
 
     // Poll immediately when tab regains focus
