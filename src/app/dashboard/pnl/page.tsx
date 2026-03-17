@@ -301,6 +301,112 @@ export default function PnLPage() {
     }
   }, [connectionReady, activeStoreId, fetchData]);
 
+  // ── Auto-poll live data every 30s (Shopify-style real-time updates) ──────────
+  useEffect(() => {
+    if (!activeStoreId || !connectionReady) return;
+
+    let active = true;
+
+    const pollLive = async () => {
+      if (!active || document.hidden) return;
+
+      try {
+        const res = await fetch(
+          `/api/prism/today-live?storeId=${encodeURIComponent(activeStoreId)}`
+        );
+        if (!res.ok || !active) return;
+        const live = await res.json() as {
+          date: string;
+          orders: number;
+          estimated_revenue: number;
+          estimated_fees: number;
+          ad_spend: number;
+          estimated_net_profit: number;
+        };
+
+        // Discard if store switched during fetch
+        if (!active || fetchStoreIdRef.current !== activeStoreId) return;
+
+        const revenue = live.estimated_revenue || 0;
+        const fees = live.estimated_fees || 0;
+        const adSpend = live.ad_spend || 0;
+        const orders = live.orders || 0;
+
+        setDailyPnL(prev => {
+          const idx = prev.findIndex(d => d.date === live.date);
+          const existing = idx >= 0 ? prev[idx] : null;
+
+          // Skip update if nothing changed (avoid unnecessary re-renders)
+          if (
+            existing &&
+            Math.abs(existing.revenue - revenue) < 0.01 &&
+            (existing.orderCount ?? 0) === orders &&
+            Math.abs(existing.adSpend - adSpend) < 0.01
+          ) {
+            return prev;
+          }
+
+          // Preserve deep-computed values from full getDailyPnL() computation
+          const cogs = existing?.cogs || 0;
+          const shipping = existing?.shipping || 0;
+          const refunds = existing?.refunds || 0;
+          const chargebackLoss = existing?.chargebackLoss || 0;
+          const chargebackWon = existing?.chargebackWon || 0;
+          const adjustments = existing?.adjustments || 0;
+
+          const netProfit = revenue - cogs - adSpend - shipping - fees
+            - refunds - chargebackLoss + chargebackWon + adjustments;
+          const margin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
+
+          const updated: PnLEntry = {
+            ...(existing || { date: live.date, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0 }),
+            date: live.date,
+            revenue,
+            cogs,
+            adSpend,
+            shipping,
+            fees,
+            refunds,
+            netProfit,
+            margin,
+            orderCount: orders,
+            chargebackLoss,
+            chargebackWon,
+            adjustments,
+          };
+
+          if (idx === -1) {
+            return [...prev, updated].sort((a, b) => a.date.localeCompare(b.date));
+          }
+          const next = [...prev];
+          next[idx] = updated;
+          return next;
+        });
+
+        const now = new Date();
+        setLastRefreshed(now);
+        setLastRefreshedLabel(formatLastRefreshed(now));
+      } catch {
+        // Silent — retry on next interval
+      }
+    };
+
+    // Start polling after initial data loads (5s delay)
+    const startTimeout = setTimeout(pollLive, 5_000);
+    const interval = setInterval(pollLive, 30_000);
+
+    // Poll immediately when tab regains focus
+    const onVisibility = () => { if (!document.hidden) pollLive(); };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      active = false;
+      clearTimeout(startTimeout);
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [activeStoreId, connectionReady]);
+
   const handleRefresh = () => {
     if (!isRefreshing) {
       clearPnLCaches(); // Force fresh fee + order data on manual refresh
