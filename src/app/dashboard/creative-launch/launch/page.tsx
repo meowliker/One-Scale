@@ -1,6 +1,18 @@
 'use client';
 
+import { Suspense } from 'react';
 import { CreativeLaunchWizard } from '@/components/creative-launch/CreativeLaunchWizard';
+
+function WizardLoadingFallback() {
+  return (
+    <div className="flex min-h-[400px] items-center justify-center">
+      <div className="flex flex-col items-center gap-3">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-purple-200 border-t-purple-600" />
+        <p className="text-sm text-slate-500">Loading wizard...</p>
+      </div>
+    </div>
+  );
+}
 
 export default function CreativeLaunchPage() {
   return (
@@ -14,7 +26,9 @@ export default function CreativeLaunchPage() {
         </p>
       </div>
       <div className="rounded-3xl border border-slate-200 bg-white/95 p-6 shadow-[0_24px_70px_-35px_rgba(2,6,23,0.45)]">
-        <CreativeLaunchWizard />
+        <Suspense fallback={<WizardLoadingFallback />}>
+          <CreativeLaunchWizard />
+        </Suspense>
       </div>
     </div>
   );
