@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getThirdPartyToken, getStoreAdAccounts, getLatestMetaEndpointSnapshot, getStore } from '@/app/api/lib/db';
 import { getMetaToken } from '@/app/api/lib/tokens';
+import { fetchFromMeta } from '@/app/api/lib/meta-client';
 import type { ProductProfile, ClickUpCreativeSet, WinnerCopy } from '@/types/creativeLaunch';
 
 interface ClickUpCustomFieldOption {
@@ -21,6 +22,15 @@ interface ClickUpCustomField {
   };
 }
 
+interface ClickUpAttachment {
+  id: string;
+  url: string;
+  title: string;
+  thumbnail_small?: string;
+  thumbnail_medium?: string;
+  thumbnail_large?: string;
+}
+
 interface ClickUpTask {
   id: string;
   name: string;
@@ -31,6 +41,7 @@ interface ClickUpTask {
   list: { id: string; name: string };
   url: string;
   date_created: string;
+  attachments?: ClickUpAttachment[];
 }
 
 function extractFieldValue(fields: ClickUpCustomField[], ...nameParts: string[]): string {
@@ -198,11 +209,12 @@ export async function GET(request: NextRequest) {
   }
 
   // --- Get store info + Meta ad account info ---
+  // Note: Meta assets (pages, pixels, campaigns) are fetched separately by meta-assets API
+  // to avoid duplicate API calls and improve loading speed
   const storeRecord = getStore(storeId);
   const storeName = storeRecord?.name || storeId;
   const adAccounts = getStoreAdAccounts(storeId);
-  const metaToken = await getMetaToken(storeId);
-  const hasMetaConnection = !!metaToken && adAccounts.length > 0;
+  const hasMetaConnection = adAccounts.length > 0;
 
   const primaryAdAccount = adAccounts[0];
   const winnerCopyLibrary = extractWinnerCopy(storeId);
@@ -228,28 +240,68 @@ export async function GET(request: NextRequest) {
   const clickupCreatives: ClickUpCreativeSet[] = [];
 
   for (const [productId, { name, tasks: productTasks }] of productMap.entries()) {
-    const creatives: ClickUpCreativeSet[] = productTasks.map((task) => ({
-      id: task.id,
-      taskId: task.id,
-      productId,
-      productName: name,
-      name: task.name,
-      hook: extractFieldValue(task.custom_fields, 'hook', 'headline') || task.name,
-      angle: extractFieldValue(task.custom_fields, 'angle', 'concept', 'theme') || '',
-      format: detectFormat(task.custom_fields, task.name, task.tags),
-      thumbnailUrl: extractFieldValue(task.custom_fields, 'thumbnail', 'preview', 'cover'),
-      driveLink: extractFieldValue(task.custom_fields, 'drive', 'video', 'asset', 'link', 'url', 'file') || task.url,
-      notes: task.description || '',
-      dateAdded: new Date(parseInt(task.date_created)).toISOString().split('T')[0],
-    }));
+    const creatives: ClickUpCreativeSet[] = productTasks.map((task) => {
+      // Try to get thumbnail from custom fields first
+      let thumbnailUrl = extractFieldValue(task.custom_fields, 'thumbnail', 'preview', 'cover', 'image');
+      
+      // Get drive link
+      const driveLink = extractFieldValue(task.custom_fields, 'drive', 'video', 'asset', 'link', 'url', 'file') || task.url;
+      
+      // If no thumbnail from custom fields, try to extract from drive link
+      if (!thumbnailUrl && driveLink) {
+        // Check if drive link is a direct image URL
+        if (/\.(jpg|jpeg|png|gif|webp)(\?|$)/i.test(driveLink)) {
+          thumbnailUrl = driveLink;
+        }
+        // Check if it's a Google Drive link and convert to thumbnail URL
+        else if (driveLink.includes('drive.google.com')) {
+          const fileIdMatch = driveLink.match(/\/d\/([a-zA-Z0-9_-]+)/);
+          if (fileIdMatch) {
+            thumbnailUrl = `https://drive.google.com/thumbnail?id=${fileIdMatch[1]}&sz=w400`;
+          }
+        }
+        // Check if it's a Dropbox link
+        else if (driveLink.includes('dropbox.com')) {
+          thumbnailUrl = driveLink.replace('dl=0', 'raw=1').replace('www.dropbox.com', 'dl.dropboxusercontent.com');
+        }
+      }
+      
+      // If still no thumbnail, try to get from attachments (if available)
+      if (!thumbnailUrl && task.attachments && task.attachments.length > 0) {
+        const firstAttachment = task.attachments[0];
+        thumbnailUrl = firstAttachment.thumbnail_large || 
+                       firstAttachment.thumbnail_medium || 
+                       firstAttachment.thumbnail_small ||
+                       firstAttachment.url;
+      }
+      
+      return {
+        id: task.id,
+        taskId: task.id,
+        productId,
+        productName: name,
+        name: task.name,
+        hook: extractFieldValue(task.custom_fields, 'hook', 'headline') || task.name,
+        angle: extractFieldValue(task.custom_fields, 'angle', 'concept', 'theme') || '',
+        format: detectFormat(task.custom_fields, task.name, task.tags),
+        thumbnailUrl,
+        driveLink,
+        notes: task.description || '',
+        dateAdded: new Date(parseInt(task.date_created)).toISOString().split('T')[0],
+      };
+    });
 
     clickupCreatives.push(...creatives);
+
+    // Build landing URL from store domain
+    const storeDomain = storeRecord?.domain || '';
+    const landingUrl = storeDomain ? `https://${storeDomain.replace(/^https?:\/\//, '')}` : '';
 
     const product: ProductProfile = {
       id: productId,
       name,
       image: '',
-      shopifyUrl: '',
+      shopifyUrl: landingUrl,
       adAccountId: primaryAdAccount?.ad_account_id || '',
       adAccountName: primaryAdAccount?.ad_account_name || '',
       pageId: '',
@@ -257,7 +309,9 @@ export async function GET(request: NextRequest) {
       instagramId: '',
       pixelId: '',
       conversionEvent: 'Purchase',
-      landingUrl: '',
+      landingUrl: landingUrl,
+      defaultCampaignId: undefined,
+      defaultCampaignName: undefined,
       defaultBudget: 50,
       defaultDuration: 7,
       winnerCopyLibrary,
@@ -270,10 +324,16 @@ export async function GET(request: NextRequest) {
     products.push(product);
   }
 
+  // Get store domain for destination URL
+  const storeDomain = storeRecord?.domain || '';
+  const destinationUrl = storeDomain ? `https://${storeDomain.replace(/^https?:\/\//, '')}` : '';
+
   return NextResponse.json({
     products,
     clickupCreatives,
     hasMetaConnection,
+    storeDomain,
+    destinationUrl,
     adAccounts: adAccounts.map((a) => ({
       id: a.ad_account_id,
       name: a.ad_account_name,

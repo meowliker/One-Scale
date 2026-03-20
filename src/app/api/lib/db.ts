@@ -243,7 +243,7 @@ function initDb(): Database.Database {
     CREATE TABLE IF NOT EXISTS meta_endpoint_snapshots (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
-      endpoint TEXT NOT NULL CHECK(endpoint IN ('creatives', 'adsets', 'ads', 'campaigns', 'insights')),
+      endpoint TEXT NOT NULL CHECK(endpoint IN ('creatives', 'adsets', 'ads', 'campaigns', 'insights', 'pages', 'pixels', 'instagram', 'accounts')),
       scope_id TEXT NOT NULL DEFAULT '',
       variant_key TEXT NOT NULL DEFAULT '',
       row_count INTEGER NOT NULL DEFAULT 0,
@@ -254,6 +254,51 @@ function initDb(): Database.Database {
 
     CREATE INDEX IF NOT EXISTS idx_meta_endpoint_snapshots_lookup
       ON meta_endpoint_snapshots(store_id, endpoint, scope_id, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS product_launch_profiles (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      store_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      product_name TEXT NOT NULL,
+      ad_account_id TEXT,
+      ad_account_name TEXT,
+      page_id TEXT,
+      page_name TEXT,
+      instagram_id TEXT,
+      pixel_id TEXT,
+      pixel_name TEXT,
+      default_campaign_id TEXT,
+      default_campaign_name TEXT,
+      default_adset_id TEXT,
+      default_adset_name TEXT,
+      conversion_event TEXT DEFAULT 'PURCHASE',
+      custom_conversion_id TEXT,
+      daily_budget REAL DEFAULT 50,
+      lifetime_budget REAL,
+      budget_type TEXT DEFAULT 'daily',
+      test_duration INTEGER DEFAULT 7,
+      bid_strategy TEXT DEFAULT 'LOWEST_COST_WITHOUT_CAP',
+      min_age INTEGER DEFAULT 18,
+      max_age INTEGER DEFAULT 65,
+      gender TEXT DEFAULT 'all',
+      locations TEXT DEFAULT '["US"]',
+      interests TEXT DEFAULT '[]',
+      destination_url TEXT,
+      product_links TEXT,
+      utm_template TEXT DEFAULT 'utm_source=FbAds&utm_medium={{adset.name}}&utm_campaign={{campaign.name}}&utm_content={{ad.name}}',
+      call_to_action TEXT DEFAULT 'SHOP_NOW',
+      winner_copy_library TEXT DEFAULT '[]',
+      last_synced_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(store_id, product_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_product_launch_profiles_store
+      ON product_launch_profiles(store_id);
+
+    CREATE INDEX IF NOT EXISTS idx_product_launch_profiles_product
+      ON product_launch_profiles(store_id, product_id);
 
     CREATE TABLE IF NOT EXISTS third_party_tokens (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -353,6 +398,12 @@ function initDb(): Database.Database {
     instance.exec('ALTER TABLE oauth_states ADD COLUMN workspace_id TEXT');
   }
 
+  const launchProfileColumns = instance.pragma('table_info(product_launch_profiles)') as { name: string }[];
+  const hasProductLinks = launchProfileColumns.some((c) => c.name === 'product_links');
+  if (!hasProductLinks) {
+    instance.exec('ALTER TABLE product_launch_profiles ADD COLUMN product_links TEXT');
+  }
+
   ensureMetaSnapshotSchema(instance);
 
   return instance;
@@ -365,14 +416,27 @@ function ensureMetaSnapshotSchema(db: Database.Database): void {
   const snapshotSqlText = (snapshotTableSql?.sql || '').toLowerCase();
   if (!snapshotSqlText) return;
 
-  const hasExpandedConstraint =
-    snapshotSqlText.includes("'campaigns'")
-    && snapshotSqlText.includes("'insights'");
+  const requiredEndpoints = [
+    "'creatives'",
+    "'adsets'",
+    "'ads'",
+    "'campaigns'",
+    "'insights'",
+    "'pages'",
+    "'pixels'",
+    "'instagram'",
+    "'accounts'",
+  ];
+  const hasExpandedConstraint = requiredEndpoints.every((endpoint) => snapshotSqlText.includes(endpoint));
   if (hasExpandedConstraint) return;
 
   const needsMigration =
     snapshotSqlText.includes("endpoint in ('creatives', 'adsets', 'ads')")
-    || snapshotSqlText.includes("endpoint in ('creatives','adsets','ads')");
+    || snapshotSqlText.includes("endpoint in ('creatives','adsets','ads')")
+    || snapshotSqlText.includes("'campaigns'")
+    || snapshotSqlText.includes("'insights'")
+    || snapshotSqlText.includes("'pages'")
+    || snapshotSqlText.includes("'pixels'");
   if (!needsMigration) return;
 
   db.exec(`
@@ -381,7 +445,7 @@ function ensureMetaSnapshotSchema(db: Database.Database): void {
     CREATE TABLE meta_endpoint_snapshots (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
-      endpoint TEXT NOT NULL CHECK(endpoint IN ('creatives', 'adsets', 'ads', 'campaigns', 'insights')),
+      endpoint TEXT NOT NULL CHECK(endpoint IN ('creatives', 'adsets', 'ads', 'campaigns', 'insights', 'pages', 'pixels', 'instagram', 'accounts')),
       scope_id TEXT NOT NULL DEFAULT '',
       variant_key TEXT NOT NULL DEFAULT '',
       row_count INTEGER NOT NULL DEFAULT 0,
@@ -418,6 +482,60 @@ function ensureTrackingEntityColumns(db: Database.Database): void {
   `);
 }
 
+function ensureProductLaunchProfileSchema(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS product_launch_profiles (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      store_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      product_name TEXT NOT NULL,
+      ad_account_id TEXT,
+      ad_account_name TEXT,
+      page_id TEXT,
+      page_name TEXT,
+      instagram_id TEXT,
+      pixel_id TEXT,
+      pixel_name TEXT,
+      default_campaign_id TEXT,
+      default_campaign_name TEXT,
+      default_adset_id TEXT,
+      default_adset_name TEXT,
+      conversion_event TEXT DEFAULT 'PURCHASE',
+      custom_conversion_id TEXT,
+      daily_budget REAL DEFAULT 50,
+      lifetime_budget REAL,
+      budget_type TEXT DEFAULT 'daily',
+      test_duration INTEGER DEFAULT 7,
+      bid_strategy TEXT DEFAULT 'LOWEST_COST_WITHOUT_CAP',
+      min_age INTEGER DEFAULT 18,
+      max_age INTEGER DEFAULT 65,
+      gender TEXT DEFAULT 'all',
+      locations TEXT DEFAULT '["US"]',
+      interests TEXT DEFAULT '[]',
+      destination_url TEXT,
+      product_links TEXT,
+      utm_template TEXT DEFAULT 'utm_source=FbAds&utm_medium={{adset.name}}&utm_campaign={{campaign.name}}&utm_content={{ad.name}}',
+      call_to_action TEXT DEFAULT 'SHOP_NOW',
+      winner_copy_library TEXT DEFAULT '[]',
+      last_synced_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(store_id, product_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_product_launch_profiles_store
+      ON product_launch_profiles(store_id);
+
+    CREATE INDEX IF NOT EXISTS idx_product_launch_profiles_product
+      ON product_launch_profiles(store_id, product_id);
+  `);
+
+  const columns = db.pragma('table_info(product_launch_profiles)') as { name: string }[];
+  if (!columns.some((column) => column.name === 'product_links')) {
+    db.exec('ALTER TABLE product_launch_profiles ADD COLUMN product_links TEXT');
+  }
+}
+
 export function getDb(): Database.Database {
   // Reuse existing connection if it's still open
   if (globalForDb.__sqlite_db) {
@@ -426,6 +544,7 @@ export function getDb(): Database.Database {
       globalForDb.__sqlite_db.pragma('journal_mode');
       ensureMetaSnapshotSchema(globalForDb.__sqlite_db);
       ensureTrackingEntityColumns(globalForDb.__sqlite_db);
+      ensureProductLaunchProfileSchema(globalForDb.__sqlite_db);
       return globalForDb.__sqlite_db;
     } catch {
       // Handle is dead (e.g. after HMR), recreate it
@@ -436,6 +555,7 @@ export function getDb(): Database.Database {
   globalForDb.__sqlite_db = initDb();
   ensureMetaSnapshotSchema(globalForDb.__sqlite_db);
   ensureTrackingEntityColumns(globalForDb.__sqlite_db);
+  ensureProductLaunchProfileSchema(globalForDb.__sqlite_db);
   return globalForDb.__sqlite_db;
 }
 
@@ -2271,7 +2391,16 @@ export interface DbMetaEndpointSnapshot {
   updated_at: string;
 }
 
-export type MetaSnapshotEndpoint = 'creatives' | 'adsets' | 'ads' | 'campaigns' | 'insights';
+export type MetaSnapshotEndpoint =
+  | 'creatives'
+  | 'adsets'
+  | 'ads'
+  | 'campaigns'
+  | 'insights'
+  | 'pages'
+  | 'pixels'
+  | 'instagram'
+  | 'accounts';
 
 export function upsertMetaEndpointSnapshot(
   storeId: string,
@@ -2427,4 +2556,116 @@ export function upsertThirdPartyToken(data: {
 export function deleteThirdPartyToken(storeId: string, platform: string): void {
   const db = getDb();
   db.prepare('DELETE FROM third_party_tokens WHERE store_id = ? AND platform = ?').run(storeId, platform);
+}
+
+// ------ Product Launch Profile CRUD ------
+
+export interface DbProductLaunchProfile {
+  id: string;
+  store_id: string;
+  product_id: string;
+  product_name: string;
+  ad_account_id: string | null;
+  ad_account_name: string | null;
+  page_id: string | null;
+  page_name: string | null;
+  instagram_id: string | null;
+  pixel_id: string | null;
+  pixel_name: string | null;
+  default_campaign_id: string | null;
+  default_campaign_name: string | null;
+  default_adset_id: string | null;
+  default_adset_name: string | null;
+  conversion_event: string | null;
+  daily_budget: number | null;
+  lifetime_budget: number | null;
+  budget_type: string | null;
+  test_duration: number | null;
+  bid_strategy: string | null;
+  min_age: number | null;
+  max_age: number | null;
+  gender: string | null;
+  locations: string | null;
+  interests: string | null;
+  destination_url: string | null;
+  product_links: string | null;
+  utm_template: string | null;
+  call_to_action: string | null;
+  winner_copy_library: string | null;
+  last_synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function getProductLaunchProfile(storeId: string, productId: string): DbProductLaunchProfile | null {
+  const db = getDb();
+  const row = db.prepare(
+    'SELECT * FROM product_launch_profiles WHERE store_id = ? AND product_id = ?'
+  ).get(storeId, productId) as DbProductLaunchProfile | undefined;
+  return row ?? null;
+}
+
+export function getProductLaunchProfiles(storeId: string): DbProductLaunchProfile[] {
+  const db = getDb();
+  return db.prepare(
+    'SELECT * FROM product_launch_profiles WHERE store_id = ? ORDER BY updated_at DESC'
+  ).all(storeId) as DbProductLaunchProfile[];
+}
+
+export function upsertProductLaunchProfile(
+  storeId: string,
+  productId: string,
+  data: Partial<Omit<DbProductLaunchProfile, 'id' | 'store_id' | 'product_id' | 'created_at' | 'updated_at'>>
+): void {
+  const db = getDb();
+  
+  // Check if exists
+  const existing = getProductLaunchProfile(storeId, productId);
+  
+  if (existing) {
+    // Update
+    const updates: string[] = [];
+    const values: unknown[] = [];
+    
+    for (const [key, value] of Object.entries(data)) {
+      if (value !== undefined) {
+        updates.push(`${key} = ?`);
+        values.push(typeof value === 'object' ? JSON.stringify(value) : value);
+      }
+    }
+    
+    if (updates.length > 0) {
+      updates.push('updated_at = datetime(\'now\')');
+      values.push(storeId, productId);
+      
+      db.prepare(`
+        UPDATE product_launch_profiles
+        SET ${updates.join(', ')}
+        WHERE store_id = ? AND product_id = ?
+      `).run(...values);
+    }
+  } else {
+    // Insert
+    const columns = ['store_id', 'product_id'];
+    const placeholders = ['?', '?'];
+    const values: unknown[] = [storeId, productId];
+    
+    for (const [key, value] of Object.entries(data)) {
+      if (value !== undefined) {
+        columns.push(key);
+        placeholders.push('?');
+        values.push(typeof value === 'object' ? JSON.stringify(value) : value);
+      }
+    }
+    
+    db.prepare(`
+      INSERT INTO product_launch_profiles (${columns.join(', ')})
+      VALUES (${placeholders.join(', ')})
+    `).run(...values);
+  }
+}
+
+export function deleteProductLaunchProfile(storeId: string, productId: string): void {
+  const db = getDb();
+  db.prepare('DELETE FROM product_launch_profiles WHERE store_id = ? AND product_id = ?').run(storeId, productId);
 }

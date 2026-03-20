@@ -37,7 +37,16 @@ import type {
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
-type MetaSnapshotEndpoint = 'creatives' | 'adsets' | 'ads' | 'campaigns' | 'insights';
+type MetaSnapshotEndpoint =
+  | 'creatives'
+  | 'adsets'
+  | 'ads'
+  | 'campaigns'
+  | 'insights'
+  | 'pages'
+  | 'pixels'
+  | 'instagram'
+  | 'accounts';
 
 function headers(extra?: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {

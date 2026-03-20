@@ -91,7 +91,7 @@ create table if not exists workspace_stores (
 create table if not exists meta_endpoint_snapshots (
   id bigserial primary key,
   store_id text not null references stores(id) on delete cascade,
-  endpoint text not null check (endpoint in ('creatives', 'adsets', 'ads', 'campaigns', 'insights')),
+  endpoint text not null check (endpoint in ('creatives', 'adsets', 'ads', 'campaigns', 'insights', 'pages', 'pixels', 'instagram', 'accounts')),
   scope_id text not null default '',
   variant_key text not null default '',
   row_count integer not null default 0,

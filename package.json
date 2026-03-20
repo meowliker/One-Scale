@@ -10,6 +10,7 @@
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/run-tests.mjs",
+    "test:unit": "node --experimental-strip-types --experimental-specifier-resolution=node --test src/app/api/lib/*.test.ts",
     "check:parallel": "node scripts/run-parallel-checks.mjs",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build",
     "test:creative-load": "node scripts/test-creative-load.mjs",

@@ -236,6 +236,7 @@ export const mockShopifyProducts: ShopifyProduct[] = [
   {
     id: 2001,
     title: 'Hydrating Serum 30ml',
+    handle: 'hydrating-serum-30ml',
     bodyHtml: '<p>Deep hydration serum with hyaluronic acid for all skin types.</p>',
     vendor: 'GlowSkin',
     productType: 'Serum',
@@ -252,6 +253,7 @@ export const mockShopifyProducts: ShopifyProduct[] = [
   {
     id: 2002,
     title: 'Daily Moisturizer',
+    handle: 'daily-moisturizer',
     bodyHtml: '<p>Lightweight daily moisturizer with SPF 30 protection.</p>',
     vendor: 'GlowSkin',
     productType: 'Moisturizer',
@@ -268,6 +270,7 @@ export const mockShopifyProducts: ShopifyProduct[] = [
   {
     id: 2003,
     title: 'Anti-Aging Bundle',
+    handle: 'anti-aging-bundle',
     bodyHtml: '<p>Complete anti-aging routine with serum, moisturizer, and eye cream.</p>',
     vendor: 'GlowSkin',
     productType: 'Bundle',
@@ -284,6 +287,7 @@ export const mockShopifyProducts: ShopifyProduct[] = [
   {
     id: 2004,
     title: 'Vitamin C Brightening Serum',
+    handle: 'vitamin-c-brightening-serum',
     bodyHtml: '<p>Brightening serum with 15% vitamin C and ferulic acid.</p>',
     vendor: 'GlowSkin',
     productType: 'Serum',
@@ -300,6 +304,7 @@ export const mockShopifyProducts: ShopifyProduct[] = [
   {
     id: 2005,
     title: 'Complete Skincare Set',
+    handle: 'complete-skincare-set',
     bodyHtml: '<p>Everything you need for a complete skincare routine.</p>',
     vendor: 'GlowSkin',
     productType: 'Bundle',
@@ -317,6 +322,7 @@ export const mockShopifyProducts: ShopifyProduct[] = [
   {
     id: 2006,
     title: 'Gentle Cleanser',
+    handle: 'gentle-cleanser',
     bodyHtml: '<p>Sulfate-free gentle cleanser for sensitive skin.</p>',
     vendor: 'GlowSkin',
     productType: 'Cleanser',
@@ -333,6 +339,7 @@ export const mockShopifyProducts: ShopifyProduct[] = [
   {
     id: 2007,
     title: 'Lip Balm SPF 15',
+    handle: 'lip-balm-spf-15',
     bodyHtml: '<p>Moisturizing lip balm with SPF 15 sun protection.</p>',
     vendor: 'GlowSkin',
     productType: 'Lip Care',
@@ -349,6 +356,7 @@ export const mockShopifyProducts: ShopifyProduct[] = [
   {
     id: 2008,
     title: 'Retinol Night Cream',
+    handle: 'retinol-night-cream',
     bodyHtml: '<p>Powerful retinol night cream for skin renewal while you sleep.</p>',
     vendor: 'GlowSkin',
     productType: 'Night Cream',

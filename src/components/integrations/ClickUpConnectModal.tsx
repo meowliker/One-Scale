@@ -1,11 +1,16 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   X, CheckSquare, Loader2, ExternalLink, Check, ChevronRight,
-  Folder, List, Search, Minus,
+  Folder, List, Search, Minus, ChevronDown,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+
+interface ClickUpStatusOption {
+  name: string;
+  color: string;
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Workspace { id: string; name: string }
@@ -249,7 +254,9 @@ export function ClickUpConnectModal({ storeId, onSuccess, onClose }: Props) {
   const [search, setSearch] = useState('');
   const [selectedMap, setSelectedMap] = useState<Map<string, SelectedList>>(new Map());
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
-  const [readyStatus, setReadyStatus] = useState('ready to launch');
+  const [readyStatus, setReadyStatus] = useState('');
+  const [availableStatuses, setAvailableStatuses] = useState<ClickUpStatusOption[]>([]);
+  const [statusesLoading, setStatusesLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -294,7 +301,11 @@ export function ClickUpConnectModal({ storeId, onSuccess, onClose }: Props) {
     setLoading(true); setError('');
     try {
       const res = await fetch(`/api/integrations/clickup/workspaces?apiToken=${encodeURIComponent(apiToken.trim())}`);
-      const data = await res.json() as { workspaces?: Workspace[]; error?: string };
+      let data: { workspaces?: Workspace[]; error?: string } = {};
+      try {
+        const text = await res.text();
+        if (text) data = JSON.parse(text);
+      } catch { data = { error: 'Invalid response' }; }
       if (!res.ok || data.error) throw new Error(data.error || 'Failed to connect');
       setWorkspaces(data.workspaces || []);
       if ((data.workspaces || []).length === 1) {
@@ -314,7 +325,11 @@ export function ClickUpConnectModal({ storeId, onSuccess, onClose }: Props) {
     setLoading(true); setError('');
     try {
       const res = await fetch(`/api/integrations/clickup/lists?apiToken=${encodeURIComponent(apiToken.trim())}&workspaceId=${workspaceId}`);
-      const data = await res.json() as { tree?: TreeItem[]; error?: string };
+      let data: { tree?: TreeItem[]; error?: string } = {};
+      try {
+        const text = await res.text();
+        if (text) data = JSON.parse(text);
+      } catch { data = { error: 'Invalid response' }; }
       if (!res.ok || data.error) throw new Error(data.error || 'Failed to fetch lists');
       const treeData = data.tree || [];
       setTree(treeData);
@@ -333,8 +348,43 @@ export function ClickUpConnectModal({ storeId, onSuccess, onClose }: Props) {
     } finally { setLoading(false); }
   };
 
+  // Fetch statuses when moving to status step
+  const fetchStatuses = async (listIds: string[]) => {
+    if (listIds.length === 0) return;
+    setStatusesLoading(true);
+    try {
+      const res = await fetch(
+        `/api/integrations/clickup/statuses?apiToken=${encodeURIComponent(apiToken.trim())}&listIds=${listIds.join(',')}`
+      );
+      let data: { statuses?: ClickUpStatusOption[]; error?: string } = {};
+      try {
+        const text = await res.text();
+        if (text) data = JSON.parse(text);
+      } catch { data = {}; }
+      if (res.ok && data.statuses) {
+        setAvailableStatuses(data.statuses);
+        // Auto-select first status if none selected
+        if (!readyStatus && data.statuses.length > 0) {
+          setReadyStatus(data.statuses[0].name);
+        }
+      }
+    } catch {
+      // Non-fatal - user can still type manually
+    } finally {
+      setStatusesLoading(false);
+    }
+  };
+
+  // When step changes to 'status', fetch available statuses
+  useEffect(() => {
+    if (step === 'status' && selectedMap.size > 0 && availableStatuses.length === 0) {
+      fetchStatuses([...selectedMap.keys()]);
+    }
+  }, [step, selectedMap, availableStatuses.length, apiToken]);
+
   const handleSave = async () => {
     if (selectedMap.size === 0) { setError('Select at least one list'); return; }
+    if (!readyStatus.trim()) { setError('Please select a status'); return; }
     setLoading(true); setError('');
     try {
       const listIds = [...selectedMap.keys()];
@@ -349,10 +399,14 @@ export function ClickUpConnectModal({ storeId, onSuccess, onClose }: Props) {
           workspaceName: selectedWorkspace?.name,
           listIds,
           listNames,
-          readyStatus: readyStatus.trim().toLowerCase(),
+          readyStatus: readyStatus.trim(),
         }),
       });
-      const data = await res.json() as { success?: boolean; error?: string };
+      let data: { success?: boolean; error?: string } = {};
+      try {
+        const text = await res.text();
+        if (text) data = JSON.parse(text);
+      } catch { data = { error: 'Invalid response' }; }
       if (!res.ok || data.error) throw new Error(data.error || 'Failed to save');
       onSuccess();
     } catch (err) {
@@ -533,18 +587,41 @@ export function ClickUpConnectModal({ storeId, onSuccess, onClose }: Props) {
 
               <div>
                 <label className="block text-xs font-medium text-text-primary mb-1">
-                  &ldquo;Ready to Launch&rdquo; Status Name
+                  &ldquo;Ready to Launch&rdquo; Status
                 </label>
                 <p className="text-[11px] text-text-muted mb-2">
-                  Tasks with this exact status will appear in Creative Launch (case-insensitive).
+                  Tasks with this status will appear in Creative Launch.
                 </p>
-                <input
-                  type="text"
-                  value={readyStatus}
-                  onChange={(e) => setReadyStatus(e.target.value)}
-                  placeholder="ready to launch"
-                  className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-colors"
-                />
+                {statusesLoading ? (
+                  <div className="flex items-center gap-2 py-2">
+                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                    <span className="text-xs text-text-muted">Loading statuses...</span>
+                  </div>
+                ) : availableStatuses.length > 0 ? (
+                  <div className="relative">
+                    <select
+                      value={readyStatus}
+                      onChange={(e) => setReadyStatus(e.target.value)}
+                      className="w-full appearance-none rounded-lg border border-border bg-surface px-3 py-2.5 pr-10 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-colors cursor-pointer"
+                    >
+                      <option value="">Select a status...</option>
+                      {availableStatuses.map((status) => (
+                        <option key={status.name} value={status.name}>
+                          {status.name}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-muted pointer-events-none" />
+                  </div>
+                ) : (
+                  <input
+                    type="text"
+                    value={readyStatus}
+                    onChange={(e) => setReadyStatus(e.target.value)}
+                    placeholder="e.g. ready to launch"
+                    className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-colors"
+                  />
+                )}
               </div>
 
               {error && <p className="text-xs text-red-400">{error}</p>}

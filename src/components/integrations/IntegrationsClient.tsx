@@ -2,53 +2,25 @@
 
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { CheckSquare, HardDrive, MessageSquare, Copy, Loader2 } from 'lucide-react';
+import { Copy, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { cn } from '@/lib/utils';
-import type {
-  Integration,
-  ClickUpTask,
-  GoogleDriveFile,
-  SlackChannel,
-  SlackNotificationRule,
-} from '@/types/integrations';
-import {
-  getIntegrations,
-  getClickUpTasks,
-  getGoogleDriveFiles,
-  getSlackChannels,
-  getSlackNotificationRules,
-} from '@/services/integrations';
+import type { Integration } from '@/types/integrations';
+import { getIntegrations } from '@/services/integrations';
 import { useConnectionStore } from '@/stores/connectionStore';
 import { useStoreStore } from '@/stores/storeStore';
 import { getWorkspaceId } from '@/lib/auth/workspace';
 import { IntegrationCard } from '@/components/integrations/IntegrationCard';
-import { ClickUpPanel } from '@/components/integrations/ClickUpPanel';
-import { GoogleDrivePanel } from '@/components/integrations/GoogleDrivePanel';
-import { SlackConfig } from '@/components/integrations/SlackConfig';
-import { ImportCreativeModal } from '@/components/integrations/ImportCreativeModal';
 import { ShopifyConnectModal } from '@/components/integrations/ShopifyConnectModal';
 import { MetaConnectionDetails } from '@/components/integrations/MetaConnectionDetails';
 import { ClickUpConnectModal } from '@/components/integrations/ClickUpConnectModal';
-
-type PanelTab = 'clickup' | 'google_drive' | 'slack';
-
-const tabConfig: { key: PanelTab; label: string; icon: typeof CheckSquare; platform: string }[] = [
-  { key: 'clickup', label: 'ClickUp Tasks', icon: CheckSquare, platform: 'clickup' },
-  { key: 'google_drive', label: 'Google Drive', icon: HardDrive, platform: 'google_drive' },
-  { key: 'slack', label: 'Slack Config', icon: MessageSquare, platform: 'slack' },
-];
+import { ClickUpConnectionDetails } from '@/components/integrations/ClickUpConnectionDetails';
 
 export function IntegrationsClient() {
   const [integrations, setIntegrations] = useState<Integration[]>([]);
-  const [clickUpTasks, setClickUpTasks] = useState<ClickUpTask[]>([]);
-  const [driveFiles, setDriveFiles] = useState<GoogleDriveFile[]>([]);
-  const [slackChannels, setSlackChannels] = useState<SlackChannel[]>([]);
-  const [slackRules, setSlackRules] = useState<SlackNotificationRule[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [activeIntegration, setActiveIntegration] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<PanelTab>('clickup');
 
   // Available Meta connections from other stores (for reuse)
   const [availableMetaConnections, setAvailableMetaConnections] = useState<
@@ -60,10 +32,6 @@ export function IntegrationsClient() {
   // Modal states
   const [shopifyModalOpen, setShopifyModalOpen] = useState(false);
   const [clickupModalOpen, setClickupModalOpen] = useState(false);
-  const [importModal, setImportModal] = useState<{
-    isOpen: boolean;
-    source: { type: 'clickup'; data: ClickUpTask } | { type: 'drive'; data: GoogleDriveFile } | null;
-  }>({ isOpen: false, source: null });
 
   const searchParams = useSearchParams();
   const refreshStatus = useConnectionStore((s) => s.refreshStatus);
@@ -200,79 +168,33 @@ export function IntegrationsClient() {
           : intg
       )
     );
-    // Reload tasks from real API
-    if (activeStoreId) {
-      try {
-        const res = await fetch(`/api/integrations/clickup/tasks?storeId=${encodeURIComponent(activeStoreId)}`);
-        if (res.ok) {
-          const data = await res.json() as { tasks?: Array<{ id: string; name: string; format: 'video' | 'image' | 'carousel'; notes: string }> };
-          if (data.tasks) {
-            setClickUpTasks(data.tasks.map((t) => ({
-              id: t.id,
-              name: t.name,
-              status: 'open' as const,
-              assignee: '',
-              dueDate: '',
-              priority: 'normal' as const,
-              creativeType: (t.format || 'video') as 'video' | 'image' | 'carousel',
-              description: t.notes || '',
-              tags: [],
-            })));
-          }
-        }
-      } catch {
-        // non-fatal
-      }
-    }
   };
 
   useEffect(() => {
     async function loadData() {
       try {
-        const [intgs, tasks, files, channels, rules] = await Promise.all([
-          getIntegrations(),
-          getClickUpTasks(),
-          getGoogleDriveFiles(),
-          getSlackChannels(),
-          getSlackNotificationRules(),
-        ]);
-
+        const intgs = await getIntegrations();
         setIntegrations(intgs);
-        setClickUpTasks(tasks);
-        setDriveFiles(files);
-        setSlackChannels(channels);
-        setSlackRules(rules);
 
-        // Check real ClickUp connection status and load real tasks if connected
+        // Check real ClickUp connection status
         if (activeStoreId) {
-          const statusRes = await fetch(`/api/integrations/clickup/connect?storeId=${encodeURIComponent(activeStoreId)}`);
-          if (statusRes.ok) {
-            const statusData = await statusRes.json() as { connected: boolean };
-            if (statusData.connected) {
-              setIntegrations((prev) =>
-                prev.map((intg) =>
-                  intg.platform === 'clickup' ? { ...intg, status: 'connected' as const } : intg
-                )
-              );
-              // Fetch real tasks from ClickUp
-              const tasksRes = await fetch(`/api/integrations/clickup/tasks?storeId=${encodeURIComponent(activeStoreId)}`);
-              if (tasksRes.ok) {
-                const tasksData = await tasksRes.json() as { tasks?: Array<{ id: string; name: string; format: 'video' | 'image' | 'carousel'; notes: string }> };
-                if (tasksData.tasks) {
-                  setClickUpTasks(tasksData.tasks.map((t) => ({
-                    id: t.id,
-                    name: t.name,
-                    status: 'open' as const,
-                    assignee: '',
-                    dueDate: '',
-                    priority: 'normal' as const,
-                    creativeType: (t.format || 'video') as 'video' | 'image' | 'carousel',
-                    description: t.notes || '',
-                    tags: [],
-                  })));
+          try {
+            const statusRes = await fetch(`/api/integrations/clickup/connect?storeId=${encodeURIComponent(activeStoreId)}`);
+            if (statusRes.ok) {
+              const text = await statusRes.text();
+              if (text) {
+                const statusData = JSON.parse(text) as { connected: boolean };
+                if (statusData.connected) {
+                  setIntegrations((prev) =>
+                    prev.map((intg) =>
+                      intg.platform === 'clickup' ? { ...intg, status: 'connected' as const } : intg
+                    )
+                  );
                 }
               }
             }
+          } catch {
+            // Ignore ClickUp status check errors
           }
         }
       } catch {
@@ -295,12 +217,6 @@ export function IntegrationsClient() {
     }
 
     setActiveIntegration(id);
-
-    // Auto-switch to the correct tab based on platform
-    const platform = integration.platform;
-    if (platform === 'clickup' || platform === 'google_drive' || platform === 'slack') {
-      setActiveTab(platform);
-    }
   };
 
   const handleToggleConnection = async (id: string) => {
@@ -431,24 +347,6 @@ export function IntegrationsClient() {
     );
   };
 
-  const handleImportClickUpTask = (task: ClickUpTask) => {
-    setImportModal({ isOpen: true, source: { type: 'clickup', data: task } });
-  };
-
-  const handleUseAsCreative = (file: GoogleDriveFile) => {
-    setImportModal({ isOpen: true, source: { type: 'drive', data: file } });
-  };
-
-  const handleCloseImportModal = () => {
-    setImportModal({ isOpen: false, source: null });
-  };
-
-  // Check if a panel tab platform is connected
-  const isPlatformConnected = (platform: string) => {
-    return integrations.some(
-      (i) => i.platform === platform && i.status === 'connected'
-    );
-  };
 
   if (loading) {
     return (
@@ -529,72 +427,35 @@ export function IntegrationsClient() {
         />
       )}
 
-      {/* Detail Panel */}
-      <div className="rounded-lg border border-border bg-surface-elevated">
-        {/* Panel Tabs */}
-        <div className="flex border-b border-border">
-          {tabConfig.map((tab) => {
-            const Icon = tab.icon;
-            const connected = isPlatformConnected(tab.platform);
-
-            return (
-              <button
-                key={tab.key}
-                onClick={() => setActiveTab(tab.key)}
-                className={cn(
-                  'flex items-center gap-2 border-b-2 px-5 py-3 text-sm font-medium transition-colors',
-                  activeTab === tab.key
-                    ? 'border-primary text-primary'
-                    : 'border-transparent text-text-secondary hover:border-border hover:text-text-primary'
-                )}
-              >
-                <Icon className="h-4 w-4" />
-                {tab.label}
-                {!connected && (
-                  <span className="rounded-full bg-surface-hover px-1.5 py-0.5 text-[10px] text-text-dimmed">
-                    Not connected
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Panel Content */}
-        <div className="p-5">
-          {activeTab === 'clickup' && (
-            isPlatformConnected('clickup') ? (
-              <ClickUpPanel tasks={clickUpTasks} onImportTask={handleImportClickUpTask} />
-            ) : (
-              <EmptyPanelState platform="ClickUp" />
-            )
-          )}
-
-          {activeTab === 'google_drive' && (
-            isPlatformConnected('google_drive') ? (
-              <GoogleDrivePanel files={driveFiles} onUseAsCreative={handleUseAsCreative} />
-            ) : (
-              <EmptyPanelState platform="Google Drive" />
-            )
-          )}
-
-          {activeTab === 'slack' && (
-            isPlatformConnected('slack') ? (
-              <SlackConfig channels={slackChannels} rules={slackRules} />
-            ) : (
-              <EmptyPanelState platform="Slack" />
-            )
-          )}
-        </div>
-      </div>
+      {/* ClickUp Connection Details — shown when ClickUp is connected */}
+      {integrations.some((i) => i.platform === 'clickup' && i.status === 'connected') && (
+        <ClickUpConnectionDetails
+          storeId={activeStoreId}
+          storeName={activeStoreName}
+          onDisconnect={async () => {
+            try {
+              const res = await fetch('/api/integrations/clickup/connect', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ storeId: activeStoreId }),
+              });
+              if (!res.ok) throw new Error('Failed to disconnect');
+              toast.success('ClickUp disconnected');
+              setIntegrations((prev) =>
+                prev.map((intg) =>
+                  intg.platform === 'clickup'
+                    ? { ...intg, status: 'disconnected' as const, lastSynced: null }
+                    : intg
+                )
+              );
+            } catch {
+              toast.error('Failed to disconnect ClickUp');
+            }
+          }}
+        />
+      )}
 
       {/* Modals */}
-      <ImportCreativeModal
-        isOpen={importModal.isOpen}
-        onClose={handleCloseImportModal}
-        source={importModal.source}
-      />
-
       <ShopifyConnectModal
         isOpen={shopifyModalOpen}
         onClose={() => setShopifyModalOpen(false)}
@@ -610,19 +471,6 @@ export function IntegrationsClient() {
         />
       )}
 
-    </div>
-  );
-}
-
-function EmptyPanelState({ platform }: { platform: string }) {
-  return (
-    <div className="py-12 text-center">
-      <p className="text-sm text-text-secondary">
-        Connect {platform} to access this panel.
-      </p>
-      <p className="mt-1 text-xs text-text-muted">
-        Click the &quot;Connect&quot; button on the {platform} card above to get started.
-      </p>
     </div>
   );
 }

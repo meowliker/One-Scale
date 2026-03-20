@@ -265,6 +265,7 @@ function mapProduct(raw: Record<string, any>): ShopifyProduct {
   return {
     id: raw.id,
     title: raw.title,
+    handle: raw.handle || '',
     bodyHtml: raw.body_html || '',
     vendor: raw.vendor || '',
     productType: raw.product_type || '',
