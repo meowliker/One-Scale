@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { useStoreStore } from '@/stores/storeStore';
 import { useCreativeLaunchStore } from '@/stores/creativeLaunchStore';
@@ -169,7 +169,6 @@ function WizardStepIndicator({ currentStep, steps }: { currentStep: number; step
 
 export function CreativeLaunchWizard() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { activeStoreId } = useStoreStore();
   const launchStore = useCreativeLaunchStore();
   
@@ -332,21 +331,6 @@ export function CreativeLaunchWizard() {
     };
   }, [activeStoreId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Pre-select creatives from URL params
-  useEffect(() => {
-    const creativeIds = searchParams.get('creatives');
-    if (creativeIds) {
-      setSelectedCreativeIds(new Set(creativeIds.split(',')));
-    }
-  }, [searchParams]);
-
-  useEffect(() => {
-    if (selectedCreativeIds.size > 0) return;
-    if (searchParams.get('creatives')) return;
-    if (launchStore.clickupCreatives.length === 0) return;
-    setSelectedCreativeIds(new Set(launchStore.clickupCreatives.map((row) => row.id)));
-  }, [launchStore.clickupCreatives, searchParams, selectedCreativeIds.size]);
-
   const selectedProducts = useMemo(() => {
     const selectedCreatives = launchStore.clickupCreatives.filter((c) => selectedCreativeIds.has(c.id));
     const ids = [...new Set(selectedCreatives.map((c) => c.productId))];
@@ -434,6 +418,7 @@ export function CreativeLaunchWizard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           storeId: activeStoreId,
+          liveFallback: true,
           products,
         }),
       });

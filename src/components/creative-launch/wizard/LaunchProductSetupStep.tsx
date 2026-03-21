@@ -39,11 +39,17 @@ export function LaunchProductSetupStep({
 
   const normalizeAccount = (value: string) => value.replace(/^act_/, '');
 
-  const getAccountScopedPages = (mapping: ProductMapping, adAccountId: string) =>
+  const getStrictAccountScopedPages = (mapping: ProductMapping, adAccountId: string) =>
     mapping.availablePages.filter((page) => {
-      if (!page.adAccountIds || page.adAccountIds.length === 0) return true;
+      if (!page.adAccountIds || page.adAccountIds.length === 0) return false;
       return page.adAccountIds.some((id) => normalizeAccount(id) === normalizeAccount(adAccountId));
     });
+
+  const getAccountScopedPages = (mapping: ProductMapping, adAccountId: string) => {
+    const strict = getStrictAccountScopedPages(mapping, adAccountId);
+    if (strict.length > 0) return strict;
+    return mapping.availablePages.filter((page) => !page.adAccountIds || page.adAccountIds.length === 0);
+  };
 
   const getAccountScopedInstagram = (mapping: ProductMapping, adAccountId: string) =>
     mapping.availableInstagramAccounts.filter((account) => {
@@ -59,7 +65,7 @@ export function LaunchProductSetupStep({
     if (!mapping) return;
 
     const pages = getAccountScopedPages(mapping, mapping.adAccountId);
-    const selectedPage = pages.find(p => p.id === pageId) || mapping.availablePages.find((p) => p.id === pageId);
+    const selectedPage = pages.find((p) => p.id === pageId);
     updateMapping(productId, {
       pageId,
       pageName: selectedPage?.name || '',
@@ -73,19 +79,23 @@ export function LaunchProductSetupStep({
     if (!mapping) return;
 
     const selectedAccount = mapping.availableAdAccounts.find(a => a.id === adAccountId);
+    const selectedBusinessManager = mapping.availableBusinessManagers.find((row) =>
+      row.adAccountIds.some((id) => normalizeAccount(id) === normalizeAccount(adAccountId))
+    );
 
+    const strictAccountPages = getStrictAccountScopedPages(mapping, adAccountId);
     const accountPages = getAccountScopedPages(mapping, adAccountId);
     const accountPixels = getAccountScopedPixels(mapping, adAccountId);
     const accountInstagram = getAccountScopedInstagram(mapping, adAccountId);
-    const selectedPage = accountPages[0];
+    const selectedPage = strictAccountPages[0] || accountPages[0];
     const selectedPixel = accountPixels[0];
     const selectedInstagram = accountInstagram.find((row) => row.id === selectedPage?.instagramId) || accountInstagram[0];
 
     updateMapping(productId, {
       adAccountId,
       adAccountName: selectedAccount?.name || '',
-      businessManagerId: adAccountId ? `bm:${adAccountId}` : '',
-      businessManagerName: selectedAccount?.name || '',
+      businessManagerId: selectedBusinessManager?.id || '',
+      businessManagerName: selectedBusinessManager?.name || '',
       pageId: selectedPage?.id || '',
       pageName: selectedPage?.name || '',
       pixelId: selectedPixel?.id || '',
@@ -255,12 +265,6 @@ export function LaunchProductSetupStep({
                         Manual setup needed
                       </span>
                     )}
-                    {mapping.needsUrlReview && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">
-                        <AlertCircle className="h-3 w-3" />
-                        Verify URL
-                      </span>
-                    )}
                   </div>
                   <p className="text-xs text-slate-500 mt-0.5 truncate">
                     {mapping.adAccountName || 'No ad account selected'} • {mapping.pageName || 'No page selected'}
@@ -287,20 +291,6 @@ export function LaunchProductSetupStep({
                       </p>
                     </div>
                   )}
-                  {mapping.needsUrlReview && (
-                    <div className="rounded-lg bg-orange-50 border border-orange-200 p-3">
-                      <p className="text-xs text-orange-700">
-                        URL handle came from title-based Shopify lookup. Please verify before launch.
-                      </p>
-                    </div>
-                  )}
-                  {mapping.missingCachedAssets && (
-                    <div className="rounded-lg bg-amber-50 border border-amber-200 p-3">
-                      <p className="text-xs text-amber-700">
-                        Some cached Meta setup options are missing. Manual overrides are available.
-                      </p>
-                    </div>
-                  )}
 
                   <div className="rounded-lg border border-slate-200 bg-white p-3">
                     <div className="flex items-center justify-between gap-2">
@@ -319,7 +309,8 @@ export function LaunchProductSetupStep({
                     <div>
                       <label className="block text-xs font-medium text-slate-500 mb-1">Business Manager</label>
                       <div className="px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-600">
-                        {mapping.businessManagerName || 'Derived from ad account'}
+                        {mapping.businessManagerName
+                          || (mapping.businessManagerId ? mapping.businessManagerId.replace(/^bm:/, '') : 'Not found in cache')}
                       </div>
                     </div>
 

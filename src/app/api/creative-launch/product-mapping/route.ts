@@ -16,7 +16,8 @@ import {
   getLatestPersistentMetaEndpointSnapshot,
   getRecentPersistentMetaEndpointSnapshots,
 } from '@/app/api/lib/supabase-tracking';
-import { getShopifyToken } from '@/app/api/lib/tokens';
+import { fetchFromMeta } from '@/app/api/lib/meta-client';
+import { getMetaToken, getShopifyToken } from '@/app/api/lib/tokens';
 import { fetchShopifyProducts } from '@/app/api/lib/shopify-client';
 import {
   extractAdUrlsFromSnapshot,
@@ -98,6 +99,53 @@ function normalizeAccountId(value: string): string {
   return value.replace(/^act_/, '').trim();
 }
 
+function normalizeTextForMatch(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokenizeForMatch(value: string): string[] {
+  return normalizeTextForMatch(value)
+    .split(' ')
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3);
+}
+
+function scoreAccountAffinity(params: {
+  accountName: string;
+  canonicalHandle: string;
+  productName: string;
+}): number {
+  const { accountName, canonicalHandle, productName } = params;
+  const normalizedAccountName = normalizeTextForMatch(accountName);
+  if (!normalizedAccountName) return 0;
+
+  let score = 0;
+  const handlePhrase = normalizeTextForMatch(canonicalHandle.replace(/-/g, ' '));
+  if (handlePhrase && normalizedAccountName.includes(handlePhrase)) {
+    score += 120;
+  }
+
+  const handleTokens = tokenizeForMatch(canonicalHandle.replace(/-/g, ' '));
+  const productTokens = tokenizeForMatch(productName);
+
+  for (const token of handleTokens) {
+    if (normalizedAccountName.includes(token)) {
+      score += 18;
+    }
+  }
+  for (const token of productTokens) {
+    if (normalizedAccountName.includes(token)) {
+      score += 8;
+    }
+  }
+
+  return score;
+}
+
 function uniqueById<T extends { id: string }>(rows: T[]): T[] {
   const out = new Map<string, T>();
   for (const row of rows) {
@@ -113,6 +161,21 @@ function mergeAccountIds(existing: string[] | undefined, next: string | undefine
   if (!next) return existing;
   const merged = new Set([...(existing || []), next]);
   return merged.size > 0 ? [...merged] : undefined;
+}
+
+function mergeAccountIdsMany(existing: string[] | undefined, next: string[] | undefined): string[] | undefined {
+  const merged = new Set((existing || []).filter(Boolean));
+  for (const id of next || []) {
+    if (id) merged.add(id);
+  }
+  return merged.size > 0 ? [...merged] : undefined;
+}
+
+function deriveBusinessLabelFromAccountName(accountName: string): string {
+  const trimmed = accountName.trim();
+  if (!trimmed) return '';
+  const [head] = trimmed.split('|');
+  return (head || '').trim() || trimmed;
 }
 
 function belongsToAccount(optionAccountIds: string[] | undefined, adAccountId: string): boolean {
@@ -157,12 +220,61 @@ function extractDestinationUrlFromCreative(value: unknown): string {
   return ctaValue && typeof ctaValue.link === 'string' ? ctaValue.link : '';
 }
 
+function extractPageIdFromStoryId(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const parts = trimmed.split('_');
+  if (parts.length < 2) return '';
+  const candidate = parts[0]?.trim() || '';
+  return /^\d+$/.test(candidate) ? candidate : '';
+}
+
+function extractPageId(value: unknown): string {
+  if (!value || typeof value !== 'object') return '';
+  const row = value as Record<string, unknown>;
+  const creative = (row.creative && typeof row.creative === 'object')
+    ? (row.creative as Record<string, unknown>)
+    : row;
+  const story = (creative.object_story_spec && typeof creative.object_story_spec === 'object')
+    ? (creative.object_story_spec as Record<string, unknown>)
+    : null;
+
+  const explicitPageId =
+    (typeof row.page_id === 'string' && row.page_id)
+    || (typeof row.pageId === 'string' && row.pageId)
+    || (typeof creative.page_id === 'string' && creative.page_id)
+    || (typeof creative.pageId === 'string' && creative.pageId)
+    || (story && typeof story.page_id === 'string' ? story.page_id : '')
+    || '';
+  if (explicitPageId) return explicitPageId;
+
+  const storyId =
+    (typeof row.object_story_id === 'string' && row.object_story_id)
+    || (typeof row.effective_object_story_id === 'string' && row.effective_object_story_id)
+    || (typeof creative.object_story_id === 'string' && creative.object_story_id)
+    || (typeof creative.effective_object_story_id === 'string' && creative.effective_object_story_id)
+    || '';
+  return extractPageIdFromStoryId(storyId);
+}
+
 function isStrictHandleMatch(handle: string, candidateUrl: string): boolean {
   const normalizedHandle = normalizeHandle(handle);
   if (!normalizedHandle) return false;
   const normalizedCandidate = normalizeUrl(candidateUrl);
   if (!normalizedCandidate) return false;
   return normalizedCandidate.endsWith(`/products/${normalizedHandle}`);
+}
+
+function isStrictProductUrl(candidateUrl: string): boolean {
+  const normalized = normalizeUrl(candidateUrl);
+  return /\/products\/[^/]+$/.test(normalized);
+}
+
+function areSameStringSets(lhs: string[], rhs: string[]): boolean {
+  if (lhs.length !== rhs.length) return false;
+  const left = new Set(lhs);
+  if (left.size !== rhs.length) return false;
+  return rhs.every((row) => left.has(row));
 }
 
 function dedupeMetaAdUrls(rows: MetaAdUrl[]): MetaAdUrl[] {
@@ -212,8 +324,9 @@ async function resolveProducts(params: {
   const { storeId, storeDomain, products } = params;
 
   const unresolved = products.filter((product) => {
+    const firstProductLink = Array.isArray(product.productLinks) ? product.productLinks[0] : '';
     const explicitHandle = normalizeHandle(
-      product.shopifyHandle || extractProductHandle(product.shopifyUrl || product.landingUrl || '') || '',
+      product.shopifyHandle || extractProductHandle(product.shopifyUrl || product.landingUrl || firstProductLink || '') || '',
     );
     return !explicitHandle;
   });
@@ -281,10 +394,181 @@ async function loadShopifyCatalog(storeId: string): Promise<ShopifyCatalogProduc
   }
 }
 
+async function fetchLiveBusinessForAccount(
+  accessToken: string,
+  adAccountId: string,
+): Promise<{ id: string; name: string } | null> {
+  const normalized = normalizeAccountId(adAccountId);
+  if (!normalized) return null;
+  const accountNode = adAccountId.startsWith('act_') ? adAccountId : `act_${normalized}`;
+
+  try {
+    const details = await fetchFromMeta<Record<string, unknown>>(
+      accessToken,
+      `/${accountNode}`,
+      { fields: 'id,name,business{id,name},owner_business{id,name},business_name' },
+      10000,
+      1,
+    );
+    const business = (details.business && typeof details.business === 'object')
+      ? (details.business as Record<string, unknown>)
+      : null;
+    const ownerBusiness = (details.owner_business && typeof details.owner_business === 'object')
+      ? (details.owner_business as Record<string, unknown>)
+      : null;
+    const businessId = (business && typeof business.id === 'string' ? business.id : '')
+      || (ownerBusiness && typeof ownerBusiness.id === 'string' ? ownerBusiness.id : '');
+    const businessName = (business && typeof business.name === 'string' ? business.name : '')
+      || (ownerBusiness && typeof ownerBusiness.name === 'string' ? ownerBusiness.name : '')
+      || (typeof details.business_name === 'string' ? details.business_name : '')
+      || businessId;
+    if (!businessId && !businessName) {
+      const fallbackName = typeof details.name === 'string' ? details.name : '';
+      if (!fallbackName) return null;
+      return {
+        id: normalizeAccountId(adAccountId),
+        name: deriveBusinessLabelFromAccountName(fallbackName),
+      };
+    }
+    return {
+      id: businessId || normalizeAccountId(adAccountId),
+      name: businessName,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchLivePagesForAccountAndHandle(params: {
+  accessToken: string;
+  adAccountId: string;
+  handle?: string;
+}): Promise<Array<{ id: string; name: string; count: number }>> {
+  const { accessToken, adAccountId, handle } = params;
+  const normalizedHandle = normalizeHandle(handle || '');
+  const normalizedAccountId = normalizeAccountId(adAccountId);
+  if (!normalizedAccountId) return [];
+  const accountNode = adAccountId.startsWith('act_') ? adAccountId : `act_${normalizedAccountId}`;
+
+  const pageCounts = new Map<string, number>();
+  const ingestCreative = (creative: Record<string, unknown>) => {
+    const destinationUrl = extractDestinationUrlFromCreative(creative);
+    if (normalizedHandle && !isStrictHandleMatch(normalizedHandle, destinationUrl)) return;
+    const pageId = extractPageId(creative);
+    if (!pageId) return;
+    pageCounts.set(pageId, (pageCounts.get(pageId) || 0) + 1);
+  };
+
+  const scanAds = async () => {
+    let after: string | undefined;
+    let requests = 0;
+    const MAX_AD_PAGES = normalizedHandle ? 12 : 6;
+    while (requests < MAX_AD_PAGES) {
+      try {
+        const adsResponse = await fetchFromMeta<{
+          data?: Array<Record<string, unknown>>;
+          paging?: { cursors?: { after?: string } };
+        }>(
+          accessToken,
+          `/${accountNode}/ads`,
+          {
+            fields: 'id,creative{object_story_spec,object_url,link_url,object_story_id,effective_object_story_id,page_id}',
+            limit: '200',
+            ...(after ? { after } : {}),
+          },
+          10000,
+          1,
+        );
+        for (const row of toArray<Record<string, unknown>>(adsResponse.data)) {
+          const creative = (row.creative && typeof row.creative === 'object')
+            ? (row.creative as Record<string, unknown>)
+            : null;
+          if (!creative) continue;
+          ingestCreative(creative);
+        }
+        requests += 1;
+        const nextAfter = adsResponse.paging?.cursors?.after;
+        if (!nextAfter) break;
+        after = nextAfter;
+      } catch {
+        break;
+      }
+    }
+  };
+
+  const scanAdCreatives = async () => {
+    let after: string | undefined;
+    let requests = 0;
+    const MAX_CREATIVE_PAGES = normalizedHandle ? 10 : 5;
+    while (requests < MAX_CREATIVE_PAGES) {
+      try {
+        const creativesResponse = await fetchFromMeta<{
+          data?: Array<Record<string, unknown>>;
+          paging?: { cursors?: { after?: string } };
+        }>(
+          accessToken,
+          `/${accountNode}/adcreatives`,
+          {
+            fields: 'id,object_story_spec,object_url,link_url,object_story_id,effective_object_story_id,page_id',
+            limit: '200',
+            ...(after ? { after } : {}),
+          },
+          10000,
+          1,
+        );
+        for (const row of toArray<Record<string, unknown>>(creativesResponse.data)) {
+          ingestCreative(row);
+        }
+        requests += 1;
+        const nextAfter = creativesResponse.paging?.cursors?.after;
+        if (!nextAfter) break;
+        after = nextAfter;
+      } catch {
+        break;
+      }
+    }
+  };
+
+  await scanAds();
+  if (pageCounts.size === 0) {
+    await scanAdCreatives();
+  }
+
+  if (pageCounts.size === 0) return [];
+
+  const pageNameById = new Map<string, string>();
+  await Promise.all(
+    [...pageCounts.keys()].map(async (pageId) => {
+      try {
+        const pageRow = await fetchFromMeta<Record<string, unknown>>(
+          accessToken,
+          `/${pageId}`,
+          { fields: 'id,name' },
+          8000,
+          1,
+        );
+        const pageName = typeof pageRow.name === 'string' ? pageRow.name : '';
+        if (pageName) pageNameById.set(pageId, pageName);
+      } catch {
+        // best effort; keep id as fallback label
+      }
+    }),
+  );
+
+  return [...pageCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([id, count]) => ({
+      id,
+      name: pageNameById.get(id) || id,
+      count,
+    }));
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { storeId, products, action } = body;
+    const allowLiveFallback = body.liveFallback !== false;
 
     if (!storeId) {
       return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
@@ -386,6 +670,37 @@ export async function POST(request: NextRequest) {
       normalizedAccountToCanonical.set(normalizeAccountId(account.id), account.id);
       accountNameById.set(account.id, account.name);
     }
+    const mapAccountIdToCanonical = (value: string): string => {
+      if (!value) return '';
+      return normalizedAccountToCanonical.get(normalizeAccountId(value)) || value;
+    };
+    const extractScopedAccountIds = (row: Record<string, unknown>): string[] => {
+      const bucket: string[] = [];
+      const adAccountIds = row.adAccountIds;
+      if (Array.isArray(adAccountIds)) {
+        for (const value of adAccountIds) {
+          if (typeof value === 'string') bucket.push(value);
+        }
+      }
+      const adAccountIdsSnake = row.ad_account_ids;
+      if (Array.isArray(adAccountIdsSnake)) {
+        for (const value of adAccountIdsSnake) {
+          if (typeof value === 'string') bucket.push(value);
+        }
+      }
+      const singletonCandidates = [
+        row.adAccountId,
+        row.ad_account_id,
+        row.accountId,
+        row.account_id,
+      ];
+      for (const value of singletonCandidates) {
+        if (typeof value === 'string' && value.trim()) {
+          bucket.push(value);
+        }
+      }
+      return normalizeProductLinks(bucket.map(mapAccountIdToCanonical).filter(Boolean));
+    };
 
     const inputProducts = products as InputProduct[];
     const store = getStore(storeId);
@@ -396,18 +711,76 @@ export async function POST(request: NextRequest) {
       storeDomain,
       products: inputProducts,
     });
+    const catalog = await loadShopifyCatalog(storeId);
+    const knownHandles = new Set(catalog.map((row) => normalizeHandle(row.handle)).filter(Boolean));
 
     const savedProfilesByProduct = new Map<string, ReturnType<typeof getProductLaunchProfile>>();
     for (const product of resolvedProducts) {
       savedProfilesByProduct.set(product.id, getProductLaunchProfile(storeId, product.id));
     }
 
-    const [adsSnapshots, creativesSnapshots, adsetsSnapshots, campaignsSnapshots] = await Promise.all([
+    const [adsSnapshots, creativesSnapshots, adsetsSnapshots, campaignsSnapshots, accountsSnapshot] = await Promise.all([
       getRecentSnapshots<Record<string, unknown>>(storeId, 'ads'),
       getRecentSnapshots<Record<string, unknown>>(storeId, 'creatives'),
       getRecentSnapshots<Record<string, unknown>>(storeId, 'adsets'),
       getRecentSnapshots<Record<string, unknown>>(storeId, 'campaigns'),
+      getLatestSnapshot<Record<string, unknown>>(storeId, 'accounts', ''),
     ]);
+
+    const businessByAccount = new Map<string, { id: string; name: string }>();
+    for (const row of toArray<Record<string, unknown>>(accountsSnapshot?.data)) {
+      const rawAccountId = typeof row.id === 'string'
+        ? row.id
+        : (typeof row.ad_account_id === 'string' ? row.ad_account_id : '');
+      const canonicalAccountId = normalizedAccountToCanonical.get(normalizeAccountId(rawAccountId)) || rawAccountId;
+      if (!canonicalAccountId) continue;
+      const businessObject = (row.business && typeof row.business === 'object')
+        ? (row.business as Record<string, unknown>)
+        : null;
+      const ownerBusinessObject = (row.ownerBusiness && typeof row.ownerBusiness === 'object')
+        ? (row.ownerBusiness as Record<string, unknown>)
+        : (
+          (row.owner_business && typeof row.owner_business === 'object')
+            ? (row.owner_business as Record<string, unknown>)
+            : null
+        );
+      const businessId = typeof row.businessId === 'string'
+        ? row.businessId
+        : (
+          typeof row.business_id === 'string'
+            ? row.business_id
+            : (
+              typeof businessObject?.id === 'string'
+                ? businessObject.id
+                : (
+                  typeof ownerBusinessObject?.id === 'string'
+                    ? ownerBusinessObject.id
+                    : ''
+                )
+            )
+        );
+      const businessName = typeof row.businessName === 'string'
+        ? row.businessName
+        : (
+          typeof row.business_name === 'string'
+            ? row.business_name
+            : (
+              typeof businessObject?.name === 'string'
+                ? businessObject.name
+                : (
+                  typeof ownerBusinessObject?.name === 'string'
+                    ? ownerBusinessObject.name
+                    : ''
+                )
+            )
+        );
+      if (businessId || businessName) {
+        businessByAccount.set(canonicalAccountId, {
+          id: businessId,
+          name: businessName,
+        });
+      }
+    }
 
     const campaignToAccount = new Map<string, string>();
     for (const snapshot of campaignsSnapshots) {
@@ -457,8 +830,61 @@ export async function POST(request: NextRequest) {
     }
 
     const allAdUrls: MetaAdUrl[] = [];
+    const observedPages: Array<{ id: string; name: string; adAccountId: string }> = [];
+    const pageHintsByAccountAndHandle = new Map<string, Map<string, { count: number; name: string }>>();
+
+    const trackPageHint = (accountId: string, url: string, pageId: string, pageName?: string) => {
+      const normalizedAccountId = normalizeAccountId(accountId);
+      const handle = normalizeHandle(extractProductHandle(url) || '');
+      if (!normalizedAccountId || !handle || !pageId) return;
+      const key = `${normalizedAccountId}|${handle}`;
+      const pageCounts = pageHintsByAccountAndHandle.get(key) || new Map<string, { count: number; name: string }>();
+      const current = pageCounts.get(pageId) || { count: 0, name: '' };
+      pageCounts.set(pageId, {
+        count: current.count + 1,
+        name: current.name || (pageName || ''),
+      });
+      pageHintsByAccountAndHandle.set(key, pageCounts);
+    };
 
     for (const snapshot of adsSnapshots) {
+      for (const row of snapshot.data) {
+        const creative = (row.creative && typeof row.creative === 'object')
+          ? (row.creative as Record<string, unknown>)
+          : null;
+        const destinationUrl = extractDestinationUrlFromCreative(creative);
+        const rowAdSetId =
+          (typeof row.adset_id === 'string' && row.adset_id)
+          || (typeof row.adsetId === 'string' && row.adsetId)
+          || snapshot.scopeId;
+        const campaignId =
+          (typeof row.campaign_id === 'string' && row.campaign_id)
+          || (typeof row.campaignId === 'string' && row.campaignId)
+          || adSetToCampaign.get(rowAdSetId)
+          || '';
+        const rawAccountId =
+          (typeof row.ad_account_id === 'string' && row.ad_account_id)
+          || (typeof row.adAccountId === 'string' && row.adAccountId)
+          || adSetToAccount.get(rowAdSetId)
+          || (campaignId ? campaignToAccount.get(campaignId) : '')
+          || '';
+        const canonicalAccountId = normalizedAccountToCanonical.get(normalizeAccountId(rawAccountId)) || rawAccountId;
+        const pageId = extractPageId(row);
+        const pageName = typeof row.page_name === 'string'
+          ? row.page_name
+          : (typeof row.pageName === 'string' ? row.pageName : '');
+        if (pageId) {
+          observedPages.push({
+            id: pageId,
+            name: pageName,
+            adAccountId: canonicalAccountId,
+          });
+        }
+        if (destinationUrl && pageId) {
+          trackPageHint(canonicalAccountId, destinationUrl, pageId, pageName);
+        }
+      }
+
       const extracted = extractAdUrlsFromSnapshot(snapshot.data, '');
       const snapshotAdSetId = snapshot.scopeId;
       for (const row of extracted) {
@@ -511,6 +937,19 @@ export async function POST(request: NextRequest) {
           adName: (row.name as string) || '',
           url: destinationUrl,
         });
+
+        const pageId = extractPageId(row);
+        const pageName = typeof row.page_name === 'string'
+          ? row.page_name
+          : (typeof row.pageName === 'string' ? row.pageName : '');
+        if (pageId) {
+          observedPages.push({
+            id: pageId,
+            name: pageName,
+            adAccountId: canonicalAccountId,
+          });
+          trackPageHint(canonicalAccountId, destinationUrl, pageId, pageName);
+        }
       }
     }
 
@@ -535,17 +974,29 @@ export async function POST(request: NextRequest) {
         : (typeof row.instagram_username === 'string' ? row.instagram_username : undefined);
 
       const existing = pageMap.get(id);
+      const rowAccountIds = extractScopedAccountIds(row);
+      const mergedAccountIds = mergeAccountIdsMany(
+        existing?.adAccountIds,
+        [...rowAccountIds, ...(accountId ? [mapAccountIdToCanonical(accountId)] : [])],
+      );
       pageMap.set(id, {
         id,
         name: typeof row.name === 'string' ? row.name : existing?.name || id,
         instagramId: instagramId || existing?.instagramId,
         instagramUsername: instagramUsername || existing?.instagramUsername,
-        adAccountIds: mergeAccountIds(existing?.adAccountIds, accountId),
+        adAccountIds: mergedAccountIds,
       });
     };
 
     for (const row of toArray<Record<string, unknown>>(pagesGlobalSnapshot?.data)) {
       upsertPage(row);
+    }
+    for (const observation of observedPages) {
+      if (!observation.id) continue;
+      upsertPage(
+        { id: observation.id, name: observation.name || observation.id },
+        observation.adAccountId || undefined,
+      );
     }
 
     const upsertInstagram = (row: Record<string, unknown>, accountId?: string) => {
@@ -558,13 +1009,18 @@ export async function POST(request: NextRequest) {
       const linkedPageId = typeof row.linkedPageId === 'string'
         ? row.linkedPageId
         : (typeof row.linked_page_id === 'string' ? row.linked_page_id : existing?.linkedPageId);
+      const rowAccountIds = extractScopedAccountIds(row);
+      const mergedAccountIds = mergeAccountIdsMany(
+        existing?.adAccountIds,
+        [...rowAccountIds, ...(accountId ? [mapAccountIdToCanonical(accountId)] : [])],
+      );
 
       instagramMap.set(id, {
         id,
         name: typeof row.name === 'string' ? row.name : (existing?.name || username || id),
         username: username || undefined,
         linkedPageId,
-        adAccountIds: mergeAccountIds(existing?.adAccountIds, accountId),
+        adAccountIds: mergedAccountIds,
       });
     };
 
@@ -645,43 +1101,48 @@ export async function POST(request: NextRequest) {
 
     for (const product of resolvedProducts) {
       const savedProfile = savedProfilesByProduct.get(product.id);
-      const savedLinks = parseStringArray(savedProfile?.product_links);
-      const incomingLinks = normalizeProductLinks(Array.isArray(product.productLinks) ? product.productLinks : []);
-      const candidateLinks = normalizeProductLinks([
+      const isKnownProductLink = (url: string) => {
+        if (!isStrictProductUrl(url)) return false;
+        if (knownHandles.size === 0) return true;
+        const handle = normalizeHandle(extractProductHandle(url) || '');
+        return !!handle && knownHandles.has(handle);
+      };
+
+      const savedLinks = parseStringArray(savedProfile?.product_links).filter(isKnownProductLink);
+      const incomingLinks = normalizeProductLinks(Array.isArray(product.productLinks) ? product.productLinks : []).filter(isKnownProductLink);
+      const incomingLinksProvided = incomingLinks.length > 0;
+      const linksChangedByUser = incomingLinksProvided && !areSameStringSets(incomingLinks, savedLinks);
+      const useSavedAssetOverrides = !!savedProfile && !linksChangedByUser;
+      const manualProductLinks = normalizeProductLinks([
         ...incomingLinks,
         ...savedLinks,
-        product.resolvedShopifyUrl,
-        product.shopifyUrl || '',
-        product.landingUrl || '',
-      ]);
+      ]).filter(isStrictProductUrl);
 
-      const handleCandidates = new Set<string>();
-      for (const link of candidateLinks) {
-        const extracted = normalizeHandle(product.shopifyHandle || extractProductHandle(link) || product.resolvedHandle || '');
-        if (extracted) handleCandidates.add(extracted);
-      }
-      if (product.resolvedHandle) {
-        handleCandidates.add(normalizeHandle(product.resolvedHandle));
-      }
+      const resolvedProductUrl = isKnownProductLink(product.resolvedShopifyUrl) ? product.resolvedShopifyUrl : '';
+      const candidateLinks = normalizeProductLinks([
+        ...manualProductLinks,
+        resolvedProductUrl,
+      ]).filter(isKnownProductLink);
+
+      const canonicalHandle = normalizeHandle(
+        product.shopifyHandle
+          || extractProductHandle(candidateLinks[0] || '')
+          || product.resolvedHandle
+          || '',
+      );
 
       let bestMatch: ProductMatch | null = null;
       const matchedByAccount = new Map<string, ProductMatch>();
+      const matchCountByAccount = new Map<string, number>();
 
       for (const ad of dedupedAdUrls) {
-        let matchedHandle = '';
-        for (const handle of handleCandidates) {
-          if (isStrictHandleMatch(handle, ad.url)) {
-            matchedHandle = handle;
-            break;
-          }
-        }
-        if (!matchedHandle) continue;
+        if (!canonicalHandle || !isStrictHandleMatch(canonicalHandle, ad.url)) continue;
 
         const canonicalAccountId = normalizedAccountToCanonical.get(normalizeAccountId(ad.adAccountId || '')) || ad.adAccountId || '';
         const match: ProductMatch = {
           productId: product.id,
           productName: product.name,
-          shopifyUrl: product.resolvedShopifyUrl,
+          shopifyUrl: candidateLinks[0] || product.resolvedShopifyUrl,
           matchedCampaignId: ad.campaignId,
           matchedCampaignName: ad.campaignName,
           matchedAdAccountId: canonicalAccountId,
@@ -700,18 +1161,56 @@ export async function POST(request: NextRequest) {
           if (!existing || match.matchScore > existing.matchScore) {
             matchedByAccount.set(canonicalAccountId, match);
           }
+          matchCountByAccount.set(canonicalAccountId, (matchCountByAccount.get(canonicalAccountId) || 0) + 1);
         }
       }
 
-      const matchedAccountIds = [...matchedByAccount.keys()];
+      const rankAccountIds = (ids: string[]): string[] => ids
+        .map((accountId, index) => ({
+          accountId,
+          index,
+          score: scoreAccountAffinity({
+            accountName: accountNameById.get(accountId) || accountId,
+            canonicalHandle,
+            productName: product.name,
+          }),
+        }))
+        .sort((a, b) => {
+          if (b.score !== a.score) return b.score - a.score;
+          return a.index - b.index;
+        })
+        .map((row) => row.accountId);
+
+      const matchedAccountIds = [...matchCountByAccount.entries()]
+        .sort((a, b) => {
+          const affinityA = scoreAccountAffinity({
+            accountName: accountNameById.get(a[0]) || a[0],
+            canonicalHandle,
+            productName: product.name,
+          });
+          const affinityB = scoreAccountAffinity({
+            accountName: accountNameById.get(b[0]) || b[0],
+            canonicalHandle,
+            productName: product.name,
+          });
+          if (affinityB !== affinityA) return affinityB - affinityA;
+          return b[1] - a[1];
+        })
+        .map(([accountId]) => accountId);
+      const preferredMatchedAccountId = matchedAccountIds[0] || '';
+      if (preferredMatchedAccountId) {
+        bestMatch = matchedByAccount.get(preferredMatchedAccountId) || bestMatch;
+      }
       const candidateAccountIds = normalizeProductLinks([
-        savedProfile?.ad_account_id || '',
+        useSavedAssetOverrides ? (savedProfile?.ad_account_id || '') : '',
         ...matchedAccountIds,
       ]).map((id) => normalizedAccountToCanonical.get(normalizeAccountId(id)) || id);
 
-      const productAccountIds = candidateAccountIds.length > 0
-        ? [...new Set(candidateAccountIds)]
-        : storeAccounts.map((account) => account.id);
+      const rankedStoreAccountIds = rankAccountIds(storeAccounts.map((account) => account.id));
+      const seededAccountIds = candidateAccountIds.length > 0
+        ? [...new Set([...candidateAccountIds, ...rankedStoreAccountIds])]
+        : rankedStoreAccountIds;
+      const productAccountIds = rankAccountIds(seededAccountIds);
 
       const availableAdAccounts: AccountOption[] = (productAccountIds.length > 0
         ? productAccountIds
@@ -722,12 +1221,18 @@ export async function POST(request: NextRequest) {
       }));
 
       const availableBusinessManagers = availableAdAccounts.map((account) => ({
-        id: `bm:${account.id}`,
-        name: account.name,
+        id: businessByAccount.get(account.id)?.id
+          ? `bm:${businessByAccount.get(account.id)?.id}`
+          : `bm:${normalizeAccountId(account.id)}`,
+        name: businessByAccount.get(account.id)?.name
+          || businessByAccount.get(account.id)?.id
+          || deriveBusinessLabelFromAccountName(account.name)
+          || account.name
+          || account.id,
         adAccountIds: [account.id],
       }));
 
-      const availablePages = allPages.filter((page) => {
+      let availablePages = allPages.filter((page) => {
         if (!page.adAccountIds || page.adAccountIds.length === 0) return true;
         return page.adAccountIds.some((id) => productAccountIds.some((target) => normalizeAccountId(target) === normalizeAccountId(id)));
       });
@@ -743,65 +1248,113 @@ export async function POST(request: NextRequest) {
       });
 
       let adAccountId = '';
-      if (savedProfile?.ad_account_id) {
+      if (useSavedAssetOverrides && savedProfile?.ad_account_id) {
         adAccountId = normalizedAccountToCanonical.get(normalizeAccountId(savedProfile.ad_account_id)) || savedProfile.ad_account_id;
       } else if (bestMatch?.matchedAdAccountId) {
         adAccountId = bestMatch.matchedAdAccountId;
       } else if (availableAdAccounts.length > 0) {
         adAccountId = availableAdAccounts[0].id;
       }
-      const adAccountName = availableAdAccounts.find((row) => row.id === adAccountId)?.name || savedProfile?.ad_account_name || '';
+      if (adAccountId && !availableAdAccounts.some((row) => normalizeAccountId(row.id) === normalizeAccountId(adAccountId))) {
+        adAccountId = availableAdAccounts[0]?.id || '';
+      }
+      if (!adAccountId && availableAdAccounts.length > 0) {
+        adAccountId = availableAdAccounts[0].id;
+      }
+      const adAccountName = availableAdAccounts.find((row) => row.id === adAccountId)?.name
+        || (useSavedAssetOverrides ? (savedProfile?.ad_account_name || '') : '');
 
-      const pagesForSelectedAccount = availablePages.filter((row) => belongsToAccount(row.adAccountIds, adAccountId));
       const igForSelectedAccount = availableInstagramAccounts.filter((row) => belongsToAccount(row.adAccountIds, adAccountId));
       const pixelsForSelectedAccount = availablePixels.filter((row) => normalizeAccountId(row.adAccountId) === normalizeAccountId(adAccountId));
+      const pageHintKey = `${normalizeAccountId(adAccountId)}|${canonicalHandle}`;
+      const hintedPageCounts = pageHintsByAccountAndHandle.get(pageHintKey);
+      const hintedPageId = hintedPageCounts
+        ? [...hintedPageCounts.entries()].sort((a, b) => b[1].count - a[1].count)[0]?.[0]
+        : '';
+      const hintedPageName = (hintedPageId && hintedPageCounts?.get(hintedPageId)?.name) || '';
+      if (hintedPageId && !availablePages.some((row) => row.id === hintedPageId)) {
+        availablePages = [
+          {
+            id: hintedPageId,
+            name: hintedPageName || `Matched Page (${hintedPageId})`,
+            adAccountIds: [adAccountId],
+          },
+          ...availablePages,
+        ];
+      }
+      const strictPagesForSelectedAccountAfterHint = availablePages.filter((row) =>
+        (row.adAccountIds || []).some((id) => normalizeAccountId(id) === normalizeAccountId(adAccountId))
+      );
+      const pagesForSelectedAccountAfterHint = strictPagesForSelectedAccountAfterHint;
 
-      let pageId = savedProfile?.page_id || '';
-      let pageName = savedProfile?.page_name || '';
+      let pageId = useSavedAssetOverrides ? (savedProfile?.page_id || '') : '';
+      let pageName = useSavedAssetOverrides ? (savedProfile?.page_name || '') : '';
+      if (pageId && !pagesForSelectedAccountAfterHint.some((row) => row.id === pageId)) {
+        pageId = '';
+        pageName = '';
+      }
       if (!pageId) {
-        const selectedPage = pagesForSelectedAccount[0] || availablePages[0];
+        const selectedPage = pagesForSelectedAccountAfterHint.find((row) => row.id === hintedPageId)
+          || (
+            strictPagesForSelectedAccountAfterHint.length > 0
+              ? strictPagesForSelectedAccountAfterHint[0]
+              : undefined
+          );
         pageId = selectedPage?.id || '';
         pageName = selectedPage?.name || '';
       }
 
-      let instagramId = savedProfile?.instagram_id || '';
+      let instagramId = useSavedAssetOverrides ? (savedProfile?.instagram_id || '') : '';
       let instagramUsername = '';
+      if (instagramId && !igForSelectedAccount.some((row) => row.id === instagramId)) {
+        instagramId = '';
+      }
       if (!instagramId && pageId) {
         const selectedPage = availablePages.find((row) => row.id === pageId);
         instagramId = selectedPage?.instagramId || '';
       }
+      if (!instagramId && igForSelectedAccount.length > 0) {
+        instagramId = igForSelectedAccount[0].id;
+      }
       if (instagramId) {
-        const selectedIg = availableInstagramAccounts.find((row) => row.id === instagramId) || igForSelectedAccount[0];
+        const selectedIg = igForSelectedAccount.find((row) => row.id === instagramId) || igForSelectedAccount[0];
         instagramUsername = selectedIg?.username || selectedIg?.name || '';
       }
 
-      let pixelId = savedProfile?.pixel_id || '';
-      let pixelName = savedProfile?.pixel_name || '';
+      let pixelId = useSavedAssetOverrides ? (savedProfile?.pixel_id || '') : '';
+      let pixelName = useSavedAssetOverrides ? (savedProfile?.pixel_name || '') : '';
+      if (pixelId && !pixelsForSelectedAccount.some((row) => row.id === pixelId)) {
+        pixelId = '';
+        pixelName = '';
+      }
       if (!pixelId) {
-        const selectedPixel = pixelsForSelectedAccount[0] || availablePixels[0];
+        const selectedPixel = pixelsForSelectedAccount[0];
         pixelId = selectedPixel?.id || '';
         pixelName = selectedPixel?.name || '';
       }
 
-      let destinationUrl = savedProfile?.destination_url || '';
+      let destinationUrl = useSavedAssetOverrides ? (savedProfile?.destination_url || '') : '';
       if (!destinationUrl && bestMatch?.matchedAdUrl) {
         destinationUrl = bestMatch.matchedAdUrl;
       }
-      if (!destinationUrl) {
-        destinationUrl = candidateLinks[0] || product.resolvedShopifyUrl;
+      if (!destinationUrl && manualProductLinks.length > 0) {
+        destinationUrl = manualProductLinks[0];
+      }
+      if (!destinationUrl && resolvedProductUrl) {
+        destinationUrl = resolvedProductUrl;
       }
 
+      const suggestedMatchedUrl = isStrictProductUrl(bestMatch?.matchedAdUrl || '') ? (bestMatch?.matchedAdUrl || '') : '';
+      const destinationAsProduct = isKnownProductLink(destinationUrl) ? destinationUrl : '';
       const productLinks = normalizeProductLinks([
-        ...incomingLinks,
-        ...savedLinks,
-        product.resolvedShopifyUrl,
-        product.shopifyUrl || '',
-        product.landingUrl || '',
-        bestMatch?.matchedAdUrl || '',
-        destinationUrl,
-      ]);
+        ...manualProductLinks,
+        resolvedProductUrl,
+        suggestedMatchedUrl,
+        destinationAsProduct,
+      ]).filter(isKnownProductLink);
 
       const selectedBusinessManager = availableBusinessManagers.find((row) => row.adAccountIds.includes(adAccountId));
+      const selectedBusiness = businessByAccount.get(adAccountId);
 
       const hasMissingCache =
         availableAdAccounts.length === 0
@@ -813,7 +1366,7 @@ export async function POST(request: NextRequest) {
         productId: product.id,
         productName: product.name,
         productImage: product.image || '',
-        shopifyUrl: product.resolvedShopifyUrl,
+        shopifyUrl: resolvedProductUrl || productLinks[0] || '',
         shopifyHandle: product.resolvedHandle,
         isAutoMatched: !!bestMatch,
         matchScore: bestMatch?.matchScore || 0,
@@ -824,8 +1377,14 @@ export async function POST(request: NextRequest) {
         matchedCampaignName: bestMatch?.matchedCampaignName,
         adAccountId,
         adAccountName,
-        businessManagerId: selectedBusinessManager?.id || (adAccountId ? `bm:${adAccountId}` : ''),
-        businessManagerName: selectedBusinessManager?.name || adAccountName,
+        businessManagerId: selectedBusiness?.id
+          ? `bm:${selectedBusiness.id}`
+          : (selectedBusinessManager?.id || ''),
+        businessManagerName: selectedBusiness?.name
+          || selectedBusiness?.id
+          || selectedBusinessManager?.name
+          || deriveBusinessLabelFromAccountName(adAccountName)
+          || '',
         pageId,
         pageName,
         instagramId,
@@ -841,6 +1400,147 @@ export async function POST(request: NextRequest) {
         availableInstagramAccounts,
         availablePixels,
       });
+    }
+
+    if (allowLiveFallback && mappings.length > 0) {
+      const requiresLiveFallback = mappings.some((mapping) => {
+        const strictPagesForAccount = mapping.availablePages.filter((row) =>
+          (row.adAccountIds || []).some((id) => normalizeAccountId(id) === normalizeAccountId(mapping.adAccountId)),
+        );
+        return !mapping.businessManagerName || !mapping.pageId || strictPagesForAccount.length === 0;
+      });
+
+      if (requiresLiveFallback) {
+        const token = await getMetaToken(storeId);
+        if (token?.accessToken) {
+          const businessLiveCache = new Map<string, { id: string; name: string } | null>();
+          const pagesLiveCache = new Map<string, Array<{ id: string; name: string; count: number }>>();
+
+          for (const mapping of mappings) {
+            const adAccountId = mapping.adAccountId;
+            const handle = normalizeHandle(
+              mapping.shopifyHandle
+                || extractProductHandle(mapping.shopifyUrl || mapping.destinationUrl || mapping.productLinks[0] || '')
+                || '',
+            );
+            if (!adAccountId || !handle) continue;
+
+            const normalizeAndMergePage = (page: ProductPageOption): ProductPageOption => {
+              const existing = mapping.availablePages.find((row) => row.id === page.id);
+              return {
+                id: page.id,
+                name: page.name || existing?.name || page.id,
+                instagramId: page.instagramId || existing?.instagramId,
+                instagramUsername: page.instagramUsername || existing?.instagramUsername,
+                adAccountIds: mergeAccountIds(existing?.adAccountIds, adAccountId),
+              };
+            };
+
+            if (!mapping.businessManagerName || !mapping.businessManagerId) {
+              if (!businessLiveCache.has(adAccountId)) {
+                const liveBusiness = await fetchLiveBusinessForAccount(token.accessToken, adAccountId);
+                businessLiveCache.set(adAccountId, liveBusiness);
+              }
+              const liveBusiness = businessLiveCache.get(adAccountId);
+              if (liveBusiness) {
+                mapping.businessManagerId = liveBusiness.id ? `bm:${liveBusiness.id}` : mapping.businessManagerId;
+                mapping.businessManagerName = liveBusiness.name || liveBusiness.id || mapping.businessManagerName;
+
+                mapping.availableBusinessManagers = mapping.availableBusinessManagers.map((row) => {
+                  if (!row.adAccountIds.some((id) => normalizeAccountId(id) === normalizeAccountId(adAccountId))) {
+                    return row;
+                  }
+                  return {
+                    ...row,
+                    id: liveBusiness.id ? `bm:${liveBusiness.id}` : row.id,
+                    name: liveBusiness.name || liveBusiness.id || row.name,
+                  };
+                });
+              }
+            }
+
+            const strictPagesForAccount = mapping.availablePages.filter((row) =>
+              (row.adAccountIds || []).some((id) => normalizeAccountId(id) === normalizeAccountId(adAccountId)),
+            );
+            const selectedPageIsScoped = !!mapping.pageId
+              && strictPagesForAccount.some((row) => row.id === mapping.pageId);
+            const needsLivePages = !mapping.pageId || strictPagesForAccount.length === 0 || !selectedPageIsScoped;
+
+            if (needsLivePages) {
+              const pageCacheKey = `${normalizeAccountId(adAccountId)}|${handle}`;
+              if (!pagesLiveCache.has(pageCacheKey)) {
+                const livePages = await fetchLivePagesForAccountAndHandle({
+                  accessToken: token.accessToken,
+                  adAccountId,
+                  handle,
+                });
+                pagesLiveCache.set(pageCacheKey, livePages);
+              }
+
+              const livePages = pagesLiveCache.get(pageCacheKey) || [];
+              let livePagesForManualFallback: Array<{ id: string; name: string; count: number }> = [];
+              if (livePages.length === 0) {
+                const broadKey = `${normalizeAccountId(adAccountId)}|*`;
+                if (!pagesLiveCache.has(broadKey)) {
+                  const broadPages = await fetchLivePagesForAccountAndHandle({
+                    accessToken: token.accessToken,
+                    adAccountId,
+                  });
+                  pagesLiveCache.set(broadKey, broadPages);
+                }
+                livePagesForManualFallback = pagesLiveCache.get(broadKey) || [];
+              }
+
+              const pagesToMerge = livePages.length > 0 ? livePages : livePagesForManualFallback;
+              if (pagesToMerge.length > 0) {
+                const mergedPages = new Map<string, ProductPageOption>();
+                for (const row of mapping.availablePages) {
+                  mergedPages.set(row.id, row);
+                }
+                for (const row of pagesToMerge) {
+                  const normalized = normalizeAndMergePage({
+                    id: row.id,
+                    name: row.name,
+                    adAccountIds: [adAccountId],
+                  });
+                  mergedPages.set(row.id, normalized);
+                }
+                mapping.availablePages = uniqueById([...mergedPages.values()]);
+
+                const strictPagesAfterMerge = mapping.availablePages.filter((row) =>
+                  (row.adAccountIds || []).some((id) => normalizeAccountId(id) === normalizeAccountId(adAccountId)),
+                );
+                if (!mapping.pageId || !strictPagesAfterMerge.some((row) => row.id === mapping.pageId)) {
+                  const topPage = strictPagesAfterMerge[0];
+                  if (topPage) {
+                    mapping.pageId = topPage.id;
+                    mapping.pageName = topPage.name || mapping.pageName;
+                  }
+                } else if (!mapping.pageName) {
+                  const selected = strictPagesAfterMerge.find((row) => row.id === mapping.pageId);
+                  mapping.pageName = selected?.name || mapping.pageName;
+                }
+              }
+            }
+
+            const strictPagesAfterFallback = mapping.availablePages.filter((row) =>
+              (row.adAccountIds || []).some((id) => normalizeAccountId(id) === normalizeAccountId(adAccountId)),
+            );
+            const igForAccount = mapping.availableInstagramAccounts.filter((row) =>
+              belongsToAccount(row.adAccountIds, adAccountId),
+            );
+            const pixelsForAccount = mapping.availablePixels.filter((row) =>
+              normalizeAccountId(row.adAccountId) === normalizeAccountId(adAccountId),
+            );
+
+            mapping.missingCachedAssets =
+              mapping.availableAdAccounts.length === 0
+              || strictPagesAfterFallback.length === 0
+              || pixelsForAccount.length === 0
+              || igForAccount.length === 0;
+          }
+        }
+      }
     }
 
     return NextResponse.json({ mappings });

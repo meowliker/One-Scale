@@ -46,7 +46,7 @@ test('resolveProductIdentity marks uncertain catalog matches for review', () => 
   assert.equal(resolved.needsUrlReview, true);
 });
 
-test('resolveProductIdentity falls back to slug when no catalog match', () => {
+test('resolveProductIdentity falls back without fabricating a product handle', () => {
   const resolved = resolveProductIdentity(
     {
       name: 'Unknown Product Name',
@@ -56,5 +56,6 @@ test('resolveProductIdentity falls back to slug when no catalog match', () => {
 
   assert.equal(resolved.source, 'fallback');
   assert.equal(resolved.needsUrlReview, true);
-  assert.equal(resolved.handle, 'unknown-product-name');
+  assert.equal(resolved.handle, '');
+  assert.equal(resolved.shopifyUrl, '');
 });

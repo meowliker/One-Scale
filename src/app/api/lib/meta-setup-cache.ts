@@ -15,6 +15,7 @@ interface MetaPageOption {
   name: string;
   instagramId?: string;
   instagramUsername?: string;
+  adAccountIds?: string[];
 }
 
 interface MetaInstagramOption {
@@ -22,6 +23,7 @@ interface MetaInstagramOption {
   name: string;
   username: string;
   linkedPageId?: string;
+  adAccountIds?: string[];
 }
 
 interface MetaPixelOption {
@@ -31,7 +33,7 @@ interface MetaPixelOption {
 }
 
 export interface MetaSetupCachePayload {
-  accounts: Array<{ id: string; name: string; accountId: string }>;
+  accounts: Array<{ id: string; name: string; accountId: string; businessId?: string; businessName?: string }>;
   pages: MetaPageOption[];
   instagram: MetaInstagramOption[];
   pixels: MetaPixelOption[];
@@ -50,21 +52,105 @@ function uniqueById<T extends { id: string }>(rows: T[]): T[] {
   return [...out.values()];
 }
 
+function mergeAccountIds(existing: string[] | undefined, next: string[] | undefined): string[] | undefined {
+  const merged = new Set<string>();
+  for (const row of existing || []) {
+    if (row) merged.add(row);
+  }
+  for (const row of next || []) {
+    if (row) merged.add(row);
+  }
+  return merged.size > 0 ? [...merged] : undefined;
+}
+
+function mergePages(rows: MetaPageOption[]): MetaPageOption[] {
+  const out = new Map<string, MetaPageOption>();
+  for (const row of rows) {
+    if (!row?.id) continue;
+    const existing = out.get(row.id);
+    if (!existing) {
+      out.set(row.id, row);
+      continue;
+    }
+    out.set(row.id, {
+      id: row.id,
+      name: existing.name || row.name || row.id,
+      instagramId: existing.instagramId || row.instagramId,
+      instagramUsername: existing.instagramUsername || row.instagramUsername,
+      adAccountIds: mergeAccountIds(existing.adAccountIds, row.adAccountIds),
+    });
+  }
+  return [...out.values()];
+}
+
+function mergeInstagram(rows: MetaInstagramOption[]): MetaInstagramOption[] {
+  const out = new Map<string, MetaInstagramOption>();
+  for (const row of rows) {
+    if (!row?.id) continue;
+    const existing = out.get(row.id);
+    if (!existing) {
+      out.set(row.id, row);
+      continue;
+    }
+    out.set(row.id, {
+      id: row.id,
+      name: existing.name || row.name || row.id,
+      username: existing.username || row.username || row.name || row.id,
+      linkedPageId: existing.linkedPageId || row.linkedPageId,
+      adAccountIds: mergeAccountIds(existing.adAccountIds, row.adAccountIds),
+    });
+  }
+  return [...out.values()];
+}
+
 export async function refreshMetaSetupSnapshots(params: {
   accessToken: string;
   adAccounts: StoreAccountLike[];
   writeSnapshot: SnapshotWriter;
 }): Promise<MetaSetupCachePayload> {
   const { accessToken, adAccounts, writeSnapshot } = params;
-  const accounts = adAccounts.map((account) => ({
-    id: account.ad_account_id,
-    name: account.ad_account_name || account.ad_account_id,
-    accountId: normalizeAccountId(account.ad_account_id),
-  }));
+  const accounts = await Promise.all(
+    adAccounts.map(async (account) => {
+      const accountRow = {
+        id: account.ad_account_id,
+        name: account.ad_account_name || account.ad_account_id,
+        accountId: normalizeAccountId(account.ad_account_id),
+        businessId: undefined as string | undefined,
+        businessName: undefined as string | undefined,
+      };
+      try {
+        const details = await fetchFromMeta<Record<string, unknown>>(
+          accessToken,
+          `/${account.ad_account_id}`,
+          { fields: 'id,name,account_id,business{id,name},owner_business{id,name}' },
+          8000,
+          1
+        );
+        const business = (details.business && typeof details.business === 'object')
+          ? (details.business as Record<string, unknown>)
+          : null;
+        const ownerBusiness = (details.owner_business && typeof details.owner_business === 'object')
+          ? (details.owner_business as Record<string, unknown>)
+          : null;
+        accountRow.businessId =
+          (business && typeof business.id === 'string' ? business.id : '')
+          || (ownerBusiness && typeof ownerBusiness.id === 'string' ? ownerBusiness.id : '')
+          || undefined;
+        accountRow.businessName =
+          (business && typeof business.name === 'string' ? business.name : '')
+          || (ownerBusiness && typeof ownerBusiness.name === 'string' ? ownerBusiness.name : '')
+          || undefined;
+      } catch {
+        // Keep fallback row from store cache
+      }
+      return accountRow;
+    })
+  );
 
   const pages: MetaPageOption[] = [];
   const instagram: MetaInstagramOption[] = [];
   const pixels: MetaPixelOption[] = [];
+  const pageNameById = new Map<string, string>();
 
   await writeSnapshot('accounts', '', 'latest', accounts);
 
@@ -91,6 +177,7 @@ export async function refreshMetaSetupSnapshots(params: {
         instagramId: instagramId || undefined,
         instagramUsername: instagramUsername || undefined,
       });
+      pageNameById.set(id, name);
       if (instagramId) {
         instagram.push({
           id: instagramId,
@@ -107,6 +194,7 @@ export async function refreshMetaSetupSnapshots(params: {
   const perAccountRows = await Promise.all(
     accounts.map(async (account) => {
       const accountNode = `act_${normalizeAccountId(account.id)}`;
+      const accountPages: MetaPageOption[] = [];
       const accountPixels: MetaPixelOption[] = [];
       const accountInstagram: MetaInstagramOption[] = [];
 
@@ -146,16 +234,84 @@ export async function refreshMetaSetupSnapshots(params: {
             id,
             name: username || id,
             username: username || id,
+            adAccountIds: [account.id],
           });
         }
       } catch {
         // Best effort.
       }
 
+      try {
+        const pageIds = new Set<string>();
+        let after: string | undefined;
+        let pageFetches = 0;
+        const MAX_AD_PAGES = 15;
+
+        while (pageFetches < MAX_AD_PAGES) {
+          const adsResponse = await fetchFromMeta<{
+            data?: Array<Record<string, unknown>>;
+            paging?: { cursors?: { after?: string } };
+          }>(
+            accessToken,
+            `/${accountNode}/ads`,
+            {
+              fields: 'creative{object_story_spec}',
+              limit: '200',
+              ...(after ? { after } : {}),
+            },
+            10000,
+            1
+          );
+
+          for (const row of adsResponse.data || []) {
+            const creative = (row.creative && typeof row.creative === 'object')
+              ? (row.creative as Record<string, unknown>)
+              : null;
+            const story = (creative?.object_story_spec && typeof creative.object_story_spec === 'object')
+              ? (creative.object_story_spec as Record<string, unknown>)
+              : null;
+            const pageId = story && typeof story.page_id === 'string' ? story.page_id : '';
+            if (pageId) pageIds.add(pageId);
+          }
+
+          pageFetches += 1;
+          const nextAfter = adsResponse.paging?.cursors?.after;
+          if (!nextAfter) break;
+          after = nextAfter;
+        }
+
+        for (const pageId of pageIds) {
+          let pageName = pageNameById.get(pageId) || '';
+          if (!pageName) {
+            try {
+              const pageDetails = await fetchFromMeta<Record<string, unknown>>(
+                accessToken,
+                `/${pageId}`,
+                { fields: 'id,name' },
+                8000,
+                1
+              );
+              pageName = typeof pageDetails.name === 'string' ? pageDetails.name : '';
+            } catch {
+              // Best effort, keep fallback id-only name.
+            }
+          }
+          accountPages.push({
+            id: pageId,
+            name: pageName || pageId,
+            adAccountIds: [account.id],
+          });
+        }
+      } catch {
+        // Best effort.
+      }
+
+      await writeSnapshot('pages', account.id, 'latest', accountPages);
       await writeSnapshot('pixels', account.id, 'latest', accountPixels);
       await writeSnapshot('instagram', account.id, 'latest', accountInstagram);
 
       return {
+        pages: accountPages,
         pixels: accountPixels,
         instagram: accountInstagram,
       };
@@ -163,12 +319,13 @@ export async function refreshMetaSetupSnapshots(params: {
   );
 
   for (const row of perAccountRows) {
+    pages.push(...row.pages);
     pixels.push(...row.pixels);
     instagram.push(...row.instagram);
   }
 
-  const uniquePages = uniqueById(pages);
-  const uniqueInstagram = uniqueById(instagram);
+  const uniquePages = mergePages(pages);
+  const uniqueInstagram = mergeInstagram(instagram);
   const uniquePixels = uniqueById(
     pixels.map((row) => ({ ...row, id: `${row.adAccountId}:${row.id}` }))
   ).map((row) => ({

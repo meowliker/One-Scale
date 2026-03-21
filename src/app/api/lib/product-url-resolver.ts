@@ -60,7 +60,7 @@ export function scoreProductNameSimilarity(lhs: string, rhs: string): number {
 export function findShopifyCandidateByTitle(
   productName: string,
   catalog: ShopifyCatalogProduct[],
-  minConfidence = 0.72
+  minConfidence = 0.85
 ): { handle: string; confidence: number } | null {
   let best: { handle: string; confidence: number } | null = null;
 
@@ -111,10 +111,9 @@ export function resolveProductIdentity(
     };
   }
 
-  const fallbackHandle = slugifyProductName(product.name);
   return {
-    shopifyUrl: fallbackHandle && storeDomain ? `https://${storeDomain}/products/${fallbackHandle}` : explicitUrl,
-    handle: fallbackHandle,
+    shopifyUrl: '',
+    handle: '',
     needsUrlReview: true,
     confidence: 0,
     source: 'fallback',
