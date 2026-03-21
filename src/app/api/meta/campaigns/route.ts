@@ -103,53 +103,60 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Always check 'latest' variant (populated by cron sync)
-    const latestSnapshot = useSupabase
-      ? await getPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'latest')
-      : getMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'latest');
-    if (latestSnapshot && latestSnapshot.data.length > 0) {
-      return NextResponse.json({
-        data: latestSnapshot.data,
-        cached: true,
-        stale: !forceLive,
-        snapshotAt: latestSnapshot.updatedAt,
-        staleReason: 'snapshot_latest_fast',
-      });
-    }
-
-    // Try last_30d preset
-    if (!isApproxLast30Range(since, until)) {
-      const last30Snapshot = useSupabase
-        ? await getPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'preset:last_30d')
-        : getMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'preset:last_30d');
-      if (last30Snapshot && last30Snapshot.data.length > 0) {
+    // When strictDate is set, skip loose fallbacks — the user explicitly
+    // changed the date range and must see data for that range, not stale
+    // "latest" or "last_30d" snapshots from a different period.
+    if (!isStrictRangeRequest) {
+      // Check 'latest' variant (populated by cron sync)
+      const latestSnapshot = useSupabase
+        ? await getPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'latest')
+        : getMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'latest');
+      if (latestSnapshot && latestSnapshot.data.length > 0) {
         return NextResponse.json({
-          data: last30Snapshot.data,
+          data: latestSnapshot.data,
           cached: true,
           stale: !forceLive,
-          snapshotAt: last30Snapshot.updatedAt,
-          staleReason: 'snapshot_last_30d_fast',
+          snapshotAt: latestSnapshot.updatedAt,
+          staleReason: 'snapshot_latest_fast',
+        });
+      }
+
+      // Try last_30d preset
+      if (!isApproxLast30Range(since, until)) {
+        const last30Snapshot = useSupabase
+          ? await getPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'preset:last_30d')
+          : getMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId, 'preset:last_30d');
+        if (last30Snapshot && last30Snapshot.data.length > 0) {
+          return NextResponse.json({
+            data: last30Snapshot.data,
+            cached: true,
+            stale: !forceLive,
+            snapshotAt: last30Snapshot.updatedAt,
+            staleReason: 'snapshot_last_30d_fast',
+          });
+        }
+      }
+
+      // Try any available snapshot
+      const anySnapshot = useSupabase
+        ? await getLatestPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId)
+        : getLatestMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId);
+      if (anySnapshot && anySnapshot.data.length > 0) {
+        return NextResponse.json({
+          data: anySnapshot.data,
+          cached: true,
+          stale: !forceLive,
+          snapshotAt: anySnapshot.updatedAt,
+          staleReason: 'snapshot_any_fast',
         });
       }
     }
-
-    // Try any available snapshot
-    const anySnapshot = useSupabase
-      ? await getLatestPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId)
-      : getLatestMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId);
-    if (anySnapshot && anySnapshot.data.length > 0) {
-      return NextResponse.json({
-        data: anySnapshot.data,
-        cached: true,
-        stale: !forceLive,
-        snapshotAt: anySnapshot.updatedAt,
-        staleReason: 'snapshot_any_fast',
-      });
-    }
   }
 
-  // If not forcing live data and we have no cache, return empty with a hint to wait for sync
-  if (!forceLive) {
+  // If not forcing live data and we have no cache, return empty with a hint to wait for sync.
+  // Exception: strict date requests should always attempt a live fetch so the user
+  // sees accurate data for the date range they selected.
+  if (!forceLive && !isStrictRangeRequest) {
     return NextResponse.json({
       data: [],
       cached: true,

@@ -80,7 +80,8 @@ async function readCachedSnapshot(
   storeId: string,
   campaignId: string,
   exactVariant: string,
-  mode: string
+  mode: string,
+  strictDate = false
 ): Promise<{ data: AdSet[]; updatedAt?: string } | null> {
   // First try exact variant match
   const exactSnapshot = useSupabase
@@ -90,7 +91,11 @@ async function readCachedSnapshot(
     return { data: exactSnapshot.data, updatedAt: exactSnapshot.updatedAt };
   }
 
-  // Always check 'latest' variant (populated by cron sync)
+  // When strictDate is set, skip loose fallbacks — user explicitly changed
+  // the date range and must see data for that range only.
+  if (strictDate) return null;
+
+  // Check 'latest' variant (populated by cron sync)
   const latestSnapshot = useSupabase
     ? await getPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, 'latest')
     : getMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, 'latest');
@@ -197,7 +202,7 @@ export async function GET(request: NextRequest) {
 
       if (preferCache && !forceLive) {
         const exactVariant = `mode:${mode}|since:${since || ''}|until:${until || ''}|strict:${strictDate ? '1' : '0'}`;
-        const snap = await readCachedSnapshot(useSupabase, storeId, id, exactVariant, mode);
+        const snap = await readCachedSnapshot(useSupabase, storeId, id, exactVariant, mode, strictDate);
         if (snap && snap.data.length > 0 && (!strictDate || hasAdSetSignal(snap.data))) {
           results[id] = snap.data;
           adSetCache.set(cacheKey, { at: Date.now(), data: snap.data });
@@ -294,7 +299,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (preferCache && !forceLive) {
-    const snap = await readCachedSnapshot(useSupabase, storeId, campaignId, exactVariant, mode);
+    const snap = await readCachedSnapshot(useSupabase, storeId, campaignId, exactVariant, mode, strictDate);
     if (snap && snap.data.length > 0 && (!strictDate || hasAdSetSignal(snap.data))) {
       adSetCache.set(cacheKey, { at: Date.now(), data: snap.data });
       queueAdSetRefresh({
@@ -355,7 +360,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ data: fallback.data, cached: true, stale: true });
     }
 
-    const snap = await readCachedSnapshot(useSupabase, storeId, campaignId, exactVariant, mode);
+    const snap = await readCachedSnapshot(useSupabase, storeId, campaignId, exactVariant, mode, strictDate);
     if (snap && snap.data.length > 0) {
       adSetCache.set(cacheKey, { at: Date.now(), data: snap.data });
       return NextResponse.json({
