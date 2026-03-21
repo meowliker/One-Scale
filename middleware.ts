@@ -11,6 +11,7 @@ const PUBLIC_API_PREFIXES = [
   '/api/auth/meta',
   '/api/auth/shopify',
   '/api/auth/status',
+    '/api/auth/setup-status',
   '/api/auth/session',
   '/api/auth/register',
   '/api/shopify/webhooks',
