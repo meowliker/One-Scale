@@ -147,12 +147,15 @@ export async function GET(request: NextRequest) {
   let pnlChargebackLoss = 0;
   let pnlChargebackWon = 0;
   let pnlOrderCount = 0;
+  // Load snapshots with product_breakdown — this is the source of truth for Period View
+  let snapshotProductBreakdowns: Array<{ productId: string; productTitle: string; classification: string; revenue: number; unitsSold: number; fees: number; orders: number }> = [];
   try {
     const snapshots = await rest<Array<{
       revenue: number; transaction_fees: number; ad_spend: number;
       refunds: number; chargeback_loss: number; chargeback_won: number; order_count: number;
+      product_breakdown: string;
     }>>(
-      `/daily_pnl_snapshots?store_id=eq.${enc(storeId)}&date=gte.${from}&date=lte.${to}&select=revenue,transaction_fees,ad_spend,refunds,chargeback_loss,chargeback_won,order_count`
+      `/daily_pnl_snapshots?store_id=eq.${enc(storeId)}&date=gte.${from}&date=lte.${to}&select=revenue,transaction_fees,ad_spend,refunds,chargeback_loss,chargeback_won,order_count,product_breakdown`
     );
     for (const s of snapshots ?? []) {
       pnlRevenue += Number(s.revenue) || 0;
@@ -162,19 +165,77 @@ export async function GET(request: NextRequest) {
       pnlChargebackLoss += Number(s.chargeback_loss) || 0;
       pnlChargebackWon += Number(s.chargeback_won) || 0;
       pnlOrderCount += Number(s.order_count) || 0;
+      // Collect product breakdowns from snapshots
+      try {
+        const pb = JSON.parse(s.product_breakdown || '[]');
+        snapshotProductBreakdowns.push(...pb);
+      } catch { /* malformed JSON */ }
     }
   } catch { /* table may not exist */ }
   const hasPnlData = pnlRevenue > 0 || pnlFees > 0;
 
   try {
     // ══════════════════════════════════════════════════════════════════════
-    // PRIMARY PATH: Apps Script V4.4 Port — EXACT line-for-line port
-    // Uses order.total_price for revenue (not line items).
-    // Results passed through directly. No normalization. No overrides.
-    // Ad spend normalized to P&L ground truth only.
+    // PRIMARY PATH: Read from snapshot product_breakdown (same source as Period View)
+    // This ensures Product Performance section always matches Period View numbers.
+    // Falls back to live buildProductPerformance only if no snapshot data exists.
     // ══════════════════════════════════════════════════════════════════════
     try {
-      const appsScriptResults = await buildProductPerformance(storeId, from, to);
+      // Aggregate multi-day snapshot breakdowns by product_id
+      let appsScriptResults: Awaited<ReturnType<typeof buildProductPerformance>>;
+
+      if (snapshotProductBreakdowns.length > 0) {
+        // Use snapshot data — guaranteed to match Period View
+        const byProduct = new Map<string, { revenue: number; orders: number; fees: number; classification: string; title: string }>();
+        for (const p of snapshotProductBreakdowns) {
+          const existing = byProduct.get(p.productId);
+          if (existing) {
+            existing.revenue += p.revenue;
+            existing.orders += p.orders;
+            existing.fees += p.fees;
+          } else {
+            byProduct.set(p.productId, {
+              revenue: p.revenue,
+              orders: p.orders,
+              fees: p.fees,
+              classification: p.classification,
+              title: p.productTitle,
+            });
+          }
+        }
+
+        // Distribute ad spend proportionally to main products by revenue
+        const mainProducts = [...byProduct.entries()].filter(([, v]) => v.classification === 'main' && v.revenue > 0);
+        const totalMainRev = mainProducts.reduce((s, [, v]) => s + v.revenue, 0);
+
+        appsScriptResults = [...byProduct.entries()].map(([pid, v]) => {
+          const adSpendShare = (v.classification === 'main' && totalMainRev > 0)
+            ? round2(pnlAdSpend * (v.revenue / totalMainRev))
+            : 0;
+          const netProfit = round2(v.revenue - v.fees - adSpendShare);
+          const margin = v.revenue > 0 ? round2((netProfit / v.revenue) * 100) : 0;
+          return {
+            product_id: pid,
+            product_name: v.title,
+            classification: v.classification as 'main' | 'upsell' | 'downsell' | 'bundle' | 'excluded' | 'pending',
+            revenue: round2(v.revenue),
+            orders: v.orders,
+            fees: round2(v.fees),
+            fees_estimated: false,
+            ad_spend: adSpendShare,
+            cogs: 0,
+            net_profit: netProfit,
+            margin,
+            attribution_method: 'snapshot',
+            parent_product_id: null,
+            parent_product_name: null,
+          };
+        });
+      } else {
+        // Fallback: compute live (no snapshot data available)
+        appsScriptResults = await buildProductPerformance(storeId, from, to);
+      }
+
       if (appsScriptResults.length > 0) {
         // Fetch product images
         const imgMap = new Map<string, string>();
