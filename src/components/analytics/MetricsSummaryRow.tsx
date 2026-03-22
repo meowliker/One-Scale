@@ -365,8 +365,10 @@ export function MetricsSummaryRow({ metrics }: MetricsSummaryRowProps) {
 
   const fbRevenue = metrics.totalRevenue ?? 0;
   // Keep Shopify cards consistent with the live strip:
-  // when Shopify revenue is unavailable, fall back to FB-attributed revenue.
-  const shopifyRevenue = metrics.shopifyRevenue ?? fbRevenue;
+  // when Shopify revenue is unavailable or $0, fall back to FB-attributed revenue.
+  // shopifyRevenue=0 with fbRevenue>0 means P&L snapshots haven't synced yet — use FB as proxy.
+  const rawShopifyRevenue = metrics.shopifyRevenue ?? 0;
+  const shopifyRevenue = (rawShopifyRevenue === 0 && fbRevenue > 0) ? fbRevenue : rawShopifyRevenue;
   const spend = metrics.totalSpend ?? 0;
   const conversions = metrics.totalConversions ?? 0;
   const cpa = conversions > 0 ? spend / conversions : 0;

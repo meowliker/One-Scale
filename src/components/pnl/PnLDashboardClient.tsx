@@ -300,8 +300,9 @@ export function PnLDashboardClient({
     return () => { productAbortRef.current?.abort(); };
   }, [dateRange, fetchProductsForRange]);
 
-  // Use live-fetched data if available, otherwise fall back to props
-  const effectiveProductPnL = liveProductPnL ?? productPnL;
+  // Use live-fetched data ONLY — never fall back to stale props from previous store/date
+  // This prevents "random amounts" flashing when switching stores or dates
+  const effectiveProductPnL = productLoading ? [] : (liveProductPnL ?? []);
   // ── End product performance fetching ────────────────────────────────────────
 
 
