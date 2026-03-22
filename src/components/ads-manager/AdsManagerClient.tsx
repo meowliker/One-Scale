@@ -757,11 +757,14 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   }, [activeStoreId, dateRange?.since, dateRange?.until, campaigns]);
 
   // Background sync polling — refresh today's metrics every 2 minutes
+  // Only runs when the user is viewing EXACTLY today (single-day).
+  // Multi-day ranges or historical dates must NOT be overwritten by
+  // today-only sync data, which would show incorrect spend.
   useEffect(() => {
     if (!activeStoreId) return;
-    // Only poll when the selected date range includes today
-    const today = new Date().toISOString().slice(0, 10);
-    if (dateRange && dateRange.until < today) return;
+    const today = todayInTimezone();
+    // Skip sync unless the selected range is exactly "today" (since === until === today)
+    if (!dateRange || dateRange.since !== today || dateRange.until !== today) return;
 
     let cancelled = false;
 

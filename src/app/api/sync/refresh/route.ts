@@ -141,15 +141,19 @@ export async function POST(request: NextRequest) {
   }
 
   const useSupabase = isSupabasePersistenceEnabled();
-  const today = new Date().toISOString().slice(0, 10);
-  const dateRange = { since: today, until: today };
-  const exactVariant = `range:since:${today}|until:${today}|strict:1`;
 
   const adAccounts = useSupabase
     ? await listPersistentStoreAdAccounts(storeId)
     : getStoreAdAccounts(storeId);
 
   const activeAccounts = adAccounts.filter((a) => a.is_active);
+
+  // Use the ad account's timezone (not server UTC) to determine "today".
+  // This ensures we fetch the correct day's data regardless of server location.
+  const accountTz = activeAccounts.find((a) => a.timezone)?.timezone || 'America/New_York';
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: accountTz }).format(new Date()); // YYYY-MM-DD
+  const dateRange = { since: today, until: today };
+  const exactVariant = `range:since:${today}|until:${today}|strict:1`;
   if (activeAccounts.length === 0) {
     return NextResponse.json({ data: {}, lastSyncedAt: new Date().toISOString(), queued: false });
   }

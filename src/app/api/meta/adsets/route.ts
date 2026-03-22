@@ -19,16 +19,16 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function detectSingleDayPreset(since: string | null, until: string | null): 'today' | 'yesterday' | undefined {
+function detectSingleDayPreset(since: string | null, until: string | null, accountTz?: string): 'today' | 'yesterday' | undefined {
   if (!since || !until || since !== until) return undefined;
   const target = new Date(`${since}T00:00:00Z`);
   if (Number.isNaN(target.getTime())) return undefined;
-  const todayUtc = new Date();
-  const todayUtcStr = todayUtc.toISOString().split('T')[0];
-  const todayStart = new Date(`${todayUtcStr}T00:00:00Z`);
+  const tz = accountTz || 'America/New_York';
+  const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date());
+  const todayStart = new Date(`${todayStr}T00:00:00Z`);
   const diffDays = Math.round((todayStart.getTime() - target.getTime()) / 86_400_000);
   if (diffDays === 0) return 'today';
-  if (diffDays === 1 || diffDays === 2) return 'yesterday';
+  if (diffDays === 1) return 'yesterday';
   return undefined;
 }
 
