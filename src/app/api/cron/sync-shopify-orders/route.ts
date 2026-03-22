@@ -153,7 +153,14 @@ export async function GET(req: NextRequest) {
           status: 'any',
           limit: '250',
         };
-        if (explicitTo) params.created_at_max = new Date(explicitTo + 'T23:59:59Z').toISOString();
+        // Add 1 day buffer to cover timezone offsets (store may be UTC-6 to UTC+12)
+        // e.g. to=2026-03-19 → max=2026-03-20T12:00:00Z covers all timezones
+        if (explicitTo) {
+          const toDate = new Date(explicitTo + 'T00:00:00Z');
+          toDate.setDate(toDate.getDate() + 1);
+          toDate.setHours(12, 0, 0, 0);
+          params.created_at_max = toDate.toISOString();
+        }
         if (sinceId) params.since_id = sinceId;
 
         const data = await fetchFromShopify<{ orders: ShopifyOrderRaw[] }>(
