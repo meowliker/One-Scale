@@ -75,19 +75,39 @@ async function persistAdSets(
   }
 }
 
+// For historical strict ranges, the cache is only final if the snapshot was taken
+// AFTER the 'until' date ended — prevents serving partial intra-day spend.
+function isSnapshotFinalizedForRange(
+  until: string | null | undefined,
+  strictDate: boolean,
+  snapshotUpdatedAt?: string
+): boolean {
+  if (!strictDate || !until || !snapshotUpdatedAt) return true;
+  const todayUtc = new Date().toISOString().split('T')[0];
+  if (until >= todayUtc) return true; // today or future — cache is live enough
+  const untilEndMs = new Date(`${until}T23:59:59Z`).getTime();
+  const snapshotMs = new Date(snapshotUpdatedAt).getTime();
+  return snapshotMs > untilEndMs;
+}
+
 async function readCachedSnapshot(
   useSupabase: boolean,
   storeId: string,
   campaignId: string,
   exactVariant: string,
   mode: string,
-  strictDate = false
+  strictDate = false,
+  until?: string | null
 ): Promise<{ data: AdSet[]; updatedAt?: string } | null> {
   // First try exact variant match
   const exactSnapshot = useSupabase
     ? await getPersistentMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, exactVariant)
     : getMetaEndpointSnapshot<AdSet[]>(storeId, 'adsets', campaignId, exactVariant);
-  if (exactSnapshot && exactSnapshot.data.length > 0) {
+  if (
+    exactSnapshot &&
+    exactSnapshot.data.length > 0 &&
+    isSnapshotFinalizedForRange(until, strictDate, exactSnapshot.updatedAt)
+  ) {
     return { data: exactSnapshot.data, updatedAt: exactSnapshot.updatedAt };
   }
 
@@ -202,7 +222,7 @@ export async function GET(request: NextRequest) {
 
       if (preferCache && !forceLive) {
         const exactVariant = `mode:${mode}|since:${since || ''}|until:${until || ''}|strict:${strictDate ? '1' : '0'}`;
-        const snap = await readCachedSnapshot(useSupabase, storeId, id, exactVariant, mode, strictDate);
+        const snap = await readCachedSnapshot(useSupabase, storeId, id, exactVariant, mode, strictDate, until);
         if (snap && snap.data.length > 0 && (!strictDate || hasAdSetSignal(snap.data))) {
           results[id] = snap.data;
           adSetCache.set(cacheKey, { at: Date.now(), data: snap.data });
@@ -299,7 +319,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (preferCache && !forceLive) {
-    const snap = await readCachedSnapshot(useSupabase, storeId, campaignId, exactVariant, mode, strictDate);
+    const snap = await readCachedSnapshot(useSupabase, storeId, campaignId, exactVariant, mode, strictDate, until);
     if (snap && snap.data.length > 0 && (!strictDate || hasAdSetSignal(snap.data))) {
       adSetCache.set(cacheKey, { at: Date.now(), data: snap.data });
       queueAdSetRefresh({
@@ -360,7 +380,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ data: fallback.data, cached: true, stale: true });
     }
 
-    const snap = await readCachedSnapshot(useSupabase, storeId, campaignId, exactVariant, mode, strictDate);
+    const snap = await readCachedSnapshot(useSupabase, storeId, campaignId, exactVariant, mode, strictDate, until);
     if (snap && snap.data.length > 0) {
       adSetCache.set(cacheKey, { at: Date.now(), data: snap.data });
       return NextResponse.json({

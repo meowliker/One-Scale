@@ -83,6 +83,19 @@ export async function GET(request: NextRequest) {
   const exactVariant = `range:since:${since || ''}|until:${until || ''}|strict:${strictDate ? '1' : '0'}`;
   const isStrictRangeRequest = strictDate && !!since && !!until;
 
+  // Helper: for a historical strict range, the cache is only "final" if the
+  // snapshot was taken AFTER the 'until' date ended (UTC midnight). This ensures
+  // we don't serve partial intra-day spend for completed date periods.
+  function isSnapshotFinalizedForRange(snapshotUpdatedAt?: string): boolean {
+    if (!isStrictRangeRequest || !until || !snapshotUpdatedAt) return true;
+    const todayUtc = new Date().toISOString().split('T')[0];
+    if (until >= todayUtc) return true; // today or future — treat cache as live enough
+    // Historical range: snapshot must have been taken after the period ended
+    const untilEndMs = new Date(`${until}T23:59:59Z`).getTime();
+    const snapshotMs = new Date(snapshotUpdatedAt).getTime();
+    return snapshotMs > untilEndMs;
+  }
+
   // Always try to serve from cache first (unless forceLive is set)
   if (preferCache) {
     // First try exact variant match
@@ -92,7 +105,8 @@ export async function GET(request: NextRequest) {
     if (
       exactSnapshot &&
       exactSnapshot.data.length > 0 &&
-      (!isStrictRangeRequest || hasCampaignSignal(exactSnapshot.data))
+      (!isStrictRangeRequest || hasCampaignSignal(exactSnapshot.data)) &&
+      isSnapshotFinalizedForRange(exactSnapshot.updatedAt)
     ) {
       return NextResponse.json({
         data: exactSnapshot.data,
