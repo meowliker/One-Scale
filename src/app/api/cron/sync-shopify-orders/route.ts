@@ -247,22 +247,22 @@ export async function GET(req: NextRequest) {
         });
       }
 
+      if (page > 1) console.log(`[sync-shopify-orders] ${store.id}: ${page} pages, ${allOrders.length} total orders fetched`);
       const upserted = rows.length;
 
       // ---- Sync disputes/chargebacks via GraphQL ----
+      // Skip disputes during targeted backfill (from/to params) — BT sync handles these
       let disputesSynced = 0;
-      try {
-        const disputes = await fetchDisputesGraphQL(store.id);
-        for (const dispute of disputes) {
-          const normalized = normalizeDisputeStatus(dispute.status);
-          const orderId = dispute.order?.id
-            ? dispute.order.id.replace('gid://shopify/Order/', '')
-            : null;
-
-          await rest('/shopify_chargebacks', {
-            method: 'POST',
-            headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-            body: JSON.stringify({
+      if (!explicitFrom) {
+        try {
+          const disputes = await fetchDisputesGraphQL(store.id);
+          // Batch upsert disputes instead of one-by-one
+          const disputeRows = disputes.map(dispute => {
+            const normalized = normalizeDisputeStatus(dispute.status);
+            const orderId = dispute.order?.id
+              ? dispute.order.id.replace('gid://shopify/Order/', '')
+              : null;
+            return {
               store_id: store.id,
               order_id: orderId || dispute.id,
               amount: parseFloat(dispute.amount.amount),
@@ -272,13 +272,19 @@ export async function GET(req: NextRequest) {
               shopify_status: dispute.status,
               created_at: dispute.initiatedAt,
               updated_at: dispute.finalizedAt || dispute.initiatedAt,
-            }),
+            };
           });
-          disputesSynced++;
+          if (disputeRows.length > 0) {
+            await rest('/shopify_chargebacks', {
+              method: 'POST',
+              headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+              body: JSON.stringify(disputeRows),
+            });
+            disputesSynced = disputeRows.length;
+          }
+        } catch (err) {
+          console.warn(`[sync-shopify-orders] Disputes fetch failed for ${store.id}:`, err instanceof Error ? err.message : err);
         }
-      } catch (err) {
-        // Disputes fetch may fail if scope not granted yet — log but don't fail
-        console.warn(`[sync-shopify-orders] Disputes fetch failed for ${store.id}:`, err instanceof Error ? err.message : err);
       }
 
       const elapsed = Date.now() - start;
