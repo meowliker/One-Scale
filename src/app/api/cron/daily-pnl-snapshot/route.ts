@@ -272,7 +272,7 @@ export async function GET(req: NextRequest) {
       }
 
       // 5. Product breakdown (using buildProductPerformance with full rollup)
-      // This ensures snapshot product_breakdown matches the Product Performance UI
+      // Ensures snapshot product_breakdown matches Product Performance UI exactly
       let productBreakdownArr: Array<{ productId: string; productTitle: string; classification: string; revenue: number; unitsSold: number; fees: number; orders: number }> = [];
       try {
         const productResults = await buildProductPerformance(store.id, dayDate, dayDate);
@@ -288,6 +288,28 @@ export async function GET(req: NextRequest) {
             orders: p.orders,
           }))
           .sort((a, b) => b.revenue - a.revenue);
+
+        // Ensure 100% revenue coverage — any unmatched revenue goes to "Other Orders"
+        const productRevSum = productBreakdownArr.reduce((s, p) => s + p.revenue, 0);
+        const productFeeSum = productBreakdownArr.reduce((s, p) => s + p.fees, 0);
+        const productOrderSum = new Set(productBreakdownArr.filter(p => p.classification === 'main').map(p => p.orders)).size > 0
+          ? productBreakdownArr.filter(p => p.classification === 'main').reduce((s, p) => s + p.orders, 0)
+          : 0;
+        const revenueGap = Math.round((orderRevenue - productRevSum) * 100) / 100;
+        const feeGap = Math.round((totalFees - productFeeSum) * 100) / 100;
+        const orderGap = paidOrders.length - productOrderSum;
+
+        if (revenueGap > 0.01 || orderGap > 0) {
+          productBreakdownArr.push({
+            productId: 'unassigned',
+            productTitle: 'Other Orders',
+            classification: 'unknown',
+            revenue: revenueGap > 0 ? revenueGap : 0,
+            unitsSold: orderGap > 0 ? orderGap : 0,
+            fees: feeGap > 0 ? feeGap : 0,
+            orders: orderGap > 0 ? orderGap : 0,
+          });
+        }
       } catch (err) {
         console.warn(`[daily-pnl] Product breakdown failed for ${store.id}/${dayDate}:`, err instanceof Error ? err.message : err);
       }
