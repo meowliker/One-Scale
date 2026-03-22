@@ -105,6 +105,7 @@ export default function PnLPage() {
   const latestProductPnLRef = useRef<ProductPnLData[]>([]);
   const latestDailyPnLRef = useRef<PnLEntry[]>([]);
   const latestLastRefreshedRef = useRef<Date | null>(null);
+  const [productRefreshKey, setProductRefreshKey] = useState(0);
 
   // Track the storeId that data was fetched for, to prevent stale updates
   const fetchStoreIdRef = useRef<string>('');
@@ -373,6 +374,8 @@ export default function PnLPage() {
         const now = new Date();
         setLastRefreshed(now);
         setLastRefreshedLabel(formatLastRefreshed(now));
+        // Trigger product performance refresh when live data changes
+        setProductRefreshKey(k => k + 1);
       } catch {
         // Silent — retry on next interval
       }
@@ -456,6 +459,7 @@ export default function PnLPage() {
         productType={summary.productType || 'physical'}
         hourlyPnL={hourlyPnL}
         currency={currency}
+        refreshKey={productRefreshKey}
       />
     </div>
   );

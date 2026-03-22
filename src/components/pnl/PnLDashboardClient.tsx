@@ -34,6 +34,7 @@ interface PnLDashboardClientProps {
   productType?: 'physical' | 'digital';
   hourlyPnL?: HourlyPnLEntry[];
   currency?: string;
+  refreshKey?: number;
 }
 
 
@@ -96,6 +97,7 @@ export function PnLDashboardClient({
   productType = 'physical',
   hourlyPnL = [],
   currency = 'USD',
+  refreshKey = 0,
 }: PnLDashboardClientProps) {
   const [datePreset, setDatePreset] = useState<DateRangePreset>('today');
   const [customRange, setCustomRange] = useState<DateRange | null>(null);
@@ -291,14 +293,14 @@ export function PnLDashboardClient({
     }
   }, [activeStoreId]);
 
-  // Re-fetch product data when date range changes
+  // Re-fetch product data when date range changes OR live poll detects new data
   useEffect(() => {
     const from = formatDateInTimezone(dateRange.start);
     const to = formatDateInTimezone(dateRange.end);
     fetchProductsForRange(from, to);
 
     return () => { productAbortRef.current?.abort(); };
-  }, [dateRange, fetchProductsForRange]);
+  }, [dateRange, fetchProductsForRange, refreshKey]);
 
   // Use live-fetched data ONLY — never fall back to stale props from previous store/date
   // This prevents "random amounts" flashing when switching stores or dates
