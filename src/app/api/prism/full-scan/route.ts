@@ -72,6 +72,7 @@ export async function POST(req: NextRequest) {
       });
     }
     report.familyTree = familyTree;
+    report.paidVariants = familyResult.paidVariants || [];
 
     const elapsed = Date.now() - start;
     report.durationMs = elapsed;

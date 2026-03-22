@@ -25,11 +25,23 @@ interface FamilyRelation {
   relationship: string;
 }
 
+interface PaidVariant {
+  freeProductId: string;
+  freeProductName: string;
+  paidProductId: string;
+  paidProductName: string;
+  paidPrice: number;
+  paidOrders: number;
+  aloneRate: number; // % of orders where paid variant appears without the free version
+  titleSimilarity: number; // 0-100
+}
+
 interface ScanResult {
   familiesFound: number;
   childrenMapped: number;
   orphanProducts: number;
   totalOrdersScanned: number;
+  paidVariants: PaidVariant[]; // Free + paid version detection
   families: Array<{
     mainProduct: string;
     mainTitle: string;
@@ -265,11 +277,105 @@ export async function scanProductFamilies(storeId: string): Promise<ScanResult> 
   // suppress unused variable warning — relations array built for potential future use
   void (relations as unknown);
 
+  // ── Detect paid variants of free main products ──────────────────────
+  // Some stores have BOTH a free lead magnet AND a paid version of the same product.
+  // e.g. "1000+ Medical Nursing Notes" (free) + "Medical Nursing Notes" ($29.99)
+  // Detect by: similar title + one is free (in mainProducts) + other is paid (in allProducts)
+  const paidVariants: PaidVariant[] = [];
+  for (const main of mainProducts) {
+    const mainWords = new Set(
+      main.product_name.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/free|today|v2/gi, '').split(/\s+/).filter(w => w.length > 2)
+    );
+    if (mainWords.size === 0) continue;
+
+    for (const [pid, title] of allProducts.entries()) {
+      if (mainIds.has(pid)) continue; // skip other mains
+      const childWords = new Set(
+        title.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2)
+      );
+      if (childWords.size === 0) continue;
+
+      // Check title similarity
+      let overlap = 0;
+      for (const w of mainWords) { if (childWords.has(w)) overlap++; }
+      const similarity = Math.round((overlap / Math.max(mainWords.size, 1)) * 100);
+      if (similarity < 50) continue; // need 50%+ word match
+
+      // Check if this product has a price > $5 (it's the paid version)
+      // We need to check order data for this
+      let paidPrice = 0;
+      let paidTotal = 0;
+      let paidAlone = 0;
+      for (const order of paidOrders) {
+        let items: LineItem[];
+        try { items = typeof order.line_items === 'string' ? JSON.parse(order.line_items) : order.line_items || []; } catch { continue; }
+        const hasThis = items.some(i => String(i.product_id) === pid);
+        if (!hasThis) continue;
+        paidTotal++;
+        const thisItem = items.find(i => String(i.product_id) === pid);
+        const price = parseFloat(thisItem?.price ?? '0');
+        if (price > paidPrice) paidPrice = price;
+        // Check if this order has the free main
+        const hasFreeMain = items.some(i => String(i.product_id) === main.product_id);
+        if (!hasFreeMain) paidAlone++;
+      }
+
+      if (paidPrice >= 5 && paidTotal >= 1) {
+        const aloneRate = paidTotal > 0 ? Math.round((paidAlone / paidTotal) * 100) : 0;
+        paidVariants.push({
+          freeProductId: main.product_id,
+          freeProductName: main.product_name,
+          paidProductId: pid,
+          paidProductName: title,
+          paidPrice,
+          paidOrders: paidTotal,
+          aloneRate,
+          titleSimilarity: similarity,
+        });
+
+        // Tag the relationship as 'paid_variant' in product_families
+        const key = `${pid}::${main.product_id}`;
+        const existing = coMap.get(key);
+        if (existing) {
+          existing.relationship = 'paid_variant';
+        }
+
+        // Update in DB
+        await rest('/product_families?on_conflict=store_id,child_product_id,parent_product_id', {
+          method: 'POST',
+          headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+          body: JSON.stringify({
+            store_id: storeId,
+            child_product_id: pid,
+            parent_product_id: main.product_id,
+            child_title: title,
+            parent_title: main.product_name,
+            relationship: 'paid_variant',
+            co_occurrence: coOccurrenceScores.get(key) || 0,
+            detection_method: 'price_heuristic',
+            window_order_count: paidTotal,
+            last_scanned_at: new Date().toISOString(),
+          }),
+        }).catch(() => null);
+
+        console.log(`[familyScanner] Paid variant detected: "${title}" ($${paidPrice}) → free main "${main.product_name}" | ${paidTotal} orders, ${aloneRate}% alone, ${similarity}% title match`);
+      }
+    }
+  }
+
+  // If a paid variant has high alone_rate (>50%), log warning — it might need its own main entry
+  for (const pv of paidVariants) {
+    if (pv.aloneRate > 50 && pv.paidOrders >= 5) {
+      console.warn(`[familyScanner] ALERT: "${pv.paidProductName}" ($${pv.paidPrice}) has ${pv.aloneRate}% alone rate with ${pv.paidOrders} orders — consider adding as main product`);
+    }
+  }
+
   return {
     familiesFound: families.length,
     childrenMapped: coMap.size,
     orphanProducts: orphanSet.size,
     totalOrdersScanned: paidOrders.length,
+    paidVariants,
     families,
   };
 }
