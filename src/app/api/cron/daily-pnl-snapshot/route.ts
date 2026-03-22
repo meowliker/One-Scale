@@ -195,7 +195,8 @@ export async function GET(req: NextRequest) {
       // - Refund adjustments (partial refunds, reversals)
       // - Settlement corrections (1-3 day delay)
       // - Meta attribution retroactive updates (up to 7 days)
-      const RETROACTIVE_DAYS = 7;
+      // Default 7 days, override via ?days=30 for full backfill
+      const RETROACTIVE_DAYS = parseInt(new URL(req.url).searchParams.get('days') || '7', 10);
       const enc = (v: string) => encodeURIComponent(v);
 
       for (let daysBack = 0; daysBack <= RETROACTIVE_DAYS; daysBack++) {
