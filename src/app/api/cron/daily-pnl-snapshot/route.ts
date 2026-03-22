@@ -190,7 +190,7 @@ export async function GET(req: NextRequest) {
       const RETROACTIVE_DAYS = 7;
       const enc = (v: string) => encodeURIComponent(v);
 
-      for (let daysBack = 1; daysBack <= RETROACTIVE_DAYS; daysBack++) {
+      for (let daysBack = 0; daysBack <= RETROACTIVE_DAYS; daysBack++) {
       const dayDate = daysAgoInTimezone(daysBack, tz);
       const { start: tzStart, end: tzEnd } = getStoreDateRangeForPeriod(dayDate, dayDate, tz);
 
@@ -247,11 +247,21 @@ export async function GET(req: NextRequest) {
         totalFees += orderFeeMap.get(String(o.shopify_order_id)) ?? 0;
       }
 
-      // 4. Ad spend from meta_spend_cache
-      const spendRows = await rest<Array<{ spend: number }>>(
-        `/meta_spend_cache?store_id=eq.${enc(store.id)}&date=eq.${dayDate}&select=spend`
+      // 4. Ad spend from meta_spend_cache — ONLY for mapped ad accounts
+      // Use meta_ad_account_mappings as source of truth (not store_ad_accounts which has cross-store pollution)
+      const mappedAccounts = await rest<Array<{ ad_account_id: string }>>(
+        `/meta_ad_account_mappings?store_id=eq.${enc(store.id)}&select=ad_account_id`
       ).catch(() => []);
-      const totalAdSpend = spendRows.reduce((s, r) => s + (Number(r.spend) || 0), 0);
+      const mappedAccountIds = [...new Set(mappedAccounts.map(a => a.ad_account_id))];
+
+      let totalAdSpend = 0;
+      if (mappedAccountIds.length > 0) {
+        const accountFilter = mappedAccountIds.map(id => enc(id)).join(',');
+        const spendRows = await rest<Array<{ spend: number }>>(
+          `/meta_spend_cache?store_id=eq.${enc(store.id)}&ad_account_id=in.(${accountFilter})&date=eq.${dayDate}&select=spend`
+        ).catch(() => []);
+        totalAdSpend = spendRows.reduce((s, r) => s + (Number(r.spend) || 0), 0);
+      }
 
       // 5. Product breakdown (using product_config classification)
       const productConfigRows = await rest<Array<{ product_id: string }>>(
