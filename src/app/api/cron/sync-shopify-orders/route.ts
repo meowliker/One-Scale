@@ -109,10 +109,16 @@ export async function GET(req: NextRequest) {
 
       // Smart lookback: check when last order was synced for this store.
       // If cron was down, auto-recover by looking back further.
-      const backfillDays = parseInt(new URL(req.url).searchParams.get('days') || '0', 10);
+      const urlParams = new URL(req.url).searchParams;
+      const backfillDays = parseInt(urlParams.get('days') || '0', 10);
+      const explicitFrom = urlParams.get('from'); // YYYY-MM-DD override for targeted backfill
+      const explicitTo = urlParams.get('to');     // YYYY-MM-DD override
       let sinceMs: number;
 
-      if (backfillDays > 0) {
+      if (explicitFrom) {
+        // Targeted date range backfill (e.g. ?from=2026-03-18&to=2026-03-19)
+        sinceMs = Date.now() - new Date(explicitFrom + 'T00:00:00Z').getTime();
+      } else if (backfillDays > 0) {
         // Explicit backfill mode
         sinceMs = backfillDays * 24 * 60 * 60 * 1000;
       } else {
@@ -147,6 +153,7 @@ export async function GET(req: NextRequest) {
           status: 'any',
           limit: '250',
         };
+        if (explicitTo) params.created_at_max = new Date(explicitTo + 'T23:59:59Z').toISOString();
         if (sinceId) params.since_id = sinceId;
 
         const data = await fetchFromShopify<{ orders: ShopifyOrderRaw[] }>(
