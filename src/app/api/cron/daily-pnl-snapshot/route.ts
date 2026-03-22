@@ -154,7 +154,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Supabase not configured' }, { status: 500 });
   }
 
-  const stores = await listPersistentStores();
+  const allStores = await listPersistentStores();
+
+  // Support single-store mode via ?store_id= param (avoids 60s Vercel timeout)
+  const requestedStoreId = new URL(req.url).searchParams.get('store_id');
+  const stores = requestedStoreId
+    ? allStores.filter(s => s.id === requestedStoreId)
+    : allStores;
+
   const results: Array<{ storeId: string; status: string; date?: string; warnings?: number; error?: string }> = [];
 
   for (const store of stores) {
