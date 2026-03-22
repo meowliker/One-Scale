@@ -12,6 +12,7 @@ import { getOrderFees } from '@/lib/pnl/orderFeeSync';
 import { runAutoSync } from '@/lib/pnl/autoProductConfig';
 import { getShopifyToken } from '@/app/api/lib/tokens';
 import { fetchFromShopify } from '@/app/api/lib/shopify-client';
+import { buildProductPerformance } from '@/lib/pnl/appsScriptPort';
 
 export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
@@ -270,49 +271,26 @@ export async function GET(req: NextRequest) {
         totalAdSpend = spendRows.reduce((s, r) => s + (Number(r.spend) || 0), 0);
       }
 
-      // 5. Product breakdown (using product_config classification)
-      const productConfigRows = await rest<Array<{ product_id: string }>>(
-        `/product_config?store_id=eq.${enc(store.id)}&is_active=eq.true&select=product_id`
-      ).catch(() => []);
-      const configMainIds = new Set(productConfigRows.map(r => r.product_id));
-
-      interface ProdAcc { title: string; units: number; revenue: number; fees: number; orders: number; classification: string; }
-      const prodMap = new Map<string, ProdAcc>();
-      let lineItemTotal = 0;
-
-      for (const o of paidOrders) {
-        let items: Array<{ product_id?: string | number; title?: string; price?: string; quantity?: number }>;
-        try { items = typeof o.line_items === 'string' ? JSON.parse(o.line_items) : o.line_items || []; } catch { continue; }
-
-        const oid = String(o.shopify_order_id);
-        const orderFee = orderFeeMap.get(oid) ?? 0;
-        const orderLineTotal = items.reduce((s, i) => s + parseFloat(i.price ?? '0') * (i.quantity ?? 1), 0);
-
-        for (const item of items) {
-          const pid = item.product_id ? String(item.product_id) : '';
-          if (!pid || pid === 'null' || pid === '0') continue;
-          const lineRev = parseFloat(item.price ?? '0') * (item.quantity ?? 1);
-          const lineFee = orderLineTotal > 0 ? orderFee * (lineRev / orderLineTotal) : 0;
-          lineItemTotal += lineRev;
-
-          const cls = configMainIds.size > 0 ? (configMainIds.has(pid) ? 'main' : 'upsell') : 'unknown';
-          const acc = prodMap.get(pid) || { title: item.title || '', units: 0, revenue: 0, fees: 0, orders: 0, classification: cls };
-          acc.units += item.quantity ?? 1;
-          acc.revenue += lineRev;
-          acc.fees += lineFee;
-          acc.orders++;
-          prodMap.set(pid, acc);
-        }
+      // 5. Product breakdown (using buildProductPerformance with full rollup)
+      // This ensures snapshot product_breakdown matches the Product Performance UI
+      let productBreakdownArr: Array<{ productId: string; productTitle: string; classification: string; revenue: number; unitsSold: number; fees: number; orders: number }> = [];
+      try {
+        const productResults = await buildProductPerformance(store.id, dayDate, dayDate);
+        productBreakdownArr = productResults
+          .filter(p => p.orders > 0 || p.revenue > 0)
+          .map(p => ({
+            productId: p.product_id,
+            productTitle: p.product_name,
+            classification: p.classification,
+            revenue: Math.round(p.revenue * 100) / 100,
+            unitsSold: p.orders,
+            fees: Math.round(p.fees * 100) / 100,
+            orders: p.orders,
+          }))
+          .sort((a, b) => b.revenue - a.revenue);
+      } catch (err) {
+        console.warn(`[daily-pnl] Product breakdown failed for ${store.id}/${dayDate}:`, err instanceof Error ? err.message : err);
       }
-
-      // Scale product revenue to match order total_price
-      const revScale = (orderRevenue > 0 && lineItemTotal > 0) ? orderRevenue / lineItemTotal : 1;
-      const productBreakdownArr = Array.from(prodMap.entries()).map(([pid, acc]) => ({
-        productId: pid, productTitle: acc.title, classification: acc.classification,
-        revenue: Math.round(acc.revenue * revScale * 100) / 100,
-        unitsSold: acc.units, fees: Math.round(acc.fees * 100) / 100,
-        orders: acc.orders,
-      })).sort((a, b) => b.revenue - a.revenue);
 
       const netProfit = orderRevenue - totalFees - totalAdSpend - totalRefunds - totalCbLoss + totalCbWon + totalAdjustments;
       const margin = orderRevenue > 0 ? (netProfit / orderRevenue) * 100 : 0;
