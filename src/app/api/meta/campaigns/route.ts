@@ -19,17 +19,17 @@ function isApproxLast30Range(since?: string | null, until?: string | null): bool
   return days >= 28 && days <= 32;
 }
 
-function detectSingleDayPreset(since: string | null, until: string | null): 'today' | 'yesterday' | undefined {
+function detectSingleDayPreset(since: string | null, until: string | null, accountTz?: string): 'today' | 'yesterday' | undefined {
   if (!since || !until || since !== until) return undefined;
   const target = new Date(`${since}T00:00:00Z`);
   if (Number.isNaN(target.getTime())) return undefined;
-  const todayUtc = new Date();
-  const todayUtcStr = todayUtc.toISOString().split('T')[0];
-  const todayStart = new Date(`${todayUtcStr}T00:00:00Z`);
+  // Use the ad-account timezone (not server UTC) to determine "today"
+  const tz = accountTz || 'America/New_York';
+  const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date());
+  const todayStart = new Date(`${todayStr}T00:00:00Z`);
   const diffDays = Math.round((todayStart.getTime() - target.getTime()) / 86_400_000);
   if (diffDays === 0) return 'today';
-  // Allow a ±1 day drift from store/account timezone vs server UTC.
-  if (diffDays === 1 || diffDays === 2) return 'yesterday';
+  if (diffDays === 1) return 'yesterday';
   return undefined;
 }
 
@@ -61,6 +61,7 @@ export async function GET(request: NextRequest) {
 
   // Determine which accounts to fetch campaigns from.
   let targetIds: string[] = [];
+  let accountTz: string | undefined;
   if (accountId) {
     targetIds = [accountId];
   } else if (accountIds) {
@@ -69,9 +70,9 @@ export async function GET(request: NextRequest) {
     const mapped = useSupabase
       ? await listPersistentStoreAdAccounts(storeId)
       : getStoreAdAccounts(storeId);
-    targetIds = mapped
-      .filter((a) => a.platform === 'meta' && a.is_active === 1)
-      .map((a) => a.ad_account_id);
+    const activeAccounts = mapped.filter((a) => a.platform === 'meta' && a.is_active === 1);
+    targetIds = activeAccounts.map((a) => a.ad_account_id);
+    accountTz = activeAccounts.find((a) => a.timezone)?.timezone || undefined;
   }
 
   if (targetIds.length === 0) {
@@ -88,8 +89,8 @@ export async function GET(request: NextRequest) {
   // we don't serve partial intra-day spend for completed date periods.
   function isSnapshotFinalizedForRange(snapshotUpdatedAt?: string): boolean {
     if (!isStrictRangeRequest || !until || !snapshotUpdatedAt) return true;
-    const todayUtc = new Date().toISOString().split('T')[0];
-    if (until >= todayUtc) return true; // today or future — treat cache as live enough
+    const todayTz = new Intl.DateTimeFormat('en-CA', { timeZone: accountTz || 'America/New_York' }).format(new Date());
+    if (until >= todayTz) return true; // today or future — treat cache as live enough
     // Historical range: snapshot must have been taken after the period ended
     const untilEndMs = new Date(`${until}T23:59:59Z`).getTime();
     const snapshotMs = new Date(snapshotUpdatedAt).getTime();
@@ -187,7 +188,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Detect "yesterday" pattern: single day = today - 1; use date_preset to avoid rate limiting
-  const detectedDatePreset = detectSingleDayPreset(since, until);
+  const detectedDatePreset = detectSingleDayPreset(since, until, accountTz);
   // Build date range if both since and until are provided (skip when using a date_preset)
   const dateRange = !detectedDatePreset && since && until ? { since, until } : undefined;
 
