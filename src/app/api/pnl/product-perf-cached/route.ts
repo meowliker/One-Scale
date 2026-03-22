@@ -97,16 +97,16 @@ function mapResultsToResponse(results: Awaited<ReturnType<typeof buildProductPer
     margin: r.margin,
     fbMetrics: {
       roas: r.ad_spend > 0 ? round2(r.revenue / r.ad_spend) : 0,
-      cpc: r.meta_clicks > 0 ? round2(r.ad_spend / r.meta_clicks) : 0,
-      cpm: r.meta_impressions > 0 ? round2((r.ad_spend / r.meta_impressions) * 1000) : 0,
-      ctr: r.meta_impressions > 0 ? round2((r.meta_clicks / r.meta_impressions) * 100) : 0,
+      cpc: 0,
+      cpm: 0,
+      ctr: 0,
       aov: r.orders > 0 ? round2(r.revenue / r.orders) : 0,
       atcRate: 0,
       spend: r.ad_spend,
-      impressions: r.meta_impressions,
-      clicks: r.meta_clicks,
-      purchases: r.meta_purchases,
-      costPerPurchase: r.meta_purchases > 0 ? round2(r.ad_spend / r.meta_purchases) : 0,
+      impressions: 0,
+      clicks: 0,
+      purchases: 0,
+      costPerPurchase: 0,
       frequency: 0,
       reach: 0,
     },
@@ -212,7 +212,7 @@ export async function GET(request: NextRequest) {
 
   // ── TODAY: live sync from Shopify → compute → respond ──
   try {
-    const results = await buildProductPerformance(storeId, from, to, { liveSync: true });
+    const results = await buildProductPerformance(storeId, from, to);
 
     // Merge product images from existing cache (don't fetch from Shopify API — too slow)
     const imgRows = await rest<Array<{ product_id: string; product_image: string | null }>>(
