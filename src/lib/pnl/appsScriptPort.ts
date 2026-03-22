@@ -10,6 +10,7 @@
  */
 
 import { rest } from '@/app/api/lib/supabase-persistence';
+import { rollUpOrders } from './productRollup';
 
 const enc = (v: string) => encodeURIComponent(v);
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -424,6 +425,8 @@ export async function buildProductPerformance(
     orderCounts.set(p.product_id, 0);
   }
 
+  const unmatchedOrders: typeof orders = [];
+
   for (const order of orders) {
     if (['voided', 'refunded'].includes(order.financial_status)) continue;
 
@@ -437,6 +440,74 @@ export async function buildProductPerformance(
       orderProductMap.set(String(order.shopify_order_id), matched);
       revenue.set(matched, (revenue.get(matched) ?? 0) + Number(order.total_price));
       orderCounts.set(matched, (orderCounts.get(matched) ?? 0) + 1);
+    } else {
+      unmatchedOrders.push(order);
+    }
+  }
+
+  // ── Step 1a: Orphan recovery — attribute unmatched orders via product families ──
+  if (unmatchedOrders.length > 0) {
+    // Build a per-order fee map from BT charge transactions for rollUpOrders
+    const orderFeeMap = new Map<string, number>();
+    for (const txn of btTxns) {
+      if (txn.type !== 'charge' || !txn.source_order_id) continue;
+      const fee = Math.abs(txn.fee);
+      if (fee > 0) {
+        orderFeeMap.set(String(txn.source_order_id), (orderFeeMap.get(String(txn.source_order_id)) ?? 0) + fee);
+      }
+    }
+
+    const mainProductIdSet = new Set(productConfigs.map(p => p.product_id));
+    const orphanResult = await rollUpOrders(storeId, unmatchedOrders, mainProductIdSet, orderFeeMap);
+
+    // Merge orphan-attributed revenue into existing main product totals (ADDITIVE)
+    for (const [pid, rolled] of orphanResult.products.entries()) {
+      if (rolled.orders === 0) continue; // nothing attributed to this main from orphans
+      revenue.set(pid, (revenue.get(pid) ?? 0) + rolled.revenue);
+      orderCounts.set(pid, (orderCounts.get(pid) ?? 0) + rolled.orders);
+      // orderProductMap for individual orphan orders is populated in the best-effort pass below
+    }
+
+    // Best-effort: re-attribute orphan orders to orderProductMap for fee splitting.
+    // We re-run the same family lookup logic inline to populate orderProductMap.
+    if (orphanResult.products.size > 0) {
+      // Load family + parent maps (same data rollUpOrders loaded — small overhead)
+      const [parentRowsLocal, familyRowsLocal] = await Promise.all([
+        rest<Array<{ product_id: string; parent_product: string }>>(
+          `/product_classifications?store_id=eq.${enc(storeId)}&parent_product=not.is.null&select=product_id,parent_product`
+        ).catch(() => [] as Array<{ product_id: string; parent_product: string }>),
+        rest<Array<{ child_product_id: string; parent_product_id: string; co_occurrence: number }>>(
+          `/product_families?store_id=eq.${enc(storeId)}&select=child_product_id,parent_product_id,co_occurrence&order=co_occurrence.desc`
+        ).catch(() => [] as Array<{ child_product_id: string; parent_product_id: string; co_occurrence: number }>),
+      ]);
+
+      const localParentMap = new Map(parentRowsLocal.map(r => [r.product_id, r.parent_product]));
+      const localFamilyMap = new Map<string, string>();
+      for (const row of familyRowsLocal) {
+        if (!localFamilyMap.has(row.child_product_id)) {
+          localFamilyMap.set(row.child_product_id, row.parent_product_id);
+        }
+      }
+
+      for (const order of unmatchedOrders) {
+        const orderId = String(order.shopify_order_id);
+        if (orderProductMap.has(orderId)) continue; // already mapped
+
+        let items: LineItem[];
+        try {
+          items = typeof order.line_items === 'string' ? JSON.parse(order.line_items) : order.line_items || [];
+        } catch { continue; }
+
+        for (const item of items) {
+          const pid = item.product_id ? String(item.product_id) : '';
+          if (!pid || pid === 'null' || pid === '0') continue;
+          const parent = localFamilyMap.get(pid) || localParentMap.get(pid);
+          if (parent && mainProductIdSet.has(parent)) {
+            orderProductMap.set(orderId, parent);
+            break;
+          }
+        }
+      }
     }
   }
 
