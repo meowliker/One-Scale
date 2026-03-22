@@ -4,8 +4,8 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getDateRange } from '@/lib/dateUtils';
-import { formatInTimezone, formatDateInTimezone, nowInTimezone, getStoreTimezone } from '@/lib/timezone';
-import { fromZonedTime } from 'date-fns-tz';
+import { formatInTimezone, formatDateInTimezone, getStoreTimezone } from '@/lib/timezone';
+import { fromZonedTime, toZonedTime } from 'date-fns-tz';
 import type { DateRangePreset } from '@/types/analytics';
 
 export interface DateRangePickerProps {
@@ -39,21 +39,26 @@ const presetLabels: Record<string, string> = {
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-function formatTriggerLabel(start: Date, end: Date, preset?: DateRangePreset): string {
+function formatTriggerLabel(start: Date, end: Date, preset?: DateRangePreset, tz?: string): string {
   if (preset && preset !== 'custom' && presetLabels[preset]) return presetLabels[preset];
-  const startStr = formatDateInTimezone(start);
-  const endStr = formatDateInTimezone(end);
-  if (startStr === endStr) return formatInTimezone(start, 'MMM d, yyyy');
-  const startYear = start.getFullYear();
-  const endYear = end.getFullYear();
-  if (startYear === endYear) return `${formatInTimezone(start, 'MMM d')} – ${formatInTimezone(end, 'MMM d, yyyy')}`;
-  return `${formatInTimezone(start, 'MMM d, yyyy')} – ${formatInTimezone(end, 'MMM d, yyyy')}`;
+  const timezone = tz || getStoreTimezone();
+  const startStr = formatDateInTimezone(start, timezone);
+  const endStr = formatDateInTimezone(end, timezone);
+  if (startStr === endStr) return formatInTimezone(start, 'MMM d, yyyy', timezone);
+  const startYear = toZonedTime(start, timezone).getFullYear();
+  const endYear = toZonedTime(end, timezone).getFullYear();
+  if (startYear === endYear) return `${formatInTimezone(start, 'MMM d', timezone)} – ${formatInTimezone(end, 'MMM d, yyyy', timezone)}`;
+  return `${formatInTimezone(start, 'MMM d, yyyy', timezone)} – ${formatInTimezone(end, 'MMM d, yyyy', timezone)}`;
 }
 
-function formatFooterDate(date: Date): string {
-  const day = date.getDate();
-  const month = MONTH_NAMES[date.getMonth()].slice(0, 3);
-  const year = date.getFullYear();
+/**
+ * Format a Date for footer display using the store timezone (NOT the browser/local TZ).
+ */
+function formatFooterDate(date: Date, tz: string): string {
+  const zoned = toZonedTime(date, tz);
+  const day = zoned.getDate();
+  const month = MONTH_NAMES[zoned.getMonth()].slice(0, 3);
+  const year = zoned.getFullYear();
   return `${day} ${month} ${year}`;
 }
 
@@ -65,32 +70,41 @@ function getFirstDayOfMonth(year: number, month: number): number {
   return new Date(year, month, 1).getDay();
 }
 
-function isSameDay(d1: Date, d2: Date): boolean {
-  return d1.getFullYear() === d2.getFullYear() &&
-    d1.getMonth() === d2.getMonth() &&
-    d1.getDate() === d2.getDate();
+/**
+ * Compare two dates as calendar days in the store timezone.
+ * Uses formatDateInTimezone so the comparison is always TZ-aware.
+ */
+function isSameDay(d1: Date, d2: Date, tz: string): boolean {
+  return formatDateInTimezone(d1, tz) === formatDateInTimezone(d2, tz);
 }
 
-function isDateInRange(date: Date, start: Date | null, end: Date | null): boolean {
-  if (!start || !end) return false;
-  const time = date.getTime();
-  return time >= start.getTime() && time <= end.getTime();
+/**
+ * Check if a date string (YYYY-MM-DD) falls within a range of date strings.
+ * All comparisons are lexicographic on YYYY-MM-DD strings — no TZ ambiguity.
+ */
+function isDateInRange(dateStr: string, startStr: string | null, endStr: string | null): boolean {
+  if (!startStr || !endStr) return false;
+  return dateStr >= startStr && dateStr <= endStr;
 }
 
-function isDateToday(date: Date): boolean {
-  const today = nowInTimezone();
-  return isSameDay(date, today);
+/**
+ * Check if a date string (YYYY-MM-DD) is today in the store timezone.
+ */
+function isDateToday(dateStr: string, todayStr: string): boolean {
+  return dateStr === todayStr;
 }
 
-function isDateFuture(date: Date): boolean {
-  const today = nowInTimezone();
-  today.setHours(23, 59, 59, 999);
-  return date.getTime() > today.getTime();
+/**
+ * Check if a date string (YYYY-MM-DD) is in the future relative to today in the store timezone.
+ */
+function isDateFuture(dateStr: string, todayStr: string): boolean {
+  return dateStr > todayStr;
 }
 
 interface CalendarMonthProps {
   year: number;
   month: number;
+  timezone: string;
   selectedStart: Date | null;
   selectedEnd: Date | null;
   hoverDate: Date | null;
@@ -101,7 +115,7 @@ interface CalendarMonthProps {
 }
 
 function CalendarMonth({
-  year, month, selectedStart, selectedEnd, hoverDate,
+  year, month, timezone, selectedStart, selectedEnd, hoverDate,
   onDateClick, onDateHover, onMonthChange, showNavigation,
 }: CalendarMonthProps) {
   const daysInMonth = getDaysInMonth(year, month);
@@ -111,13 +125,18 @@ function CalendarMonth({
   for (let i = 0; i < firstDay; i++) days.push(null);
   for (let i = 1; i <= daysInMonth; i++) days.push(i);
 
-  const effectiveStart = selectedStart;
-  const effectiveEnd = selectedEnd || hoverDate;
+  // Pre-compute all date strings in store timezone for fast comparison
+  const todayStr = formatDateInTimezone(new Date(), timezone);
+  const selectedStartStr = selectedStart ? formatDateInTimezone(selectedStart, timezone) : null;
+  const selectedEndStr = selectedEnd ? formatDateInTimezone(selectedEnd, timezone) : null;
+  const hoverDateStr = hoverDate ? formatDateInTimezone(hoverDate, timezone) : null;
 
-  let rangeStart = effectiveStart;
-  let rangeEnd = effectiveEnd;
-  if (rangeStart && rangeEnd && rangeStart.getTime() > rangeEnd.getTime()) {
-    [rangeStart, rangeEnd] = [rangeEnd, rangeStart];
+  const effectiveEndStr = selectedEndStr || hoverDateStr;
+
+  let rangeStartStr = selectedStartStr;
+  let rangeEndStr = effectiveEndStr;
+  if (rangeStartStr && rangeEndStr && rangeStartStr > rangeEndStr) {
+    [rangeStartStr, rangeEndStr] = [rangeEndStr, rangeStartStr];
   }
 
   return (
@@ -148,14 +167,22 @@ function CalendarMonth({
         {days.map((day, idx) => {
           if (day === null) return <div key={`empty-${idx}`} className="h-8" />;
 
-          const date = new Date(year, month, day);
-          const isStart = selectedStart && isSameDay(date, selectedStart);
-          const isEnd = selectedEnd && isSameDay(date, selectedEnd);
-          const inRange = isDateInRange(date, rangeStart, rangeEnd);
-          const isCurrentDay = isDateToday(date);
-          const disabled = isDateFuture(date);
+          // Build a YYYY-MM-DD date string for this calendar cell
+          const m = String(month + 1).padStart(2, '0');
+          const d = String(day).padStart(2, '0');
+          const dateStr = `${year}-${m}-${d}`;
+
+          // Create a Date anchored to NOON in the store timezone so it is always
+          // within this calendar day regardless of DST or UTC offset.
+          const date = fromZonedTime(`${dateStr}T12:00:00`, timezone);
+
+          const isStart = selectedStartStr === dateStr;
+          const isEnd = selectedEndStr === dateStr;
+          const inRange = isDateInRange(dateStr, rangeStartStr, rangeEndStr);
+          const isCurrentDay = isDateToday(dateStr, todayStr);
+          const disabled = isDateFuture(dateStr, todayStr);
           const isSingleDay = isStart && isEnd;
-          const hasRange = rangeStart && rangeEnd && !isSameDay(rangeStart, rangeEnd);
+          const hasRange = rangeStartStr && rangeEndStr && rangeStartStr !== rangeEndStr;
 
           return (
             <button
@@ -189,9 +216,13 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
   const [open, setOpen] = useState(false);
   const [selectedPreset, setSelectedPreset] = useState<DateRangePreset | null>(dateRange.preset || null);
 
+  // Always derive timezone from the active ad account, never the browser's local TZ
+  const tz = getStoreTimezone();
+
   const [leftMonth, setLeftMonth] = useState(() => {
-    const d = dateRange.start;
-    return { year: d.getFullYear(), month: d.getMonth() };
+    // Use the store timezone to determine which month/year the start date falls in
+    const zoned = toZonedTime(dateRange.start, getStoreTimezone());
+    return { year: zoned.getFullYear(), month: zoned.getMonth() };
   });
 
   const [selectionStart, setSelectionStart] = useState<Date | null>(dateRange.start);
@@ -222,12 +253,14 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
       setSelectionEnd(dateRange.end);
       setIsSelectingEnd(false);
       setSelectedPreset(dateRange.preset || null);
+      // Determine month/year using store timezone
+      const zoned = toZonedTime(dateRange.start, tz);
       setLeftMonth({
-        year: dateRange.start.getFullYear(),
-        month: dateRange.start.getMonth(),
+        year: zoned.getFullYear(),
+        month: zoned.getMonth(),
       });
     }
-  }, [open, dateRange]);
+  }, [open, dateRange, tz]);
 
   const handlePresetClick = (preset: DateRangePreset) => {
     const range = getDateRange(preset);
@@ -235,9 +268,11 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
     setSelectionEnd(range.end);
     setSelectedPreset(preset);
     setIsSelectingEnd(false);
+    // Scroll calendar to the start month of the preset, using store timezone
+    const zoned = toZonedTime(range.start, tz);
     setLeftMonth({
-      year: range.start.getFullYear(),
-      month: range.start.getMonth(),
+      year: zoned.getFullYear(),
+      month: zoned.getMonth(),
     });
   };
 
@@ -273,18 +308,13 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
 
   const handleUpdate = () => {
     if (selectionStart) {
-      const tz = getStoreTimezone();
-      const startYear = selectionStart.getFullYear();
-      const startMonth = String(selectionStart.getMonth() + 1).padStart(2, '0');
-      const startDay = String(selectionStart.getDate()).padStart(2, '0');
-      const startStr = `${startYear}-${startMonth}-${startDay}`;
-
+      // Extract YYYY-MM-DD in the store timezone — never use .getFullYear()/.getMonth()/.getDate()
+      // which would read the local/UTC components instead of the store-tz components.
+      const startStr = formatDateInTimezone(selectionStart, tz);
       const endDate = selectionEnd || selectionStart;
-      const endYear = endDate.getFullYear();
-      const endMonth = String(endDate.getMonth() + 1).padStart(2, '0');
-      const endDay = String(endDate.getDate()).padStart(2, '0');
-      const endStr = `${endYear}-${endMonth}-${endDay}`;
+      const endStr = formatDateInTimezone(endDate, tz);
 
+      // Re-construct proper start-of-day / end-of-day Date objects in store timezone
       const start = fromZonedTime(`${startStr}T00:00:00`, tz);
       const end = fromZonedTime(`${endStr}T23:59:59`, tz);
       onRangeChange({ start, end, preset: selectedPreset || 'custom' });
@@ -294,10 +324,10 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
 
   const footerDateRange = useMemo(() => {
     if (!selectionStart) return '';
-    const startStr = formatFooterDate(selectionStart);
-    if (!selectionEnd || isSameDay(selectionStart, selectionEnd)) return startStr;
-    return `${startStr} - ${formatFooterDate(selectionEnd)}`;
-  }, [selectionStart, selectionEnd]);
+    const startStr = formatFooterDate(selectionStart, tz);
+    if (!selectionEnd || isSameDay(selectionStart, selectionEnd, tz)) return startStr;
+    return `${startStr} - ${formatFooterDate(selectionEnd, tz)}`;
+  }, [selectionStart, selectionEnd, tz]);
 
   return (
     <div className="relative inline-flex items-center" ref={ref}>
@@ -311,7 +341,7 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
         )}
       >
         <Calendar className="h-4 w-4" />
-        <span>{formatTriggerLabel(dateRange.start, dateRange.end, dateRange.preset)}</span>
+        <span>{formatTriggerLabel(dateRange.start, dateRange.end, dateRange.preset, tz)}</span>
         <ChevronRight className={cn('h-4 w-4 transition-transform', open && 'rotate-90')} />
       </button>
 
@@ -350,6 +380,7 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
                 <CalendarMonth
                   year={leftMonth.year}
                   month={leftMonth.month}
+                  timezone={tz}
                   selectedStart={selectionStart}
                   selectedEnd={selectionEnd}
                   hoverDate={isSelectingEnd ? hoverDate : null}
@@ -361,6 +392,7 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
                 <CalendarMonth
                   year={rightMonth.year}
                   month={rightMonth.month}
+                  timezone={tz}
                   selectedStart={selectionStart}
                   selectedEnd={selectionEnd}
                   hoverDate={isSelectingEnd ? hoverDate : null}
