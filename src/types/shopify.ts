@@ -70,6 +70,7 @@ export interface ShopifyImage {
 export interface ShopifyProduct {
   id: number;
   title: string;
+  handle: string;
   bodyHtml: string;
   vendor: string;
   productType: string;

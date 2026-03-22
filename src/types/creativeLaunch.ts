@@ -123,3 +123,97 @@ export interface MockAdset {
   status: string;
   budget: string;
 }
+
+export interface ProductOption {
+  id: string;
+  name: string;
+}
+
+export interface ProductPageOption extends ProductOption {
+  instagramId?: string;
+  instagramUsername?: string;
+  adAccountIds?: string[];
+}
+
+export interface ProductInstagramOption extends ProductOption {
+  username?: string;
+  linkedPageId?: string;
+  adAccountIds?: string[];
+}
+
+export interface ProductPixelOption extends ProductOption {
+  adAccountId: string;
+}
+
+export interface ProductBusinessManagerOption extends ProductOption {
+  adAccountIds: string[];
+}
+
+export type ProductMatchReason =
+  | 'exact_handle_path'
+  | 'contains_handle'
+  | 'saved_profile'
+  | 'manual'
+  | 'no_match';
+
+export interface ProductMapping {
+  productId: string;
+  productName: string;
+  productImage: string;
+  shopifyUrl: string;
+  shopifyHandle: string;
+  isAutoMatched: boolean;
+  matchScore: number;
+  matchReason: ProductMatchReason;
+  needsUrlReview: boolean;
+  missingCachedAssets: boolean;
+  matchedCampaignId?: string;
+  matchedCampaignName?: string;
+  adAccountId: string;
+  adAccountName: string;
+  businessManagerId: string;
+  businessManagerName: string;
+  pageId: string;
+  pageName: string;
+  instagramId: string;
+  instagramUsername: string;
+  pixelId: string;
+  pixelName: string;
+  destinationUrl: string;
+  productLinks: string[];
+  utmTemplate: string;
+  availableAdAccounts: ProductOption[];
+  availableBusinessManagers: ProductBusinessManagerOption[];
+  availablePages: ProductPageOption[];
+  availableInstagramAccounts: ProductInstagramOption[];
+  availablePixels: ProductPixelOption[];
+}
+
+export interface ProductLaunchPlan {
+  productId: string;
+  productName: string;
+  creativeIds: string[];
+  mapping: {
+    adAccountId: string;
+    adAccountName: string;
+    businessManagerId: string;
+    businessManagerName: string;
+    pageId: string;
+    pageName: string;
+    instagramId: string;
+    instagramUsername: string;
+    pixelId: string;
+    pixelName: string;
+    destinationUrl: string;
+    productLinks: string[];
+    utmTemplate: string;
+  };
+}
+
+export interface ProductLaunchResult {
+  productId: string;
+  productName: string;
+  status: 'queued' | 'failed';
+  errors: string[];
+  warnings: string[];
+}

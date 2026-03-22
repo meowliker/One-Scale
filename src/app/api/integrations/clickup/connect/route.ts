@@ -37,12 +37,21 @@ export async function GET(request: NextRequest) {
 
   const meta = row.metadata ? JSON.parse(row.metadata) as Record<string, unknown> : {};
   const listIds: string[] = (meta.listIds as string[]) || (meta.listId ? [meta.listId as string] : []);
+  const listNames: string[] = (meta.listNames as string[]) || [];
+
+  // Build lists array with id and name
+  const lists = listIds.map((id, idx) => ({
+    id,
+    name: listNames[idx] || id,
+  }));
+
   return NextResponse.json({
     connected: true,
     workspaceId: meta.workspaceId ?? null,
     workspaceName: meta.workspaceName ?? null,
     listIds,
-    listNames: meta.listNames ?? [],
+    listNames,
+    lists,
     readyStatus: meta.readyStatus ?? 'ready to launch',
     connectedAt: row.connected_at,
   });

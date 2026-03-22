@@ -42,7 +42,11 @@ export function MetaAccountSelector({
         if (!response.ok) {
           throw new Error('Failed to fetch ad accounts');
         }
-        const data = await response.json();
+        let data: { data?: MetaAdAccount[] } = { data: [] };
+        try {
+          const text = await response.text();
+          if (text) data = JSON.parse(text);
+        } catch { data = { data: [] }; }
         setAccounts(data.data || []);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Error loading accounts';

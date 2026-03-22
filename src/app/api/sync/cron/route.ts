@@ -5,6 +5,8 @@ import { getMetaToken } from '@/app/api/lib/tokens';
 import { fetchMetaCampaigns, fetchMetaAdSets, fetchMetaAds, MetaRateLimitError } from '@/app/api/lib/meta-client';
 import { upsertPersistentMetaEndpointSnapshot } from '@/app/api/lib/supabase-tracking';
 import { isMetaCallBlocked, markMetaRateLimited } from '@/app/api/lib/meta-sync-queue';
+import { refreshMetaSetupSnapshots } from '@/app/api/lib/meta-setup-cache';
+import type { Ad, AdSet, Campaign } from '@/types/campaign';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -57,21 +59,33 @@ export async function GET(request: NextRequest) {
           const activeAccounts = (store.adAccounts || []).filter((a) => Number(a.is_active) === 1);
           if (activeAccounts.length === 0) continue;
 
+          await refreshMetaSetupSnapshots({
+            accessToken: token.accessToken,
+            adAccounts: activeAccounts,
+            writeSnapshot: async (endpoint, scopeId, variantKey, payload) => {
+              await upsertPersistentMetaEndpointSnapshot(store.id, endpoint, scopeId, variantKey, payload);
+            },
+          });
+
           const allCampaigns = await Promise.all(
-            activeAccounts.map((account) =>
-              fetchMetaCampaigns(
+            activeAccounts.map(async (account) => ({
+              accountId: account.ad_account_id,
+              campaigns: await fetchMetaCampaigns(
                 token.accessToken,
                 account.ad_account_id,
                 dateRange,
                 { disableDateFallback: true }
-              ).catch(() => [])
-            )
+              ).catch(() => []),
+            }))
           );
 
-          const campaignMap = new Map<string, (typeof allCampaigns)[number][number]>();
-          for (const campaigns of allCampaigns) {
-            for (const campaign of campaigns) {
-              campaignMap.set(campaign.id, campaign);
+          const campaignMap = new Map<string, Campaign>();
+          for (const group of allCampaigns) {
+            for (const campaign of group.campaigns) {
+              campaignMap.set(campaign.id, {
+                ...campaign,
+                ad_account_id: group.accountId,
+              } as Campaign);
             }
           }
 
@@ -93,6 +107,8 @@ export async function GET(request: NextRequest) {
               console.log(`[sync/cron] Rate limited, skipping remaining campaigns for ${store.id}`);
               break;
             }
+            const campaignWithAccount = campaign as Campaign & { ad_account_id?: string };
+            const campaignAccountId = campaignWithAccount.ad_account_id || '';
 
             try {
               // Fetch ad sets for this campaign
@@ -101,20 +117,25 @@ export async function GET(request: NextRequest) {
                 preferLightweight: true,
                 basicOnly: false,
               });
+              const adSetsWithContext = adSets.map((adSet) => ({
+                ...adSet,
+                campaign_id: campaign.id,
+                ad_account_id: campaignAccountId,
+              })) as AdSet[];
 
-              if (adSets.length > 0) {
+              if (adSetsWithContext.length > 0) {
                 await Promise.all([
-                  upsertPersistentMetaEndpointSnapshot(store.id, 'adsets', campaign.id, adSetVariant, adSets),
-                  upsertPersistentMetaEndpointSnapshot(store.id, 'adsets', campaign.id, 'latest', adSets),
+                  upsertPersistentMetaEndpointSnapshot(store.id, 'adsets', campaign.id, adSetVariant, adSetsWithContext),
+                  upsertPersistentMetaEndpointSnapshot(store.id, 'adsets', campaign.id, 'latest', adSetsWithContext),
                 ]);
-                adSetsSynced += adSets.length;
+                adSetsSynced += adSetsWithContext.length;
               }
 
               // Small delay to avoid rate limiting
               await sleep(200);
 
               // Fetch ads for each ad set
-              for (const adSet of adSets) {
+              for (const adSet of adSetsWithContext) {
                 if (isMetaCallBlocked(store.id)) break;
 
                 try {
@@ -123,13 +144,19 @@ export async function GET(request: NextRequest) {
                     preferLightweight: true,
                     basicOnly: false,
                   });
+                  const adsWithContext = ads.map((ad) => ({
+                    ...ad,
+                    adset_id: adSet.id,
+                    campaign_id: campaign.id,
+                    ad_account_id: campaignAccountId,
+                  })) as Ad[];
 
-                  if (ads.length > 0) {
+                  if (adsWithContext.length > 0) {
                     await Promise.all([
-                      upsertPersistentMetaEndpointSnapshot(store.id, 'ads', adSet.id, adsVariant, ads),
-                      upsertPersistentMetaEndpointSnapshot(store.id, 'ads', adSet.id, 'latest', ads),
+                      upsertPersistentMetaEndpointSnapshot(store.id, 'ads', adSet.id, adsVariant, adsWithContext),
+                      upsertPersistentMetaEndpointSnapshot(store.id, 'ads', adSet.id, 'latest', adsWithContext),
                     ]);
-                    adsSynced += ads.length;
+                    adsSynced += adsWithContext.length;
                   }
 
                   // Delay between ad set requests
@@ -177,21 +204,33 @@ export async function GET(request: NextRequest) {
         const accounts = getStoreAdAccounts(store.id).filter((a) => a.is_active);
         if (accounts.length === 0) continue;
 
+        await refreshMetaSetupSnapshots({
+          accessToken: token.accessToken,
+          adAccounts: accounts,
+          writeSnapshot: async (endpoint, scopeId, variantKey, payload) => {
+            upsertMetaEndpointSnapshot(store.id, endpoint, scopeId, variantKey, payload);
+          },
+        });
+
         const allCampaigns = await Promise.all(
-          accounts.map((account) =>
-            fetchMetaCampaigns(
+          accounts.map(async (account) => ({
+            accountId: account.ad_account_id,
+            campaigns: await fetchMetaCampaigns(
               token.accessToken,
               account.ad_account_id,
               dateRange,
               { disableDateFallback: true }
-            ).catch(() => [])
-          )
+            ).catch(() => []),
+          }))
         );
 
-        const campaignMap = new Map<string, (typeof allCampaigns)[number][number]>();
-        for (const campaigns of allCampaigns) {
-          for (const campaign of campaigns) {
-            campaignMap.set(campaign.id, campaign);
+        const campaignMap = new Map<string, Campaign>();
+        for (const group of allCampaigns) {
+          for (const campaign of group.campaigns) {
+            campaignMap.set(campaign.id, {
+              ...campaign,
+              ad_account_id: group.accountId,
+            } as Campaign);
           }
         }
         const mergedCampaigns = Array.from(campaignMap.values());
@@ -207,6 +246,8 @@ export async function GET(request: NextRequest) {
         
         for (const campaign of activeCampaigns) {
           if (isMetaCallBlocked(store.id)) break;
+          const campaignWithAccount = campaign as Campaign & { ad_account_id?: string };
+          const campaignAccountId = campaignWithAccount.ad_account_id || '';
 
           try {
             const adSets = await fetchMetaAdSets(token.accessToken, campaign.id, dateRange, {
@@ -214,16 +255,21 @@ export async function GET(request: NextRequest) {
               preferLightweight: true,
               basicOnly: false,
             });
+            const adSetsWithContext = adSets.map((adSet) => ({
+              ...adSet,
+              campaign_id: campaign.id,
+              ad_account_id: campaignAccountId,
+            })) as AdSet[];
 
-            if (adSets.length > 0) {
-              upsertMetaEndpointSnapshot(store.id, 'adsets', campaign.id, adSetVariant, adSets);
-              upsertMetaEndpointSnapshot(store.id, 'adsets', campaign.id, 'latest', adSets);
-              adSetsSynced += adSets.length;
+            if (adSetsWithContext.length > 0) {
+              upsertMetaEndpointSnapshot(store.id, 'adsets', campaign.id, adSetVariant, adSetsWithContext);
+              upsertMetaEndpointSnapshot(store.id, 'adsets', campaign.id, 'latest', adSetsWithContext);
+              adSetsSynced += adSetsWithContext.length;
             }
 
             await sleep(200);
 
-            for (const adSet of adSets) {
+            for (const adSet of adSetsWithContext) {
               if (isMetaCallBlocked(store.id)) break;
 
               try {
@@ -232,11 +278,17 @@ export async function GET(request: NextRequest) {
                   preferLightweight: true,
                   basicOnly: false,
                 });
+                const adsWithContext = ads.map((ad) => ({
+                  ...ad,
+                  adset_id: adSet.id,
+                  campaign_id: campaign.id,
+                  ad_account_id: campaignAccountId,
+                })) as Ad[];
 
-                if (ads.length > 0) {
-                  upsertMetaEndpointSnapshot(store.id, 'ads', adSet.id, adsVariant, ads);
-                  upsertMetaEndpointSnapshot(store.id, 'ads', adSet.id, 'latest', ads);
-                  adsSynced += ads.length;
+                if (adsWithContext.length > 0) {
+                  upsertMetaEndpointSnapshot(store.id, 'ads', adSet.id, adsVariant, adsWithContext);
+                  upsertMetaEndpointSnapshot(store.id, 'ads', adSet.id, 'latest', adsWithContext);
+                  adsSynced += adsWithContext.length;
                 }
 
                 await sleep(150);

@@ -1232,22 +1232,47 @@ export async function upsertPersistentThirdPartyToken(data: {
   try {
     const encrypted = encryptSecret(data.accessToken);
     const metaJson = data.metadata ? JSON.stringify(data.metadata) : null;
-    await rest(
-      '/third_party_tokens',
-      {
-        method: 'POST',
-        headers: headers({ Prefer: 'resolution=merge-duplicates,return=minimal' }),
-        body: JSON.stringify({
-          store_id: data.storeId,
-          platform: data.platform,
-          access_token: encrypted,
-          metadata: metaJson,
-          updated_at: new Date().toISOString(),
-        }),
-      }
-    );
-  } catch {
-    // Table may not exist yet — silently ignore
+    
+    // First try to update existing record
+    const existing = await rest<Array<{ id: number }>>(
+      `/third_party_tokens?store_id=eq.${encodeURIComponent(data.storeId)}&platform=eq.${encodeURIComponent(data.platform)}&select=id&limit=1`
+    ).catch(() => []);
+    
+    if (existing.length > 0) {
+      // Update existing record
+      await rest(
+        `/third_party_tokens?store_id=eq.${encodeURIComponent(data.storeId)}&platform=eq.${encodeURIComponent(data.platform)}`,
+        {
+          method: 'PATCH',
+          headers: headers({ Prefer: 'return=minimal' }),
+          body: JSON.stringify({
+            access_token: encrypted,
+            metadata: metaJson,
+            updated_at: new Date().toISOString(),
+          }),
+        }
+      );
+    } else {
+      // Insert new record
+      await rest(
+        '/third_party_tokens',
+        {
+          method: 'POST',
+          headers: headers({ Prefer: 'return=minimal' }),
+          body: JSON.stringify({
+            store_id: data.storeId,
+            platform: data.platform,
+            access_token: encrypted,
+            metadata: metaJson,
+            connected_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }),
+        }
+      );
+    }
+  } catch (err) {
+    // Log error for debugging but don't throw
+    console.error('[upsertPersistentThirdPartyToken] Error:', err);
   }
 }
 

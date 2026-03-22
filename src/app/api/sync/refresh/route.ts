@@ -9,6 +9,7 @@ import {
   upsertPersistentCreativeAssets,
 } from '@/app/api/lib/supabase-tracking';
 import { enqueueMetaSyncTask, isMetaCallBlocked, markMetaRateLimited } from '@/app/api/lib/meta-sync-queue';
+import { refreshMetaSetupSnapshots } from '@/app/api/lib/meta-setup-cache';
 import type { Campaign, AdSet, Ad, PerformanceMetrics } from '@/types/campaign';
 
 interface RefreshRequestBody {
@@ -173,19 +174,35 @@ export async function POST(request: NextRequest) {
         if (!token) return;
 
         try {
+          await refreshMetaSetupSnapshots({
+            accessToken: token.accessToken,
+            adAccounts: activeAccounts,
+            writeSnapshot: async (endpoint, cachedScopeId, variantKey, payload) => {
+              if (useSupabase) {
+                await upsertPersistentMetaEndpointSnapshot(storeId, endpoint, cachedScopeId, variantKey, payload);
+              } else {
+                upsertMetaEndpointSnapshot(storeId, endpoint, cachedScopeId, variantKey, payload);
+              }
+            },
+          });
+
           const allCampaigns = await Promise.all(
-            activeAccounts.map((account) =>
-              fetchMetaCampaigns(token.accessToken, account.ad_account_id, dateRange, {
+            activeAccounts.map(async (account) => ({
+              accountId: account.ad_account_id,
+              campaigns: await fetchMetaCampaigns(token.accessToken, account.ad_account_id, dateRange, {
                 disableDateFallback: true,
-              }).catch(() => [])
-            )
+              }).catch(() => []),
+            }))
           );
 
           const campaignMap = new Map<string, Campaign>();
-          for (const campaigns of allCampaigns) {
-            for (const campaign of campaigns) {
+          for (const group of allCampaigns) {
+            for (const campaign of group.campaigns) {
               if (!campaignMap.has(campaign.id)) {
-                campaignMap.set(campaign.id, campaign);
+                campaignMap.set(campaign.id, {
+                  ...campaign,
+                  ad_account_id: group.accountId,
+                } as Campaign);
               }
             }
           }
@@ -197,23 +214,36 @@ export async function POST(request: NextRequest) {
 
           const activeCampaigns = campaigns.filter((c) => c.status === 'ACTIVE');
           for (const campaign of activeCampaigns) {
+            const campaignWithAccount = campaign as Campaign & { ad_account_id?: string };
+            const campaignAccountId = campaignWithAccount.ad_account_id || '';
             const adSets = await fetchMetaAdSets(token.accessToken, campaign.id, dateRange, {
               disableDateFallback: true,
               preferLightweight: true,
               basicOnly: false,
             });
+            const adSetsWithContext = adSets.map((adSet) => ({
+              ...adSet,
+              campaign_id: campaign.id,
+              ad_account_id: campaignAccountId,
+            })) as AdSet[];
 
             const adSetVariant = `mode:fast|since:${today}|until:${today}|strict:1`;
-            await persistAdSetSnapshot(useSupabase, storeId, campaign.id, adSetVariant, adSets);
+            await persistAdSetSnapshot(useSupabase, storeId, campaign.id, adSetVariant, adSetsWithContext);
 
-            for (const adSet of adSets) {
+            for (const adSet of adSetsWithContext) {
               const ads = await fetchMetaAds(token.accessToken, adSet.id, dateRange, {
                 disableDateFallback: true,
                 preferLightweight: true,
                 basicOnly: false,
               });
+              const adsWithContext = ads.map((ad) => ({
+                ...ad,
+                adset_id: adSet.id,
+                campaign_id: campaign.id,
+                ad_account_id: campaignAccountId,
+              })) as Ad[];
               const adsVariant = `mode:fast|since:${today}|until:${today}|strict:1`;
-              await persistAdSnapshot(useSupabase, storeId, adSet.id, adsVariant, ads);
+              await persistAdSnapshot(useSupabase, storeId, adSet.id, adsVariant, adsWithContext);
               await new Promise((resolve) => setTimeout(resolve, 120));
             }
 
@@ -255,19 +285,35 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    await refreshMetaSetupSnapshots({
+      accessToken: token.accessToken,
+      adAccounts: activeAccounts,
+      writeSnapshot: async (endpoint, cachedScopeId, variantKey, payload) => {
+        if (useSupabase) {
+          await upsertPersistentMetaEndpointSnapshot(storeId, endpoint, cachedScopeId, variantKey, payload);
+        } else {
+          upsertMetaEndpointSnapshot(storeId, endpoint, cachedScopeId, variantKey, payload);
+        }
+      },
+    });
+
     const allCampaigns = await Promise.all(
-      activeAccounts.map((account) =>
-        fetchMetaCampaigns(token.accessToken, account.ad_account_id, dateRange, {
+      activeAccounts.map(async (account) => ({
+        accountId: account.ad_account_id,
+        campaigns: await fetchMetaCampaigns(token.accessToken, account.ad_account_id, dateRange, {
           disableDateFallback: true,
-        }).catch(() => [])
-      )
+        }).catch(() => []),
+      }))
     );
 
     const campaignMap = new Map<string, Campaign>();
-    for (const campaigns of allCampaigns) {
-      for (const campaign of campaigns) {
+    for (const group of allCampaigns) {
+      for (const campaign of group.campaigns) {
         if (!campaignMap.has(campaign.id)) {
-          campaignMap.set(campaign.id, campaign);
+          campaignMap.set(campaign.id, {
+            ...campaign,
+            ad_account_id: group.accountId,
+          } as Campaign);
         }
       }
     }

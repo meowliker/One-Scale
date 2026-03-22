@@ -82,7 +82,20 @@ export function MetaConnectionDetails({
         }
         throw new Error('Failed to fetch');
       }
-      const data = await res.json();
+      let data: MetaDetails | null = null;
+      try {
+        const text = await res.text();
+        if (text) {
+          data = JSON.parse(text);
+        }
+      } catch {
+        throw new Error('Invalid response');
+      }
+      
+      if (!data) {
+        throw new Error('Empty response');
+      }
+      
       setDetails(data);
       // Auto-expand all BMs on first load
       if (data.businesses) {

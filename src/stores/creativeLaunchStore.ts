@@ -13,6 +13,8 @@ interface DiscoverResult {
   notConnected?: boolean;
   notConfigured?: boolean;
   message?: string;
+  destinationUrl?: string;
+  storeDomain?: string;
 }
 
 interface CreativeLaunchState {
@@ -27,6 +29,7 @@ interface CreativeLaunchState {
   discoverError: string | null;
   notConnected: boolean;
   notConfigured: boolean;
+  destinationUrl: string;
 
   setStage: (stage: LaunchStage) => void;
   fetchData: (storeId: string) => Promise<void>;
@@ -52,6 +55,7 @@ export const useCreativeLaunchStore = create<CreativeLaunchState>()((set, get) =
   discoverError: null,
   notConnected: false,
   notConfigured: false,
+  destinationUrl: '',
 
   setStage: (stage) => set({ stage }),
 
@@ -68,6 +72,7 @@ export const useCreativeLaunchStore = create<CreativeLaunchState>()((set, get) =
         clickupCreatives: data.clickupCreatives || [],
         notConnected: !!data.notConnected,
         notConfigured: !!data.notConfigured,
+        destinationUrl: data.destinationUrl || '',
         discoverError: data.message && (data.notConnected || data.notConfigured) ? data.message : null,
         isLoading: false,
       });

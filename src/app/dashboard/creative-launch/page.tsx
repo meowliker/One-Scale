@@ -1,7 +1,7 @@
-import { CreativeLaunchClient } from '@/components/creative-launch/CreativeLaunchClient';
+import { CreativeLaunchDashboard } from '@/components/creative-launch/CreativeLaunchDashboard';
 
 export const metadata = { title: 'Creative Launch — OneScale' };
 
 export default function CreativeLaunchPage() {
-  return <CreativeLaunchClient />;
+  return <CreativeLaunchDashboard />;
 }
