@@ -3,10 +3,10 @@ import {
   rest,
   isSupabasePersistenceEnabled,
   listPersistentStores,
-  getPersistentConnection,
   logStoreError,
 } from '@/app/api/lib/supabase-persistence';
 import { fetchFromShopify } from '@/app/api/lib/shopify-client';
+import { getShopifyToken } from '@/app/api/lib/tokens';
 import { fetchDisputesGraphQL, normalizeDisputeStatus } from '@/app/api/lib/shopify-graphql';
 
 export const maxDuration = 300;
@@ -84,21 +84,28 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Supabase not configured' }, { status: 500 });
   }
 
-  const stores = await listPersistentStores();
+  const allStores = await listPersistentStores();
+
+  // Support single-store mode via ?store_id= param (avoids 60s timeout, deeper pagination)
+  const requestedStoreId = new URL(req.url).searchParams.get('store_id');
+  const stores = requestedStoreId
+    ? allStores.filter(s => s.id === requestedStoreId)
+    : allStores;
+
   const results: Array<{ storeId: string; status: string; rows?: number; error?: string }> = [];
 
   for (const store of stores) {
     const start = Date.now();
     try {
-      // Get Shopify connection
-      const shopifyConn = await getPersistentConnection(store.id, 'shopify');
-      if (!shopifyConn || !shopifyConn.access_token || !shopifyConn.shop_domain) {
+      // Get Shopify token (with auto-refresh if expired)
+      const shopifyToken = await getShopifyToken(store.id);
+      if (!shopifyToken?.accessToken || !shopifyToken?.shopDomain) {
         results.push({ storeId: store.id, status: 'skipped', error: 'No Shopify connection' });
         continue;
       }
 
-      const accessToken = shopifyConn.access_token;
-      const shopDomain = shopifyConn.shop_domain;
+      const accessToken = shopifyToken.accessToken;
+      const shopDomain = shopifyToken.shopDomain;
 
       // Smart lookback: check when last order was synced for this store.
       // If cron was down, auto-recover by looking back further.
