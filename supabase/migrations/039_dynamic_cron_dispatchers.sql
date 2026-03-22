@@ -54,11 +54,11 @@ SELECT cron.schedule(
   $$
 );
 
--- 3. Meta spend sync (every 6 hours)
+-- 3. Meta spend sync (every hour — keeps ad spend fresh, minimizes gap with live Meta API)
 -- This already handles all stores internally
 SELECT cron.schedule(
   'meta-spend-sync',
-  '0 */6 * * *',
+  '0 * * * *',
   $$
   SELECT net.http_post(
     url := 'https://one-scale-git-dev-mahesh-meow-likers-projects.vercel.app/api/cron/sync-meta-spend',
