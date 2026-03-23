@@ -190,8 +190,16 @@ export async function GET(request: NextRequest) {
   const from = dateFrom || '';
   const to = dateTo || '';
 
-  // Determine if range includes today
-  const nowParts = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+  // Determine if range includes today — use store timezone so "today" matches frontend
+  let storeTz = 'America/New_York';
+  try {
+    const tzRows = await rest<Array<{ timezone: string | null }>>(
+      `/store_ad_accounts?store_id=eq.${enc(storeId)}&is_active=eq.true&select=timezone&limit=1`
+    );
+    storeTz = tzRows?.[0]?.timezone || 'America/New_York';
+  } catch { /* use default */ }
+
+  const nowParts = new Intl.DateTimeFormat('en-CA', { timeZone: storeTz, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
   const todayStr = `${nowParts.find(p => p.type === 'year')!.value}-${nowParts.find(p => p.type === 'month')!.value}-${nowParts.find(p => p.type === 'day')!.value}`;
   const includesToday = to >= todayStr;
 

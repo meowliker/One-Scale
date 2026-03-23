@@ -378,7 +378,7 @@ export function PnLDashboardClient({
 
       {/* S6: Key Metrics Bar (AOV, Orders, Upsell Rate, ROAS) — always visible */}
       <SectionWrapper label="Key Metrics">
-        <MetricsBar entry={activeEntry} products={productLoading ? [] : effectiveProductPnL} currency={currency} />
+        <MetricsBar entry={activeEntry} currency={currency} />
       </SectionWrapper>
 
       {/* S7: Product Performance */}

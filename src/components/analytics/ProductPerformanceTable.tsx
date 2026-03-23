@@ -114,9 +114,11 @@ async function fetchProductPerf(storeId: string, preset: DateRangePreset): Promi
   const from = formatDateInTimezone(range.start);
   const to = formatDateInTimezone(range.end);
 
+  const params = `storeId=${encodeURIComponent(storeId)}&from=${from}&to=${to}`;
+
   // Try fast cached endpoint first, fallback to full computation
   const [perfRes, alertRes] = await Promise.all([
-    fetch(`/api/pnl/product-perf-cached?storeId=${encodeURIComponent(storeId)}&from=${from}&to=${to}`),
+    fetch(`/api/pnl/product-perf-cached?${params}`),
     fetch(`/api/meta/ad-rejections?storeId=${encodeURIComponent(storeId)}`).catch(() => null),
   ]);
 
@@ -128,6 +130,21 @@ async function fetchProductPerf(storeId: string, preset: DateRangePreset): Promi
     products = perfJson.data.filter(
       (p: ProductRow) => p.category === 'main' || p.category === 'MAIN'
     );
+  }
+
+  // If cached endpoint returned empty (common for "today"), try the full product-performance endpoint
+  if (products.length === 0) {
+    try {
+      const fullRes = await fetch(`/api/pnl/product-performance?${params}`);
+      if (fullRes.ok) {
+        const fullJson = await fullRes.json();
+        if (fullJson.ok && fullJson.data) {
+          products = fullJson.data.filter(
+            (p: ProductRow) => (p.category === 'main' || p.category === 'MAIN')
+          );
+        }
+      }
+    } catch { /* ignore fallback errors */ }
   }
 
   if (alertRes) {

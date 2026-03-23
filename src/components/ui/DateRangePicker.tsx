@@ -18,7 +18,7 @@ const presets: { label: string; value: DateRangePreset }[] = [
   { label: 'Yesterday', value: 'yesterday' },
   { label: 'Last 7 days', value: 'last7' },
   { label: 'Last 14 days', value: 'last14' },
-  { label: 'Last 28 days', value: 'last3' },
+  { label: 'Last 28 days', value: 'last28' },
   { label: 'Last 30 days', value: 'last30' },
   { label: 'This month', value: 'thisMonth' },
   { label: 'Last month', value: 'lastMonth' },
@@ -27,10 +27,11 @@ const presets: { label: string; value: DateRangePreset }[] = [
 const presetLabels: Record<string, string> = {
   today: 'Today',
   yesterday: 'Yesterday',
-  last3: 'Last 28 Days',
+  last3: 'Last 3 Days',
   last7: 'Last 7 Days',
   last7today: '7D + Today',
   last14: 'Last 14 Days',
+  last28: 'Last 28 Days',
   last30: 'Last 30 Days',
   thisMonth: 'This Month',
   lastMonth: 'Last Month',
@@ -264,16 +265,13 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
 
   const handlePresetClick = (preset: DateRangePreset) => {
     const range = getDateRange(preset);
-    setSelectionStart(range.start);
-    setSelectionEnd(range.end);
-    setSelectedPreset(preset);
-    setIsSelectingEnd(false);
-    // Scroll calendar to the start month of the preset, using store timezone
-    const zoned = toZonedTime(range.start, tz);
-    setLeftMonth({
-      year: zoned.getFullYear(),
-      month: zoned.getMonth(),
-    });
+    // Apply preset immediately — no need to click "Update"
+    const startStr = formatDateInTimezone(range.start, tz);
+    const endStr = formatDateInTimezone(range.end, tz);
+    const start = fromZonedTime(`${startStr}T00:00:00`, tz);
+    const end = fromZonedTime(`${endStr}T23:59:59`, tz);
+    onRangeChange({ start, end, preset });
+    setOpen(false);
   };
 
   const handleDateClick = (date: Date) => {
