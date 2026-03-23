@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { rest, isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
 import { buildProductPerformance } from '@/lib/pnl/appsScriptPort';
+import { getShopifyToken } from '@/app/api/lib/tokens';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -151,6 +152,57 @@ async function fetchMetaMetricsByProduct(
   } catch { /* non-critical */ }
 
   return metricMap;
+}
+
+/**
+ * Live fallback: fetch today's orders from Shopify API and aggregate by product line items.
+ * Used when buildProductPerformance returns empty (no product_config or empty order cache).
+ */
+async function fetchLiveProductBreakdown(storeId: string, storeTz: string): Promise<Array<{
+  productId: string; productName: string; productImage: string | null;
+  revenue: number; unitsSold: number; fees: number; category: string;
+}>> {
+  try {
+    const shopToken = await getShopifyToken(storeId);
+    if (!shopToken?.accessToken || !shopToken?.shopDomain) return [];
+
+    // Fetch today's orders from Shopify API
+    const todayParts = new Intl.DateTimeFormat('en-CA', { timeZone: storeTz, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+    const todayStr = `${todayParts.find(p => p.type === 'year')!.value}-${todayParts.find(p => p.type === 'month')!.value}-${todayParts.find(p => p.type === 'day')!.value}`;
+
+    const url = `https://${shopToken.shopDomain}/admin/api/2024-01/orders.json?status=any&created_at_min=${todayStr}T00:00:00&limit=250&fields=id,line_items,total_price,financial_status`;
+    const res = await fetch(url, {
+      headers: { 'X-Shopify-Access-Token': shopToken.accessToken, 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) return [];
+    const json = await res.json() as { orders?: Array<{ id: number; total_price: string; financial_status: string; line_items: Array<{ product_id: number; title: string; price: string; quantity: number; variant_title?: string }> }> };
+    const orders = json.orders || [];
+
+    // Aggregate by product
+    const byProduct = new Map<string, { name: string; revenue: number; units: number }>();
+    for (const order of orders) {
+      if (['voided', 'refunded'].includes(order.financial_status)) continue;
+      for (const item of order.line_items || []) {
+        const pid = String(item.product_id || 'unknown');
+        const existing = byProduct.get(pid) || { name: item.title, revenue: 0, units: 0 };
+        existing.revenue += parseFloat(item.price || '0') * (item.quantity || 1);
+        existing.units += item.quantity || 1;
+        byProduct.set(pid, existing);
+      }
+    }
+
+    return [...byProduct.entries()].map(([pid, v]) => ({
+      productId: pid,
+      productName: v.name,
+      productImage: null,
+      revenue: round2(v.revenue),
+      unitsSold: v.units,
+      fees: 0,
+      category: 'main',
+    }));
+  } catch {
+    return [];
+  }
 }
 
 function mapResultsToResponse(
@@ -336,12 +388,63 @@ export async function GET(request: NextRequest) {
 
   // ── TODAY: live sync from Shopify → compute → respond ──
   try {
-    const results = await buildProductPerformance(storeId, from, to);
+    let results = await buildProductPerformance(storeId, from, to);
+
+    // If buildProductPerformance returns empty (no product_config or empty order cache),
+    // fetch today's orders LIVE from Shopify API as fallback
+    if (results.length === 0) {
+      const liveProducts = await fetchLiveProductBreakdown(storeId, storeTz);
+      if (liveProducts.length > 0) {
+        const revMap = new Map<string, number>();
+        for (const p of liveProducts) revMap.set(p.productId, p.revenue);
+        const metaMetrics = await fetchMetaMetricsByProduct(storeId, from, to, revMap);
+
+        const data = liveProducts.map(p => {
+          const meta = metaMetrics.get(p.productId) || { spend: 0, impressions: 0, clicks: 0, purchases: 0 };
+          const spend = meta.spend;
+          return {
+            productId: p.productId,
+            productName: p.productName,
+            productImage: p.productImage,
+            sku: '',
+            unitsSold: p.unitsSold,
+            revenue: p.revenue,
+            cogs: 0,
+            shipping: 0,
+            fees: p.fees,
+            netProfit: round2(p.revenue - p.fees - spend),
+            margin: p.revenue > 0 ? round2(((p.revenue - p.fees - spend) / p.revenue) * 100) : 0,
+            fbMetrics: {
+              roas: spend > 0 ? round2(p.revenue / spend) : 0,
+              cpc: meta.clicks > 0 ? round2(spend / meta.clicks) : 0,
+              cpm: meta.impressions > 0 ? round2((spend / meta.impressions) * 1000) : 0,
+              ctr: meta.impressions > 0 ? round2((meta.clicks / meta.impressions) * 100) : 0,
+              aov: p.unitsSold > 0 ? round2(p.revenue / p.unitsSold) : 0,
+              atcRate: 0,
+              spend,
+              impressions: meta.impressions,
+              clicks: meta.clicks,
+              purchases: meta.purchases,
+              costPerPurchase: meta.purchases > 0 ? round2(spend / meta.purchases) : 0,
+              frequency: 0,
+              reach: 0,
+            },
+            isAdvertised: spend > 0 || meta.impressions > 0,
+            adLandingPageUrl: null, adName: null, adSetName: null, campaignName: null,
+            category: p.category,
+            classificationConfidence: 70,
+            classificationMethod: 'line_item_live',
+          };
+        });
+        return NextResponse.json({ ok: true, data, source: 'shopify_live' });
+      }
+    }
+
     const revMap = new Map<string, number>();
     for (const r of results) revMap.set(r.product_id, r.revenue);
     const metaMetrics = await fetchMetaMetricsByProduct(storeId, from, to, revMap);
 
-    // Merge product images from existing cache (don't fetch from Shopify API — too slow)
+    // Merge product images from existing cache
     const imgRows = await rest<Array<{ product_id: string; product_image: string | null }>>(
       `/product_pnl_cache?store_id=eq.${enc(storeId)}&product_image=not.is.null&select=product_id,product_image`
     ).catch(() => []);

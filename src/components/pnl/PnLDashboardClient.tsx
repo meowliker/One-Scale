@@ -293,9 +293,21 @@ export function PnLDashboardClient({
       }
 
       const json = await res.json() as { ok?: boolean; data?: ProductPnLData[] };
-      if (json.ok && json.data) {
+      if (json.ok && json.data && json.data.length > 0) {
         setLiveProductPnL(json.data);
       } else {
+        // product-performance returned empty — try product-perf-cached which has live Shopify fallback
+        try {
+          const cachedParams = new URLSearchParams({ storeId: activeStoreId, from, to });
+          const cachedRes = await fetch(`/api/pnl/product-perf-cached?${cachedParams}`, { signal: controller.signal });
+          if (cachedRes.ok) {
+            const cachedJson = await cachedRes.json() as { ok?: boolean; data?: ProductPnLData[] };
+            if (cachedJson.ok && cachedJson.data && cachedJson.data.length > 0) {
+              setLiveProductPnL(cachedJson.data);
+              return;
+            }
+          }
+        } catch { /* ignore */ }
         setLiveProductPnL([]);
       }
     } catch (err) {
