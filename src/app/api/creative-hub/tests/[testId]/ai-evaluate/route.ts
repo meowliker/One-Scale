@@ -117,7 +117,7 @@ Return JSON only: { "items": [{ "id": "...", "recommendation": "kill|scale|wait|
 // Fallback mock evaluation
 // ---------------------------------------------------------------------------
 
-function mockEvaluation(items: NonNullable<ReturnType<typeof getCreativeTest>>['items']): EvalItem[] {
+function mockEvaluation(items: NonNullable<Awaited<ReturnType<typeof getCreativeTest>>>['items']): EvalItem[] {
   return items.map((item) => {
     let recommendation: AIRecommendation;
     let reasoning: string;

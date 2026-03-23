@@ -1,4 +1,5 @@
 import { getDb } from '@/app/api/lib/db';
+import { isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
 import type {
   ProductProfile,
   ProductCampaignLink,
@@ -8,6 +9,32 @@ import type {
   WinningCopy,
   FatigueAlert,
 } from '@/types/creativeHub';
+
+// ── Supabase REST helper ──
+
+const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+
+async function supaRest<T>(
+  path: string,
+  options?: { method?: string; body?: string; headers?: Record<string, string> },
+): Promise<T> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
+    method: options?.method || 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      Prefer: 'return=representation',
+      ...options?.headers,
+    },
+    body: options?.body,
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error(`Supabase error: ${res.status} ${await res.text()}`);
+  const text = await res.text();
+  return text ? JSON.parse(text) : ([] as unknown as T);
+}
 
 // ── Row types (snake_case DB rows) ──
 
@@ -20,11 +47,9 @@ interface ProductProfileRow {
   ad_account_id: string;
   ad_account_currency: string;
   page_id: string | null;
-  page_name: string | null;
   instagram_actor_id: string | null;
   instagram_username: string | null;
   pixel_id: string | null;
-  pixel_name: string | null;
   conversion_event: string;
   destination_url: string | null;
   utm_template: string | null;
@@ -64,7 +89,7 @@ interface ProductCampaignLinkRow {
   instagram_username: string | null;
   bm_id: string | null;
   bm_name: string | null;
-  is_active: number;
+  is_active: number | boolean;
   linked_at: string;
 }
 
@@ -151,7 +176,7 @@ interface CopyLibraryRow {
   total_spend: number | null;
   total_revenue: number | null;
   total_purchases: number | null;
-  is_ai_generated: number;
+  is_ai_generated: number | boolean;
   created_at: string;
 }
 
@@ -183,11 +208,9 @@ function mapProfileRow(row: ProductProfileRow): ProductProfile {
     adAccountId: row.ad_account_id,
     adAccountCurrency: row.ad_account_currency,
     pageId: row.page_id ?? undefined,
-    pageName: row.page_name ?? undefined,
     instagramActorId: row.instagram_actor_id ?? undefined,
     instagramUsername: row.instagram_username ?? undefined,
     pixelId: row.pixel_id ?? undefined,
-    pixelName: row.pixel_name ?? undefined,
     conversionEvent: row.conversion_event,
     destinationUrl: row.destination_url ?? undefined,
     utmTemplate: row.utm_template ?? undefined,
@@ -229,7 +252,7 @@ function mapCampaignLinkRow(row: ProductCampaignLinkRow): ProductCampaignLink {
     instagramUsername: row.instagram_username ?? undefined,
     bmId: row.bm_id ?? undefined,
     bmName: row.bm_name ?? undefined,
-    isActive: row.is_active === 1,
+    isActive: row.is_active === 1 || row.is_active === true,
     linkedAt: row.linked_at,
   };
 }
@@ -323,7 +346,7 @@ function mapCopyLibraryRow(row: CopyLibraryRow): WinningCopy {
     totalSpend: row.total_spend ?? 0,
     totalRevenue: row.total_revenue ?? 0,
     totalPurchases: row.total_purchases ?? 0,
-    isAiGenerated: row.is_ai_generated === 1,
+    isAiGenerated: row.is_ai_generated === 1 || row.is_ai_generated === true,
     createdAt: row.created_at,
   };
 }
@@ -346,9 +369,9 @@ function mapFatigueAlertRow(row: FatigueAlertRow): FatigueAlert {
   };
 }
 
-// ── Product Profiles ──
+// ── Local SQLite helpers (fallback) ──
 
-export function getProductProfiles(storeId: string): ProductProfile[] {
+function getProductProfilesLocal(storeId: string): ProductProfile[] {
   const db = getDb();
   const rows = db.prepare(
     'SELECT * FROM product_profiles WHERE store_id = ? ORDER BY updated_at DESC'
@@ -356,7 +379,7 @@ export function getProductProfiles(storeId: string): ProductProfile[] {
   return rows.map(mapProfileRow);
 }
 
-export function getProductProfile(id: string): ProductProfile | null {
+function getProductProfileLocal(id: string): ProductProfile | null {
   const db = getDb();
   const row = db.prepare(
     'SELECT * FROM product_profiles WHERE id = ?'
@@ -364,12 +387,12 @@ export function getProductProfile(id: string): ProductProfile | null {
   return row ? mapProfileRow(row) : null;
 }
 
-export function upsertProductProfile(profile: Partial<ProductProfile> & { id: string; storeId: string; productName: string; adAccountId: string }): void {
+function upsertProductProfileLocal(profile: Partial<ProductProfile> & { id: string; storeId: string; productName: string; adAccountId: string }): void {
   const db = getDb();
   db.prepare(`
     INSERT INTO product_profiles (
       id, store_id, shopify_product_id, product_name, product_image,
-      ad_account_id, ad_account_currency, page_id, page_name, instagram_actor_id, instagram_username, pixel_id, pixel_name,
+      ad_account_id, ad_account_currency, page_id, instagram_actor_id, instagram_username, pixel_id,
       conversion_event, destination_url, utm_template, average_order_value,
       default_budget, default_duration, default_bid_strategy, default_bid_amount,
       default_roas_floor, default_structure, default_launch_status,
@@ -379,7 +402,7 @@ export function upsertProductProfile(profile: Partial<ProductProfile> & { id: st
       updated_at
     ) VALUES (
       ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?,
@@ -395,11 +418,9 @@ export function upsertProductProfile(profile: Partial<ProductProfile> & { id: st
       ad_account_id = excluded.ad_account_id,
       ad_account_currency = excluded.ad_account_currency,
       page_id = excluded.page_id,
-      page_name = excluded.page_name,
       instagram_actor_id = excluded.instagram_actor_id,
       instagram_username = excluded.instagram_username,
       pixel_id = excluded.pixel_id,
-      pixel_name = excluded.pixel_name,
       conversion_event = excluded.conversion_event,
       destination_url = excluded.destination_url,
       utm_template = excluded.utm_template,
@@ -430,11 +451,9 @@ export function upsertProductProfile(profile: Partial<ProductProfile> & { id: st
     profile.adAccountId,
     profile.adAccountCurrency ?? 'USD',
     profile.pageId ?? null,
-    profile.pageName ?? null,
     profile.instagramActorId ?? null,
     profile.instagramUsername ?? null,
     profile.pixelId ?? null,
-    profile.pixelName ?? null,
     profile.conversionEvent ?? 'PURCHASE',
     profile.destinationUrl ?? null,
     profile.utmTemplate ?? null,
@@ -458,14 +477,12 @@ export function upsertProductProfile(profile: Partial<ProductProfile> & { id: st
   );
 }
 
-export function deleteProductProfile(id: string): void {
+function deleteProductProfileLocal(id: string): void {
   const db = getDb();
   db.prepare('DELETE FROM product_profiles WHERE id = ?').run(id);
 }
 
-// ── Product Campaign Links ──
-
-export function getProductCampaignLinks(profileId: string): ProductCampaignLink[] {
+function getProductCampaignLinksLocal(profileId: string): ProductCampaignLink[] {
   const db = getDb();
   const rows = db.prepare(
     'SELECT * FROM product_campaign_links WHERE product_profile_id = ? ORDER BY linked_at DESC'
@@ -473,7 +490,7 @@ export function getProductCampaignLinks(profileId: string): ProductCampaignLink[
   return rows.map(mapCampaignLinkRow);
 }
 
-export function upsertProductCampaignLink(link: Partial<ProductCampaignLink> & { id: string; productProfileId: string; campaignId: string; campaignType: string; adAccountId: string }): void {
+function upsertProductCampaignLinkLocal(link: Partial<ProductCampaignLink> & { id: string; productProfileId: string; campaignId: string; campaignType: string; adAccountId: string }): void {
   const db = getDb();
   db.prepare(`
     INSERT INTO product_campaign_links (
@@ -515,9 +532,7 @@ export function upsertProductCampaignLink(link: Partial<ProductCampaignLink> & {
   );
 }
 
-// ── Creative Tests ──
-
-export function getCreativeTests(storeId: string, status?: string): CreativeTest[] {
+function getCreativeTestsLocal(storeId: string, status?: string): CreativeTest[] {
   const db = getDb();
 
   const query = status
@@ -546,7 +561,7 @@ export function getCreativeTests(storeId: string, status?: string): CreativeTest
   });
 }
 
-export function getCreativeTest(id: string): CreativeTest | null {
+function getCreativeTestLocal(id: string): CreativeTest | null {
   const db = getDb();
   const row = db.prepare(
     'SELECT ct.*, pp.product_name FROM creative_tests ct LEFT JOIN product_profiles pp ON pp.id = ct.product_profile_id WHERE ct.id = ?'
@@ -569,7 +584,7 @@ export function getCreativeTest(id: string): CreativeTest | null {
   };
 }
 
-export function createCreativeTest(test: {
+function createCreativeTestLocal(test: {
   id: string;
   storeId: string;
   productProfileId: string;
@@ -688,7 +703,7 @@ export function createCreativeTest(test: {
   transaction();
 }
 
-export function updateCreativeTestStatus(id: string, status: string): void {
+function updateCreativeTestStatusLocal(id: string, status: string): void {
   const db = getDb();
   const completedAt = (status === 'completed' || status === 'failed') ? new Date().toISOString() : null;
   db.prepare(
@@ -696,7 +711,7 @@ export function updateCreativeTestStatus(id: string, status: string): void {
   ).run(status, completedAt, id);
 }
 
-export function updateCreativeTestItem(id: string, updates: Partial<{
+function updateCreativeTestItemLocal(id: string, updates: Partial<{
   metaAdsetId: string;
   metaAdId: string;
   metaCreativeId: string;
@@ -758,9 +773,7 @@ export function updateCreativeTestItem(id: string, updates: Partial<{
   ).run(...values);
 }
 
-// ── Copy Library ──
-
-export function getCopyLibrary(productProfileId: string): WinningCopy[] {
+function getCopyLibraryLocal(productProfileId: string): WinningCopy[] {
   const db = getDb();
   const rows = db.prepare(
     'SELECT * FROM copy_library WHERE product_profile_id = ? ORDER BY roas DESC'
@@ -768,7 +781,7 @@ export function getCopyLibrary(productProfileId: string): WinningCopy[] {
   return rows.map(mapCopyLibraryRow);
 }
 
-export function saveCopyToLibrary(copy: Partial<WinningCopy> & { id: string; productProfileId: string; primaryText: string }): void {
+function saveCopyToLibraryLocal(copy: Partial<WinningCopy> & { id: string; productProfileId: string; primaryText: string }): void {
   const db = getDb();
   db.prepare(`
     INSERT INTO copy_library (
@@ -795,14 +808,12 @@ export function saveCopyToLibrary(copy: Partial<WinningCopy> & { id: string; pro
   );
 }
 
-export function deleteCopyFromLibrary(id: string): void {
+function deleteCopyFromLibraryLocal(id: string): void {
   const db = getDb();
   db.prepare('DELETE FROM copy_library WHERE id = ?').run(id);
 }
 
-// ── Fatigue Alerts ──
-
-export function getFatigueAlerts(storeId: string): FatigueAlert[] {
+function getFatigueAlertsLocal(storeId: string): FatigueAlert[] {
   const db = getDb();
   const rows = db.prepare(`
     SELECT cfa.* FROM creative_fatigue_alerts cfa
@@ -811,4 +822,496 @@ export function getFatigueAlerts(storeId: string): FatigueAlert[] {
     ORDER BY cfa.created_at DESC
   `).all(storeId) as FatigueAlertRow[];
   return rows.map(mapFatigueAlertRow);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Exported async functions (Supabase primary, SQLite fallback) ──
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Product Profiles ──
+
+export async function getProductProfiles(storeId: string): Promise<ProductProfile[]> {
+  if (isSupabasePersistenceEnabled()) {
+    const rows = await supaRest<ProductProfileRow[]>(
+      `/product_profiles?store_id=eq.${encodeURIComponent(storeId)}&order=updated_at.desc`
+    );
+    return rows.map(mapProfileRow);
+  }
+  return getProductProfilesLocal(storeId);
+}
+
+export async function getProductProfile(id: string): Promise<ProductProfile | null> {
+  if (isSupabasePersistenceEnabled()) {
+    const rows = await supaRest<ProductProfileRow[]>(
+      `/product_profiles?id=eq.${encodeURIComponent(id)}&limit=1`
+    );
+    return rows.length > 0 ? mapProfileRow(rows[0]) : null;
+  }
+  return getProductProfileLocal(id);
+}
+
+export async function upsertProductProfile(
+  profile: Partial<ProductProfile> & { id: string; storeId: string; productName: string; adAccountId: string },
+): Promise<void> {
+  if (isSupabasePersistenceEnabled()) {
+    const now = new Date().toISOString();
+    await supaRest<ProductProfileRow[]>(
+      `/product_profiles?on_conflict=id`,
+      {
+        method: 'POST',
+        headers: { Prefer: 'return=representation,resolution=merge-duplicates' },
+        body: JSON.stringify({
+          id: profile.id,
+          store_id: profile.storeId,
+          shopify_product_id: profile.shopifyProductId ?? null,
+          product_name: profile.productName,
+          product_image: profile.productImage ?? null,
+          ad_account_id: profile.adAccountId,
+          ad_account_currency: profile.adAccountCurrency ?? 'USD',
+          page_id: profile.pageId ?? null,
+          instagram_actor_id: profile.instagramActorId ?? null,
+          instagram_username: profile.instagramUsername ?? null,
+          pixel_id: profile.pixelId ?? null,
+          conversion_event: profile.conversionEvent ?? 'PURCHASE',
+          destination_url: profile.destinationUrl ?? null,
+          utm_template: profile.utmTemplate ?? null,
+          average_order_value: profile.averageOrderValue ?? null,
+          default_budget: profile.defaultBudget ?? 20,
+          default_duration: profile.defaultDuration ?? 3,
+          default_bid_strategy: profile.defaultBidStrategy ?? 'LOWEST_COST_WITHOUT_CAP',
+          default_bid_amount: profile.defaultBidAmount ?? null,
+          default_roas_floor: profile.defaultRoasFloor ?? null,
+          default_structure: profile.defaultStructure ?? 'ABO',
+          default_launch_status: profile.defaultLaunchStatus ?? 'ACTIVE',
+          naming_template_json: profile.namingTemplate ? JSON.stringify(profile.namingTemplate) : null,
+          targeting_presets_json: profile.targetingPresets ? JSON.stringify(profile.targetingPresets) : null,
+          clickup_list_id: profile.clickupListId ?? null,
+          clickup_list_name: profile.clickupListName ?? null,
+          clickup_sync_interval: profile.clickupSyncInterval ?? 30,
+          ai_min_spend: profile.aiMinSpend ?? null,
+          ai_min_impressions: profile.aiMinImpressions ?? 500,
+          ai_min_hours: profile.aiMinHours ?? 24,
+          ai_eval_frequency: profile.aiEvalFrequency ?? 'every_6h',
+          updated_at: now,
+        }),
+      },
+    );
+    return;
+  }
+  upsertProductProfileLocal(profile);
+}
+
+export async function deleteProductProfile(id: string): Promise<void> {
+  if (isSupabasePersistenceEnabled()) {
+    await supaRest<unknown>(
+      `/product_profiles?id=eq.${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    );
+    return;
+  }
+  deleteProductProfileLocal(id);
+}
+
+// ── Product Campaign Links ──
+
+export async function getProductCampaignLinks(profileId: string): Promise<ProductCampaignLink[]> {
+  if (isSupabasePersistenceEnabled()) {
+    const rows = await supaRest<ProductCampaignLinkRow[]>(
+      `/product_campaign_links?product_profile_id=eq.${encodeURIComponent(profileId)}&order=linked_at.desc`
+    );
+    return rows.map(mapCampaignLinkRow);
+  }
+  return getProductCampaignLinksLocal(profileId);
+}
+
+export async function upsertProductCampaignLink(
+  link: Partial<ProductCampaignLink> & { id: string; productProfileId: string; campaignId: string; campaignType: string; adAccountId: string },
+): Promise<void> {
+  if (isSupabasePersistenceEnabled()) {
+    await supaRest<ProductCampaignLinkRow[]>(
+      `/product_campaign_links?on_conflict=id`,
+      {
+        method: 'POST',
+        headers: { Prefer: 'return=representation,resolution=merge-duplicates' },
+        body: JSON.stringify({
+          id: link.id,
+          product_profile_id: link.productProfileId,
+          campaign_id: link.campaignId,
+          campaign_name: link.campaignName ?? null,
+          campaign_type: link.campaignType,
+          ad_account_id: link.adAccountId,
+          page_id: link.pageId ?? null,
+          page_name: link.pageName ?? null,
+          pixel_id: link.pixelId ?? null,
+          pixel_name: link.pixelName ?? null,
+          instagram_actor_id: link.instagramActorId ?? null,
+          instagram_username: link.instagramUsername ?? null,
+          bm_id: link.bmId ?? null,
+          bm_name: link.bmName ?? null,
+          is_active: link.isActive !== false,
+        }),
+      },
+    );
+    return;
+  }
+  upsertProductCampaignLinkLocal(link);
+}
+
+// ── Creative Tests ──
+
+export async function getCreativeTests(storeId: string, status?: string): Promise<CreativeTest[]> {
+  if (isSupabasePersistenceEnabled()) {
+    // Fetch tests
+    let testPath = `/creative_tests?store_id=eq.${encodeURIComponent(storeId)}&order=created_at.desc`;
+    if (status) {
+      testPath += `&status=eq.${encodeURIComponent(status)}`;
+    }
+    const testRows = await supaRest<CreativeTestRow[]>(testPath);
+
+    if (testRows.length === 0) return [];
+
+    // Gather all test IDs for batch queries
+    const testIds = testRows.map((r) => r.id);
+    const idsFilter = `in.(${testIds.map((id) => `"${id}"`).join(',')})`;
+
+    // Fetch product profiles for product names, items, and ad copy in parallel
+    const profileIds = [...new Set(testRows.map((r) => r.product_profile_id))];
+    const profileFilter = `in.(${profileIds.map((id) => `"${id}"`).join(',')})`;
+
+    const [profileRows, itemRows, copyRows] = await Promise.all([
+      supaRest<ProductProfileRow[]>(
+        `/product_profiles?id=${profileFilter}&select=id,product_name`
+      ),
+      supaRest<CreativeTestItemRow[]>(
+        `/creative_test_items?creative_test_id=${idsFilter}&order=created_at.asc`
+      ),
+      supaRest<TestAdCopyRow[]>(
+        `/test_ad_copy?creative_test_id=${idsFilter}&order=position.asc`
+      ),
+    ]);
+
+    const profileNameMap = new Map(profileRows.map((p) => [p.id, p.product_name]));
+
+    return testRows.map((row) => {
+      const test = mapTestRow(row);
+      return {
+        ...test,
+        productName: profileNameMap.get(row.product_profile_id) ?? '',
+        items: itemRows.filter((i) => i.creative_test_id === row.id).map(mapTestItemRow),
+        adCopy: copyRows.filter((c) => c.creative_test_id === row.id).map(mapAdCopyRow),
+      };
+    });
+  }
+  return getCreativeTestsLocal(storeId, status);
+}
+
+export async function getCreativeTest(id: string): Promise<CreativeTest | null> {
+  if (isSupabasePersistenceEnabled()) {
+    const testRows = await supaRest<CreativeTestRow[]>(
+      `/creative_tests?id=eq.${encodeURIComponent(id)}&limit=1`
+    );
+    if (testRows.length === 0) return null;
+
+    const row = testRows[0];
+
+    // Fetch product name, items, and ad copy in parallel
+    const [profileRows, itemRows, copyRows] = await Promise.all([
+      supaRest<ProductProfileRow[]>(
+        `/product_profiles?id=eq.${encodeURIComponent(row.product_profile_id)}&select=id,product_name&limit=1`
+      ),
+      supaRest<CreativeTestItemRow[]>(
+        `/creative_test_items?creative_test_id=eq.${encodeURIComponent(id)}&order=created_at.asc`
+      ),
+      supaRest<TestAdCopyRow[]>(
+        `/test_ad_copy?creative_test_id=eq.${encodeURIComponent(id)}&order=position.asc`
+      ),
+    ]);
+
+    const test = mapTestRow(row);
+    return {
+      ...test,
+      productName: profileRows.length > 0 ? profileRows[0].product_name : '',
+      items: itemRows.map(mapTestItemRow),
+      adCopy: copyRows.map(mapAdCopyRow),
+    };
+  }
+  return getCreativeTestLocal(id);
+}
+
+export async function createCreativeTest(test: {
+  id: string;
+  storeId: string;
+  productProfileId: string;
+  campaignId: string;
+  campaignName?: string;
+  campaignMode: string;
+  adsetMode: string;
+  structure: string;
+  bidStrategy?: string;
+  bidAmount?: number;
+  roasFloor?: number;
+  dailyBudget?: number;
+  testDuration?: number;
+  launchStatus?: string;
+  status?: string;
+  launchedBy?: string;
+  launchedAt?: string;
+  items: Array<{
+    id: string;
+    clickupTaskId?: string;
+    clickupTaskName?: string;
+    creativeName: string;
+    creativeFormat?: string;
+    hook?: string;
+    angle?: string;
+    driveUrl?: string;
+    thumbnailUrl?: string;
+    metaAssetId?: string;
+    metaAssetType?: string;
+  }>;
+  adCopy: Array<{
+    id: string;
+    copyType: string;
+    copyText: string;
+    source?: string;
+    sourceCopyId?: string;
+    position?: number;
+  }>;
+}): Promise<void> {
+  if (isSupabasePersistenceEnabled()) {
+    // Insert the test row
+    await supaRest<CreativeTestRow[]>(
+      `/creative_tests`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          id: test.id,
+          store_id: test.storeId,
+          product_profile_id: test.productProfileId,
+          campaign_id: test.campaignId,
+          campaign_name: test.campaignName ?? null,
+          campaign_mode: test.campaignMode,
+          adset_mode: test.adsetMode,
+          structure: test.structure,
+          bid_strategy: test.bidStrategy ?? null,
+          bid_amount: test.bidAmount ?? null,
+          roas_floor: test.roasFloor ?? null,
+          daily_budget: test.dailyBudget ?? null,
+          test_duration: test.testDuration ?? null,
+          launch_status: test.launchStatus ?? null,
+          status: test.status ?? 'launching',
+          launched_by: test.launchedBy ?? null,
+          launched_at: test.launchedAt ?? null,
+        }),
+      },
+    );
+
+    // Insert items and ad copy in parallel
+    const itemsPromise = test.items.length > 0
+      ? supaRest<CreativeTestItemRow[]>(
+          `/creative_test_items`,
+          {
+            method: 'POST',
+            body: JSON.stringify(
+              test.items.map((item) => ({
+                id: item.id,
+                creative_test_id: test.id,
+                clickup_task_id: item.clickupTaskId ?? null,
+                clickup_task_name: item.clickupTaskName ?? null,
+                creative_name: item.creativeName,
+                creative_format: item.creativeFormat ?? null,
+                hook: item.hook ?? null,
+                angle: item.angle ?? null,
+                drive_url: item.driveUrl ?? null,
+                thumbnail_url: item.thumbnailUrl ?? null,
+                meta_asset_id: item.metaAssetId ?? null,
+                meta_asset_type: item.metaAssetType ?? null,
+              })),
+            ),
+          },
+        )
+      : Promise.resolve([]);
+
+    const copyPromise = test.adCopy.length > 0
+      ? supaRest<TestAdCopyRow[]>(
+          `/test_ad_copy`,
+          {
+            method: 'POST',
+            body: JSON.stringify(
+              test.adCopy.map((copy) => ({
+                id: copy.id,
+                creative_test_id: test.id,
+                copy_type: copy.copyType,
+                copy_text: copy.copyText,
+                source: copy.source ?? null,
+                source_copy_id: copy.sourceCopyId ?? null,
+                position: copy.position ?? 0,
+              })),
+            ),
+          },
+        )
+      : Promise.resolve([]);
+
+    await Promise.all([itemsPromise, copyPromise]);
+    return;
+  }
+  createCreativeTestLocal(test);
+}
+
+export async function updateCreativeTestStatus(id: string, status: string): Promise<void> {
+  if (isSupabasePersistenceEnabled()) {
+    const patch: Record<string, unknown> = { status };
+    if (status === 'completed' || status === 'failed') {
+      patch.completed_at = new Date().toISOString();
+    }
+    await supaRest<CreativeTestRow[]>(
+      `/creative_tests?id=eq.${encodeURIComponent(id)}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      },
+    );
+    return;
+  }
+  updateCreativeTestStatusLocal(id, status);
+}
+
+export async function updateCreativeTestItem(id: string, updates: Partial<{
+  metaAdsetId: string;
+  metaAdId: string;
+  metaCreativeId: string;
+  uploadStatus: string;
+  launchStatus: string;
+  reviewStatus: string;
+  reviewFeedback: string;
+  learningPhase: string;
+  testStatus: string;
+  spend: number;
+  revenue: number;
+  roas: number;
+  cpa: number;
+  ctr: number;
+  purchases: number;
+  impressions: number;
+  aiRecommendation: string;
+  aiReasoning: string;
+}>): Promise<void> {
+  if (isSupabasePersistenceEnabled()) {
+    const fieldMap: Record<string, string> = {
+      metaAdsetId: 'meta_adset_id',
+      metaAdId: 'meta_ad_id',
+      metaCreativeId: 'meta_creative_id',
+      uploadStatus: 'upload_status',
+      launchStatus: 'launch_status',
+      reviewStatus: 'review_status',
+      reviewFeedback: 'review_feedback',
+      learningPhase: 'learning_phase',
+      testStatus: 'test_status',
+      spend: 'spend',
+      revenue: 'revenue',
+      roas: 'roas',
+      cpa: 'cpa',
+      ctr: 'ctr',
+      purchases: 'purchases',
+      impressions: 'impressions',
+      aiRecommendation: 'ai_recommendation',
+      aiReasoning: 'ai_reasoning',
+    };
+
+    const patch: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(updates)) {
+      const column = fieldMap[key];
+      if (column && value !== undefined) {
+        patch[column] = value;
+      }
+    }
+
+    if (Object.keys(patch).length === 0) return;
+
+    await supaRest<CreativeTestItemRow[]>(
+      `/creative_test_items?id=eq.${encodeURIComponent(id)}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      },
+    );
+    return;
+  }
+  updateCreativeTestItemLocal(id, updates);
+}
+
+// ── Copy Library ──
+
+export async function getCopyLibrary(productProfileId: string): Promise<WinningCopy[]> {
+  if (isSupabasePersistenceEnabled()) {
+    const rows = await supaRest<CopyLibraryRow[]>(
+      `/copy_library?product_profile_id=eq.${encodeURIComponent(productProfileId)}&order=roas.desc.nullslast`
+    );
+    return rows.map(mapCopyLibraryRow);
+  }
+  return getCopyLibraryLocal(productProfileId);
+}
+
+export async function saveCopyToLibrary(
+  copy: Partial<WinningCopy> & { id: string; productProfileId: string; primaryText: string },
+): Promise<void> {
+  if (isSupabasePersistenceEnabled()) {
+    await supaRest<CopyLibraryRow[]>(
+      `/copy_library`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          id: copy.id,
+          product_profile_id: copy.productProfileId,
+          primary_text: copy.primaryText,
+          headline: copy.headline ?? null,
+          description: copy.description ?? null,
+          cta: copy.cta ?? null,
+          source_ad_id: copy.sourceAdId ?? null,
+          source_test_id: copy.sourceTestId ?? null,
+          roas: copy.roas ?? null,
+          cpa: copy.cpa ?? null,
+          ctr: copy.ctr ?? null,
+          total_spend: copy.totalSpend ?? null,
+          total_revenue: copy.totalRevenue ?? null,
+          total_purchases: copy.totalPurchases ?? null,
+          is_ai_generated: copy.isAiGenerated ?? false,
+        }),
+      },
+    );
+    return;
+  }
+  saveCopyToLibraryLocal(copy);
+}
+
+export async function deleteCopyFromLibrary(id: string): Promise<void> {
+  if (isSupabasePersistenceEnabled()) {
+    await supaRest<unknown>(
+      `/copy_library?id=eq.${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    );
+    return;
+  }
+  deleteCopyFromLibraryLocal(id);
+}
+
+// ── Fatigue Alerts ──
+
+export async function getFatigueAlerts(storeId: string): Promise<FatigueAlert[]> {
+  if (isSupabasePersistenceEnabled()) {
+    // First get product profile IDs for this store
+    const profiles = await supaRest<{ id: string }[]>(
+      `/product_profiles?store_id=eq.${encodeURIComponent(storeId)}&select=id`
+    );
+    if (profiles.length === 0) return [];
+
+    const profileIds = profiles.map((p) => p.id);
+    const profileFilter = `in.(${profileIds.map((id) => `"${id}"`).join(',')})`;
+
+    const rows = await supaRest<FatigueAlertRow[]>(
+      `/creative_fatigue_alerts?product_profile_id=${profileFilter}&status=eq.active&order=created_at.desc`
+    );
+    return rows.map(mapFatigueAlertRow);
+  }
+  return getFatigueAlertsLocal(storeId);
 }

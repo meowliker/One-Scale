@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
   }
 
   // Verify at least one profile has a ClickUp list
-  const profiles = getProductProfiles(storeId);
+  const profiles = await getProductProfiles(storeId);
   const hasClickupList = profiles.some((p) => p.clickupListId);
   if (!hasClickupList) {
     return NextResponse.json(

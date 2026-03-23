@@ -541,12 +541,12 @@ export async function POST(request: NextRequest) {
     }
 
     // 5. Save matches as product profiles
-    const existingProfiles = getProductProfiles(storeId);
+    const existingProfiles = await getProductProfiles(storeId);
     const existingByShopifyId = new Map(
       existingProfiles.filter((p) => p.shopifyProductId).map((p) => [p.shopifyProductId!, p])
     );
 
-    const savedProfiles: Array<ReturnType<typeof getProductProfiles>[0] & { campaignLinks: unknown[] }> = [];
+    const savedProfiles: Array<Awaited<ReturnType<typeof getProductProfiles>>[0] & { campaignLinks: unknown[] }> = [];
 
     for (const [, match] of matchesByHandle) {
       const shopifyId = String(match.shopifyProduct.id);
@@ -572,7 +572,7 @@ export async function POST(request: NextRequest) {
           || (!existingProfile.pageName && profilePageName)
           || (!existingProfile.pixelName && profilePixelName);
         if (needsMetaUpdate) {
-          upsertProductProfile({
+          await upsertProductProfile({
             id: profileId,
             storeId,
             productName: existingProfile.productName,
@@ -588,7 +588,7 @@ export async function POST(request: NextRequest) {
       } else {
         profileId = randomUUID();
         const productImage = match.shopifyProduct.image?.src ?? match.shopifyProduct.images?.[0]?.src;
-        upsertProductProfile({
+        await upsertProductProfile({
           id: profileId,
           storeId,
           shopifyProductId: shopifyId,
@@ -622,7 +622,7 @@ export async function POST(request: NextRequest) {
         const linkPixelName = linkPixelId ? pixelNameMap.get(linkPixelId) : undefined;
         const linkIgUsername = linkIgId ? igUsernameMap.get(linkIgId) : undefined;
 
-        upsertProductCampaignLink({
+        await upsertProductCampaignLink({
           id: linkId,
           productProfileId: profileId,
           campaignId: camp.campaignId,
