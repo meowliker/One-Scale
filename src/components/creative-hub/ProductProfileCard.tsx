@@ -20,6 +20,7 @@ import {
   LayoutGrid,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useStoreStore } from '@/stores/storeStore';
 import type { ProductProfile, ProductCampaignLink, CampaignLinkType } from '@/types/creativeHub';
 
 interface ProductProfileCardProps {
@@ -85,6 +86,11 @@ export function ProductProfileCard({
   onViewCopyLibrary,
 }: ProductProfileCardProps) {
   const [campaignsExpanded, setCampaignsExpanded] = useState(true);
+  const { stores, activeStoreId } = useStoreStore();
+  const activeStore = stores.find(s => s.id === activeStoreId);
+  const adAccountName = activeStore?.adAccounts?.find(
+    a => a.id === profile.adAccountId || a.accountId === profile.adAccountId
+  )?.name;
 
   // Aggregate metadata from campaign links, fall back to profile-level data
   const pages = collectUnique(linkedCampaigns, 'pageId', 'pageName');
@@ -92,22 +98,23 @@ export function ProductProfileCard({
   const instagrams = collectUnique(linkedCampaigns, 'instagramActorId', 'instagramUsername');
   const bms = collectUnique(linkedCampaigns, 'bmId', 'bmName');
 
-  // Fall back to profile-level IDs when no campaign links have metadata
+  // Fall back to profile-level names, then IDs
   const pageDisplay = pages.length > 0
     ? formatAggregated(pages, 'pages')
-    : { display: profile.pageId || 'Not set' };
+    : { display: profile.pageName || profile.pageId || 'Not set' };
 
   const pixelDisplay = pixels.length > 0
     ? formatAggregated(pixels, 'pixels')
-    : { display: profile.pixelId || 'Not set' };
+    : { display: profile.pixelName || profile.pixelId || 'Not set' };
 
+  // Only show IG items that have a real username (not raw numeric IDs)
   const igItems = instagrams.length > 0
-    ? instagrams.map((i) => ({ ...i, name: i.name.startsWith('@') ? i.name : `@${i.name}` }))
+    ? instagrams
+        .filter((i) => i.name && !/^\d+$/.test(i.name)) // skip raw numeric IDs
+        .map((i) => ({ ...i, name: i.name.startsWith('@') ? i.name : `@${i.name}` }))
     : profile.instagramUsername
       ? [{ id: profile.instagramActorId || '', name: `@${profile.instagramUsername}` }]
-      : profile.instagramActorId
-        ? [{ id: profile.instagramActorId, name: profile.instagramActorId }]
-        : [];
+      : [];
   const igDisplay = igItems.length > 0
     ? formatAggregated(igItems, 'accounts')
     : { display: 'Not set' };
@@ -180,10 +187,13 @@ export function ProductProfileCard({
             icon={<DollarSign className="h-3.5 w-3.5" />}
             label="Ad Account"
             value={
-              profile.adAccountId
-                ? `${profile.adAccountId} (${profile.adAccountCurrency})`
-                : 'Not set'
+              adAccountName
+                ? `${adAccountName} (${profile.adAccountCurrency})`
+                : profile.adAccountId
+                  ? `${profile.adAccountId} (${profile.adAccountCurrency})`
+                  : 'Not set'
             }
+            tooltip={profile.adAccountId}
             muted={!profile.adAccountId}
           />
           <InfoRow
