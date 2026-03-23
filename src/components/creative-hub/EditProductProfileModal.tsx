@@ -9,7 +9,6 @@ import {
   Settings,
   Package,
   Globe,
-  FlaskConical,
   Brain,
   Target,
   Tag,
@@ -26,7 +25,6 @@ import { useCreativeHubStore } from '@/stores/creativeHubStore';
 import { useStoreStore } from '@/stores/storeStore';
 import type {
   ProductProfile,
-  BidStrategy,
   NamingTemplate,
   TargetingPreset,
   ProductCampaignLink,
@@ -42,32 +40,26 @@ interface EditProductProfileModalProps {
 
 type Section =
   | 'meta'
-  | 'product'
+  | 'clickup'
   | 'destination'
-  | 'testDefaults'
+  | 'product'
   | 'aiKill'
   | 'targeting'
   | 'naming'
-  | 'campaigns'
-  | 'clickup';
+  | 'campaigns';
 
-const bidStrategyLabels: Record<BidStrategy, string> = {
-  LOWEST_COST_WITHOUT_CAP: 'Lowest Cost (No Cap)',
-  COST_CAP: 'Cost Cap',
-  LOWEST_COST_WITH_BID_CAP: 'Bid Cap',
-  LOWEST_COST_WITH_MIN_ROAS: 'Min ROAS',
-};
+const DEFAULT_UTM_TEMPLATE =
+  'utm_source=FbAds&utm_medium={{adset.name}}&utm_campaign={{campaign.name}}&utm_content={{ad.name}}&campaign_id={{campaign.id}}&adset_id={{adset.id}}&ad_id={{ad.id}}';
 
 const sectionConfig: { id: Section; label: string; Icon: typeof Settings }[] = [
   { id: 'meta', label: 'Meta Configuration', Icon: Settings },
+  { id: 'clickup', label: 'ClickUp Integration', Icon: LayoutGrid },
+  { id: 'destination', label: 'Destination & UTM', Icon: Globe },
   { id: 'product', label: 'Product Info', Icon: Package },
-  { id: 'destination', label: 'Destination', Icon: Globe },
-  { id: 'testDefaults', label: 'Test Defaults', Icon: FlaskConical },
   { id: 'aiKill', label: 'AI Kill Thresholds', Icon: Brain },
   { id: 'targeting', label: 'Targeting Presets', Icon: Target },
   { id: 'naming', label: 'Naming Template', Icon: Tag },
   { id: 'campaigns', label: 'Linked Campaigns', Icon: Link2 },
-  { id: 'clickup', label: 'ClickUp Integration', Icon: LayoutGrid },
 ];
 
 function getDefaults(): Partial<ProductProfile> {
@@ -77,6 +69,7 @@ function getDefaults(): Partial<ProductProfile> {
     adAccountCurrency: 'USD',
     pageId: '',
     instagramActorId: '',
+    instagramUsername: '',
     pixelId: '',
     conversionEvent: 'PURCHASE',
     destinationUrl: '',
@@ -96,6 +89,7 @@ function getDefaults(): Partial<ProductProfile> {
     namingTemplate: { campaign: '{product}_{type}_{date}', adset: '{targeting}_{budget}', ad: '{creative}_{hook}' },
     targetingPresets: [],
     clickupListId: '',
+    clickupListName: '',
     clickupSyncInterval: 60,
   };
 }
@@ -115,9 +109,21 @@ export function EditProductProfileModal({
   const [form, setForm] = useState<Partial<ProductProfile>>(getDefaults());
   const [saving, setSaving] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Set<Section>>(
-    new Set(['meta', 'product', 'destination', 'testDefaults'])
+    new Set(['meta', 'clickup', 'destination'])
   );
   const [newPresetName, setNewPresetName] = useState('');
+
+  // Meta setup options state
+  const [setupOptions, setSetupOptions] = useState<{
+    pages: Array<{ id: string; name: string; instagramAccountId?: string; instagramUsername?: string }>;
+    pixels: Array<{ id: string; name: string }>;
+    instagramAccounts: Array<{ id: string; username: string }>;
+  } | null>(null);
+  const [optionsLoading, setOptionsLoading] = useState(false);
+
+  // ClickUp lists state
+  const [clickupLists, setClickupLists] = useState<Array<{ id: string; name: string }>>([]);
+  const [clickupLoading, setClickupLoading] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -126,9 +132,36 @@ export function EditProductProfileModal({
       } else {
         setForm(getDefaults());
       }
-      setExpandedSections(new Set(['meta', 'product', 'destination', 'testDefaults']));
+      setExpandedSections(new Set(['meta', 'clickup', 'destination']));
     }
   }, [isOpen, profile]);
+
+  // Fetch Meta setup options and ClickUp lists when modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+
+    // Fetch Meta setup options
+    if (form.adAccountId) {
+      setOptionsLoading(true);
+      fetch(`/api/meta/campaign-setup/options?storeId=${storeId}&accountId=${form.adAccountId}`)
+        .then((r) => r.json())
+        .then((data) => setSetupOptions(data))
+        .catch(() => {})
+        .finally(() => setOptionsLoading(false));
+    }
+
+    // Fetch ClickUp lists
+    setClickupLoading(true);
+    fetch(`/api/integrations/clickup/list-mappings?storeId=${storeId}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.connected && data.lists) {
+          setClickupLists(data.lists.map((l: Record<string, unknown>) => ({ id: l.id as string, name: l.name as string })));
+        }
+      })
+      .catch(() => {})
+      .finally(() => setClickupLoading(false));
+  }, [isOpen, form.adAccountId, storeId]);
 
   const handleEscape = useCallback(
     (e: KeyboardEvent) => {
@@ -200,17 +233,39 @@ export function EditProductProfileModal({
         storeId: profile?.storeId ?? storeId,
         id: profile?.id,
       } as Partial<ProductProfile> & { storeId: string });
+
+      // Bidirectional ClickUp list mapping save
+      // For existing profiles, use profile.id; for new ones, find by name in the updated store
+      const profileId = profile?.id ??
+        useCreativeHubStore.getState().profiles.find(
+          (p) => p.storeId === storeId && p.productName === form.productName?.trim()
+        )?.id;
+
+      if (form.clickupListId && profileId) {
+        fetch('/api/integrations/clickup/list-mappings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            storeId,
+            listId: form.clickupListId,
+            productId: profileId,
+            productName: form.productName,
+          }),
+        }).catch(() => {});
+      }
+
       onClose();
     } catch {
-      // Error toast handled by store in Task 16
+      // Error toast handled by store
     } finally {
       setSaving(false);
     }
   };
 
   const isNew = !profile;
-  const showBidAmount = form.defaultBidStrategy === 'COST_CAP' || form.defaultBidStrategy === 'LOWEST_COST_WITH_BID_CAP';
-  const showRoasFloor = form.defaultBidStrategy === 'LOWEST_COST_WITH_MIN_ROAS';
+  const selectCls =
+    'w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary';
+  const inputCls = selectCls;
 
   return createPortal(
     <div className="fixed inset-0 z-[60] flex items-center justify-center">
@@ -226,7 +281,7 @@ export function EditProductProfileModal({
               {isNew ? 'New Product Profile' : 'Edit Product Profile'}
             </h2>
             <p className="text-xs text-text-secondary mt-0.5">
-              {isNew ? 'Configure a new product for creative testing' : form.productName}
+              {isNew ? 'Configure once, launch many times' : form.productName}
             </p>
           </div>
           <button
@@ -271,7 +326,7 @@ export function EditProductProfileModal({
                                   updateField('adAccountCurrency', selected.currency);
                                 }
                               }}
-                              className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                              className={selectCls}
                             >
                               <option value="">Select an ad account...</option>
                               {adAccounts.map((account) => (
@@ -286,7 +341,7 @@ export function EditProductProfileModal({
                               value={form.adAccountId ?? ''}
                               onChange={(e) => updateField('adAccountId', e.target.value)}
                               placeholder="act_123456789"
-                              className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                              className={inputCls}
                             />
                           )}
                         </FormField>
@@ -294,7 +349,7 @@ export function EditProductProfileModal({
                           <select
                             value={form.adAccountCurrency ?? 'USD'}
                             onChange={(e) => updateField('adAccountCurrency', e.target.value)}
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            className={selectCls}
                           >
                             <option value="USD">USD</option>
                             <option value="EUR">EUR</option>
@@ -303,38 +358,108 @@ export function EditProductProfileModal({
                             <option value="AUD">AUD</option>
                           </select>
                         </FormField>
-                        <FormField label="Facebook Page ID">
-                          <input
-                            type="text"
-                            value={form.pageId ?? ''}
-                            onChange={(e) => updateField('pageId', e.target.value)}
-                            placeholder="Page ID"
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                          />
+
+                        {/* Facebook Page — dropdown with names */}
+                        <FormField label="Facebook Page">
+                          {optionsLoading ? (
+                            <p className="text-xs text-text-secondary py-2">Loading pages...</p>
+                          ) : (setupOptions?.pages || []).length > 0 ? (
+                            <select
+                              value={form.pageId ?? ''}
+                              onChange={(e) => {
+                                updateField('pageId', e.target.value);
+                                const page = (setupOptions?.pages || []).find((p) => p.id === e.target.value);
+                                // Auto-link Instagram when page has instagramAccountId
+                                if (page?.instagramAccountId) {
+                                  updateField('instagramActorId', page.instagramAccountId);
+                                  updateField('instagramUsername', page.instagramUsername ?? '');
+                                }
+                              }}
+                              className={selectCls}
+                            >
+                              <option value="">Select a page...</option>
+                              {(setupOptions?.pages || []).map((page) => (
+                                <option key={page.id} value={page.id}>
+                                  {page.name}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              type="text"
+                              value={form.pageId ?? ''}
+                              onChange={(e) => updateField('pageId', e.target.value)}
+                              placeholder="Page ID"
+                              className={inputCls}
+                            />
+                          )}
                         </FormField>
-                        <FormField label="Instagram Actor ID">
-                          <input
-                            type="text"
-                            value={form.instagramActorId ?? ''}
-                            onChange={(e) => updateField('instagramActorId', e.target.value)}
-                            placeholder="Instagram actor ID"
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                          />
+
+                        {/* Instagram — dropdown with @usernames */}
+                        <FormField label="Instagram Account">
+                          {optionsLoading ? (
+                            <p className="text-xs text-text-secondary py-2">Loading...</p>
+                          ) : (setupOptions?.instagramAccounts || []).length > 0 ? (
+                            <select
+                              value={form.instagramActorId ?? ''}
+                              onChange={(e) => {
+                                updateField('instagramActorId', e.target.value);
+                                const ig = (setupOptions?.instagramAccounts || []).find((i) => i.id === e.target.value);
+                                updateField('instagramUsername', ig?.username ?? '');
+                              }}
+                              className={selectCls}
+                            >
+                              <option value="">No Instagram actor</option>
+                              {(setupOptions?.instagramAccounts || []).map((ig) => (
+                                <option key={ig.id} value={ig.id}>
+                                  @{ig.username}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              type="text"
+                              value={form.instagramActorId ?? ''}
+                              onChange={(e) => updateField('instagramActorId', e.target.value)}
+                              placeholder="Instagram actor ID"
+                              className={inputCls}
+                            />
+                          )}
                         </FormField>
-                        <FormField label="Pixel ID">
-                          <input
-                            type="text"
-                            value={form.pixelId ?? ''}
-                            onChange={(e) => updateField('pixelId', e.target.value)}
-                            placeholder="Pixel ID"
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                          />
+
+                        {/* Pixel — dropdown with names */}
+                        <FormField label="Pixel">
+                          {optionsLoading ? (
+                            <p className="text-xs text-text-secondary py-2">Loading pixels...</p>
+                          ) : (setupOptions?.pixels || []).length > 0 ? (
+                            <select
+                              value={form.pixelId ?? ''}
+                              onChange={(e) => updateField('pixelId', e.target.value)}
+                              className={selectCls}
+                            >
+                              <option value="">Select a pixel...</option>
+                              {(setupOptions?.pixels || []).map((pixel) => (
+                                <option key={pixel.id} value={pixel.id}>
+                                  {pixel.name}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              type="text"
+                              value={form.pixelId ?? ''}
+                              onChange={(e) => updateField('pixelId', e.target.value)}
+                              placeholder="Pixel ID"
+                              className={inputCls}
+                            />
+                          )}
                         </FormField>
+
                         <FormField label="Conversion Event">
                           <select
                             value={form.conversionEvent ?? 'PURCHASE'}
                             onChange={(e) => updateField('conversionEvent', e.target.value)}
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            className={selectCls}
                           >
                             <option value="PURCHASE">Purchase</option>
                             <option value="ADD_TO_CART">Add to Cart</option>
@@ -347,6 +472,85 @@ export function EditProductProfileModal({
                       </div>
                     )}
 
+                    {id === 'clickup' && (
+                      <div className="grid grid-cols-2 gap-4">
+                        <FormField label="ClickUp List">
+                          {clickupLoading ? (
+                            <p className="text-xs text-text-secondary py-2">Loading lists...</p>
+                          ) : clickupLists.length > 0 ? (
+                            <select
+                              value={form.clickupListId ?? ''}
+                              onChange={(e) => {
+                                const list = clickupLists.find((l) => l.id === e.target.value);
+                                updateField('clickupListId', e.target.value);
+                                updateField('clickupListName', list?.name ?? '');
+                              }}
+                              className={selectCls}
+                            >
+                              <option value="">Select a list...</option>
+                              {clickupLists.map((list) => (
+                                <option key={list.id} value={list.id}>
+                                  {list.name}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <p className="text-xs text-text-secondary py-2">
+                              No ClickUp lists available. Connect ClickUp in Settings &rarr; Integrations.
+                            </p>
+                          )}
+                        </FormField>
+                        <FormField label="Sync Interval (minutes)">
+                          <select
+                            value={form.clickupSyncInterval ?? 60}
+                            onChange={(e) => updateField('clickupSyncInterval', Number(e.target.value))}
+                            className={selectCls}
+                          >
+                            <option value={15}>Every 15 min</option>
+                            <option value={30}>Every 30 min</option>
+                            <option value={60}>Every 1 hour</option>
+                            <option value={360}>Every 6 hours</option>
+                            <option value={1440}>Daily</option>
+                          </select>
+                        </FormField>
+                      </div>
+                    )}
+
+                    {id === 'destination' && (
+                      <div className="grid grid-cols-1 gap-4">
+                        <FormField label="Destination URL">
+                          <input
+                            type="url"
+                            value={form.destinationUrl ?? ''}
+                            onChange={(e) => updateField('destinationUrl', e.target.value)}
+                            placeholder="https://yourstore.com/products/..."
+                            className={inputCls}
+                          />
+                        </FormField>
+                        <FormField label="UTM Template">
+                          <input
+                            type="text"
+                            value={form.utmTemplate || ''}
+                            onChange={(e) => updateField('utmTemplate', e.target.value)}
+                            placeholder={DEFAULT_UTM_TEMPLATE}
+                            className={inputCls}
+                          />
+                          {!form.utmTemplate && (
+                            <button
+                              type="button"
+                              onClick={() => updateField('utmTemplate', DEFAULT_UTM_TEMPLATE)}
+                              className="text-[11px] text-blue-600 hover:underline mt-1"
+                            >
+                              Use default UTM template
+                            </button>
+                          )}
+                          <p className="text-[11px] text-text-dimmed mt-1">
+                            Available tokens: {'{{campaign.name}}'}, {'{{adset.name}}'}, {'{{ad.name}}'}, {'{{campaign.id}}'}, {'{{adset.id}}'}, {'{{ad.id}}'}
+                          </p>
+                        </FormField>
+                      </div>
+                    )}
+
                     {id === 'product' && (
                       <div className="grid grid-cols-2 gap-4">
                         <FormField label="Product Name" required>
@@ -355,7 +559,7 @@ export function EditProductProfileModal({
                             value={form.productName ?? ''}
                             onChange={(e) => updateField('productName', e.target.value)}
                             placeholder="e.g. Premium Moisturizer"
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            className={inputCls}
                           />
                         </FormField>
                         <FormField label="Average Order Value">
@@ -370,7 +574,7 @@ export function EditProductProfileModal({
                                 updateField('averageOrderValue', e.target.value ? Number(e.target.value) : undefined)
                               }
                               placeholder="0.00"
-                              className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 pl-7 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                              className={cn(inputCls, 'pl-7')}
                             />
                           </div>
                         </FormField>
@@ -380,151 +584,9 @@ export function EditProductProfileModal({
                             value={form.productImage ?? ''}
                             onChange={(e) => updateField('productImage', e.target.value)}
                             placeholder="https://..."
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            className={inputCls}
                           />
                         </FormField>
-                      </div>
-                    )}
-
-                    {id === 'destination' && (
-                      <div className="grid grid-cols-1 gap-4">
-                        <FormField label="Destination URL">
-                          <input
-                            type="url"
-                            value={form.destinationUrl ?? ''}
-                            onChange={(e) => updateField('destinationUrl', e.target.value)}
-                            placeholder="https://yourstore.com/products/..."
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                          />
-                        </FormField>
-                        <FormField label="UTM Template">
-                          <input
-                            type="text"
-                            value={form.utmTemplate ?? ''}
-                            onChange={(e) => updateField('utmTemplate', e.target.value)}
-                            placeholder="utm_source=meta&utm_medium=paid&utm_campaign={campaign_name}"
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                          />
-                          <p className="text-[11px] text-text-dimmed mt-1">
-                            Available tokens: {'{campaign_name}'}, {'{adset_name}'}, {'{ad_name}'}, {'{product}'}
-                          </p>
-                        </FormField>
-                      </div>
-                    )}
-
-                    {id === 'testDefaults' && (
-                      <div className="space-y-4">
-                        {/* Structure toggle */}
-                        <div className="flex items-center gap-3">
-                          <span className="text-sm text-text-secondary w-24">Structure:</span>
-                          <div className="inline-flex rounded-lg border border-border overflow-hidden">
-                            {(['ABO', 'CBO'] as const).map((s) => (
-                              <button
-                                key={s}
-                                onClick={() => updateField('defaultStructure', s)}
-                                className={cn(
-                                  'px-4 py-1.5 text-sm font-medium transition-colors',
-                                  form.defaultStructure === s
-                                    ? 'bg-blue-600 text-white'
-                                    : 'bg-white text-text-secondary hover:bg-surface-hover'
-                                )}
-                              >
-                                {s}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-4">
-                          <FormField label={`Daily Budget (${form.adAccountCurrency ?? 'USD'})`}>
-                            <input
-                              type="number"
-                              min={1}
-                              value={form.defaultBudget ?? 20}
-                              onChange={(e) => updateField('defaultBudget', Number(e.target.value))}
-                              className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                            />
-                          </FormField>
-                          <FormField label="Test Duration (days)">
-                            <input
-                              type="number"
-                              min={1}
-                              max={30}
-                              value={form.defaultDuration ?? 3}
-                              onChange={(e) => updateField('defaultDuration', Number(e.target.value))}
-                              className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                            />
-                          </FormField>
-                        </div>
-
-                        <FormField label="Bid Strategy">
-                          <select
-                            value={form.defaultBidStrategy ?? 'LOWEST_COST_WITHOUT_CAP'}
-                            onChange={(e) => updateField('defaultBidStrategy', e.target.value as BidStrategy)}
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                          >
-                            {Object.entries(bidStrategyLabels).map(([value, label]) => (
-                              <option key={value} value={value}>
-                                {label}
-                              </option>
-                            ))}
-                          </select>
-                        </FormField>
-
-                        {showBidAmount && (
-                          <FormField label={`Bid Amount (${form.adAccountCurrency ?? 'USD'})`}>
-                            <input
-                              type="number"
-                              min={0}
-                              step={0.01}
-                              value={form.defaultBidAmount ?? ''}
-                              onChange={(e) =>
-                                updateField('defaultBidAmount', e.target.value ? Number(e.target.value) : undefined)
-                              }
-                              placeholder="0.00"
-                              className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                            />
-                          </FormField>
-                        )}
-
-                        {showRoasFloor && (
-                          <FormField label="Min ROAS Floor">
-                            <input
-                              type="number"
-                              min={0}
-                              step={0.1}
-                              value={form.defaultRoasFloor ?? ''}
-                              onChange={(e) =>
-                                updateField('defaultRoasFloor', e.target.value ? Number(e.target.value) : undefined)
-                              }
-                              placeholder="e.g. 2.0"
-                              className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                            />
-                          </FormField>
-                        )}
-
-                        {/* Launch status */}
-                        <div className="flex items-center gap-3">
-                          <span className="text-sm text-text-secondary w-24">Launch as:</span>
-                          <div className="inline-flex rounded-lg border border-border overflow-hidden">
-                            {(['PAUSED', 'ACTIVE'] as const).map((s) => (
-                              <button
-                                key={s}
-                                onClick={() => updateField('defaultLaunchStatus', s)}
-                                className={cn(
-                                  'px-4 py-1.5 text-sm font-medium transition-colors',
-                                  form.defaultLaunchStatus === s
-                                    ? s === 'ACTIVE'
-                                      ? 'bg-emerald-600 text-white'
-                                      : 'bg-gray-600 text-white'
-                                    : 'bg-white text-text-secondary hover:bg-surface-hover'
-                                )}
-                              >
-                                {s === 'PAUSED' ? 'Paused' : 'Active'}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
                       </div>
                     )}
 
@@ -540,7 +602,7 @@ export function EditProductProfileModal({
                               updateField('aiMinSpend', e.target.value ? Number(e.target.value) : undefined)
                             }
                             placeholder="e.g. 30"
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            className={inputCls}
                           />
                         </FormField>
                         <FormField label="Min Impressions">
@@ -549,7 +611,7 @@ export function EditProductProfileModal({
                             min={0}
                             value={form.aiMinImpressions ?? 100}
                             onChange={(e) => updateField('aiMinImpressions', Number(e.target.value))}
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            className={inputCls}
                           />
                         </FormField>
                         <FormField label="Min Hours Before Eval">
@@ -558,14 +620,14 @@ export function EditProductProfileModal({
                             min={1}
                             value={form.aiMinHours ?? 24}
                             onChange={(e) => updateField('aiMinHours', Number(e.target.value))}
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            className={inputCls}
                           />
                         </FormField>
                         <FormField label="Evaluation Frequency">
                           <select
                             value={form.aiEvalFrequency ?? '6h'}
                             onChange={(e) => updateField('aiEvalFrequency', e.target.value)}
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            className={selectCls}
                           >
                             <option value="1h">Every 1 hour</option>
                             <option value="3h">Every 3 hours</option>
@@ -604,7 +666,7 @@ export function EditProductProfileModal({
                             onChange={(e) => setNewPresetName(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && addTargetingPreset()}
                             placeholder="New preset name..."
-                            className="flex-1 rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            className={cn(inputCls, 'flex-1')}
                           />
                           <button
                             onClick={addTargetingPreset}
@@ -631,7 +693,7 @@ export function EditProductProfileModal({
                             value={form.namingTemplate?.campaign ?? ''}
                             onChange={(e) => updateNamingTemplate('campaign', e.target.value)}
                             placeholder="{product}_{type}_{date}"
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            className={inputCls}
                           />
                         </FormField>
                         <FormField label="Adset Pattern">
@@ -640,7 +702,7 @@ export function EditProductProfileModal({
                             value={form.namingTemplate?.adset ?? ''}
                             onChange={(e) => updateNamingTemplate('adset', e.target.value)}
                             placeholder="{targeting}_{budget}"
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            className={inputCls}
                           />
                         </FormField>
                         <FormField label="Ad Pattern">
@@ -649,7 +711,7 @@ export function EditProductProfileModal({
                             value={form.namingTemplate?.ad ?? ''}
                             onChange={(e) => updateNamingTemplate('ad', e.target.value)}
                             placeholder="{creative}_{hook}"
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            className={inputCls}
                           />
                         </FormField>
                         {/* Preview */}
@@ -707,33 +769,6 @@ export function EditProductProfileModal({
                             </button>
                           </div>
                         ))}
-                      </div>
-                    )}
-
-                    {id === 'clickup' && (
-                      <div className="grid grid-cols-2 gap-4">
-                        <FormField label="ClickUp List ID">
-                          <input
-                            type="text"
-                            value={form.clickupListId ?? ''}
-                            onChange={(e) => updateField('clickupListId', e.target.value)}
-                            placeholder="List ID"
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                          />
-                        </FormField>
-                        <FormField label="Sync Interval (minutes)">
-                          <select
-                            value={form.clickupSyncInterval ?? 60}
-                            onChange={(e) => updateField('clickupSyncInterval', Number(e.target.value))}
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                          >
-                            <option value={15}>Every 15 min</option>
-                            <option value={30}>Every 30 min</option>
-                            <option value={60}>Every 1 hour</option>
-                            <option value={360}>Every 6 hours</option>
-                            <option value={1440}>Daily</option>
-                          </select>
-                        </FormField>
                       </div>
                     )}
                   </div>
