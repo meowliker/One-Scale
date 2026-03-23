@@ -167,11 +167,12 @@ export async function POST(request: NextRequest) {
         for (const snap of campaignSnapshots) {
           try {
             const campaigns = JSON.parse(snap.payload_json);
+            const scopeFallback = snap.scope_id.match(/accounts:(.+)/)?.[1]?.split(',')[0] || adAccounts[0]?.ad_account_id || '';
             for (const c of campaigns) {
               if (c.id && c.name) {
-                const accountMatch = snap.scope_id.match(/accounts:(.+)/);
-                const firstAccount = accountMatch ? accountMatch[1].split(',')[0] : adAccounts[0]?.ad_account_id;
-                campaignNameMap.set(c.id, { name: c.name, adAccountId: firstAccount || '' });
+                // Use per-campaign ad_account_id if available, NOT the scope's first account
+                const campAdAccount = c.ad_account_id || c.adAccountId || c.account_id || scopeFallback;
+                campaignNameMap.set(c.id, { name: c.name, adAccountId: campAdAccount });
               }
             }
           } catch { /* skip malformed */ }
@@ -682,7 +683,55 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 4c. Resolve unknown page/IG names directly from Meta API
+    // 4c. Fetch per-account pixels and BM info from Meta API
+    // The options API returns pixels for the default account only. We need per-account pixels.
+    const accountPixelMap = new Map<string, { id: string; name: string }>();  // adAccountId → first pixel
+    {
+      const tokenObj = await getMetaToken(storeId);
+      const tok = tokenObj?.accessToken;
+      if (tok) {
+        await Promise.allSettled(
+          Array.from(usedAdAccountIds).map(async (acctId) => {
+            try {
+              // Fetch pixels for this ad account
+              const pixelRes = await fetchFromMeta<{ data: Array<{ id: string; name: string }> }>(
+                tok, `${acctId}/adspixels`, { fields: 'id,name' }, 8000, 0,
+              );
+              const pixels = pixelRes.data || [];
+              if (pixels.length > 0) {
+                accountPixelMap.set(acctId, pixels[0]);
+                for (const px of pixels) {
+                  pixelNameMap.set(px.id, px.name);
+                }
+              }
+
+              // Fetch BM info for this ad account
+              const acctRes = await fetchFromMeta<{ business?: { id: string; name: string } }>(
+                tok, acctId, { fields: 'business{id,name}' }, 8000, 0,
+              );
+              if (acctRes.business) {
+                accountBmMap.set(acctId, { bmId: acctRes.business.id, bmName: acctRes.business.name });
+              }
+            } catch { /* skip */ }
+          })
+        );
+
+        // For campaigns that don't have pixel from promoted_object, assign from ad account
+        for (const [, match] of matchesByHandle) {
+          for (const camp of match.campaigns) {
+            const meta = campaignMetaMap.get(camp.campaignId);
+            if (meta && !meta.pixelId) {
+              const acctPixel = accountPixelMap.get(match.adAccountId);
+              if (acctPixel) meta.pixelId = acctPixel.id;
+            }
+          }
+        }
+
+        console.log(`[auto-discover] Per-account: ${accountPixelMap.size} accounts with pixels, ${accountBmMap.size} with BM`);
+      }
+    }
+
+    // 4d. Resolve unknown page/IG names directly from Meta API
     // The options API only returns pages connected to the user, but campaigns may use other pages
     const unknownPageIds = new Set<string>();
     const unknownIgIds = new Set<string>();
