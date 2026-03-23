@@ -282,6 +282,44 @@ export async function POST(request: NextRequest) {
     const pixelNameMap = new Map<string, string>();
     const accountBmMap = new Map<string, { bmId: string; bmName: string }>();
 
+    // Pre-populate names from campaign-setup/options API (most reliable source)
+    try {
+      const baseUrl = new URL(request.url).origin;
+      const cookie = request.headers.get('cookie') ?? '';
+      const optionsRes = await fetch(
+        `${baseUrl}/api/meta/campaign-setup/options?storeId=${encodeURIComponent(storeId!)}`,
+        { headers: { cookie } },
+      );
+      if (optionsRes.ok) {
+        const options = await optionsRes.json() as {
+          pages?: Array<{ id: string; name: string; instagramAccountId?: string; instagramUsername?: string }>;
+          pixels?: Array<{ id: string; name: string }>;
+          instagramAccounts?: Array<{ id: string; username: string }>;
+          accounts?: Array<{ id: string; name: string; businessId?: string; businessName?: string }>;
+        };
+        for (const page of options.pages ?? []) {
+          if (page.id && page.name) pageNameMap.set(page.id, page.name);
+          if (page.instagramAccountId && page.instagramUsername) {
+            igUsernameMap.set(page.instagramAccountId, page.instagramUsername);
+          }
+        }
+        for (const pixel of options.pixels ?? []) {
+          if (pixel.id && pixel.name) pixelNameMap.set(pixel.id, pixel.name);
+        }
+        for (const ig of options.instagramAccounts ?? []) {
+          if (ig.id && ig.username) igUsernameMap.set(ig.id, ig.username);
+        }
+        for (const acct of options.accounts ?? []) {
+          if (acct.businessId) {
+            accountBmMap.set(acct.id, { bmId: acct.businessId, bmName: acct.businessName || acct.businessId });
+          }
+        }
+        console.log(`[auto-discover] Pre-populated from options: ${pageNameMap.size} pages, ${igUsernameMap.size} IG, ${pixelNameMap.size} pixels, ${accountBmMap.size} BM`);
+      }
+    } catch (err) {
+      console.warn('[auto-discover] Options API pre-populate failed:', err);
+    }
+
     // 4a: Resolve page names
     await batchProcess(Array.from(uniquePageIds), 10, async (pageId) => {
       try {
