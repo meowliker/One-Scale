@@ -310,6 +310,170 @@ function initDb(): Database.Database {
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       UNIQUE(store_id, platform)
     );
+
+    -- Creative Hub tables
+
+    CREATE TABLE IF NOT EXISTS product_profiles (
+      id TEXT PRIMARY KEY,
+      store_id TEXT NOT NULL,
+      shopify_product_id TEXT,
+      product_name TEXT NOT NULL,
+      product_image TEXT,
+      ad_account_id TEXT NOT NULL,
+      ad_account_currency TEXT DEFAULT 'USD',
+      page_id TEXT,
+      instagram_actor_id TEXT,
+      pixel_id TEXT,
+      conversion_event TEXT DEFAULT 'PURCHASE',
+      destination_url TEXT,
+      utm_template TEXT,
+      average_order_value REAL,
+      default_budget REAL DEFAULT 20,
+      default_duration INTEGER DEFAULT 3,
+      default_bid_strategy TEXT DEFAULT 'LOWEST_COST_WITHOUT_CAP',
+      default_bid_amount REAL,
+      default_roas_floor REAL,
+      default_structure TEXT DEFAULT 'ABO',
+      default_launch_status TEXT DEFAULT 'ACTIVE',
+      naming_template_json TEXT,
+      targeting_presets_json TEXT,
+      clickup_list_id TEXT,
+      clickup_sync_interval INTEGER DEFAULT 30,
+      ai_min_spend REAL,
+      ai_min_impressions INTEGER DEFAULT 500,
+      ai_min_hours INTEGER DEFAULT 24,
+      ai_eval_frequency TEXT DEFAULT 'every_6h',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS product_campaign_links (
+      id TEXT PRIMARY KEY,
+      product_profile_id TEXT NOT NULL,
+      campaign_id TEXT NOT NULL,
+      campaign_name TEXT,
+      campaign_type TEXT NOT NULL,
+      ad_account_id TEXT NOT NULL,
+      is_active INTEGER DEFAULT 1,
+      linked_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (product_profile_id) REFERENCES product_profiles(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS creative_tests (
+      id TEXT PRIMARY KEY,
+      store_id TEXT NOT NULL,
+      product_profile_id TEXT NOT NULL,
+      campaign_id TEXT NOT NULL,
+      campaign_name TEXT,
+      campaign_mode TEXT NOT NULL,
+      adset_mode TEXT NOT NULL,
+      structure TEXT NOT NULL,
+      bid_strategy TEXT,
+      bid_amount REAL,
+      roas_floor REAL,
+      daily_budget REAL,
+      test_duration INTEGER,
+      launch_status TEXT,
+      status TEXT DEFAULT 'launching',
+      launched_by TEXT,
+      launched_at TEXT,
+      completed_at TEXT,
+      total_spend REAL DEFAULT 0,
+      winner_creative_id TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS creative_test_items (
+      id TEXT PRIMARY KEY,
+      creative_test_id TEXT NOT NULL,
+      clickup_task_id TEXT,
+      clickup_task_name TEXT,
+      creative_name TEXT NOT NULL,
+      creative_format TEXT,
+      hook TEXT,
+      angle TEXT,
+      drive_url TEXT,
+      thumbnail_url TEXT,
+      meta_asset_id TEXT,
+      meta_asset_type TEXT,
+      meta_adset_id TEXT,
+      meta_ad_id TEXT,
+      meta_creative_id TEXT,
+      upload_status TEXT DEFAULT 'pending',
+      launch_status TEXT DEFAULT 'pending',
+      review_status TEXT,
+      review_feedback TEXT,
+      learning_phase TEXT,
+      test_status TEXT DEFAULT 'testing',
+      spend REAL DEFAULT 0,
+      revenue REAL DEFAULT 0,
+      roas REAL DEFAULT 0,
+      cpa REAL,
+      ctr REAL,
+      purchases INTEGER DEFAULT 0,
+      impressions INTEGER DEFAULT 0,
+      ai_recommendation TEXT,
+      ai_reasoning TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (creative_test_id) REFERENCES creative_tests(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS copy_library (
+      id TEXT PRIMARY KEY,
+      product_profile_id TEXT NOT NULL,
+      primary_text TEXT NOT NULL,
+      headline TEXT,
+      description TEXT,
+      cta TEXT,
+      source_ad_id TEXT,
+      source_test_id TEXT,
+      roas REAL,
+      cpa REAL,
+      ctr REAL,
+      total_spend REAL,
+      total_revenue REAL,
+      total_purchases INTEGER,
+      is_ai_generated INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS test_ad_copy (
+      id TEXT PRIMARY KEY,
+      creative_test_id TEXT NOT NULL,
+      copy_type TEXT NOT NULL,
+      copy_text TEXT NOT NULL,
+      source TEXT,
+      source_copy_id TEXT,
+      position INTEGER,
+      FOREIGN KEY (creative_test_id) REFERENCES creative_tests(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS creative_fatigue_alerts (
+      id TEXT PRIMARY KEY,
+      product_profile_id TEXT NOT NULL,
+      product_name TEXT,
+      ad_id TEXT NOT NULL,
+      creative_name TEXT,
+      campaign_id TEXT,
+      ctr_trend TEXT,
+      cpa_trend TEXT,
+      frequency_trend TEXT,
+      alert_type TEXT,
+      status TEXT DEFAULT 'active',
+      snoozed_until TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_product_profiles_store
+      ON product_profiles(store_id);
+    CREATE INDEX IF NOT EXISTS idx_creative_tests_store
+      ON creative_tests(store_id, status);
+    CREATE INDEX IF NOT EXISTS idx_creative_test_items_test
+      ON creative_test_items(creative_test_id);
+    CREATE INDEX IF NOT EXISTS idx_copy_library_profile
+      ON copy_library(product_profile_id, roas DESC);
+    CREATE INDEX IF NOT EXISTS idx_fatigue_alerts_store
+      ON creative_fatigue_alerts(product_profile_id, status);
   `);
 
   // Migration: back-fill stores table from existing connections
