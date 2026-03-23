@@ -1,0 +1,467 @@
+import { create } from 'zustand';
+import type {
+  CreativeHubTab,
+  LaunchWizardStep,
+  LaunchConfig,
+  ProductProfile,
+  InboxCreative,
+  CreativeTest,
+  WinningCopy,
+  FatigueAlert,
+} from '@/types/creativeHub';
+
+// Inline type for unmapped campaigns returned by auto-discover
+export interface UnmappedCampaign {
+  campaignId: string;
+  campaignName: string;
+  adAccountId: string;
+  spend?: number;
+  status?: string;
+}
+
+interface CreativeHubState {
+  // Tab navigation
+  activeTab: CreativeHubTab;
+
+  // Product Profiles
+  profiles: ProductProfile[];
+  profilesLoading: boolean;
+  unmappedCampaigns: UnmappedCampaign[];
+
+  // Creative Inbox
+  inboxCreatives: InboxCreative[];
+  inboxLoading: boolean;
+  selectedCreativeIds: Set<string>;
+  uploadProgress: Map<string, number>;
+
+  // Launch Wizard
+  launchWizardOpen: boolean;
+  launchStep: LaunchWizardStep;
+  launchConfig: Partial<LaunchConfig>;
+
+  // Active Tests
+  activeTests: CreativeTest[];
+  activeTestsLoading: boolean;
+
+  // Completed Tests
+  completedTests: CreativeTest[];
+
+  // Copy Library
+  copyLibrary: WinningCopy[];
+
+  // Fatigue Alerts
+  fatigueAlerts: FatigueAlert[];
+
+  // Actions
+  setActiveTab: (tab: CreativeHubTab) => void;
+
+  // Profile actions
+  fetchProfiles: (storeId: string) => Promise<void>;
+  autoDiscoverProfiles: (storeId: string) => Promise<void>;
+  saveProfile: (profile: Partial<ProductProfile> & { storeId: string }) => Promise<void>;
+  deleteProfile: (id: string) => Promise<void>;
+
+  // Inbox actions
+  fetchInbox: (storeId: string, productProfileId?: string) => Promise<void>;
+  syncInbox: (storeId: string) => Promise<void>;
+  toggleCreativeSelection: (id: string) => void;
+  selectAllCreatives: () => void;
+  deselectAllCreatives: () => void;
+  startUpload: (creativeId: string, storeId: string) => Promise<void>;
+
+  // Launch wizard actions
+  openLaunchWizard: () => void;
+  closeLaunchWizard: () => void;
+  setLaunchStep: (step: LaunchWizardStep) => void;
+  updateLaunchConfig: (partial: Partial<LaunchConfig>) => void;
+  executeLaunch: (storeId: string) => Promise<void>;
+
+  // Test actions
+  fetchActiveTests: (storeId: string) => Promise<void>;
+  fetchCompletedTests: (storeId: string) => Promise<void>;
+  executeAIActions: (testId: string, actions: Record<string, string>) => Promise<void>;
+
+  // Copy library actions
+  fetchCopyLibrary: (productProfileId: string) => Promise<void>;
+  generateAICopy: (productProfileId: string, context: string) => Promise<void>;
+  saveCopyToLibrary: (copy: Omit<WinningCopy, 'id' | 'createdAt'>) => Promise<void>;
+}
+
+export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
+  // ── Initial state ──
+
+  activeTab: 'profiles',
+
+  profiles: [],
+  profilesLoading: false,
+  unmappedCampaigns: [],
+
+  inboxCreatives: [],
+  inboxLoading: false,
+  selectedCreativeIds: new Set<string>(),
+  uploadProgress: new Map<string, number>(),
+
+  launchWizardOpen: false,
+  launchStep: 1,
+  launchConfig: {},
+
+  activeTests: [],
+  activeTestsLoading: false,
+
+  completedTests: [],
+
+  copyLibrary: [],
+
+  fatigueAlerts: [],
+
+  // ── Tab navigation ──
+
+  setActiveTab: (tab) => set({ activeTab: tab }),
+
+  // ── Product Profiles ──
+
+  fetchProfiles: async (storeId: string) => {
+    set({ profilesLoading: true });
+    try {
+      const res = await fetch(`/api/creative-hub/product-profiles?storeId=${encodeURIComponent(storeId)}`);
+      const data = await res.json();
+      set({
+        profiles: data.profiles ?? [],
+        unmappedCampaigns: data.unmappedCampaigns ?? [],
+        profilesLoading: false,
+      });
+    } catch {
+      set({ profilesLoading: false });
+    }
+  },
+
+  autoDiscoverProfiles: async (storeId: string) => {
+    set({ profilesLoading: true });
+    try {
+      const res = await fetch('/api/creative-hub/product-profiles/auto-discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storeId }),
+      });
+      const data = await res.json();
+      set({
+        profiles: data.profiles ?? [],
+        unmappedCampaigns: data.unmappedCampaigns ?? [],
+        profilesLoading: false,
+      });
+    } catch {
+      set({ profilesLoading: false });
+    }
+  },
+
+  saveProfile: async (profile) => {
+    try {
+      const isNew = !profile.id;
+      const url = isNew
+        ? '/api/creative-hub/product-profiles'
+        : `/api/creative-hub/product-profiles/${profile.id}`;
+      const method = isNew ? 'POST' : 'PATCH';
+
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(profile),
+      });
+      const data = await res.json();
+
+      if (data.profile) {
+        const { profiles } = get();
+        if (isNew) {
+          set({ profiles: [...profiles, data.profile] });
+        } else {
+          set({
+            profiles: profiles.map((p) =>
+              p.id === data.profile.id ? data.profile : p
+            ),
+          });
+        }
+      }
+    } catch {
+      // Error handling deferred to Task 16
+    }
+  },
+
+  deleteProfile: async (id: string) => {
+    try {
+      await fetch(`/api/creative-hub/product-profiles/${id}`, {
+        method: 'DELETE',
+      });
+      const { profiles } = get();
+      set({ profiles: profiles.filter((p) => p.id !== id) });
+    } catch {
+      // Error handling deferred to Task 16
+    }
+  },
+
+  // ── Creative Inbox ──
+
+  fetchInbox: async (storeId: string, productProfileId?: string) => {
+    set({ inboxLoading: true });
+    try {
+      const params = new URLSearchParams({ storeId });
+      if (productProfileId) params.set('productProfileId', productProfileId);
+
+      const res = await fetch(`/api/creative-hub/inbox?${params.toString()}`);
+      const data = await res.json();
+      set({
+        inboxCreatives: data.creatives ?? [],
+        inboxLoading: false,
+      });
+    } catch {
+      set({ inboxLoading: false });
+    }
+  },
+
+  syncInbox: async (storeId: string) => {
+    set({ inboxLoading: true });
+    try {
+      const res = await fetch('/api/creative-hub/inbox/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storeId }),
+      });
+      const data = await res.json();
+      set({
+        inboxCreatives: data.creatives ?? [],
+        inboxLoading: false,
+      });
+    } catch {
+      set({ inboxLoading: false });
+    }
+  },
+
+  toggleCreativeSelection: (id: string) => {
+    const { selectedCreativeIds } = get();
+    const next = new Set(selectedCreativeIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    set({ selectedCreativeIds: next });
+  },
+
+  selectAllCreatives: () => {
+    const { inboxCreatives } = get();
+    set({
+      selectedCreativeIds: new Set(inboxCreatives.map((c) => c.id)),
+    });
+  },
+
+  deselectAllCreatives: () => {
+    set({ selectedCreativeIds: new Set() });
+  },
+
+  startUpload: async (creativeId: string, storeId: string) => {
+    const { uploadProgress } = get();
+    const next = new Map(uploadProgress);
+    next.set(creativeId, 0);
+    set({ uploadProgress: next });
+
+    try {
+      const res = await fetch('/api/creative-hub/inbox/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ creativeId, storeId }),
+      });
+      const data = await res.json();
+
+      // Update the creative in inbox with upload result
+      const { inboxCreatives, uploadProgress: currentProgress } = get();
+      const updatedProgress = new Map(currentProgress);
+      updatedProgress.set(creativeId, 100);
+
+      set({
+        inboxCreatives: inboxCreatives.map((c) =>
+          c.id === creativeId
+            ? {
+                ...c,
+                uploadStatus: data.success ? 'ready' as const : 'failed' as const,
+                metaAssetId: data.assetId,
+                metaAssetType: data.assetType,
+                uploadError: data.error,
+              }
+            : c
+        ),
+        uploadProgress: updatedProgress,
+      });
+    } catch {
+      const { uploadProgress: currentProgress, inboxCreatives } = get();
+      const updatedProgress = new Map(currentProgress);
+      updatedProgress.delete(creativeId);
+      set({
+        uploadProgress: updatedProgress,
+        inboxCreatives: inboxCreatives.map((c) =>
+          c.id === creativeId
+            ? { ...c, uploadStatus: 'failed' as const, uploadError: 'Upload failed' }
+            : c
+        ),
+      });
+    }
+  },
+
+  // ── Launch Wizard ──
+
+  openLaunchWizard: () => {
+    const { selectedCreativeIds } = get();
+    set({
+      launchWizardOpen: true,
+      launchStep: 1,
+      launchConfig: {
+        selectedCreativeIds: Array.from(selectedCreativeIds),
+      },
+    });
+  },
+
+  closeLaunchWizard: () => {
+    set({
+      launchWizardOpen: false,
+      launchStep: 1,
+      launchConfig: {},
+    });
+  },
+
+  setLaunchStep: (step) => set({ launchStep: step }),
+
+  updateLaunchConfig: (partial) => {
+    const { launchConfig } = get();
+    set({ launchConfig: { ...launchConfig, ...partial } });
+  },
+
+  executeLaunch: async (storeId: string) => {
+    try {
+      const { launchConfig } = get();
+      const res = await fetch('/api/creative-hub/launch/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storeId, config: launchConfig }),
+      });
+      const data = await res.json();
+
+      if (data.testId) {
+        // Refresh active tests and close wizard
+        set({
+          launchWizardOpen: false,
+          launchStep: 1,
+          launchConfig: {},
+          selectedCreativeIds: new Set(),
+        });
+        // Trigger a refresh of active tests
+        get().fetchActiveTests(storeId);
+      }
+    } catch {
+      // Error handling deferred to Task 16
+    }
+  },
+
+  // ── Active Tests ──
+
+  fetchActiveTests: async (storeId: string) => {
+    set({ activeTestsLoading: true });
+    try {
+      const res = await fetch(`/api/creative-hub/active-tests?storeId=${encodeURIComponent(storeId)}`);
+      const data = await res.json();
+      set({
+        activeTests: data.tests ?? [],
+        fatigueAlerts: data.fatigueAlerts ?? [],
+        activeTestsLoading: false,
+      });
+    } catch {
+      set({ activeTestsLoading: false });
+    }
+  },
+
+  fetchCompletedTests: async (storeId: string) => {
+    try {
+      const res = await fetch(`/api/creative-hub/active-tests?storeId=${encodeURIComponent(storeId)}&status=completed`);
+      const data = await res.json();
+      set({ completedTests: data.tests ?? [] });
+    } catch {
+      // Error handling deferred to Task 16
+    }
+  },
+
+  executeAIActions: async (testId: string, actions: Record<string, string>) => {
+    try {
+      await fetch(`/api/creative-hub/active-tests/${testId}/ai-actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actions }),
+      });
+
+      // Update local state: apply actions to test items
+      const { activeTests } = get();
+      set({
+        activeTests: activeTests.map((test) => {
+          if (test.id !== testId) return test;
+          return {
+            ...test,
+            items: test.items.map((item) => {
+              const action = actions[item.id];
+              if (!action) return item;
+              return {
+                ...item,
+                aiRecommendation: action as CreativeTest['items'][number]['aiRecommendation'],
+              };
+            }),
+          };
+        }),
+      });
+    } catch {
+      // Error handling deferred to Task 16
+    }
+  },
+
+  // ── Copy Library ──
+
+  fetchCopyLibrary: async (productProfileId: string) => {
+    try {
+      const res = await fetch(`/api/creative-hub/copy-library?productProfileId=${encodeURIComponent(productProfileId)}`);
+      const data = await res.json();
+      set({ copyLibrary: data.copies ?? [] });
+    } catch {
+      // Error handling deferred to Task 16
+    }
+  },
+
+  generateAICopy: async (productProfileId: string, context: string) => {
+    try {
+      const res = await fetch('/api/creative-hub/copy-library/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productProfileId, context }),
+      });
+      const data = await res.json();
+
+      if (data.copies) {
+        const { copyLibrary } = get();
+        set({ copyLibrary: [...data.copies, ...copyLibrary] });
+      }
+    } catch {
+      // Error handling deferred to Task 16
+    }
+  },
+
+  saveCopyToLibrary: async (copy) => {
+    try {
+      const res = await fetch('/api/creative-hub/copy-library', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(copy),
+      });
+      const data = await res.json();
+
+      if (data.copy) {
+        const { copyLibrary } = get();
+        set({ copyLibrary: [data.copy, ...copyLibrary] });
+      }
+    } catch {
+      // Error handling deferred to Task 16
+    }
+  },
+}));
