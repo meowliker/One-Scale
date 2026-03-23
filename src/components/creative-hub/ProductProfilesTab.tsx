@@ -27,10 +27,22 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
   const unmappedCampaigns = useCreativeHubStore((s) => s.unmappedCampaigns);
   const autoDiscoverProfiles = useCreativeHubStore((s) => s.autoDiscoverProfiles);
   const setActiveTab = useCreativeHubStore((s) => s.setActiveTab);
+  const inboxCreatives = useCreativeHubStore((s) => s.inboxCreatives);
 
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<ProductProfile | null>(null);
   const [unmappedExpanded, setUnmappedExpanded] = useState(true);
+
+  // Count creatives per product profile
+  const creativeCountMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const c of inboxCreatives) {
+      if (c.productProfileId) {
+        map.set(c.productProfileId, (map.get(c.productProfileId) ?? 0) + 1);
+      }
+    }
+    return map;
+  }, [inboxCreatives]);
 
   // Placeholder linked campaigns -- in production these would come from the store
   const linkedCampaignsMap = useMemo(() => {
@@ -125,6 +137,7 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
               key={profile.id}
               profile={profile}
               linkedCampaigns={linkedCampaignsMap.get(profile.id) ?? []}
+              creativeCount={creativeCountMap.get(profile.id) ?? 0}
               onEdit={handleEdit}
               onViewCopyLibrary={handleViewCopyLibrary}
             />
