@@ -211,28 +211,51 @@ export async function GET(request: NextRequest) {
         for (const order of orders) {
           if (['voided', 'refunded'].includes(order.financialStatus)) continue;
           totalOrderCount++;
-          totalOrderRevenue += parseFloat(order.totalPrice || '0');
+          const orderTotal = parseFloat(order.totalPrice || '0');
+          totalOrderRevenue += orderTotal;
 
-          // Find the highest-revenue item per order → that's the MAIN product
-          let bestPid = 'unknown';
-          let bestRev = 0;
-          const orderItems: Array<{ pid: string; rev: number }> = [];
+          const lineItems = order.lineItems || [];
+          if (lineItems.length === 0) continue;
 
-          for (const item of order.lineItems || []) {
+          // Calculate line item revenue sum to detect free_plus_shipping ($0 items)
+          let lineItemRevSum = 0;
+          const orderItems: Array<{ pid: string; title: string; itemRev: number; qty: number }> = [];
+          for (const item of lineItems) {
             const pid = String(item.productId || 'unknown');
             const itemRev = parseFloat(item.price || '0') * (item.quantity || 1);
-            orderItems.push({ pid, rev: itemRev });
-            const existing = byProduct.get(pid) || { name: item.title || 'Unknown', image: null, revenue: 0, units: 0, fees: 0, cogs: 0, orderIds: new Set<string>(), category: classMap.get(pid) || 'pending' };
-            existing.revenue += itemRev;
-            existing.units += item.quantity || 1;
+            lineItemRevSum += itemRev;
+            orderItems.push({ pid, title: item.title || 'Unknown', itemRev, qty: item.quantity || 1 });
+          }
+
+          // Revenue attribution strategy:
+          // If line items have real prices → use line item prices (standard model)
+          // If line items are $0 (free_plus_shipping) → attribute order.totalPrice to main product
+          const usesOrderTotal = lineItemRevSum < 0.01 && orderTotal > 0;
+
+          // Find main product: highest line-item price, or first item if all $0
+          let bestPid = orderItems[0].pid;
+          let bestRev = orderItems[0].itemRev;
+          for (const oi of orderItems) {
+            if (oi.itemRev > bestRev) { bestRev = oi.itemRev; bestPid = oi.pid; }
+          }
+
+          for (const oi of orderItems) {
+            const existing = byProduct.get(oi.pid) || { name: oi.title, image: null, revenue: 0, units: 0, fees: 0, cogs: 0, orderIds: new Set<string>(), category: classMap.get(oi.pid) || 'pending' };
+            existing.units += oi.qty;
             existing.orderIds.add(String(order.id));
-            byProduct.set(pid, existing);
-            if (itemRev > bestRev) { bestRev = itemRev; bestPid = pid; }
+
+            if (usesOrderTotal) {
+              // Free+shipping: main product gets full order total, others get $0
+              existing.revenue += (oi.pid === bestPid) ? orderTotal : 0;
+            } else {
+              existing.revenue += oi.itemRev;
+            }
+
+            byProduct.set(oi.pid, existing);
           }
           orderToProduct.set(String(order.id), bestPid);
 
-          // Auto-classify if no stored classification:
-          // In multi-item orders, highest-revenue = main, others = upsell
+          // Auto-classify if no stored classification
           if (orderItems.length > 1) {
             for (const oi of orderItems) {
               const p = byProduct.get(oi.pid);
@@ -240,7 +263,7 @@ export async function GET(request: NextRequest) {
                 p.category = oi.pid === bestPid ? 'main' : 'upsell';
               }
             }
-          } else if (orderItems.length === 1) {
+          } else {
             const p = byProduct.get(orderItems[0].pid);
             if (p && p.category === 'pending') p.category = 'main';
           }
