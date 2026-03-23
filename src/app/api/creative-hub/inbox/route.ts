@@ -1,8 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/app/api/lib/db';
-import { getThirdPartyToken } from '@/app/api/lib/db';
+import { getThirdPartyToken, upsertThirdPartyToken } from '@/app/api/lib/db';
 import { getProductProfiles } from '@/app/api/lib/creative-hub-db';
+import {
+  isSupabasePersistenceEnabled,
+  getPersistentThirdPartyToken,
+  hydrateStoreFromSupabase,
+} from '@/app/api/lib/supabase-persistence';
 import type { InboxCreative, CreativeFormat } from '@/types/creativeHub';
+
+/** Resolve ClickUp token, hydrating from Supabase on Vercel if needed */
+async function getClickUpToken(storeId: string) {
+  if (isSupabasePersistenceEnabled()) {
+    await hydrateStoreFromSupabase(storeId);
+    const row = getThirdPartyToken(storeId, 'clickup');
+    if (row) return row;
+    const persistent = await getPersistentThirdPartyToken(storeId, 'clickup');
+    if (persistent) {
+      upsertThirdPartyToken({
+        storeId,
+        platform: 'clickup',
+        accessToken: persistent.access_token,
+        metadata: persistent.metadata
+          ? (JSON.parse(persistent.metadata) as Record<string, unknown>)
+          : undefined,
+      });
+      return getThirdPartyToken(storeId, 'clickup');
+    }
+    return null;
+  }
+  return getThirdPartyToken(storeId, 'clickup');
+}
 
 // ── ClickUp types (mirrored from integrations/clickup/tasks) ──
 
@@ -200,8 +228,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'storeId required' }, { status: 400 });
   }
 
-  // Get ClickUp token
-  const row = getThirdPartyToken(storeId, 'clickup');
+  // Get ClickUp token (with Supabase hydration for Vercel)
+  const row = await getClickUpToken(storeId);
   if (!row) {
     return NextResponse.json({ creatives: [], notConnected: true });
   }

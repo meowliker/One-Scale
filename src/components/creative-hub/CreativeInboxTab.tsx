@@ -9,13 +9,16 @@ import {
   ChevronRight,
   Rocket,
   Filter,
+  AlertTriangle,
+  Link2Off,
+  Settings,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
 import { InboxCreativeRow } from './InboxCreativeRow';
 import { CreativePreviewModal } from './CreativePreviewModal';
 import { UploadProgressBar } from './UploadProgressBar';
-import type { InboxCreative, CreativeFormat, UploadStatus } from '@/types/creativeHub';
+import type { InboxCreative } from '@/types/creativeHub';
 
 interface CreativeInboxTabProps {
   storeId: string;
@@ -24,8 +27,10 @@ interface CreativeInboxTabProps {
 export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
   const inboxCreatives = useCreativeHubStore((s) => s.inboxCreatives);
   const inboxLoading = useCreativeHubStore((s) => s.inboxLoading);
+  const inboxNotConnected = useCreativeHubStore((s) => s.inboxNotConnected);
+  const inboxNotConfigured = useCreativeHubStore((s) => s.inboxNotConfigured);
+  const inboxError = useCreativeHubStore((s) => s.inboxError);
   const selectedCreativeIds = useCreativeHubStore((s) => s.selectedCreativeIds);
-  const profiles = useCreativeHubStore((s) => s.profiles);
   const syncInbox = useCreativeHubStore((s) => s.syncInbox);
   const toggleCreativeSelection = useCreativeHubStore((s) => s.toggleCreativeSelection);
   const selectAllCreatives = useCreativeHubStore((s) => s.selectAllCreatives);
@@ -125,7 +130,69 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
     [startUpload, storeId]
   );
 
-  // Empty state
+  // ClickUp not connected state
+  if (!inboxLoading && inboxNotConnected) {
+    return (
+      <div className="space-y-4">
+        <InboxHeader syncing={syncing} onSync={handleSync} />
+        <div className="rounded-xl border border-border bg-surface-elevated p-16 text-center">
+          <Link2Off className="mx-auto h-12 w-12 text-gray-300" />
+          <p className="mt-4 text-sm font-medium text-text-secondary">
+            ClickUp Not Connected
+          </p>
+          <p className="mt-1 text-xs text-text-dimmed max-w-md mx-auto">
+            Connect your ClickUp account in Settings &gt; Integrations to import creatives.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // No ClickUp lists configured on product profiles
+  if (!inboxLoading && inboxNotConfigured) {
+    return (
+      <div className="space-y-4">
+        <InboxHeader syncing={syncing} onSync={handleSync} />
+        <div className="rounded-xl border border-border bg-surface-elevated p-16 text-center">
+          <Settings className="mx-auto h-12 w-12 text-gray-300" />
+          <p className="mt-4 text-sm font-medium text-text-secondary">
+            ClickUp Lists Not Configured
+          </p>
+          <p className="mt-1 text-xs text-text-dimmed max-w-md mx-auto">
+            Add a ClickUp List ID to your product profiles so the inbox knows where to pull creatives from.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // API error state
+  if (!inboxLoading && inboxError && inboxCreatives.length === 0) {
+    return (
+      <div className="space-y-4">
+        <InboxHeader syncing={syncing} onSync={handleSync} />
+        <div className="rounded-xl border border-red-200 bg-red-50 p-16 text-center">
+          <AlertTriangle className="mx-auto h-12 w-12 text-red-400" />
+          <p className="mt-4 text-sm font-medium text-red-700">
+            Failed to load creatives
+          </p>
+          <p className="mt-1 text-xs text-red-500 max-w-md mx-auto">
+            {inboxError}
+          </p>
+          <button
+            onClick={handleSync}
+            disabled={syncing}
+            className="mt-4 inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw className={cn('h-4 w-4', syncing && 'animate-spin')} />
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Empty state (connected + configured, but no "Ready to Launch" tasks found)
   if (!inboxLoading && inboxCreatives.length === 0) {
     return (
       <div className="space-y-4">
@@ -135,8 +202,9 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
           <p className="mt-4 text-sm font-medium text-text-secondary">
             No creatives found
           </p>
-          <p className="mt-1 text-xs text-text-dimmed">
-            Sync from ClickUp to import creatives into your inbox.
+          <p className="mt-1 text-xs text-text-dimmed max-w-md mx-auto">
+            No tasks with &quot;Ready to Launch&quot; status were found in your ClickUp lists.
+            Move creatives to that status in ClickUp, then sync again.
           </p>
           <button
             onClick={handleSync}

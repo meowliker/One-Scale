@@ -32,6 +32,9 @@ interface CreativeHubState {
   // Creative Inbox
   inboxCreatives: InboxCreative[];
   inboxLoading: boolean;
+  inboxNotConnected: boolean;
+  inboxNotConfigured: boolean;
+  inboxError: string | null;
   selectedCreativeIds: Set<string>;
   uploadProgress: Map<string, number>;
 
@@ -107,6 +110,9 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
 
   inboxCreatives: [],
   inboxLoading: false,
+  inboxNotConnected: false,
+  inboxNotConfigured: false,
+  inboxError: null,
   selectedCreativeIds: new Set<string>(),
   uploadProgress: new Map<string, number>(),
 
@@ -227,26 +233,33 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
   // ── Creative Inbox ──
 
   fetchInbox: async (storeId: string, productProfileId?: string) => {
-    set({ inboxLoading: true });
+    set({ inboxLoading: true, inboxError: null, inboxNotConnected: false, inboxNotConfigured: false });
     try {
       const params = new URLSearchParams({ storeId });
-      if (productProfileId) params.set('productProfileId', productProfileId);
+      if (productProfileId) params.set('productId', productProfileId);
 
       const res = await fetch(`/api/creative-hub/inbox?${params.toString()}`);
       const data = await res.json();
       set({
         inboxCreatives: data.creatives ?? [],
         inboxLoading: false,
+        inboxNotConnected: !!data.notConnected,
+        inboxNotConfigured: !!data.notConfigured,
+        inboxError: data.error || null,
       });
-    } catch {
-      set({ inboxLoading: false });
+    } catch (err) {
+      set({
+        inboxLoading: false,
+        inboxError: err instanceof Error ? err.message : 'Failed to fetch inbox',
+      });
     }
   },
 
   syncInbox: async (storeId: string) => {
-    set({ inboxLoading: true });
+    set({ inboxLoading: true, inboxError: null, inboxNotConnected: false, inboxNotConfigured: false });
     try {
-      const res = await fetch('/api/creative-hub/inbox/sync', {
+      const params = new URLSearchParams({ storeId });
+      const res = await fetch(`/api/creative-hub/inbox/sync?${params.toString()}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ storeId }),
@@ -255,9 +268,15 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
       set({
         inboxCreatives: data.creatives ?? [],
         inboxLoading: false,
+        inboxNotConnected: !!data.notConnected,
+        inboxNotConfigured: !!data.notConfigured,
+        inboxError: data.error || null,
       });
-    } catch {
-      set({ inboxLoading: false });
+    } catch (err) {
+      set({
+        inboxLoading: false,
+        inboxError: err instanceof Error ? err.message : 'Sync failed',
+      });
     }
   },
 
@@ -360,28 +379,39 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
   },
 
   executeLaunch: async (storeId: string) => {
-    try {
-      const { launchConfig } = get();
-      const res = await fetch('/api/creative-hub/launch/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ storeId, config: launchConfig }),
-      });
-      const data = await res.json();
+    const { launchConfig } = get();
+    const res = await fetch('/api/creative-hub/launch/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ storeId, launchConfig }),
+    });
+    const data = await res.json();
 
-      if (data.testId) {
-        // Refresh active tests and close wizard
-        set({
-          launchWizardOpen: false,
-          launchStep: 1,
-          launchConfig: {},
-          selectedCreativeIds: new Set(),
-        });
-        // Trigger a refresh of active tests
-        get().fetchActiveTests(storeId);
-      }
-    } catch {
-      // Error handling deferred to Task 16
+    if (!res.ok) {
+      throw new Error(data.error || 'Launch execution failed');
+    }
+
+    if (data.status === 'partial') {
+      // Close wizard but warn caller about partial failure
+      set({
+        launchWizardOpen: false,
+        launchStep: 1,
+        launchConfig: {},
+        selectedCreativeIds: new Set(),
+      });
+      get().fetchActiveTests(storeId);
+      throw new Error('Some creatives failed to launch. Check the test details for more info.');
+    }
+
+    if (data.testId) {
+      // Refresh active tests and close wizard
+      set({
+        launchWizardOpen: false,
+        launchStep: 1,
+        launchConfig: {},
+        selectedCreativeIds: new Set(),
+      });
+      get().fetchActiveTests(storeId);
     }
   },
 
