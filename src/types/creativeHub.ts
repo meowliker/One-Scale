@@ -11,9 +11,11 @@ export interface ProductProfile {
   adAccountId: string;
   adAccountCurrency: string;
   pageId?: string;
+  pageName?: string;
   instagramActorId?: string;
   instagramUsername?: string;
   pixelId?: string;
+  pixelName?: string;
   conversionEvent: string;
   destinationUrl?: string;
   utmTemplate?: string;

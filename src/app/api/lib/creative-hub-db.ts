@@ -20,9 +20,11 @@ interface ProductProfileRow {
   ad_account_id: string;
   ad_account_currency: string;
   page_id: string | null;
+  page_name: string | null;
   instagram_actor_id: string | null;
   instagram_username: string | null;
   pixel_id: string | null;
+  pixel_name: string | null;
   conversion_event: string;
   destination_url: string | null;
   utm_template: string | null;
@@ -181,9 +183,11 @@ function mapProfileRow(row: ProductProfileRow): ProductProfile {
     adAccountId: row.ad_account_id,
     adAccountCurrency: row.ad_account_currency,
     pageId: row.page_id ?? undefined,
+    pageName: row.page_name ?? undefined,
     instagramActorId: row.instagram_actor_id ?? undefined,
     instagramUsername: row.instagram_username ?? undefined,
     pixelId: row.pixel_id ?? undefined,
+    pixelName: row.pixel_name ?? undefined,
     conversionEvent: row.conversion_event,
     destinationUrl: row.destination_url ?? undefined,
     utmTemplate: row.utm_template ?? undefined,
@@ -365,7 +369,7 @@ export function upsertProductProfile(profile: Partial<ProductProfile> & { id: st
   db.prepare(`
     INSERT INTO product_profiles (
       id, store_id, shopify_product_id, product_name, product_image,
-      ad_account_id, ad_account_currency, page_id, instagram_actor_id, instagram_username, pixel_id,
+      ad_account_id, ad_account_currency, page_id, page_name, instagram_actor_id, instagram_username, pixel_id, pixel_name,
       conversion_event, destination_url, utm_template, average_order_value,
       default_budget, default_duration, default_bid_strategy, default_bid_amount,
       default_roas_floor, default_structure, default_launch_status,
@@ -375,7 +379,7 @@ export function upsertProductProfile(profile: Partial<ProductProfile> & { id: st
       updated_at
     ) VALUES (
       ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?,
@@ -391,9 +395,11 @@ export function upsertProductProfile(profile: Partial<ProductProfile> & { id: st
       ad_account_id = excluded.ad_account_id,
       ad_account_currency = excluded.ad_account_currency,
       page_id = excluded.page_id,
+      page_name = excluded.page_name,
       instagram_actor_id = excluded.instagram_actor_id,
       instagram_username = excluded.instagram_username,
       pixel_id = excluded.pixel_id,
+      pixel_name = excluded.pixel_name,
       conversion_event = excluded.conversion_event,
       destination_url = excluded.destination_url,
       utm_template = excluded.utm_template,
@@ -424,9 +430,11 @@ export function upsertProductProfile(profile: Partial<ProductProfile> & { id: st
     profile.adAccountId,
     profile.adAccountCurrency ?? 'USD',
     profile.pageId ?? null,
+    profile.pageName ?? null,
     profile.instagramActorId ?? null,
     profile.instagramUsername ?? null,
     profile.pixelId ?? null,
+    profile.pixelName ?? null,
     profile.conversionEvent ?? 'PURCHASE',
     profile.destinationUrl ?? null,
     profile.utmTemplate ?? null,

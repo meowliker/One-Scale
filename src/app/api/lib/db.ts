@@ -322,9 +322,11 @@ function initDb(): Database.Database {
       ad_account_id TEXT NOT NULL,
       ad_account_currency TEXT DEFAULT 'USD',
       page_id TEXT,
+      page_name TEXT,
       instagram_actor_id TEXT,
       instagram_username TEXT,
       pixel_id TEXT,
+      pixel_name TEXT,
       conversion_event TEXT DEFAULT 'PURCHASE',
       destination_url TEXT,
       utm_template TEXT,
@@ -581,6 +583,10 @@ function initDb(): Database.Database {
   // Migration: add clickup_list_name & instagram_username to product_profiles
   try { instance.exec('ALTER TABLE product_profiles ADD COLUMN clickup_list_name TEXT'); } catch {}
   try { instance.exec('ALTER TABLE product_profiles ADD COLUMN instagram_username TEXT'); } catch {}
+
+  // Migration: add page_name & pixel_name to product_profiles
+  try { instance.exec('ALTER TABLE product_profiles ADD COLUMN page_name TEXT'); } catch {}
+  try { instance.exec('ALTER TABLE product_profiles ADD COLUMN pixel_name TEXT'); } catch {}
 
   // Migration: add per-campaign metadata columns to product_campaign_links
   try { instance.exec('ALTER TABLE product_campaign_links ADD COLUMN page_id TEXT'); } catch {}
