@@ -405,33 +405,51 @@ export async function POST(request: NextRequest) {
 
           console.log(`[auto-discover] Found ${campaignAdIds.size} ad IDs for ${allCampaignIds.length} campaigns`);
 
-          // Step B: Fetch each ad's creative + promoted_object
+          // Step B: For each ad, fetch its adcreatives endpoint separately
+          // The /{ad_id}?fields=creative{object_story_spec} expansion doesn't work,
+          // but /{ad_id}/adcreatives?fields=object_story_spec DOES.
+          // Also fetch the ad's promoted_object separately.
           const adEntries = Array.from(campaignAdIds.entries());
           for (let i = 0; i < adEntries.length; i += batchSize) {
             const batch = adEntries.slice(i, i + batchSize);
             await Promise.allSettled(
               batch.map(async ([campaignId, adId]) => {
                 try {
-                  const ad = await fetchFromMeta<LiveMetaAd & {
-                    creative?: { id?: string; object_story_spec?: { page_id?: string; instagram_actor_id?: string } };
-                    promoted_object?: { pixel_id?: string };
-                  }>(
-                    metaToken,
-                    adId,
-                    { fields: 'creative{id,object_story_spec},promoted_object' },
-                    8000, 0,
-                  );
+                  // Parallel: fetch adcreatives + ad promoted_object
+                  const [creativeRes, adRes] = await Promise.allSettled([
+                    fetchFromMeta<{ data: Array<{ id: string; object_story_spec?: { page_id?: string; instagram_actor_id?: string } }> }>(
+                      metaToken,
+                      `${adId}/adcreatives`,
+                      { fields: 'id,object_story_spec' },
+                      8000, 0,
+                    ),
+                    fetchFromMeta<{ promoted_object?: { pixel_id?: string } }>(
+                      metaToken,
+                      adId,
+                      { fields: 'promoted_object' },
+                      8000, 0,
+                    ),
+                  ]);
 
                   const meta: CampaignMeta = {};
-                  if (ad.creative?.object_story_spec?.page_id) {
-                    meta.pageId = String(ad.creative.object_story_spec.page_id);
+
+                  if (creativeRes.status === 'fulfilled') {
+                    const creative = creativeRes.value.data?.[0];
+                    if (creative?.object_story_spec?.page_id) {
+                      meta.pageId = String(creative.object_story_spec.page_id);
+                    }
+                    if (creative?.object_story_spec?.instagram_actor_id) {
+                      meta.instagramActorId = String(creative.object_story_spec.instagram_actor_id);
+                    }
                   }
-                  if (ad.creative?.object_story_spec?.instagram_actor_id) {
-                    meta.instagramActorId = String(ad.creative.object_story_spec.instagram_actor_id);
+
+                  if (adRes.status === 'fulfilled') {
+                    const promoted = adRes.value.promoted_object;
+                    if (promoted?.pixel_id) {
+                      meta.pixelId = String(promoted.pixel_id);
+                    }
                   }
-                  if (ad.promoted_object?.pixel_id) {
-                    meta.pixelId = String(ad.promoted_object.pixel_id);
-                  }
+
                   if (meta.pageId || meta.pixelId || meta.instagramActorId) {
                     campaignMetaMap.set(campaignId, meta);
                   }
