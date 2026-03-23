@@ -255,7 +255,64 @@ export async function GET(request: NextRequest) {
         const totalRevenue = round2(appsScriptResults.reduce((s, r) => s + r.revenue, 0));
         const totalAdSpend = round2(appsScriptResults.reduce((s, r) => s + r.ad_spend, 0));
 
-        const data = appsScriptResults.map(r => ({
+        // Fetch real Meta metrics (CPC/CTR/CPM) from meta_spend_cache
+        const metaByProduct = new Map<string, { spend: number; impressions: number; clicks: number; purchases: number }>();
+        try {
+          const adMappings = await rest<Array<{ ad_account_id: string; product_id: string }>>(
+            `/meta_ad_account_mappings?store_id=eq.${enc(storeId)}&select=ad_account_id,product_id`
+          ).catch(() => []);
+          const metaRows = await rest<Array<{ ad_account_id: string; spend: number; impressions: number; clicks: number; purchases: number }>>(
+            `/meta_spend_cache?store_id=eq.${enc(storeId)}&date=gte.${from}&date=lte.${to}&select=ad_account_id,spend,impressions,clicks,purchases`
+          ).catch(() => []);
+
+          if (metaRows.length > 0) {
+            // Total Meta metrics for the date range
+            const metaTotals = { spend: 0, impressions: 0, clicks: 0, purchases: 0 };
+            for (const row of metaRows) {
+              metaTotals.spend += Number(row.spend) || 0;
+              metaTotals.impressions += Number(row.impressions) || 0;
+              metaTotals.clicks += Number(row.clicks) || 0;
+              metaTotals.purchases += Number(row.purchases) || 0;
+            }
+
+            if (adMappings.length > 0) {
+              // Product-level mapping
+              const acctToProduct = new Map(adMappings.map(m => [m.ad_account_id, m.product_id]));
+              for (const row of metaRows) {
+                const pid = acctToProduct.get(row.ad_account_id);
+                if (!pid) continue;
+                const ex = metaByProduct.get(pid) || { spend: 0, impressions: 0, clicks: 0, purchases: 0 };
+                ex.spend += Number(row.spend) || 0;
+                ex.impressions += Number(row.impressions) || 0;
+                ex.clicks += Number(row.clicks) || 0;
+                ex.purchases += Number(row.purchases) || 0;
+                metaByProduct.set(pid, ex);
+              }
+            } else {
+              // No mappings — distribute by revenue share
+              const totalRev = appsScriptResults.reduce((s, r) => s + r.revenue, 0);
+              if (totalRev > 0) {
+                for (const r of appsScriptResults) {
+                  const share = r.revenue / totalRev;
+                  metaByProduct.set(r.product_id, {
+                    spend: round2(metaTotals.spend * share),
+                    impressions: Math.round(metaTotals.impressions * share),
+                    clicks: Math.round(metaTotals.clicks * share),
+                    purchases: Math.round(metaTotals.purchases * share),
+                  });
+                }
+              }
+            }
+          }
+        } catch { /* Meta metrics non-critical */ }
+
+        const data = appsScriptResults.map(r => {
+          const meta = metaByProduct.get(r.product_id) || { spend: 0, impressions: 0, clicks: 0, purchases: 0 };
+          const metaSpend = meta.spend || r.ad_spend;
+          const imp = meta.impressions;
+          const clk = meta.clicks;
+          const pur = meta.purchases;
+          return {
           productId: r.product_id,
           productName: r.product_name,
           productImage: imgMap.get(r.product_id) ?? null,
@@ -270,13 +327,18 @@ export async function GET(request: NextRequest) {
           netProfit: r.net_profit,
           margin: r.margin,
           fbMetrics: {
-            roas: r.ad_spend > 0 ? Math.round((r.revenue / r.ad_spend) * 100) / 100 : 0,
-            cpc: 0, cpm: 0, ctr: 0, aov: 0, atcRate: 0,
-            spend: r.ad_spend,
-            impressions: 0, clicks: 0, purchases: 0,
-            costPerPurchase: 0, frequency: 0, reach: 0,
+            roas: metaSpend > 0 ? round2(r.revenue / metaSpend) : 0,
+            cpc: clk > 0 ? round2(metaSpend / clk) : 0,
+            cpm: imp > 0 ? round2((metaSpend / imp) * 1000) : 0,
+            ctr: imp > 0 ? round2((clk / imp) * 100) : 0,
+            aov: r.orders > 0 ? round2(r.revenue / r.orders) : 0,
+            atcRate: 0,
+            spend: metaSpend,
+            impressions: imp, clicks: clk, purchases: pur,
+            costPerPurchase: pur > 0 ? round2(metaSpend / pur) : 0,
+            frequency: 0, reach: 0,
           },
-          isAdvertised: r.ad_spend > 0,
+          isAdvertised: metaSpend > 0 || imp > 0 || clk > 0,
           adLandingPageUrl: null, adName: null, adSetName: null, campaignName: null,
           category: r.classification as 'main' | 'upsell' | 'downsell' | 'addon',
           classificationConfidence: r.classification === 'main' ? 95 : 80,
@@ -293,7 +355,8 @@ export async function GET(request: NextRequest) {
             totalSpend: totalAdSpend,
             totalOrders,
           },
-        }));
+        };
+        });
 
         console.log(`[PRISM:ProductPerf] Apps Script direct: ${data.length} products, ${totalOrders} orders, rev=$${totalRevenue}, ads=$${totalAdSpend}`);
 
