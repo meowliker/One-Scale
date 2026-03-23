@@ -169,8 +169,13 @@ export interface LaunchConfig {
   scheduledDate?: string;
   scheduledTime?: string;
   endDate?: string;
+  // Attribution
+  attributionWindow?: string;
   // UTM
   utmTemplate?: string;
+  // Naming overrides
+  adsetNameOverride?: string;
+  adNameOverride?: string;
   // Multi-account
   mirrorAccounts?: MirrorAccount[];
   // AI rules

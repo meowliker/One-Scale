@@ -8,10 +8,8 @@ import {
   PenLine,
   Monitor,
   Brain,
-  AlertTriangle,
   ChevronDown,
   ChevronUp,
-  Info,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
@@ -61,11 +59,12 @@ export function LaunchStep3Settings() {
   const [showMultiAccount, setShowMultiAccount] = useState(false);
   const [showAiRules, setShowAiRules] = useState(true);
 
+  const attributionWindow = launchConfig.attributionWindow || '7d_click_1d_view';
+
   // Naming overrides
   const namingCampaign = launchConfig.newCampaignName || '';
-  // We use a local state for adset/ad name overrides since they're not in LaunchConfig top-level
-  const [adsetNameOverride, setAdsetNameOverride] = useState('');
-  const [adNameOverride, setAdNameOverride] = useState('');
+  const adsetNameOverride = launchConfig.adsetNameOverride || '';
+  const adNameOverride = launchConfig.adNameOverride || '';
 
   return (
     <div className="space-y-8">
@@ -188,8 +187,8 @@ export function LaunchStep3Settings() {
         <div>
           <label className="mb-1.5 block text-sm font-medium text-slate-700">Attribution Window</label>
           <select
-            value="7d_click_1d_view"
-            onChange={() => {}}
+            value={attributionWindow}
+            onChange={(e) => updateLaunchConfig({ attributionWindow: e.target.value })}
             className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 sm:w-72"
           >
             {ATTRIBUTION_WINDOWS.map((w) => (
@@ -245,7 +244,7 @@ export function LaunchStep3Settings() {
             <input
               type="text"
               value={adsetNameOverride}
-              onChange={(e) => setAdsetNameOverride(e.target.value)}
+              onChange={(e) => updateLaunchConfig({ adsetNameOverride: e.target.value })}
               placeholder="Auto-generated"
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
@@ -255,7 +254,7 @@ export function LaunchStep3Settings() {
             <input
               type="text"
               value={adNameOverride}
-              onChange={(e) => setAdNameOverride(e.target.value)}
+              onChange={(e) => updateLaunchConfig({ adNameOverride: e.target.value })}
               placeholder="Auto-generated"
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />

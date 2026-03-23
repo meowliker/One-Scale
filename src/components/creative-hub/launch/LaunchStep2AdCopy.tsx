@@ -6,8 +6,6 @@ import {
   X,
   Sparkles,
   Trophy,
-  ChevronDown,
-  ChevronUp,
   Link2,
   Info,
   Type,
