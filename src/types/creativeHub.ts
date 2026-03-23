@@ -12,6 +12,7 @@ export interface ProductProfile {
   adAccountCurrency: string;
   pageId?: string;
   instagramActorId?: string;
+  instagramUsername?: string;
   pixelId?: string;
   conversionEvent: string;
   destinationUrl?: string;
@@ -27,6 +28,7 @@ export interface ProductProfile {
   namingTemplate?: NamingTemplate;
   targetingPresets?: TargetingPreset[];
   clickupListId?: string;
+  clickupListName?: string;
   clickupSyncInterval: number;
   aiMinSpend?: number;
   aiMinImpressions: number;
@@ -84,6 +86,14 @@ export interface ProductCampaignLink {
   campaignName: string;
   campaignType: CampaignLinkType;
   adAccountId: string;
+  pageId?: string;
+  pageName?: string;
+  pixelId?: string;
+  pixelName?: string;
+  instagramActorId?: string;
+  instagramUsername?: string;
+  bmId?: string;
+  bmName?: string;
   isActive: boolean;
   linkedAt: string;
 }

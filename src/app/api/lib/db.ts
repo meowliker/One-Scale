@@ -323,6 +323,7 @@ function initDb(): Database.Database {
       ad_account_currency TEXT DEFAULT 'USD',
       page_id TEXT,
       instagram_actor_id TEXT,
+      instagram_username TEXT,
       pixel_id TEXT,
       conversion_event TEXT DEFAULT 'PURCHASE',
       destination_url TEXT,
@@ -338,6 +339,7 @@ function initDb(): Database.Database {
       naming_template_json TEXT,
       targeting_presets_json TEXT,
       clickup_list_id TEXT,
+      clickup_list_name TEXT,
       clickup_sync_interval INTEGER DEFAULT 30,
       ai_min_spend REAL,
       ai_min_impressions INTEGER DEFAULT 500,
@@ -354,6 +356,14 @@ function initDb(): Database.Database {
       campaign_name TEXT,
       campaign_type TEXT NOT NULL,
       ad_account_id TEXT NOT NULL,
+      page_id TEXT,
+      page_name TEXT,
+      pixel_id TEXT,
+      pixel_name TEXT,
+      instagram_actor_id TEXT,
+      instagram_username TEXT,
+      bm_id TEXT,
+      bm_name TEXT,
       is_active INTEGER DEFAULT 1,
       linked_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (product_profile_id) REFERENCES product_profiles(id)
@@ -567,6 +577,20 @@ function initDb(): Database.Database {
   if (!hasProductLinks) {
     instance.exec('ALTER TABLE product_launch_profiles ADD COLUMN product_links TEXT');
   }
+
+  // Migration: add clickup_list_name & instagram_username to product_profiles
+  try { instance.exec('ALTER TABLE product_profiles ADD COLUMN clickup_list_name TEXT'); } catch {}
+  try { instance.exec('ALTER TABLE product_profiles ADD COLUMN instagram_username TEXT'); } catch {}
+
+  // Migration: add per-campaign metadata columns to product_campaign_links
+  try { instance.exec('ALTER TABLE product_campaign_links ADD COLUMN page_id TEXT'); } catch {}
+  try { instance.exec('ALTER TABLE product_campaign_links ADD COLUMN page_name TEXT'); } catch {}
+  try { instance.exec('ALTER TABLE product_campaign_links ADD COLUMN pixel_id TEXT'); } catch {}
+  try { instance.exec('ALTER TABLE product_campaign_links ADD COLUMN pixel_name TEXT'); } catch {}
+  try { instance.exec('ALTER TABLE product_campaign_links ADD COLUMN instagram_actor_id TEXT'); } catch {}
+  try { instance.exec('ALTER TABLE product_campaign_links ADD COLUMN instagram_username TEXT'); } catch {}
+  try { instance.exec('ALTER TABLE product_campaign_links ADD COLUMN bm_id TEXT'); } catch {}
+  try { instance.exec('ALTER TABLE product_campaign_links ADD COLUMN bm_name TEXT'); } catch {}
 
   ensureMetaSnapshotSchema(instance);
 

@@ -21,6 +21,7 @@ interface ProductProfileRow {
   ad_account_currency: string;
   page_id: string | null;
   instagram_actor_id: string | null;
+  instagram_username: string | null;
   pixel_id: string | null;
   conversion_event: string;
   destination_url: string | null;
@@ -36,6 +37,7 @@ interface ProductProfileRow {
   naming_template_json: string | null;
   targeting_presets_json: string | null;
   clickup_list_id: string | null;
+  clickup_list_name: string | null;
   clickup_sync_interval: number;
   ai_min_spend: number | null;
   ai_min_impressions: number;
@@ -52,6 +54,14 @@ interface ProductCampaignLinkRow {
   campaign_name: string | null;
   campaign_type: string;
   ad_account_id: string;
+  page_id: string | null;
+  page_name: string | null;
+  pixel_id: string | null;
+  pixel_name: string | null;
+  instagram_actor_id: string | null;
+  instagram_username: string | null;
+  bm_id: string | null;
+  bm_name: string | null;
   is_active: number;
   linked_at: string;
 }
@@ -172,6 +182,7 @@ function mapProfileRow(row: ProductProfileRow): ProductProfile {
     adAccountCurrency: row.ad_account_currency,
     pageId: row.page_id ?? undefined,
     instagramActorId: row.instagram_actor_id ?? undefined,
+    instagramUsername: row.instagram_username ?? undefined,
     pixelId: row.pixel_id ?? undefined,
     conversionEvent: row.conversion_event,
     destinationUrl: row.destination_url ?? undefined,
@@ -187,6 +198,7 @@ function mapProfileRow(row: ProductProfileRow): ProductProfile {
     namingTemplate: row.naming_template_json ? JSON.parse(row.naming_template_json) : undefined,
     targetingPresets: row.targeting_presets_json ? JSON.parse(row.targeting_presets_json) : undefined,
     clickupListId: row.clickup_list_id ?? undefined,
+    clickupListName: row.clickup_list_name ?? undefined,
     clickupSyncInterval: row.clickup_sync_interval,
     aiMinSpend: row.ai_min_spend ?? undefined,
     aiMinImpressions: row.ai_min_impressions,
@@ -205,6 +217,14 @@ function mapCampaignLinkRow(row: ProductCampaignLinkRow): ProductCampaignLink {
     campaignName: row.campaign_name ?? '',
     campaignType: row.campaign_type as ProductCampaignLink['campaignType'],
     adAccountId: row.ad_account_id,
+    pageId: row.page_id ?? undefined,
+    pageName: row.page_name ?? undefined,
+    pixelId: row.pixel_id ?? undefined,
+    pixelName: row.pixel_name ?? undefined,
+    instagramActorId: row.instagram_actor_id ?? undefined,
+    instagramUsername: row.instagram_username ?? undefined,
+    bmId: row.bm_id ?? undefined,
+    bmName: row.bm_name ?? undefined,
     isActive: row.is_active === 1,
     linkedAt: row.linked_at,
   };
@@ -345,22 +365,22 @@ export function upsertProductProfile(profile: Partial<ProductProfile> & { id: st
   db.prepare(`
     INSERT INTO product_profiles (
       id, store_id, shopify_product_id, product_name, product_image,
-      ad_account_id, ad_account_currency, page_id, instagram_actor_id, pixel_id,
+      ad_account_id, ad_account_currency, page_id, instagram_actor_id, instagram_username, pixel_id,
       conversion_event, destination_url, utm_template, average_order_value,
       default_budget, default_duration, default_bid_strategy, default_bid_amount,
       default_roas_floor, default_structure, default_launch_status,
       naming_template_json, targeting_presets_json,
-      clickup_list_id, clickup_sync_interval,
+      clickup_list_id, clickup_list_name, clickup_sync_interval,
       ai_min_spend, ai_min_impressions, ai_min_hours, ai_eval_frequency,
       updated_at
     ) VALUES (
       ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?,
       ?, ?,
-      ?, ?,
+      ?, ?, ?,
       ?, ?, ?, ?,
       datetime('now')
     )
@@ -372,6 +392,7 @@ export function upsertProductProfile(profile: Partial<ProductProfile> & { id: st
       ad_account_currency = excluded.ad_account_currency,
       page_id = excluded.page_id,
       instagram_actor_id = excluded.instagram_actor_id,
+      instagram_username = excluded.instagram_username,
       pixel_id = excluded.pixel_id,
       conversion_event = excluded.conversion_event,
       destination_url = excluded.destination_url,
@@ -387,6 +408,7 @@ export function upsertProductProfile(profile: Partial<ProductProfile> & { id: st
       naming_template_json = excluded.naming_template_json,
       targeting_presets_json = excluded.targeting_presets_json,
       clickup_list_id = excluded.clickup_list_id,
+      clickup_list_name = excluded.clickup_list_name,
       clickup_sync_interval = excluded.clickup_sync_interval,
       ai_min_spend = excluded.ai_min_spend,
       ai_min_impressions = excluded.ai_min_impressions,
@@ -403,6 +425,7 @@ export function upsertProductProfile(profile: Partial<ProductProfile> & { id: st
     profile.adAccountCurrency ?? 'USD',
     profile.pageId ?? null,
     profile.instagramActorId ?? null,
+    profile.instagramUsername ?? null,
     profile.pixelId ?? null,
     profile.conversionEvent ?? 'PURCHASE',
     profile.destinationUrl ?? null,
@@ -418,6 +441,7 @@ export function upsertProductProfile(profile: Partial<ProductProfile> & { id: st
     profile.namingTemplate ? JSON.stringify(profile.namingTemplate) : null,
     profile.targetingPresets ? JSON.stringify(profile.targetingPresets) : null,
     profile.clickupListId ?? null,
+    profile.clickupListName ?? null,
     profile.clickupSyncInterval ?? 30,
     profile.aiMinSpend ?? null,
     profile.aiMinImpressions ?? 500,
@@ -444,12 +468,25 @@ export function getProductCampaignLinks(profileId: string): ProductCampaignLink[
 export function upsertProductCampaignLink(link: Partial<ProductCampaignLink> & { id: string; productProfileId: string; campaignId: string; campaignType: string; adAccountId: string }): void {
   const db = getDb();
   db.prepare(`
-    INSERT INTO product_campaign_links (id, product_profile_id, campaign_id, campaign_name, campaign_type, ad_account_id, is_active)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO product_campaign_links (
+      id, product_profile_id, campaign_id, campaign_name, campaign_type, ad_account_id,
+      page_id, page_name, pixel_id, pixel_name,
+      instagram_actor_id, instagram_username, bm_id, bm_name,
+      is_active
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       campaign_name = excluded.campaign_name,
       campaign_type = excluded.campaign_type,
       ad_account_id = excluded.ad_account_id,
+      page_id = excluded.page_id,
+      page_name = excluded.page_name,
+      pixel_id = excluded.pixel_id,
+      pixel_name = excluded.pixel_name,
+      instagram_actor_id = excluded.instagram_actor_id,
+      instagram_username = excluded.instagram_username,
+      bm_id = excluded.bm_id,
+      bm_name = excluded.bm_name,
       is_active = excluded.is_active
   `).run(
     link.id,
@@ -458,6 +495,14 @@ export function upsertProductCampaignLink(link: Partial<ProductCampaignLink> & {
     link.campaignName ?? null,
     link.campaignType,
     link.adAccountId,
+    link.pageId ?? null,
+    link.pageName ?? null,
+    link.pixelId ?? null,
+    link.pixelName ?? null,
+    link.instagramActorId ?? null,
+    link.instagramUsername ?? null,
+    link.bmId ?? null,
+    link.bmName ?? null,
     link.isActive !== false ? 1 : 0,
   );
 }
