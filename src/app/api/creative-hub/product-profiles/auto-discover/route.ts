@@ -193,11 +193,12 @@ export async function POST(request: NextRequest) {
         const adsResult = await fetchFromMeta<{
           data: Array<{
             id: string;
+            adset_id?: string;
             creative?: { id?: string };
             promoted_object?: { pixel_id?: string };
           }>;
         }>(metaToken, `${campaign.id}/ads`, {
-          fields: 'id,creative{id},promoted_object',
+          fields: 'id,adset_id,creative{id},promoted_object',
           limit: '1',
         }, 8000, 0);
 
@@ -205,7 +206,20 @@ export async function POST(request: NextRequest) {
         if (!ad) return;
 
         const creativeId = ad.creative?.id;
-        const pixelId = ad.promoted_object?.pixel_id;
+        let pixelId = ad.promoted_object?.pixel_id;
+
+        // pixel_id is on the adset's promoted_object, not the ad
+        // If not found on ad, fetch from adset
+        if (!pixelId && ad.adset_id) {
+          try {
+            const adsetResult = await fetchFromMeta<{
+              promoted_object?: { pixel_id?: string };
+            }>(metaToken, ad.adset_id, {
+              fields: 'promoted_object',
+            }, 5000, 0);
+            pixelId = adsetResult.promoted_object?.pixel_id;
+          } catch { /* skip */ }
+        }
 
         const meta: CampaignMeta = {
           campaignId: campaign.id,
