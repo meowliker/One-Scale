@@ -335,14 +335,26 @@ export async function POST(request: NextRequest) {
     }
 
     // 4a: Resolve page names
-    await batchProcess(Array.from(uniquePageIds), 10, async (pageId) => {
+    // First try: fetch ALL pages the user manages via me/accounts (catches cross-BM pages)
+    try {
+      const allPages = await fetchFromMeta<{ data: Array<{ id: string; name: string }> }>(
+        metaToken, 'me/accounts', { fields: 'id,name', limit: '200' }, 8000, 0,
+      );
+      for (const p of allPages.data || []) {
+        if (p.id && p.name) pageNameMap.set(p.id, p.name);
+      }
+    } catch { /* skip */ }
+
+    // Second try: for any still-unresolved page IDs, try direct lookup + promote_pages
+    const unresolvedPageIds = Array.from(uniquePageIds).filter(id => !pageNameMap.has(id));
+    await batchProcess(unresolvedPageIds, 10, async (pageId) => {
       try {
         const page = await fetchFromMeta<{ id: string; name: string }>(
           metaToken, pageId, { fields: 'id,name' }, 5000, 0,
         );
         if (page.name) pageNameMap.set(pageId, page.name);
       } catch {
-        // Try promote_pages fallback for pages we can't access directly
+        // Try promote_pages fallback
         for (const acct of adAccounts) {
           try {
             const promotedPages = await fetchFromMeta<{ data: Array<{ id: string; name: string }> }>(
