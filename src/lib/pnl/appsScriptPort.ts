@@ -638,8 +638,12 @@ export async function buildProductPerformance(
     if (activity && activityMap.size > 0) {
       // Product launched AFTER the date range → skip
       if (activity.firstDate && activity.firstDate > dateTo) continue;
-      // Product was deactivated BEFORE the date range → skip
-      if (activity.lastDate && activity.lastDate < dateFrom) continue;
+      // Product was deactivated well BEFORE the date range → skip
+      // Use 30-day grace period: a product with orders yesterday shouldn't vanish from "Today"
+      if (activity.lastDate && activity.lastDate < dateFrom) {
+        const diffMs = new Date(dateFrom + 'T00:00:00').getTime() - new Date(activity.lastDate + 'T00:00:00').getTime();
+        if (diffMs > 30 * 86_400_000) continue;
+      }
     }
     const pid = product.product_id;
     const rev = round2(revenue.get(pid) ?? 0);
