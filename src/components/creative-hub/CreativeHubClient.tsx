@@ -1,12 +1,19 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Package, Inbox, FlaskConical, Trophy, BookOpen } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tabs } from '@/components/ui/Tabs';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
+import { useStoreStore } from '@/stores/storeStore';
 import type { CreativeHubTab } from '@/types/creativeHub';
+import { ProductProfilesTab } from '@/components/creative-hub/ProductProfilesTab';
+import { CreativeInboxTab } from '@/components/creative-hub/CreativeInboxTab';
+import { ActiveTestsTab } from '@/components/creative-hub/ActiveTestsTab';
+import { CompletedTestsTab } from '@/components/creative-hub/CompletedTestsTab';
+import { CopyLibraryTab } from '@/components/creative-hub/CopyLibraryTab';
+import { LaunchWizard } from '@/components/creative-hub/LaunchWizard';
 
 const tabs: { id: CreativeHubTab; label: string }[] = [
   { id: 'profiles', label: 'Product Profiles' },
@@ -16,14 +23,6 @@ const tabs: { id: CreativeHubTab; label: string }[] = [
   { id: 'copy-library', label: 'Copy Library' },
 ];
 
-const tabIcons: Record<CreativeHubTab, typeof Package> = {
-  profiles: Package,
-  inbox: Inbox,
-  active: FlaskConical,
-  completed: Trophy,
-  'copy-library': BookOpen,
-};
-
 export default function CreativeHubClient() {
   const activeTab = useCreativeHubStore((s) => s.activeTab);
   const setActiveTab = useCreativeHubStore((s) => s.setActiveTab);
@@ -31,11 +30,39 @@ export default function CreativeHubClient() {
   const inboxCreatives = useCreativeHubStore((s) => s.inboxCreatives);
   const activeTests = useCreativeHubStore((s) => s.activeTests);
   const completedTests = useCreativeHubStore((s) => s.completedTests);
+  const launchWizardOpen = useCreativeHubStore((s) => s.launchWizardOpen);
+  const fetchProfiles = useCreativeHubStore((s) => s.fetchProfiles);
+  const fetchInbox = useCreativeHubStore((s) => s.fetchInbox);
+  const fetchActiveTests = useCreativeHubStore((s) => s.fetchActiveTests);
+  const fetchCompletedTests = useCreativeHubStore((s) => s.fetchCompletedTests);
+
+  const activeStoreId = useStoreStore((s) => s.activeStoreId);
 
   const winnersCount = useMemo(
-    () => completedTests.filter((t) => t.status === 'completed' && t.winnerId).length,
+    () => completedTests.filter((t) => t.status === 'completed' && t.winnerCreativeId).length,
     [completedTests]
   );
+
+  // Fetch data based on active tab and storeId
+  useEffect(() => {
+    if (!activeStoreId) return;
+
+    switch (activeTab) {
+      case 'profiles':
+        fetchProfiles(activeStoreId);
+        break;
+      case 'inbox':
+        fetchInbox(activeStoreId);
+        break;
+      case 'active':
+        fetchActiveTests(activeStoreId);
+        break;
+      case 'completed':
+        fetchCompletedTests(activeStoreId);
+        break;
+      // copy-library fetches are driven by selected profile within the tab
+    }
+  }, [activeTab, activeStoreId, fetchProfiles, fetchInbox, fetchActiveTests, fetchCompletedTests]);
 
   return (
     <div className="space-y-6">
@@ -91,13 +118,16 @@ export default function CreativeHubClient() {
           exit={{ opacity: 0, y: -8 }}
           transition={{ duration: 0.15 }}
         >
-          {activeTab === 'profiles' && <TabPlaceholder tab="profiles" icon={Package} />}
-          {activeTab === 'inbox' && <TabPlaceholder tab="inbox" icon={Inbox} />}
-          {activeTab === 'active' && <TabPlaceholder tab="active" icon={FlaskConical} />}
-          {activeTab === 'completed' && <TabPlaceholder tab="completed" icon={Trophy} />}
-          {activeTab === 'copy-library' && <TabPlaceholder tab="copy-library" icon={BookOpen} />}
+          {activeTab === 'profiles' && <ProductProfilesTab storeId={activeStoreId} />}
+          {activeTab === 'inbox' && <CreativeInboxTab storeId={activeStoreId} />}
+          {activeTab === 'active' && <ActiveTestsTab />}
+          {activeTab === 'completed' && <CompletedTestsTab storeId={activeStoreId} />}
+          {activeTab === 'copy-library' && <CopyLibraryTab storeId={activeStoreId} />}
         </motion.div>
       </AnimatePresence>
+
+      {/* Launch Wizard overlay */}
+      {launchWizardOpen && <LaunchWizard />}
     </div>
   );
 }
@@ -132,22 +162,3 @@ function StatCard({
   );
 }
 
-/* ── Tab Placeholder ── */
-
-function TabPlaceholder({ tab, icon: Icon }: { tab: CreativeHubTab; icon: typeof Package }) {
-  const labels: Record<CreativeHubTab, string> = {
-    profiles: 'Product Profiles',
-    inbox: 'Creative Inbox',
-    active: 'Active Tests',
-    completed: 'Completed Tests',
-    'copy-library': 'Copy Library',
-  };
-
-  return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-surface-elevated p-16 text-center">
-      <Icon className="h-12 w-12 text-text-muted mb-4" />
-      <p className="text-lg font-medium text-text-primary">{labels[tab]}</p>
-      <p className="text-sm text-text-secondary mt-1">This section is coming soon</p>
-    </div>
-  );
-}

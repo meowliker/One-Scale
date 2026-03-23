@@ -8,6 +8,7 @@ import type {
   CreativeTest,
   WinningCopy,
   FatigueAlert,
+  PreLaunchReport,
 } from '@/types/creativeHub';
 
 // Inline type for unmapped campaigns returned by auto-discover
@@ -52,6 +53,9 @@ interface CreativeHubState {
   // Fatigue Alerts
   fatigueAlerts: FatigueAlert[];
 
+  // Health Check
+  healthCheckReport: PreLaunchReport | null;
+
   // Actions
   setActiveTab: (tab: CreativeHubTab) => void;
 
@@ -80,6 +84,11 @@ interface CreativeHubState {
   fetchActiveTests: (storeId: string) => Promise<void>;
   fetchCompletedTests: (storeId: string) => Promise<void>;
   executeAIActions: (testId: string, actions: Record<string, string>) => Promise<void>;
+  fetchTestMetrics: (testId: string) => Promise<void>;
+  fetchReviewStatus: (testId: string) => Promise<void>;
+
+  // Launch actions
+  runHealthCheck: (storeId: string) => Promise<void>;
 
   // Copy library actions
   fetchCopyLibrary: (productProfileId: string) => Promise<void>;
@@ -113,6 +122,8 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
   copyLibrary: [],
 
   fatigueAlerts: [],
+
+  healthCheckReport: null,
 
   // ── Tab navigation ──
 
@@ -364,7 +375,7 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
   fetchActiveTests: async (storeId: string) => {
     set({ activeTestsLoading: true });
     try {
-      const res = await fetch(`/api/creative-hub/active-tests?storeId=${encodeURIComponent(storeId)}`);
+      const res = await fetch(`/api/creative-hub/tests/active?storeId=${encodeURIComponent(storeId)}`);
       const data = await res.json();
       set({
         activeTests: data.tests ?? [],
@@ -378,17 +389,17 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
 
   fetchCompletedTests: async (storeId: string) => {
     try {
-      const res = await fetch(`/api/creative-hub/active-tests?storeId=${encodeURIComponent(storeId)}&status=completed`);
+      const res = await fetch(`/api/creative-hub/tests/active?storeId=${encodeURIComponent(storeId)}&status=completed`);
       const data = await res.json();
       set({ completedTests: data.tests ?? [] });
     } catch {
-      // Error handling deferred to Task 16
+      // silent
     }
   },
 
   executeAIActions: async (testId: string, actions: Record<string, string>) => {
     try {
-      await fetch(`/api/creative-hub/active-tests/${testId}/ai-actions`, {
+      await fetch(`/api/creative-hub/tests/${testId}/actions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ actions }),
@@ -421,17 +432,17 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
 
   fetchCopyLibrary: async (productProfileId: string) => {
     try {
-      const res = await fetch(`/api/creative-hub/copy-library?productProfileId=${encodeURIComponent(productProfileId)}`);
+      const res = await fetch(`/api/creative-hub/copy-library?productId=${encodeURIComponent(productProfileId)}`);
       const data = await res.json();
       set({ copyLibrary: data.copies ?? [] });
     } catch {
-      // Error handling deferred to Task 16
+      // silent
     }
   },
 
   generateAICopy: async (productProfileId: string, context: string) => {
     try {
-      const res = await fetch('/api/creative-hub/copy-library/generate', {
+      const res = await fetch('/api/creative-hub/copy-library/ai-generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ productProfileId, context }),
@@ -461,7 +472,76 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
         set({ copyLibrary: [data.copy, ...copyLibrary] });
       }
     } catch {
-      // Error handling deferred to Task 16
+      // silent
+    }
+  },
+
+  // ── Health Check ──
+
+  runHealthCheck: async (storeId: string) => {
+    try {
+      const { launchConfig } = get();
+      const res = await fetch('/api/creative-hub/launch/health-check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storeId, config: launchConfig }),
+      });
+      const data = await res.json();
+
+      if (data.report) {
+        set({ healthCheckReport: data.report });
+      }
+    } catch {
+      // silent
+    }
+  },
+
+  // ── Test Metrics ──
+
+  fetchTestMetrics: async (testId: string) => {
+    try {
+      const res = await fetch(`/api/creative-hub/tests/${testId}/metrics`);
+      const data = await res.json();
+
+      if (data.test) {
+        const { activeTests } = get();
+        set({
+          activeTests: activeTests.map((t) =>
+            t.id === testId ? { ...t, ...data.test } : t
+          ),
+        });
+      }
+    } catch {
+      // silent
+    }
+  },
+
+  // ── Review Status ──
+
+  fetchReviewStatus: async (testId: string) => {
+    try {
+      const res = await fetch(`/api/creative-hub/tests/${testId}/review-status`);
+      const data = await res.json();
+
+      if (data.items) {
+        const { activeTests } = get();
+        set({
+          activeTests: activeTests.map((t) => {
+            if (t.id !== testId) return t;
+            return {
+              ...t,
+              items: t.items.map((item) => {
+                const updated = data.items.find(
+                  (u: { id: string }) => u.id === item.id
+                );
+                return updated ? { ...item, ...updated } : item;
+              }),
+            };
+          }),
+        });
+      }
+    } catch {
+      // silent
     }
   },
 }));
