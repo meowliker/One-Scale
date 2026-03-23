@@ -403,6 +403,8 @@ export async function POST(request: NextRequest) {
             );
           }
 
+          (globalThis as Record<string, unknown>).__step3bReached = true;
+          (globalThis as Record<string, unknown>).__step3bAdIds = campaignAdIds.size;
           console.log(`[auto-discover] Found ${campaignAdIds.size} ad IDs for ${allCampaignIds.length} campaigns`);
 
           // Step B: For each ad, fetch its adcreatives endpoint separately
@@ -843,6 +845,10 @@ export async function POST(request: NextRequest) {
         campaignMetaEntries: Array.from(campaignMetaMap.entries()).map(([k, v]) => ({ campaignId: k, ...v })),
         pageNameMapSize: pageNameMap.size,
         pixelNameMapSize: pixelNameMap.size,
+        source,
+        matchedCampaignIds: Array.from(seenCampaignIds),
+        step3bReached: (globalThis as Record<string, unknown>).__step3bReached ?? false,
+        step3bAdIds: (globalThis as Record<string, unknown>).__step3bAdIds ?? 0,
       },
     });
   } catch (err) {
