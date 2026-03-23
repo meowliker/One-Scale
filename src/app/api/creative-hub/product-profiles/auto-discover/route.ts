@@ -379,25 +379,48 @@ export async function POST(request: NextRequest) {
             };
           }
 
-          // Process campaigns in parallel (max 10 concurrent)
+          // Two-step: get ad IDs from campaigns, then fetch each ad's creative separately
+          // Step A: Get 1 ad ID per campaign
           const allCampaignIds = campaignIdsNeedingMeta.map(c => c.campaignId);
+          const campaignAdIds = new Map<string, string>(); // campaignId -> adId
+
           const batchSize = 10;
           for (let i = 0; i < allCampaignIds.length; i += batchSize) {
             const batch = allCampaignIds.slice(i, i + batchSize);
-            const results = await Promise.allSettled(
+            await Promise.allSettled(
               batch.map(async (campaignId) => {
                 try {
-                  const result = await fetchFromMeta<{ data: LiveMetaAd[] }>(
+                  const result = await fetchFromMeta<{ data: Array<{ id: string }> }>(
                     metaToken,
                     `${campaignId}/ads`,
-                    {
-                      fields: 'id,creative{id,object_story_spec},promoted_object',
-                      limit: '1',
-                    },
-                    10000, 0,
+                    { fields: 'id', limit: '1' },
+                    8000, 0,
                   );
-                  const ad = result.data?.[0];
-                  if (!ad) return;
+                  const adId = result.data?.[0]?.id;
+                  if (adId) campaignAdIds.set(campaignId, adId);
+                } catch { /* skip */ }
+              })
+            );
+          }
+
+          console.log(`[auto-discover] Found ${campaignAdIds.size} ad IDs for ${allCampaignIds.length} campaigns`);
+
+          // Step B: Fetch each ad's creative + promoted_object
+          const adEntries = Array.from(campaignAdIds.entries());
+          for (let i = 0; i < adEntries.length; i += batchSize) {
+            const batch = adEntries.slice(i, i + batchSize);
+            await Promise.allSettled(
+              batch.map(async ([campaignId, adId]) => {
+                try {
+                  const ad = await fetchFromMeta<LiveMetaAd & {
+                    creative?: { id?: string; object_story_spec?: { page_id?: string; instagram_actor_id?: string } };
+                    promoted_object?: { pixel_id?: string };
+                  }>(
+                    metaToken,
+                    adId,
+                    { fields: 'creative{id,object_story_spec},promoted_object' },
+                    8000, 0,
+                  );
 
                   const meta: CampaignMeta = {};
                   if (ad.creative?.object_story_spec?.page_id) {
@@ -413,7 +436,7 @@ export async function POST(request: NextRequest) {
                     campaignMetaMap.set(campaignId, meta);
                   }
                 } catch (err) {
-                  console.warn(`[auto-discover] Failed to fetch meta for campaign ${campaignId}:`, err);
+                  console.warn(`[auto-discover] Failed creative fetch for ad ${adId}:`, err);
                 }
               })
             );
