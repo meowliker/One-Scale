@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCopyLibrary, getProductProfile, getProductCampaignLinks } from '@/app/api/lib/creative-hub-db';
+import { autoPopulateCopyLibrary } from '@/app/api/creative-hub/copy-library/auto-populate/route';
 
 /**
  * POST /api/creative-hub/copy-library/ai-analyze
@@ -197,6 +198,18 @@ export async function POST(request: NextRequest) {
         { error: 'Product profile not found or does not belong to this store' },
         { status: 404 }
       );
+    }
+
+    // Auto-populate copy library from Supabase ad snapshots before analysis
+    // so the AI has real performance data to work with
+    try {
+      const populateResult = await autoPopulateCopyLibrary(storeId, productProfileId);
+      if (populateResult.saved > 0) {
+        console.log(`[ai-analyze] Auto-populated ${populateResult.saved} copies from ad snapshots`);
+      }
+    } catch (err) {
+      // Non-fatal: continue with whatever copies already exist
+      console.warn('[ai-analyze] Auto-populate failed, continuing with existing data:', err);
     }
 
     const copies = getCopyLibrary(productProfileId);
