@@ -103,7 +103,8 @@ export async function fetchFromMeta<T>(
 
     await acquireSlot();
     try {
-      const url = new URL(`${META_GRAPH_URL}${endpoint}`);
+      const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+      const url = new URL(`${META_GRAPH_URL}${normalizedEndpoint}`);
       url.searchParams.set('access_token', token);
       for (const [key, value] of Object.entries(params)) {
         url.searchParams.set(key, value);
