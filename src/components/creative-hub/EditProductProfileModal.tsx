@@ -126,6 +126,7 @@ export function EditProductProfileModal({
   // ClickUp lists state
   const [clickupLists, setClickupLists] = useState<Array<{ id: string; name: string }>>([]);
   const [clickupLoading, setClickupLoading] = useState(false);
+  const [clickupConnected, setClickupConnected] = useState(true);
 
   useEffect(() => {
     if (isOpen) {
@@ -152,13 +153,34 @@ export function EditProductProfileModal({
         .finally(() => setOptionsLoading(false));
     }
 
-    // Fetch ClickUp lists
+    // Fetch ClickUp lists — prefer available-lists (all workspace lists) with fallback to list-mappings
     setClickupLoading(true);
-    fetch(`/api/integrations/clickup/list-mappings?storeId=${storeId}`)
+    setClickupConnected(true);
+    fetch(`/api/integrations/clickup/available-lists?storeId=${storeId}`)
       .then((r) => r.json())
       .then((data) => {
-        if (data.connected && data.lists) {
-          setClickupLists(data.lists.map((l: Record<string, unknown>) => ({ id: l.id as string, name: l.name as string })));
+        if (data.error) {
+          // available-lists failed (not connected or no workspace), try list-mappings
+          return fetch(`/api/integrations/clickup/list-mappings?storeId=${storeId}`)
+            .then((r2) => r2.json())
+            .then((fallback) => {
+              if (fallback.connected && fallback.lists) {
+                setClickupLists(fallback.lists.map((l: Record<string, unknown>) => ({ id: l.id as string, name: l.name as string })));
+              } else {
+                setClickupConnected(false);
+              }
+            });
+        }
+        // available-lists returned workspace lists
+        if (data.lists && data.lists.length > 0) {
+          setClickupLists(
+            data.lists.map((l: Record<string, unknown>) => ({
+              id: l.id as string,
+              name: [l.space && (l.space as Record<string, string>).name, l.folder && (l.folder as Record<string, string>).name, l.name as string]
+                .filter(Boolean)
+                .join(' > '),
+            }))
+          );
         }
       })
       .catch(() => {})
@@ -499,17 +521,30 @@ export function EditProductProfileModal({
                         <FormField label="ClickUp List">
                           {clickupLoading ? (
                             <p className="text-xs text-text-secondary py-2">Loading lists...</p>
+                          ) : !clickupConnected ? (
+                            <p className="text-xs text-text-secondary py-2">
+                              ClickUp not connected. Connect ClickUp in Settings &rarr; Integrations.
+                            </p>
                           ) : clickupLists.length > 0 ? (
                             <select
                               value={form.clickupListId ?? ''}
                               onChange={(e) => {
                                 const list = clickupLists.find((l) => l.id === e.target.value);
                                 updateField('clickupListId', e.target.value);
-                                updateField('clickupListName', list?.name ?? '');
+                                // Store just the list name (last segment after " > ") for display
+                                const fullName = list?.name ?? '';
+                                const segments = fullName.split(' > ');
+                                updateField('clickupListName', segments[segments.length - 1] || fullName);
                               }}
                               className={selectCls}
                             >
                               <option value="">Select a list...</option>
+                              {/* Include saved list if not in available lists */}
+                              {form.clickupListId && !clickupLists.some(l => l.id === form.clickupListId) && (
+                                <option value={form.clickupListId}>
+                                  {form.clickupListName || profile?.clickupListName || form.clickupListId} (saved)
+                                </option>
+                              )}
                               {clickupLists.map((list) => (
                                 <option key={list.id} value={list.id}>
                                   {list.name}
@@ -518,7 +553,7 @@ export function EditProductProfileModal({
                             </select>
                           ) : (
                             <p className="text-xs text-text-secondary py-2">
-                              No ClickUp lists available. Connect ClickUp in Settings &rarr; Integrations.
+                              No ClickUp lists found in your workspace. Add lists in ClickUp first.
                             </p>
                           )}
                         </FormField>
