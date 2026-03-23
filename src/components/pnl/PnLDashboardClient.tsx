@@ -126,13 +126,24 @@ export function PnLDashboardClient({
 
   const activeEntry = useMemo(() => {
     const entry = computeEntryFromDaily(dailyPnL, dateRange, customExpensesList);
+    // If no data found for the selected range and preset is 'today', use summary.today
+    // This ensures data shows immediately while getDailyPnL loads in background
+    if (entry.revenue === 0 && entry.orderCount === 0 && datePreset === 'today' && summary.today.revenue > 0) {
+      return summary.today;
+    }
     return entry;
-  }, [dailyPnL, dateRange, customExpensesList]);
+  }, [dailyPnL, dateRange, customExpensesList, datePreset, summary.today]);
 
   const todayEntry = useMemo(() => {
     const todayRange = getDateRange('today');
-    return computeEntryFromDaily(dailyPnL, todayRange, customExpensesList);
-  }, [dailyPnL, customExpensesList]);
+    const computed = computeEntryFromDaily(dailyPnL, todayRange, customExpensesList);
+    // If dailyPnL has no data for today, fall back to the summary prop
+    // This prevents showing zeros when getDailyPnL hasn't resolved yet
+    if (computed.revenue === 0 && computed.orderCount === 0 && summary.today.revenue > 0) {
+      return summary.today;
+    }
+    return computed;
+  }, [dailyPnL, customExpensesList, summary.today]);
 
   // Filter dailyPnL and hourlyPnL by the global date range
   const filteredDailyPnL = useMemo(() => {

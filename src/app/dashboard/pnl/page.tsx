@@ -223,8 +223,29 @@ export default function PnLPage() {
       getDailyPnL()
         .then((d) => {
           if (isStale()) return;
+          // CRITICAL: never replace good data with empty
+          if (d.length === 0) {
+            console.warn('[P&L] getDailyPnL returned empty — keeping existing data');
+            return;
+          }
           const refreshedAt = new Date();
-          setDailyPnL(d);
+          // CRITICAL: getDailyPnL snapshots may have zeros for today (snapshot
+          // not yet generated). The summary.today from getPnLSummary() is computed
+          // LIVE and has real data. Always prefer the live today entry over a zero snapshot.
+          setDailyPnL(() => {
+            const todayDate = s.today.date;
+            const liveHasData = s.today.revenue > 0 || (s.today.orderCount ?? 0) > 0;
+            if (todayDate && liveHasData) {
+              const snapshotToday = d.find(e => e.date === todayDate);
+              const snapshotIsEmpty = !snapshotToday || (snapshotToday.revenue === 0 && (snapshotToday.orderCount ?? 0) === 0);
+              if (snapshotIsEmpty) {
+                // Replace the zero snapshot entry with the live summary entry
+                const withoutToday = d.filter(e => e.date !== todayDate);
+                return [...withoutToday, s.today].sort((a, b) => a.date.localeCompare(b.date));
+              }
+            }
+            return d;
+          });
           setLastRefreshed(refreshedAt);
           setLastRefreshedLabel(formatLastRefreshed(refreshedAt));
           writePnLCache(fetchForStore, {
