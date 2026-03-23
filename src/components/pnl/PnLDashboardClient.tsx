@@ -124,16 +124,17 @@ export function PnLDashboardClient({
     setDatePreset(range.preset || 'custom');
   };
 
-  // Helper: check if a PnLEntry has any meaningful data
-  const hasData = (e: PnLEntry) =>
-    e.revenue !== 0 || (e.orderCount ?? 0) !== 0 || e.adSpend !== 0 ||
-    e.fees !== 0 || e.refunds !== 0 || e.netProfit !== 0 ||
-    (e.chargebackLoss ?? 0) !== 0 || (e.chargebackWon ?? 0) !== 0;
+  // Count non-zero fields to determine which entry has richer data
+  const richness = (e: PnLEntry) =>
+    (e.revenue !== 0 ? 1 : 0) + ((e.orderCount ?? 0) !== 0 ? 1 : 0) +
+    (e.adSpend !== 0 ? 1 : 0) + (e.fees !== 0 ? 1 : 0) +
+    (e.refunds !== 0 ? 1 : 0) + (e.netProfit !== 0 ? 1 : 0) +
+    ((e.chargebackLoss ?? 0) !== 0 ? 1 : 0) + (e.shipping !== 0 ? 1 : 0);
 
   const activeEntry = useMemo(() => {
     const entry = computeEntryFromDaily(dailyPnL, dateRange, customExpensesList);
-    // If dailyPnL has no real data for the selected range but summary has today's data, use it
-    if (!hasData(entry) && datePreset === 'today' && hasData(summary.today)) {
+    // For 'today': prefer whichever entry (computed vs summary) has richer data
+    if (datePreset === 'today' && richness(summary.today) > richness(entry)) {
       return summary.today;
     }
     return entry;
@@ -142,8 +143,8 @@ export function PnLDashboardClient({
   const todayEntry = useMemo(() => {
     const todayRange = getDateRange('today');
     const computed = computeEntryFromDaily(dailyPnL, todayRange, customExpensesList);
-    // Fall back to summary.today if dailyPnL is empty for today
-    if (!hasData(computed) && hasData(summary.today)) {
+    // Prefer summary.today if it has richer data
+    if (richness(summary.today) > richness(computed)) {
       return summary.today;
     }
     return computed;
