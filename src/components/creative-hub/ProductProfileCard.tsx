@@ -92,20 +92,28 @@ export function ProductProfileCard({
     a => a.id === profile.adAccountId || a.accountId === profile.adAccountId
   )?.name;
 
-  // Aggregate metadata from campaign links, fall back to profile-level data
+  // Priority: profile-level name > campaign link names > ID > "Not set"
+  // Profile-level name is set by user in Edit Profile, so it takes priority
   const pages = collectUnique(linkedCampaigns, 'pageId', 'pageName');
   const pixels = collectUnique(linkedCampaigns, 'pixelId', 'pixelName');
   const instagrams = collectUnique(linkedCampaigns, 'instagramActorId', 'instagramUsername');
   const bms = collectUnique(linkedCampaigns, 'bmId', 'bmName');
 
-  // Fall back to profile-level names, then IDs
-  const pageDisplay = pages.length > 0
-    ? formatAggregated(pages, 'pages')
-    : { display: profile.pageName || profile.pageId || 'Not set' };
+  // Filter out entries where "name" is just a raw numeric ID (no real name resolved)
+  const pagesWithNames = pages.filter(p => p.name && !/^\d+$/.test(p.name));
+  const pixelsWithNames = pixels.filter(p => p.name && !/^\d+$/.test(p.name));
 
-  const pixelDisplay = pixels.length > 0
-    ? formatAggregated(pixels, 'pixels')
-    : { display: profile.pixelName || profile.pixelId || 'Not set' };
+  const pageDisplay = profile.pageName
+    ? { display: profile.pageName }
+    : pagesWithNames.length > 0
+      ? formatAggregated(pagesWithNames, 'pages')
+      : { display: profile.pageId || 'Not set' };
+
+  const pixelDisplay = profile.pixelName
+    ? { display: profile.pixelName }
+    : pixelsWithNames.length > 0
+      ? formatAggregated(pixelsWithNames, 'pixels')
+      : { display: profile.pixelId || 'Not set' };
 
   // Only show IG items that have a real username (not raw numeric IDs)
   const igItems = instagrams.length > 0

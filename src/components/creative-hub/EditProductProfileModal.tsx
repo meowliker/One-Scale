@@ -68,9 +68,11 @@ function getDefaults(): Partial<ProductProfile> {
     adAccountId: '',
     adAccountCurrency: 'USD',
     pageId: '',
+    pageName: '',
     instagramActorId: '',
     instagramUsername: '',
     pixelId: '',
+    pixelName: '',
     conversionEvent: 'PURCHASE',
     destinationUrl: '',
     utmTemplate: '',
@@ -369,6 +371,10 @@ export function EditProductProfileModal({
                               onChange={(e) => {
                                 updateField('pageId', e.target.value);
                                 const page = (setupOptions?.pages || []).find((p) => p.id === e.target.value);
+                                // Save the page name alongside the ID
+                                if (page?.name) {
+                                  updateField('pageName', page.name);
+                                }
                                 // Auto-link Instagram when page has instagramAccountId
                                 if (page?.instagramAccountId) {
                                   updateField('instagramActorId', page.instagramAccountId);
@@ -434,7 +440,13 @@ export function EditProductProfileModal({
                           ) : (setupOptions?.pixels || []).length > 0 ? (
                             <select
                               value={form.pixelId ?? ''}
-                              onChange={(e) => updateField('pixelId', e.target.value)}
+                              onChange={(e) => {
+                                updateField('pixelId', e.target.value);
+                                const pixel = (setupOptions?.pixels || []).find((p) => p.id === e.target.value);
+                                if (pixel?.name) {
+                                  updateField('pixelName', pixel.name);
+                                }
+                              }}
                               className={selectCls}
                             >
                               <option value="">Select a pixel...</option>
