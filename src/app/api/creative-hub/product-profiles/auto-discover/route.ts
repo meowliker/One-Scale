@@ -141,6 +141,8 @@ export async function POST(request: NextRequest) {
     interface RawCampaign {
       id: string;
       name: string;
+      status?: string;
+      effective_status?: string;
       ad_account_id?: string;
       adAccountId?: string;
       account_id?: string;
@@ -148,11 +150,12 @@ export async function POST(request: NextRequest) {
 
     const allCampaigns: Array<{ id: string; name: string; adAccountId: string }> = [];
     const seenCampaignIds = new Set<string>();
+    // Only process ACTIVE and PAUSED campaigns (skip DELETED/ARCHIVED to save API calls)
+    const allowedStatuses = new Set(['ACTIVE', 'PAUSED', 'active', 'paused', undefined, '']);
 
     for (const snap of campaignSnapshots) {
       try {
         const campaigns: RawCampaign[] = JSON.parse(snap.payload_json);
-        // Derive ad account from scope_id: "accounts:act_XXXX" pattern
         const scopeAdAccount =
           snap.scope_id.match(/accounts:(.+)/)?.[1]?.split(',')[0] ||
           adAccounts[0]?.ad_account_id ||
@@ -161,6 +164,9 @@ export async function POST(request: NextRequest) {
         for (const c of campaigns) {
           if (!c.id || !c.name) continue;
           if (seenCampaignIds.has(c.id)) continue;
+          // Filter: only ACTIVE/PAUSED campaigns
+          const status = c.status || c.effective_status;
+          if (status && !allowedStatuses.has(status)) continue;
           seenCampaignIds.add(c.id);
 
           const adAccountId =
@@ -170,7 +176,7 @@ export async function POST(request: NextRequest) {
       } catch { /* skip malformed */ }
     }
 
-    console.log(`[auto-discover] Found ${allCampaigns.length} campaigns from Supabase snapshots`);
+    console.log(`[auto-discover] Found ${allCampaigns.length} campaigns (ACTIVE/PAUSED) from Supabase snapshots`);
 
     // ━━━ Step 3: For each campaign, get 1 ad → creative_id → object_story_spec ━━━
     const metaTokenObj = await getMetaToken(storeId!);
@@ -181,7 +187,7 @@ export async function POST(request: NextRequest) {
 
     const campaignMetaMap = new Map<string, CampaignMeta>();
 
-    await batchProcess(allCampaigns, 10, async (campaign) => {
+    await batchProcess(allCampaigns, 15, async (campaign) => {
       try {
         // Step 3a: Get 1 ad from the campaign with creative.id and promoted_object
         const adsResult = await fetchFromMeta<{
