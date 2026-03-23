@@ -183,7 +183,7 @@ export function ActiveTestsTab() {
             <FlaskConical className="mx-auto h-12 w-12 text-text-dimmed/30" />
             <p className="mt-4 text-sm font-medium text-text-dimmed">No active tests</p>
             <p className="mt-1 text-xs text-text-dimmed/70">
-              Launch creatives from the Inbox.
+              Launch a creative test from the Creative Inbox.
             </p>
           </div>
         )

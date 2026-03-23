@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getCreativeTests } from '@/app/api/lib/creative-hub-db';
+import { getCreativeTests, getFatigueAlerts } from '@/app/api/lib/creative-hub-db';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -18,13 +18,16 @@ export async function GET(request: NextRequest) {
     }
 
     // Default: fetch tests with active-like statuses: active, launching, partial
-    const activeTests = await getCreativeTests(storeId, 'active');
-    const launchingTests = await getCreativeTests(storeId, 'launching');
-    const partialTests = await getCreativeTests(storeId, 'partial');
+    const [activeTests, launchingTests, partialTests, fatigueAlerts] = await Promise.all([
+      getCreativeTests(storeId, 'active'),
+      getCreativeTests(storeId, 'launching'),
+      getCreativeTests(storeId, 'partial'),
+      getFatigueAlerts(storeId),
+    ]);
 
     const tests = [...launchingTests, ...activeTests, ...partialTests];
 
-    return NextResponse.json({ tests });
+    return NextResponse.json({ tests, fatigueAlerts });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to fetch active tests';
     return NextResponse.json({ error: message }, { status: 500 });

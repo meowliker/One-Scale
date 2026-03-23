@@ -21,6 +21,7 @@ export function CompletedTestsTab({ storeId }: CompletedTestsTabProps) {
   const [sortBy, setSortBy] = useState<SortOption>('recent');
 
   useEffect(() => {
+    if (!storeId) return;
     fetchCompletedTests(storeId);
   }, [storeId, fetchCompletedTests]);
 
