@@ -661,7 +661,7 @@ export function ProductPerformanceTable({ datePreset = 'last7' }: ProductPerform
                         )}
 
                         {isVisible('cvr') && (
-                          <MetricCell value={product.computedCvr} type="percent" isActive={product.isAdvertised} goodThreshold={3} badThreshold={1} />
+                          <MetricCell value={product.computedCvr} type="percent" isActive={product.isAdvertised || product.unitsSold > 0} goodThreshold={3} badThreshold={1} />
                         )}
 
                         {isVisible('alert') && (

@@ -87,7 +87,8 @@ function mapCacheToResponse(rows: CacheRow[]) {
  * by joining meta_spend_cache with meta_ad_account_mappings.
  */
 async function fetchMetaMetricsByProduct(
-  storeId: string, from: string, to: string
+  storeId: string, from: string, to: string,
+  productRevenues?: Map<string, number>,
 ): Promise<Map<string, { spend: number; impressions: number; clicks: number; purchases: number }>> {
   const metricMap = new Map<string, { spend: number; impressions: number; clicks: number; purchases: number }>();
 
@@ -96,28 +97,56 @@ async function fetchMetaMetricsByProduct(
     const mappings = await rest<Array<{ ad_account_id: string; product_id: string }>>(
       `/meta_ad_account_mappings?store_id=eq.${enc(storeId)}&select=ad_account_id,product_id`
     ).catch(() => []);
-    if (mappings.length === 0) return metricMap;
 
-    const accountToProduct = new Map(mappings.map(m => [m.ad_account_id, m.product_id]));
-    const accountIds = mappings.map(m => enc(m.ad_account_id)).join(',');
-
-    // Fetch aggregated meta metrics for the date range
+    // Fetch ALL meta spend for this store in the date range
     const spendRows = await rest<Array<{
       ad_account_id: string; spend: number; impressions: number; clicks: number; purchases: number;
     }>>(
-      `/meta_spend_cache?store_id=eq.${enc(storeId)}&ad_account_id=in.(${accountIds})&date=gte.${enc(from)}&date=lte.${enc(to)}&select=ad_account_id,spend,impressions,clicks,purchases`
+      `/meta_spend_cache?store_id=eq.${enc(storeId)}&date=gte.${enc(from)}&date=lte.${enc(to)}&select=ad_account_id,spend,impressions,clicks,purchases`
     ).catch(() => []);
 
-    // Aggregate by product
-    for (const row of spendRows) {
-      const productId = accountToProduct.get(row.ad_account_id);
-      if (!productId) continue;
-      const existing = metricMap.get(productId) || { spend: 0, impressions: 0, clicks: 0, purchases: 0 };
-      existing.spend += Number(row.spend) || 0;
-      existing.impressions += Number(row.impressions) || 0;
-      existing.clicks += Number(row.clicks) || 0;
-      existing.purchases += Number(row.purchases) || 0;
-      metricMap.set(productId, existing);
+    if (spendRows.length === 0) return metricMap;
+
+    if (mappings.length > 0) {
+      // Product-level mappings exist — aggregate by product via ad account mapping
+      const accountToProduct = new Map(mappings.map(m => [m.ad_account_id, m.product_id]));
+      for (const row of spendRows) {
+        const productId = accountToProduct.get(row.ad_account_id);
+        if (!productId) continue;
+        const existing = metricMap.get(productId) || { spend: 0, impressions: 0, clicks: 0, purchases: 0 };
+        existing.spend += Number(row.spend) || 0;
+        existing.impressions += Number(row.impressions) || 0;
+        existing.clicks += Number(row.clicks) || 0;
+        existing.purchases += Number(row.purchases) || 0;
+        metricMap.set(productId, existing);
+      }
+    } else if (productRevenues && productRevenues.size > 0) {
+      // No product-level mappings — distribute TOTAL Meta metrics proportionally by revenue
+      const totals = { spend: 0, impressions: 0, clicks: 0, purchases: 0 };
+      for (const row of spendRows) {
+        totals.spend += Number(row.spend) || 0;
+        totals.impressions += Number(row.impressions) || 0;
+        totals.clicks += Number(row.clicks) || 0;
+        totals.purchases += Number(row.purchases) || 0;
+      }
+      if (totals.spend > 0 || totals.impressions > 0) {
+        const totalRev = [...productRevenues.values()].reduce((s, v) => s + v, 0);
+        if (totalRev > 0) {
+          for (const [pid, rev] of productRevenues) {
+            const share = rev / totalRev;
+            metricMap.set(pid, {
+              spend: round2(totals.spend * share),
+              impressions: Math.round(totals.impressions * share),
+              clicks: Math.round(totals.clicks * share),
+              purchases: Math.round(totals.purchases * share),
+            });
+          }
+        } else if (productRevenues.size === 1) {
+          // Single product gets all metrics
+          const pid = [...productRevenues.keys()][0];
+          metricMap.set(pid, totals);
+        }
+      }
     }
   } catch { /* non-critical */ }
 
@@ -259,8 +288,11 @@ export async function GET(request: NextRequest) {
     }
 
     if (cacheComplete && cached.length > 0) {
+      // Build revenue map for proportional Meta metric distribution
+      const prodRevMap = new Map<string, number>();
+      for (const c of cached) prodRevMap.set(c.product_id, +c.revenue);
       // Always enrich cache data with real Meta metrics (cache may have 0s for impressions/clicks)
-      const metaMetrics = await fetchMetaMetricsByProduct(storeId, from, to);
+      const metaMetrics = await fetchMetaMetricsByProduct(storeId, from, to, prodRevMap);
       const cacheData = mapCacheToResponse(cached);
       // Merge Meta metrics into cache response
       const enriched = cacheData.map(p => {
@@ -292,10 +324,10 @@ export async function GET(request: NextRequest) {
 
     // Cache incomplete or miss — compute full range live and persist
     try {
-      const [results, metaMetrics] = await Promise.all([
-        buildProductPerformance(storeId, from, to),
-        fetchMetaMetricsByProduct(storeId, from, to),
-      ]);
+      const results = await buildProductPerformance(storeId, from, to);
+      const revMap = new Map<string, number>();
+      for (const r of results) revMap.set(r.product_id, r.revenue);
+      const metaMetrics = await fetchMetaMetricsByProduct(storeId, from, to, revMap);
       return NextResponse.json({ ok: true, data: mapResultsToResponse(results, metaMetrics), source: 'computed' });
     } catch (err) {
       return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : 'Error', data: [] }, { status: 500 });
@@ -304,10 +336,10 @@ export async function GET(request: NextRequest) {
 
   // ── TODAY: live sync from Shopify → compute → respond ──
   try {
-    const [results, metaMetrics] = await Promise.all([
-      buildProductPerformance(storeId, from, to),
-      fetchMetaMetricsByProduct(storeId, from, to),
-    ]);
+    const results = await buildProductPerformance(storeId, from, to);
+    const revMap = new Map<string, number>();
+    for (const r of results) revMap.set(r.product_id, r.revenue);
+    const metaMetrics = await fetchMetaMetricsByProduct(storeId, from, to, revMap);
 
     // Merge product images from existing cache (don't fetch from Shopify API — too slow)
     const imgRows = await rest<Array<{ product_id: string; product_image: string | null }>>(
