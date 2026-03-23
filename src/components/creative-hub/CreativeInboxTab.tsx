@@ -17,7 +17,6 @@ import { cn } from '@/lib/utils';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
 import { InboxCreativeRow } from './InboxCreativeRow';
 import { CreativePreviewModal } from './CreativePreviewModal';
-import { UploadProgressBar } from './UploadProgressBar';
 import type { InboxCreative } from '@/types/creativeHub';
 
 interface CreativeInboxTabProps {
@@ -35,7 +34,6 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
   const toggleCreativeSelection = useCreativeHubStore((s) => s.toggleCreativeSelection);
   const selectAllCreatives = useCreativeHubStore((s) => s.selectAllCreatives);
   const deselectAllCreatives = useCreativeHubStore((s) => s.deselectAllCreatives);
-  const startUpload = useCreativeHubStore((s) => s.startUpload);
   const openLaunchWizard = useCreativeHubStore((s) => s.openLaunchWizard);
 
   // Local UI state
@@ -60,7 +58,11 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
     return inboxCreatives.filter((c) => {
       if (productFilter !== 'all' && c.productProfileId !== productFilter) return false;
       if (formatFilter !== 'all' && c.creativeFormat !== formatFilter) return false;
-      if (statusFilter !== 'all' && c.uploadStatus !== statusFilter) return false;
+      if (statusFilter !== 'all') {
+        const hasLink = !!c.driveUrl;
+        if (statusFilter === 'ready' && !hasLink) return false;
+        if (statusFilter === 'no_link' && hasLink) return false;
+      }
       return true;
     });
   }, [inboxCreatives, productFilter, formatFilter, statusFilter]);
@@ -81,23 +83,13 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
     return groups;
   }, [filteredCreatives]);
 
-  // Stats
+  // Stats — based on driveUrl presence, not upload status
   const selectedCount = selectedCreativeIds.size;
-  const uploadingCount = inboxCreatives.filter((c) => c.uploadStatus === 'uploading').length;
-  const readyCount = inboxCreatives.filter((c) => c.uploadStatus === 'ready').length;
+  const readyCount = inboxCreatives.filter((c) => !!c.driveUrl).length;
+  const noLinkCount = inboxCreatives.filter((c) => !c.driveUrl).length;
   const readySelectedCount = inboxCreatives.filter(
-    (c) => selectedCreativeIds.has(c.id) && c.uploadStatus === 'ready'
+    (c) => selectedCreativeIds.has(c.id) && !!c.driveUrl
   ).length;
-
-  // Overall upload progress
-  const overallProgress = useMemo(() => {
-    const uploading = inboxCreatives.filter(
-      (c) => c.uploadStatus === 'uploading' || c.uploadStatus === 'ready'
-    );
-    if (uploading.length === 0) return 0;
-    const total = uploading.reduce((sum, c) => sum + c.uploadProgress, 0);
-    return total / uploading.length;
-  }, [inboxCreatives]);
 
   const toggleGroup = (key: string) => {
     setCollapsedGroups((prev) => {
@@ -121,14 +113,6 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
     }
     return Array.from(seen, ([id, name]) => ({ id, name }));
   }, [inboxCreatives]);
-
-  // Handle retry upload
-  const handleRetry = useCallback(
-    (creativeId: string) => {
-      startUpload(creativeId, storeId);
-    },
-    [startUpload, storeId]
-  );
 
   // ClickUp not connected state
   if (!inboxLoading && inboxNotConnected) {
@@ -261,10 +245,8 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
           className="rounded-lg border border-border bg-surface-elevated px-3 py-1.5 text-sm text-text-primary focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
         >
           <option value="all">All Statuses</option>
-          <option value="pending">Pending</option>
-          <option value="uploading">Uploading</option>
           <option value="ready">Ready</option>
-          <option value="failed">Failed</option>
+          <option value="no_link">No Link</option>
         </select>
 
         {/* Bulk select */}
@@ -345,8 +327,6 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
                             isSelected={selectedCreativeIds.has(creative.id)}
                             onToggleSelect={() => toggleCreativeSelection(creative.id)}
                             onPreview={() => setPreviewCreative(creative)}
-                            onRetry={() => handleRetry(creative.id)}
-                            onSkip={() => toggleCreativeSelection(creative.id)}
                           />
                         ))}
                       </motion.div>
@@ -383,26 +363,22 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
             </span>
             <span className="h-3 w-px bg-border" />
             <span>
-              Uploading:{' '}
-              <span className="font-semibold text-blue-600">{uploadingCount}</span>
-            </span>
-            <span className="h-3 w-px bg-border" />
-            <span>
               Ready:{' '}
               <span className="font-semibold text-emerald-600">{readyCount}</span>
             </span>
-          </div>
-
-          {/* Center: overall progress */}
-          <div className="flex-1 max-w-xs mx-auto">
-            {uploadingCount > 0 && (
-              <UploadProgressBar
-                progress={overallProgress}
-                status="uploading"
-                showLabel
-              />
+            {noLinkCount > 0 && (
+              <>
+                <span className="h-3 w-px bg-border" />
+                <span>
+                  No Link:{' '}
+                  <span className="font-semibold text-amber-600">{noLinkCount}</span>
+                </span>
+              </>
             )}
           </div>
+
+          {/* Spacer */}
+          <div className="flex-1" />
 
           {/* Right: launch button */}
           <button

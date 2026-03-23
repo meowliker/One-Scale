@@ -104,7 +104,7 @@ export interface ProductCampaignLink {
 
 // ── Creative Inbox ──
 
-export type UploadStatus = 'pending' | 'uploading' | 'ready' | 'failed';
+export type UploadStatus = 'pending' | 'uploading' | 'ready' | 'failed' | 'no_link';
 export type CreativeFormat = 'video' | 'image' | 'carousel';
 
 export interface InboxCreative {

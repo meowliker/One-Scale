@@ -6,13 +6,9 @@ import {
   LayoutGrid,
   Eye,
   CheckCircle,
-  AlertCircle,
-  RotateCw,
-  Upload,
-  SkipForward,
+  Link2Off,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { UploadProgressBar } from './UploadProgressBar';
 import type { InboxCreative } from '@/types/creativeHub';
 
 interface InboxCreativeRowProps {
@@ -20,8 +16,6 @@ interface InboxCreativeRowProps {
   isSelected: boolean;
   onToggleSelect: () => void;
   onPreview: () => void;
-  onRetry?: () => void;
-  onSkip?: () => void;
 }
 
 const formatIcons: Record<string, typeof ImageIcon> = {
@@ -36,23 +30,30 @@ const formatBadgeStyles: Record<string, string> = {
   carousel: 'bg-purple-50 text-purple-700',
 };
 
-const statusBadge: Record<
-  string,
-  { label: string; style: string; icon?: typeof CheckCircle }
-> = {
-  pending: { label: 'Pending', style: 'bg-gray-100 text-gray-600' },
-  uploading: { label: 'Uploading', style: 'bg-blue-50 text-blue-700' },
-  ready: {
-    label: 'Ready',
-    style: 'bg-emerald-50 text-emerald-700',
-    icon: CheckCircle,
-  },
-  failed: {
-    label: 'Failed',
-    style: 'bg-red-50 text-red-700',
-    icon: AlertCircle,
-  },
-};
+/**
+ * Inbox status is derived from whether the creative has a Drive URL:
+ * - driveUrl present → "Ready" (green)
+ * - driveUrl missing → "No Link" (amber)
+ * Upload to Meta happens only during launch (Step 4 of Launch Wizard).
+ */
+function getInboxStatus(creative: InboxCreative): {
+  label: string;
+  style: string;
+  icon: typeof CheckCircle;
+} {
+  if (creative.driveUrl) {
+    return {
+      label: 'Ready',
+      style: 'bg-emerald-50 text-emerald-700',
+      icon: CheckCircle,
+    };
+  }
+  return {
+    label: 'No Link',
+    style: 'bg-amber-50 text-amber-700',
+    icon: Link2Off,
+  };
+}
 
 const pastTestStatusColors: Record<string, string> = {
   winner: 'text-emerald-700',
@@ -65,11 +66,9 @@ export function InboxCreativeRow({
   isSelected,
   onToggleSelect,
   onPreview,
-  onRetry,
-  onSkip,
 }: InboxCreativeRowProps) {
   const FormatIcon = formatIcons[creative.creativeFormat] || ImageIcon;
-  const status = statusBadge[creative.uploadStatus];
+  const status = getInboxStatus(creative);
   const StatusIcon = status.icon;
 
   return (
@@ -161,49 +160,11 @@ export function InboxCreativeRow({
             </div>
           )}
 
-          {/* Upload progress for uploading state */}
-          {creative.uploadStatus === 'uploading' && (
-            <div className="mt-1.5 max-w-[200px]">
-              <UploadProgressBar
-                progress={creative.uploadProgress}
-                status="uploading"
-                showLabel
-              />
-            </div>
-          )}
-
-          {/* Upload error + action buttons */}
-          {creative.uploadStatus === 'failed' && creative.uploadError && (
-            <div className="mt-1.5 space-y-1">
-              <p className="text-xs text-red-600">{creative.uploadError}</p>
-              <div className="flex items-center gap-1.5">
-                {onRetry && (
-                  <button
-                    onClick={onRetry}
-                    className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-700 transition-colors"
-                  >
-                    <RotateCw className="h-2.5 w-2.5" />
-                    Retry
-                  </button>
-                )}
-                <button
-                  onClick={onPreview}
-                  className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-text-secondary hover:bg-surface-hover transition-colors"
-                >
-                  <Upload className="h-2.5 w-2.5" />
-                  Upload Manually
-                </button>
-                {onSkip && (
-                  <button
-                    onClick={onSkip}
-                    className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-text-dimmed hover:bg-surface-hover transition-colors"
-                  >
-                    <SkipForward className="h-2.5 w-2.5" />
-                    Skip
-                  </button>
-                )}
-              </div>
-            </div>
+          {/* No Drive link hint */}
+          {!creative.driveUrl && (
+            <p className="mt-1 text-xs text-amber-600">
+              Add a Google Drive link to this ClickUp task to enable launching.
+            </p>
           )}
         </div>
 

@@ -364,14 +364,70 @@ export async function POST(request: NextRequest) {
       ],
     });
 
-    // Step 2: For each creative item, create adset + ad creative + ad
+    // Step 2: Upload any creatives that don't have a Meta asset ID yet
+    // This downloads from Drive and uploads to Meta ad account
+    for (const item of selectedItems) {
+      if (!item.meta_asset_id && item.drive_url) {
+        try {
+          const uploadRes = await fetch(
+            `${request.nextUrl.origin}/api/creative-hub/inbox/upload`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                creativeId: item.id,
+                driveUrl: item.drive_url,
+                adAccountId: accountId,
+                storeId,
+              }),
+            }
+          );
+
+          if (!uploadRes.ok) {
+            const errBody = await uploadRes.json().catch(() => ({ error: 'Upload failed' })) as { error?: string };
+            throw new Error(errBody.error || `Upload returned HTTP ${uploadRes.status}`);
+          }
+
+          const uploadData = (await uploadRes.json()) as {
+            metaAssetId?: string;
+            metaAssetType?: 'IMAGE' | 'VIDEO';
+          };
+
+          if (uploadData.metaAssetId) {
+            item.meta_asset_id = uploadData.metaAssetId;
+            item.meta_asset_type = uploadData.metaAssetType || null;
+
+            // Persist the uploaded asset info to DB
+            db.prepare(
+              `UPDATE creative_test_items SET meta_asset_id = ?, meta_asset_type = ?, upload_status = 'ready' WHERE id = ?`
+            ).run(uploadData.metaAssetId, uploadData.metaAssetType || null, item.id);
+          } else {
+            throw new Error('Upload succeeded but no metaAssetId returned');
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Upload failed';
+          console.error(`[Launch] Upload failed for "${item.creative_name}":`, message);
+          // Mark upload_status as failed in DB
+          db.prepare(
+            `UPDATE creative_test_items SET upload_status = 'failed' WHERE id = ?`
+          ).run(item.id);
+          // We'll handle the launch failure for this item in the next loop
+        }
+      }
+    }
+
+    // Step 3: For each creative item, create adset + ad creative + ad
     const createdAdsetIds: string[] = [];
     let hasFailure = false;
 
     for (const item of selectedItems) {
       try {
         if (!item.meta_asset_id) {
-          throw new Error(`Creative "${item.creative_name}" has no Meta asset ID. Upload the asset first.`);
+          throw new Error(
+            item.drive_url
+              ? `Creative "${item.creative_name}" failed to upload to Meta.`
+              : `Creative "${item.creative_name}" has no Drive URL. Cannot upload.`
+          );
         }
 
         // Determine the creative-specific destination URL
