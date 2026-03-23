@@ -327,6 +327,118 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // 3b. Fetch per-campaign metadata from the live Meta API
+    //     The snapshot data typically lacks object_story_spec / promoted_object,
+    //     so campaignMetaMap is often empty after step 3. This step fetches 1 ad
+    //     per matched campaign from the live API to get page_id, pixel_id,
+    //     instagram_actor_id — ensuring each product gets its OWN metadata.
+    if (source === 'database' && matchesByHandle.size > 0) {
+      // Collect all unique campaign IDs from matched products that lack metadata
+      const campaignIdsNeedingMeta: Array<{ campaignId: string; adAccountId: string }> = [];
+      for (const [, match] of matchesByHandle) {
+        for (const camp of match.campaigns) {
+          if (!campaignMetaMap.has(camp.campaignId)) {
+            campaignIdsNeedingMeta.push({
+              campaignId: camp.campaignId,
+              adAccountId: match.adAccountId,
+            });
+          }
+        }
+      }
+
+      if (campaignIdsNeedingMeta.length > 0) {
+        const metaTokenObj = await getMetaToken(storeId);
+        if (metaTokenObj) {
+          const metaToken = metaTokenObj.accessToken;
+
+          // Group campaign IDs by ad account for batched requests
+          const campaignsByAccount = new Map<string, string[]>();
+          for (const { campaignId, adAccountId } of campaignIdsNeedingMeta) {
+            const existing = campaignsByAccount.get(adAccountId) || [];
+            existing.push(campaignId);
+            campaignsByAccount.set(adAccountId, existing);
+          }
+
+          console.log(
+            `[auto-discover] Fetching live per-campaign metadata for ${campaignIdsNeedingMeta.length} campaigns ` +
+            `across ${campaignsByAccount.size} ad accounts`
+          );
+
+          // For each ad account, do ONE batched call to get ads with creative metadata
+          interface LiveMetaAd {
+            id: string;
+            campaign_id?: string;
+            creative?: {
+              object_story_spec?: {
+                page_id?: string;
+                instagram_actor_id?: string;
+              };
+            };
+            promoted_object?: {
+              pixel_id?: string;
+            };
+          }
+
+          const liveResults = await Promise.allSettled(
+            Array.from(campaignsByAccount.entries()).map(async ([accountId, campaignIds]) => {
+              // Use filtering to get ads for all campaigns in one call
+              const filterJson = JSON.stringify([{
+                field: 'campaign.id',
+                operator: 'IN',
+                value: campaignIds,
+              }]);
+              const result = await fetchFromMeta<{ data: LiveMetaAd[] }>(
+                metaToken,
+                `${accountId}/ads`,
+                {
+                  filtering: filterJson,
+                  fields: 'campaign_id,creative{object_story_spec},promoted_object',
+                  limit: '100',
+                },
+                15000, 1,
+              );
+              return result.data || [];
+            })
+          );
+
+          for (const result of liveResults) {
+            if (result.status !== 'fulfilled') continue;
+            for (const ad of result.value) {
+              const campId = ad.campaign_id;
+              if (!campId || campaignMetaMap.has(campId)) continue;
+
+              const meta: CampaignMeta = {};
+              if (ad.creative?.object_story_spec?.page_id) {
+                meta.pageId = String(ad.creative.object_story_spec.page_id);
+              }
+              if (ad.creative?.object_story_spec?.instagram_actor_id) {
+                meta.instagramActorId = String(ad.creative.object_story_spec.instagram_actor_id);
+              }
+              if (ad.promoted_object?.pixel_id) {
+                meta.pixelId = String(ad.promoted_object.pixel_id);
+              }
+              if (meta.pageId || meta.pixelId || meta.instagramActorId) {
+                campaignMetaMap.set(campId, meta);
+              }
+            }
+          }
+
+          console.log(
+            `[auto-discover] Live metadata resolved: ${campaignMetaMap.size} campaigns now have per-campaign metadata`
+          );
+
+          // Update match campaign entries with the newly fetched metadata
+          for (const [, match] of matchesByHandle) {
+            for (const camp of match.campaigns) {
+              if (!camp.meta && campaignMetaMap.has(camp.campaignId)) {
+                camp.meta = campaignMetaMap.get(camp.campaignId);
+              }
+            }
+          }
+        }
+      }
+    }
+
     // 4. Fallback: live Meta API (1 ad per campaign)
     if (matchesByHandle.size === 0 && unmappedCampaigns.length === 0) {
       const metaTokenObj = await getMetaToken(storeId);
@@ -454,18 +566,16 @@ export async function POST(request: NextRequest) {
 
     const filteredUnmapped = unmappedCampaigns.filter(u => !seenCampaignIds.has(u.campaignId));
 
-    // 4b. Look up names for pages, pixels, instagram, and BM from snapshots
-    //     These provide human-readable names for the IDs extracted per-campaign above,
-    //     and also serve as fallback metadata when ad snapshots lack the IDs.
+    // 4b. Look up human-readable names for pages, pixels, instagram, and BM
+    //     The options API returns ALL pages/pixels for the BM, so we use it only
+    //     as a NAME LOOKUP — the actual per-product page/pixel/IG IDs come from
+    //     campaignMetaMap (populated by step 3b or the live API fallback above).
+    //     We do NOT assign account-level fallbacks; if a campaign has no metadata,
+    //     the product will show "Not set" rather than incorrect shared data.
     const pageNameMap = new Map<string, string>();   // pageId → pageName
     const pixelNameMap = new Map<string, string>();   // pixelId → pixelName
     const igUsernameMap = new Map<string, string>();  // igId → igUsername
     const accountBmMap = new Map<string, { bmId: string; bmName: string }>();  // adAccountId → BM info
-
-    // Fallback: account-level page/pixel/ig for campaigns that had no per-ad metadata
-    const accountPageMap = new Map<string, string>();  // adAccountId → first pageId
-    const accountPixelMap = new Map<string, string>(); // adAccountId → first pixelId
-    const accountIgMap = new Map<string, string>();    // adAccountId → first igId
 
     // Collect unique ad account IDs from matched profiles
     const usedAdAccountIds = new Set<string>();
@@ -491,33 +601,23 @@ export async function POST(request: NextRequest) {
             accounts?: Array<{ id: string; name: string; businessId?: string; businessName?: string }>;
           };
 
-          // Build pageId→pageName map + account→page fallback
+          // Build pageId→pageName lookup (name resolution only, no fallback assignment)
           for (const page of options.pages ?? []) {
             if (page.id && page.name) pageNameMap.set(page.id, page.name);
             // IG linked to page
             if (page.instagramAccountId && page.instagramUsername) {
               igUsernameMap.set(page.instagramAccountId, page.instagramUsername);
             }
-            // Set as default page for all accounts (pages are shared across accounts)
-            for (const acctId of usedAdAccountIds) {
-              if (!accountPageMap.has(acctId)) accountPageMap.set(acctId, page.id);
-            }
           }
 
-          // Build pixelId→pixelName map + account→pixel fallback
+          // Build pixelId→pixelName lookup (name resolution only, no fallback assignment)
           for (const pixel of options.pixels ?? []) {
             if (pixel.id && pixel.name) pixelNameMap.set(pixel.id, pixel.name);
-            for (const acctId of usedAdAccountIds) {
-              if (!accountPixelMap.has(acctId)) accountPixelMap.set(acctId, pixel.id);
-            }
           }
 
-          // Build igId→igUsername map + account→ig fallback
+          // Build igId→igUsername lookup (name resolution only, no fallback assignment)
           for (const ig of options.instagramAccounts ?? []) {
             if (ig.id && ig.username) igUsernameMap.set(ig.id, ig.username);
-            for (const acctId of usedAdAccountIds) {
-              if (!accountIgMap.has(acctId)) accountIgMap.set(acctId, ig.id);
-            }
           }
 
           // Build account→BM map
@@ -553,11 +653,12 @@ export async function POST(request: NextRequest) {
       let profileId: string;
       const existingProfile = existingByShopifyId.get(shopifyId);
 
-      // Determine profile-level page/pixel/ig from the first campaign's metadata or account fallback
+      // Determine profile-level page/pixel/ig from the first campaign's per-campaign metadata
+      // No account-level fallback — if a campaign has no metadata, leave as undefined ("Not set")
       const firstCampMeta = match.campaigns[0]?.meta;
-      const profilePageId = firstCampMeta?.pageId || accountPageMap.get(match.adAccountId);
-      const profilePixelId = firstCampMeta?.pixelId || accountPixelMap.get(match.adAccountId);
-      const profileIgId = firstCampMeta?.instagramActorId || accountIgMap.get(match.adAccountId);
+      const profilePageId = firstCampMeta?.pageId;
+      const profilePixelId = firstCampMeta?.pixelId;
+      const profileIgId = firstCampMeta?.instagramActorId;
       const bm = accountBmMap.get(match.adAccountId);
 
       const profilePageName = profilePageId ? pageNameMap.get(profilePageId) : undefined;
@@ -566,23 +667,24 @@ export async function POST(request: NextRequest) {
       if (existingProfile) {
         profileId = existingProfile.id;
         // Update existing profile with page/pixel/instagram if it was missing them
-        const needsMetaUpdate = (!existingProfile.pageId && profilePageId)
-          || (!existingProfile.pixelId && profilePixelId)
-          || (!existingProfile.instagramActorId && profileIgId)
-          || (!existingProfile.pageName && profilePageName)
-          || (!existingProfile.pixelName && profilePixelName);
+        // Always update if we have better data (names resolved, or IDs filled)
+        const needsMetaUpdate = (profilePageId && (!existingProfile.pageId || !existingProfile.pageName))
+          || (profilePixelId && (!existingProfile.pixelId || !existingProfile.pixelName))
+          || (profileIgId && (!existingProfile.instagramActorId || !existingProfile.instagramUsername))
+          || (profilePageName && existingProfile.pageName !== profilePageName)
+          || (profilePixelName && existingProfile.pixelName !== profilePixelName);
         if (needsMetaUpdate) {
           await upsertProductProfile({
             id: profileId,
             storeId,
             productName: existingProfile.productName,
             adAccountId: existingProfile.adAccountId,
-            pageId: existingProfile.pageId || profilePageId,
-            pageName: existingProfile.pageName || profilePageName,
-            pixelId: existingProfile.pixelId || profilePixelId,
-            pixelName: existingProfile.pixelName || profilePixelName,
-            instagramActorId: existingProfile.instagramActorId || profileIgId,
-            instagramUsername: existingProfile.instagramUsername || (profileIgId ? igUsernameMap.get(profileIgId) : undefined),
+            pageId: profilePageId || existingProfile.pageId,
+            pageName: profilePageName || existingProfile.pageName,
+            pixelId: profilePixelId || existingProfile.pixelId,
+            pixelName: profilePixelName || existingProfile.pixelName,
+            instagramActorId: profileIgId || existingProfile.instagramActorId,
+            instagramUsername: (profileIgId ? igUsernameMap.get(profileIgId) : undefined) || existingProfile.instagramUsername,
           });
         }
       } else {
@@ -611,11 +713,11 @@ export async function POST(request: NextRequest) {
       for (const camp of match.campaigns) {
         const linkId = randomUUID();
 
-        // Resolve per-campaign metadata: use campaign-level first, then account-level fallback
+        // Resolve per-campaign metadata: use campaign-level only, no account-level fallback
         const campMeta = camp.meta || campaignMetaMap.get(camp.campaignId);
-        const linkPageId = campMeta?.pageId || accountPageMap.get(match.adAccountId);
-        const linkPixelId = campMeta?.pixelId || accountPixelMap.get(match.adAccountId);
-        const linkIgId = campMeta?.instagramActorId || accountIgMap.get(match.adAccountId);
+        const linkPageId = campMeta?.pageId;
+        const linkPixelId = campMeta?.pixelId;
+        const linkIgId = campMeta?.instagramActorId;
         const linkBm = accountBmMap.get(match.adAccountId);
 
         const linkPageName = linkPageId ? pageNameMap.get(linkPageId) : undefined;
