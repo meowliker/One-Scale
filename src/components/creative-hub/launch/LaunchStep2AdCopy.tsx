@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Plus,
   X,
@@ -32,8 +32,16 @@ function generateId() {
 }
 
 export function LaunchStep2AdCopy() {
-  const { launchConfig, updateLaunchConfig, copyLibrary, inboxCreatives, selectedCreativeIds } =
+  const { launchConfig, updateLaunchConfig, copyLibrary, fetchCopyLibrary, generateAICopy, inboxCreatives, selectedCreativeIds, profiles } =
     useCreativeHubStore();
+
+  // Fetch the copy library for the selected product when this step mounts
+  const productProfileId = launchConfig.productProfileId;
+  useEffect(() => {
+    if (productProfileId) {
+      fetchCopyLibrary(productProfileId);
+    }
+  }, [productProfileId, fetchCopyLibrary]);
 
   const primaryTexts = launchConfig.primaryTexts || [];
   const headlines = launchConfig.headlines || [];
@@ -80,20 +88,46 @@ export function LaunchStep2AdCopy() {
     updateLaunchConfig({ descriptions: descriptions.filter((d) => d.id !== id) });
   };
 
-  // ── AI generation mock ──
+  // ── AI generation ──
   const handleGenerateAICopy = async () => {
+    if (!productProfileId) return;
     setAiGenerating(true);
-    // Simulated delay -- replaced by real API call in Task 16
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    setAiCopyResults([
-      { type: 'primary', text: 'Transform your routine with our best-selling formula. Clinically tested, loved by thousands.' },
-      { type: 'primary', text: 'Stop scrolling. This is the product your feed has been telling you about.' },
-      { type: 'headline', text: 'Best-Seller for a Reason' },
-      { type: 'headline', text: 'Your New Daily Essential' },
-      { type: 'description', text: 'Free shipping on orders over $50. Shop now.' },
-      { type: 'description', text: 'Join 10,000+ happy customers. Order today.' },
-    ]);
-    setAiGenerating(false);
+    try {
+      // Build context from the current ad copy state for better AI suggestions
+      const context = [
+        primaryTexts.length > 0 ? `Existing primary texts: ${primaryTexts.map((t) => t.text).join(' | ')}` : '',
+        headlines.length > 0 ? `Existing headlines: ${headlines.map((h) => h.text).join(' | ')}` : '',
+      ].filter(Boolean).join('. ');
+
+      // Get product name from the selected profile for better AI context
+      const profiles = useCreativeHubStore.getState().profiles;
+      const selectedProfile = profiles.find((p) => p.id === productProfileId);
+      const productName = selectedProfile?.productName || 'Product';
+      await generateAICopy(productProfileId, productName, context || 'Generate fresh ad copy suggestions');
+
+      // After the store updates copyLibrary, populate AI results from the newly added entries
+      // The store prepends new AI copies to copyLibrary, so we read from there
+      const { copyLibrary: updatedLibrary } = useCreativeHubStore.getState();
+      const aiCopies = updatedLibrary.filter((c) => c.isAiGenerated).slice(0, 6);
+
+      const results: { type: 'primary' | 'headline' | 'description'; text: string }[] = [];
+      for (const copy of aiCopies) {
+        if (copy.primaryText) results.push({ type: 'primary', text: copy.primaryText });
+        if (copy.headline) results.push({ type: 'headline', text: copy.headline });
+        if (copy.description) results.push({ type: 'description', text: copy.description });
+      }
+
+      if (results.length > 0) {
+        setAiCopyResults(results);
+      } else {
+        // Fallback: if the API didn't return structured results, show a message via the empty state
+        setAiCopyResults([]);
+      }
+    } catch {
+      // Silent fail - user sees no new results
+    } finally {
+      setAiGenerating(false);
+    }
   };
 
   const totalCombinations = Math.max(primaryTexts.length, 1) * Math.max(headlines.length, 1) * Math.max(descriptions.length, 1);

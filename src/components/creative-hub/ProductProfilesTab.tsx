@@ -49,7 +49,7 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
     const map = new Map<string, ProductCampaignLink[]>();
     profiles.forEach((p) => {
       // campaignLinks comes from the profiles API response
-      const links = (p as unknown as { campaignLinks?: ProductCampaignLink[] }).campaignLinks ?? [];
+      const links = p.campaignLinks ?? [];
       map.set(p.id, links);
     });
     return map;

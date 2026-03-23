@@ -1,60 +1,29 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Package,
   FolderOpen,
   Plus,
   ChevronDown,
   ChevronUp,
-  DollarSign,
-  Clock,
-  Target,
-  Globe,
-  Users,
-  MapPin,
   Image as ImageIcon,
+  Loader2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
+import { useStoreStore } from '@/stores/storeStore';
 import type {
-  ProductProfile,
-  CampaignMode,
-  AdsetMode,
   BidStrategy,
   ProductCampaignLink,
 } from '@/types/creativeHub';
 
-// ── Mock data for UI scaffolding (replaced by real data in Task 16+) ──
-
-const MOCK_CAMPAIGNS: ProductCampaignLink[] = [
-  {
-    id: 'link-1',
-    productProfileId: 'pp-1',
-    campaignId: 'camp-1',
-    campaignName: 'Testing - Protein Powder - CBO',
-    campaignType: 'testing',
-    adAccountId: 'act_123',
-    isActive: true,
-    linkedAt: '2026-03-01T00:00:00Z',
-  },
-  {
-    id: 'link-2',
-    productProfileId: 'pp-1',
-    campaignId: 'camp-2',
-    campaignName: 'Scaling - Protein Powder - ABO',
-    campaignType: 'scaling',
-    adAccountId: 'act_123',
-    isActive: true,
-    linkedAt: '2026-02-15T00:00:00Z',
-  },
-];
-
-const MOCK_ADSETS = [
-  { id: 'adset-1', name: 'Broad - 18-65 - US', spend: 245.00, status: 'ACTIVE' },
-  { id: 'adset-2', name: 'Lookalike - Purchase 1%', spend: 180.50, status: 'ACTIVE' },
-  { id: 'adset-3', name: 'Interest - Fitness', spend: 92.30, status: 'PAUSED' },
-];
+interface FetchedAdset {
+  id: string;
+  name: string;
+  spend: number;
+  status: string;
+}
 
 const BID_STRATEGIES: { value: BidStrategy; label: string; description: string; hasInput?: 'amount' | 'roas' }[] = [
   { value: 'LOWEST_COST_WITHOUT_CAP', label: 'Lowest Cost', description: 'Maximize results for your budget' },
@@ -94,10 +63,15 @@ const PLACEMENT_OPTIONS = [
 
 export function LaunchStep1Campaign() {
   const { profiles, launchConfig, updateLaunchConfig, inboxCreatives, selectedCreativeIds } = useCreativeHubStore();
+  const { activeStoreId } = useStoreStore();
   const [expandedNewCampaign, setExpandedNewCampaign] = useState(false);
   const [selectedPlacements, setSelectedPlacements] = useState<string[]>([
     'facebook_feed', 'instagram_feed', 'instagram_stories', 'instagram_reels',
   ]);
+
+  // Real adset data fetched from the API when an existing campaign is selected
+  const [campaignAdsets, setCampaignAdsets] = useState<FetchedAdset[]>([]);
+  const [adsetsLoading, setAdsetsLoading] = useState(false);
 
   const selectedProfile = profiles.find((p) => p.id === launchConfig.productProfileId);
   const campaignMode = launchConfig.campaignMode || 'existing';
@@ -108,6 +82,45 @@ export function LaunchStep1Campaign() {
   const adsetAssignments = launchConfig.existingAdsetAssignments || {};
 
   const selectedCreatives = inboxCreatives.filter((c) => selectedCreativeIds.has(c.id));
+
+  // Get the campaign links from the selected product profile (populated by the profiles API)
+  const linkedCampaigns: ProductCampaignLink[] = selectedProfile?.campaignLinks ?? [];
+
+  // Fetch adsets when an existing campaign is selected
+  const fetchAdsets = useCallback(async (campaignId: string) => {
+    setAdsetsLoading(true);
+    setCampaignAdsets([]);
+    try {
+      const params = new URLSearchParams({
+        storeId: activeStoreId || '',
+        campaignId,
+      });
+      const res = await fetch(`/api/meta/adsets?${params.toString()}`);
+      const data = await res.json();
+      const adsetRows = data.data ?? data.adsets ?? [];
+      if (adsetRows.length > 0) {
+        setCampaignAdsets(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          adsetRows.map((a: any) => ({
+            id: String(a.id ?? ''),
+            name: String(a.name || 'Untitled'),
+            spend: typeof a.metrics?.spend === 'number' ? a.metrics.spend : parseFloat(String(a.metrics?.spend || '0')),
+            status: String(a.status || 'UNKNOWN'),
+          }))
+        );
+      }
+    } catch {
+      // Silently fail - the user will see an empty list
+    } finally {
+      setAdsetsLoading(false);
+    }
+  }, [activeStoreId]);
+
+  useEffect(() => {
+    if (campaignMode === 'existing' && selectedCampaignId) {
+      fetchAdsets(selectedCampaignId);
+    }
+  }, [campaignMode, selectedCampaignId, fetchAdsets]);
 
   // ── Product Selector ──
 
@@ -125,14 +138,12 @@ export function LaunchStep1Campaign() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {profiles.map((profile) => {
             const isSelected = launchConfig.productProfileId === profile.id;
-            const linkedCampaigns = MOCK_CAMPAIGNS.filter(
-              (c) => c.productProfileId === profile.id
-            );
+            const profileLinks = profile.campaignLinks ?? [];
 
             return (
               <button
                 key={profile.id}
-                onClick={() =>
+                onClick={() => {
                   updateLaunchConfig({
                     productProfileId: profile.id,
                     adAccountId: profile.adAccountId,
@@ -146,8 +157,13 @@ export function LaunchStep1Campaign() {
                     bidStrategy: profile.defaultBidStrategy,
                     structure: profile.defaultStructure,
                     launchStatus: profile.defaultLaunchStatus,
-                  })
-                }
+                    // Reset campaign selection when switching products
+                    existingCampaignId: undefined,
+                    existingAdsetAssignments: undefined,
+                  });
+                  // Clear adsets when switching product
+                  setCampaignAdsets([]);
+                }}
                 className={cn(
                   'group relative flex items-start gap-3 rounded-2xl border-2 p-4 text-left transition-all',
                   isSelected
@@ -179,7 +195,7 @@ export function LaunchStep1Campaign() {
                     {profile.adAccountId} &middot; {profile.adAccountCurrency}
                   </p>
                   <p className="mt-1 text-xs text-slate-400">
-                    {linkedCampaigns.length} linked campaign{linkedCampaigns.length !== 1 ? 's' : ''}
+                    {profileLinks.length} linked campaign{profileLinks.length !== 1 ? 's' : ''}
                   </p>
                 </div>
                 {isSelected && (
@@ -239,37 +255,47 @@ export function LaunchStep1Campaign() {
           </div>
 
           <div className="space-y-2">
-            {MOCK_CAMPAIGNS.map((campaign) => {
-              const isSelected = selectedCampaignId === campaign.campaignId;
-              return (
-                <label
-                  key={campaign.id}
-                  className={cn(
-                    'flex cursor-pointer items-center gap-3 rounded-xl border-2 p-4 transition-all',
-                    isSelected
-                      ? 'border-blue-500 bg-blue-50/30'
-                      : 'border-slate-200 bg-white hover:border-slate-300'
-                  )}
-                >
-                  <input
-                    type="radio"
-                    name="existingCampaign"
-                    checked={isSelected}
-                    onChange={() =>
-                      updateLaunchConfig({ existingCampaignId: campaign.campaignId })
-                    }
-                    className="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  <div className="flex-1">
-                    <p className="text-sm font-medium text-slate-900">{campaign.campaignName}</p>
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      {campaign.campaignType.charAt(0).toUpperCase() + campaign.campaignType.slice(1)} &middot;{' '}
-                      {campaign.isActive ? 'Active' : 'Paused'}
-                    </p>
-                  </div>
-                </label>
-              );
-            })}
+            {linkedCampaigns.length > 0 ? (
+              linkedCampaigns.map((campaign) => {
+                const isSelected = selectedCampaignId === campaign.campaignId;
+                return (
+                  <label
+                    key={campaign.id}
+                    className={cn(
+                      'flex cursor-pointer items-center gap-3 rounded-xl border-2 p-4 transition-all',
+                      isSelected
+                        ? 'border-blue-500 bg-blue-50/30'
+                        : 'border-slate-200 bg-white hover:border-slate-300'
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="existingCampaign"
+                      checked={isSelected}
+                      onChange={() =>
+                        updateLaunchConfig({ existingCampaignId: campaign.campaignId })
+                      }
+                      className="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-slate-900">{campaign.campaignName}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        {campaign.campaignType.charAt(0).toUpperCase() + campaign.campaignType.slice(1)} &middot;{' '}
+                        {campaign.isActive ? 'Active' : 'Paused'}
+                      </p>
+                    </div>
+                  </label>
+                );
+              })
+            ) : (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-6 py-6 text-center">
+                <FolderOpen className="mx-auto h-6 w-6 text-slate-400" />
+                <p className="mt-2 text-sm text-slate-600">No linked campaigns found for this product.</p>
+                <p className="text-xs text-slate-400">
+                  Link campaigns in the product profile, or choose &ldquo;Create New Campaign&rdquo; instead.
+                </p>
+              </div>
+            )}
           </div>
         </section>
       )}
@@ -327,83 +353,98 @@ export function LaunchStep1Campaign() {
           </div>
 
           <div className="space-y-3">
-            {MOCK_ADSETS.map((adset) => {
-              const assignedIds = adsetAssignments[adset.id] || [];
-              const isChecked = assignedIds.length > 0;
+            {adsetsLoading ? (
+              <div className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-6 py-8">
+                <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
+                <span className="text-sm text-slate-500">Loading ad sets...</span>
+              </div>
+            ) : campaignAdsets.length > 0 ? (
+              campaignAdsets.map((adset) => {
+                const assignedIds = adsetAssignments[adset.id] || [];
+                const isChecked = assignedIds.length > 0;
 
-              return (
-                <div
-                  key={adset.id}
-                  className={cn(
-                    'rounded-xl border-2 p-4 transition-all',
-                    isChecked ? 'border-blue-500 bg-blue-50/20' : 'border-slate-200 bg-white'
-                  )}
-                >
-                  <label className="flex cursor-pointer items-center gap-3">
-                    <input
-                      type="checkbox"
-                      checked={isChecked}
-                      onChange={() => {
-                        const next = { ...adsetAssignments };
-                        if (isChecked) {
-                          delete next[adset.id];
-                        } else {
-                          next[adset.id] = selectedCreatives.map((c) => c.id);
-                        }
-                        updateLaunchConfig({ existingAdsetAssignments: next });
-                      }}
-                      className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                    />
-                    <div className="flex-1">
-                      <p className="text-sm font-medium text-slate-900">{adset.name}</p>
-                      <p className="mt-0.5 text-xs text-slate-500">
-                        ${adset.spend.toFixed(2)} spent &middot; {adset.status}
-                      </p>
-                    </div>
-                  </label>
+                return (
+                  <div
+                    key={adset.id}
+                    className={cn(
+                      'rounded-xl border-2 p-4 transition-all',
+                      isChecked ? 'border-blue-500 bg-blue-50/20' : 'border-slate-200 bg-white'
+                    )}
+                  >
+                    <label className="flex cursor-pointer items-center gap-3">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => {
+                          const next = { ...adsetAssignments };
+                          if (isChecked) {
+                            delete next[adset.id];
+                          } else {
+                            next[adset.id] = selectedCreatives.map((c) => c.id);
+                          }
+                          updateLaunchConfig({ existingAdsetAssignments: next });
+                        }}
+                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-slate-900">{adset.name}</p>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          ${adset.spend.toFixed(2)} spent &middot; {adset.status}
+                        </p>
+                      </div>
+                    </label>
 
-                  {isChecked && selectedCreatives.length > 0 && (
-                    <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-200 pt-3">
-                      {selectedCreatives.map((creative) => {
-                        const isAssigned = assignedIds.includes(creative.id);
-                        return (
-                          <button
-                            key={creative.id}
-                            onClick={() => {
-                              const current = adsetAssignments[adset.id] || [];
-                              const next = isAssigned
-                                ? current.filter((id) => id !== creative.id)
-                                : [...current, creative.id];
-                              updateLaunchConfig({
-                                existingAdsetAssignments: {
-                                  ...adsetAssignments,
-                                  [adset.id]: next,
-                                },
-                              });
-                            }}
-                            className={cn(
-                              'flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
-                              isAssigned
-                                ? 'border-blue-400 bg-blue-100 text-blue-800'
-                                : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
-                            )}
-                          >
-                            <div className="flex h-6 w-6 items-center justify-center overflow-hidden rounded bg-slate-100">
-                              {creative.thumbnailUrl ? (
-                                <img src={creative.thumbnailUrl} alt="" className="h-full w-full object-cover" />
-                              ) : (
-                                <ImageIcon className="h-3 w-3 text-slate-400" />
+                    {isChecked && selectedCreatives.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-200 pt-3">
+                        {selectedCreatives.map((creative) => {
+                          const isAssigned = assignedIds.includes(creative.id);
+                          return (
+                            <button
+                              key={creative.id}
+                              onClick={() => {
+                                const current = adsetAssignments[adset.id] || [];
+                                const next = isAssigned
+                                  ? current.filter((id) => id !== creative.id)
+                                  : [...current, creative.id];
+                                updateLaunchConfig({
+                                  existingAdsetAssignments: {
+                                    ...adsetAssignments,
+                                    [adset.id]: next,
+                                  },
+                                });
+                              }}
+                              className={cn(
+                                'flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
+                                isAssigned
+                                  ? 'border-blue-400 bg-blue-100 text-blue-800'
+                                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
                               )}
-                            </div>
-                            {creative.creativeName}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                            >
+                              <div className="flex h-6 w-6 items-center justify-center overflow-hidden rounded bg-slate-100">
+                                {creative.thumbnailUrl ? (
+                                  <img src={creative.thumbnailUrl} alt="" className="h-full w-full object-cover" />
+                                ) : (
+                                  <ImageIcon className="h-3 w-3 text-slate-400" />
+                                )}
+                              </div>
+                              {creative.creativeName}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            ) : (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-6 py-6 text-center">
+                <FolderOpen className="mx-auto h-6 w-6 text-slate-400" />
+                <p className="mt-2 text-sm text-slate-600">No ad sets found in this campaign.</p>
+                <p className="text-xs text-slate-400">
+                  Choose &ldquo;Create New Ad Sets&rdquo; instead.
+                </p>
+              </div>
+            )}
           </div>
         </section>
       )}
