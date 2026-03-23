@@ -86,9 +86,15 @@ async function fetchMetaMetrics(
 // ── Build product response from a product map + meta metrics ────────────────
 
 function buildResponse(
-  products: Map<string, { name: string; image: string | null; revenue: number; units: number; fees?: number; cogs?: number; orderIds?: Set<string> }>,
+  products: Map<string, { name: string; image: string | null; revenue: number; units: number; fees?: number; cogs?: number; orderIds?: Set<string>; category?: string }>,
   metaMetrics: Map<string, { spend: number; impressions: number; clicks: number; purchases: number }>,
+  totalOrderCount?: number,
+  totalOrderRevenue?: number,
 ) {
+  // AOV = total order revenue / total order count (order-level, not line-item level)
+  const aov = (totalOrderCount && totalOrderCount > 0 && totalOrderRevenue)
+    ? round2(totalOrderRevenue / totalOrderCount) : 0;
+
   return [...products.entries()].map(([pid, p]) => {
     const meta = metaMetrics.get(pid) || { spend: 0, impressions: 0, clicks: 0, purchases: 0 };
     const spend = meta.spend;
@@ -98,6 +104,7 @@ function buildResponse(
     const fees = p.fees || 0;
     const cogs = p.cogs || 0;
     const netProfit = round2(p.revenue - fees - cogs - spend);
+    const orderCount = p.orderIds?.size || p.units;
     return {
       productId: pid,
       productName: p.name,
@@ -115,7 +122,7 @@ function buildResponse(
         cpc: clk > 0 ? round2(spend / clk) : 0,
         cpm: imp > 0 ? round2((spend / imp) * 1000) : 0,
         ctr: imp > 0 ? round2((clk / imp) * 100) : 0,
-        aov: p.units > 0 ? round2(p.revenue / p.units) : 0,
+        aov: aov || (orderCount > 0 ? round2(p.revenue / orderCount) : 0),
         atcRate: 0,
         spend,
         impressions: imp,
@@ -130,7 +137,7 @@ function buildResponse(
       adName: null,
       adSetName: null,
       campaignName: null,
-      category: 'main',
+      category: p.category || 'main',
       classificationConfidence: 80,
       classificationMethod: 'shopify_live',
     };
@@ -184,18 +191,38 @@ export async function GET(request: NextRequest) {
       console.log(`[ProductPerf] Shopify API: ${orders.length} orders for ${from}→${to} (${storeTz})`);
 
       if (orders.length > 0) {
+        // Load stored classifications from DB (if available)
+        const classMap = new Map<string, string>();
+        if (isSupabasePersistenceEnabled()) {
+          try {
+            const cls = await rest<Array<{ product_id: string; classification: string }>>(
+              `/product_classifications?store_id=eq.${enc(storeId)}&select=product_id,classification`
+            );
+            for (const c of cls || []) classMap.set(c.product_id, c.classification);
+          } catch { /* non-critical */ }
+        }
+
         // Aggregate by product from line items + track order→product for fee distribution
-        const byProduct = new Map<string, { name: string; image: string | null; revenue: number; units: number; fees: number; cogs: number; orderIds: Set<string> }>();
-        const orderToProduct = new Map<string, string>(); // orderId → main productId (highest revenue)
+        const byProduct = new Map<string, { name: string; image: string | null; revenue: number; units: number; fees: number; cogs: number; orderIds: Set<string>; category: string }>();
+        const orderToProduct = new Map<string, string>(); // orderId → main productId
+        let totalOrderCount = 0;
+        let totalOrderRevenue = 0;
 
         for (const order of orders) {
           if (['voided', 'refunded'].includes(order.financialStatus)) continue;
+          totalOrderCount++;
+          totalOrderRevenue += parseFloat(order.totalPrice || '0');
+
+          // Find the highest-revenue item per order → that's the MAIN product
           let bestPid = 'unknown';
           let bestRev = 0;
+          const orderItems: Array<{ pid: string; rev: number }> = [];
+
           for (const item of order.lineItems || []) {
             const pid = String(item.productId || 'unknown');
             const itemRev = parseFloat(item.price || '0') * (item.quantity || 1);
-            const existing = byProduct.get(pid) || { name: item.title || 'Unknown', image: null, revenue: 0, units: 0, fees: 0, cogs: 0, orderIds: new Set<string>() };
+            orderItems.push({ pid, rev: itemRev });
+            const existing = byProduct.get(pid) || { name: item.title || 'Unknown', image: null, revenue: 0, units: 0, fees: 0, cogs: 0, orderIds: new Set<string>(), category: classMap.get(pid) || 'pending' };
             existing.revenue += itemRev;
             existing.units += item.quantity || 1;
             existing.orderIds.add(String(order.id));
@@ -203,6 +230,25 @@ export async function GET(request: NextRequest) {
             if (itemRev > bestRev) { bestRev = itemRev; bestPid = pid; }
           }
           orderToProduct.set(String(order.id), bestPid);
+
+          // Auto-classify if no stored classification:
+          // In multi-item orders, highest-revenue = main, others = upsell
+          if (orderItems.length > 1) {
+            for (const oi of orderItems) {
+              const p = byProduct.get(oi.pid);
+              if (p && p.category === 'pending') {
+                p.category = oi.pid === bestPid ? 'main' : 'upsell';
+              }
+            }
+          } else if (orderItems.length === 1) {
+            const p = byProduct.get(orderItems[0].pid);
+            if (p && p.category === 'pending') p.category = 'main';
+          }
+        }
+
+        // Any still-pending products default to main
+        for (const p of byProduct.values()) {
+          if (p.category === 'pending' || p.category === 'unknown') p.category = 'main';
         }
 
         // Fetch fees from balance transactions (same source as P&L)
@@ -255,7 +301,7 @@ export async function GET(request: NextRequest) {
         for (const [pid, p] of byProduct) revMap.set(pid, p.revenue);
 
         const metaMetrics = await fetchMetaMetrics(storeId, from, to, revMap);
-        const data = buildResponse(byProduct, metaMetrics);
+        const data = buildResponse(byProduct, metaMetrics, totalOrderCount, totalOrderRevenue);
 
         // Try to get product images from Supabase cache (non-blocking)
         if (isSupabasePersistenceEnabled()) {
