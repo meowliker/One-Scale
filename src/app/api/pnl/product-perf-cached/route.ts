@@ -159,7 +159,7 @@ async function fetchMetaMetricsByProduct(
  * Live fallback: fetch today's orders from Shopify API and aggregate by product line items.
  * Uses the proven fetchShopifyOrders client (same one used by getPnLSummary).
  */
-async function fetchLiveProductBreakdown(storeId: string, from: string, to: string): Promise<Array<{
+async function fetchLiveProductBreakdown(storeId: string, from: string, to: string, storeTz: string): Promise<Array<{
   productId: string; productName: string; productImage: string | null;
   revenue: number; unitsSold: number; fees: number; category: string;
 }>> {
@@ -170,9 +170,17 @@ async function fetchLiveProductBreakdown(storeId: string, from: string, to: stri
       return [];
     }
 
+    // Convert store-local dates to UTC (same approach as services/pnl.ts fetchOrdersForDateRange)
+    // This ensures we query the correct UTC window matching the store's timezone
+    const { fromZonedTime } = await import('date-fns-tz');
+    const startUtc = fromZonedTime(`${from}T00:00:00`, storeTz);
+    const endUtc = fromZonedTime(`${to}T23:59:59`, storeTz);
+
+    console.log(`[ProductPerf:LiveFallback] Fetching orders: ${from} to ${to} (${storeTz}) → UTC ${startUtc.toISOString()} to ${endUtc.toISOString()}`);
+
     const orders = await fetchShopifyOrders(shopToken.accessToken, shopToken.shopDomain, {
-      createdAtMin: `${from}T00:00:00`,
-      createdAtMax: `${to}T23:59:59`,
+      createdAtMin: startUtc.toISOString(),
+      createdAtMax: endUtc.toISOString(),
       status: 'any',
       limit: 250,
     });
@@ -382,7 +390,42 @@ export async function GET(request: NextRequest) {
 
     // Cache incomplete or miss — compute full range live and persist
     try {
-      const results = await buildProductPerformance(storeId, from, to);
+      let results = await buildProductPerformance(storeId, from, to);
+
+      // If buildProductPerformance returns empty, try live Shopify fallback (works for any date range)
+      if (results.length === 0) {
+        const liveProducts = await fetchLiveProductBreakdown(storeId, from, to, storeTz);
+        if (liveProducts.length > 0) {
+          const revMap = new Map<string, number>();
+          for (const p of liveProducts) revMap.set(p.productId, p.revenue);
+          const metaMetrics = await fetchMetaMetricsByProduct(storeId, from, to, revMap);
+          const data = liveProducts.map(p => {
+            const meta = metaMetrics.get(p.productId) || { spend: 0, impressions: 0, clicks: 0, purchases: 0 };
+            const spend = meta.spend;
+            return {
+              productId: p.productId, productName: p.productName, productImage: p.productImage,
+              sku: '', unitsSold: p.unitsSold, revenue: p.revenue, cogs: 0, shipping: 0, fees: p.fees,
+              netProfit: round2(p.revenue - p.fees - spend),
+              margin: p.revenue > 0 ? round2(((p.revenue - p.fees - spend) / p.revenue) * 100) : 0,
+              fbMetrics: {
+                roas: spend > 0 ? round2(p.revenue / spend) : 0,
+                cpc: meta.clicks > 0 ? round2(spend / meta.clicks) : 0,
+                cpm: meta.impressions > 0 ? round2((spend / meta.impressions) * 1000) : 0,
+                ctr: meta.impressions > 0 ? round2((meta.clicks / meta.impressions) * 100) : 0,
+                aov: p.unitsSold > 0 ? round2(p.revenue / p.unitsSold) : 0,
+                atcRate: 0, spend, impressions: meta.impressions, clicks: meta.clicks,
+                purchases: meta.purchases, costPerPurchase: meta.purchases > 0 ? round2(spend / meta.purchases) : 0,
+                frequency: 0, reach: 0,
+              },
+              isAdvertised: spend > 0 || meta.impressions > 0,
+              adLandingPageUrl: null, adName: null, adSetName: null, campaignName: null,
+              category: p.category, classificationConfidence: 70, classificationMethod: 'line_item_live',
+            };
+          });
+          return NextResponse.json({ ok: true, data, source: 'shopify_live' });
+        }
+      }
+
       const revMap = new Map<string, number>();
       for (const r of results) revMap.set(r.product_id, r.revenue);
       const metaMetrics = await fetchMetaMetricsByProduct(storeId, from, to, revMap);
@@ -399,7 +442,7 @@ export async function GET(request: NextRequest) {
     // If buildProductPerformance returns empty (no product_config or empty order cache),
     // fetch orders LIVE from Shopify API as fallback
     if (results.length === 0) {
-      const liveProducts = await fetchLiveProductBreakdown(storeId, from, to);
+      const liveProducts = await fetchLiveProductBreakdown(storeId, from, to, storeTz);
       if (liveProducts.length > 0) {
         const revMap = new Map<string, number>();
         for (const p of liveProducts) revMap.set(p.productId, p.revenue);
