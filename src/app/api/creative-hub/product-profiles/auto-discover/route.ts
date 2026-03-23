@@ -578,9 +578,17 @@ export async function POST(request: NextRequest) {
       },
       _debug: {
         campaignMetaMapSize: campaignMetaMap.size,
-        campaignMetaEntries: Array.from(campaignMetaMap.entries()).map(([, v]) => ({
+        campaignMetaEntries: Array.from(campaignMetaMap.entries()).slice(0, 5).map(([, v]) => ({
           ...v,
         })),
+        pageNameMapSize: pageNameMap.size,
+        igUsernameMapSize: igUsernameMap.size,
+        pixelNameMapSize: pixelNameMap.size,
+        accountBmMapSize: accountBmMap.size,
+        uniquePageIds: Array.from(uniquePageIds),
+        uniqueIgIds: Array.from(uniqueIgIds),
+        samplePageNames: Array.from(pageNameMap.entries()).slice(0, 3),
+        sampleIgNames: Array.from(igUsernameMap.entries()).slice(0, 3),
       },
     });
   } catch (err) {
