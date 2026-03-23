@@ -6,6 +6,9 @@ import {
   listPersistentStores,
 } from '@/app/api/lib/supabase-persistence';
 import {
+  getLatestPersistentMetaEndpointSnapshot,
+} from '@/app/api/lib/supabase-tracking';
+import {
   getProductProfiles,
   upsertProductProfile,
   upsertProductCampaignLink,
@@ -130,23 +133,43 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 2. Read cached campaign data from the database
+    // 2. Read cached campaign data (Supabase-aware)
     const sortedAccountIds = adAccounts.map((a) => a.ad_account_id).sort();
     const scopeId = `accounts:${sortedAccountIds.join(',')}`;
 
-    const snapshot = getLatestMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId);
+    let campaigns: Campaign[] = [];
 
-    if (!snapshot || !snapshot.data || snapshot.data.length === 0) {
+    // Try Supabase first
+    if (isSupabasePersistenceEnabled()) {
+      try {
+        const supaSnapshot = await getLatestPersistentMetaEndpointSnapshot<Campaign[]>(
+          storeId, 'campaigns', scopeId
+        );
+        if (supaSnapshot?.data && supaSnapshot.data.length > 0) {
+          campaigns = supaSnapshot.data;
+        }
+      } catch (err) {
+        console.warn('[auto-discover] Supabase snapshot fetch failed:', err);
+      }
+    }
+
+    // Fallback to local SQLite
+    if (campaigns.length === 0) {
+      const localSnapshot = getLatestMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId);
+      if (localSnapshot?.data && localSnapshot.data.length > 0) {
+        campaigns = localSnapshot.data;
+      }
+    }
+
+    if (campaigns.length === 0) {
       return NextResponse.json(
         { error: 'No cached campaign data available. Please sync your Meta data first.' },
         { status: 404 }
       );
     }
 
-    const campaigns = snapshot.data;
-
-    // 3. Fetch Shopify products from the database
-    const shopifyProducts = getShopifyProductsFromDb(storeId);
+    // 3. Fetch Shopify products (live API with DB fallback)
+    const shopifyProducts = await getShopifyProducts(storeId, request);
 
     // Build a handle-to-product lookup map
     const handleMap = new Map<string, ShopifyProduct>();
@@ -329,49 +352,42 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * Read Shopify products from the local database cache.
- * Falls back to the meta_endpoint_snapshots table where Shopify product data
- * may be cached, or queries a dedicated shopify products table if available.
+ * Fetch Shopify products — tries internal API first (works on Vercel),
+ * then falls back to local DB cache.
  */
-function getShopifyProductsFromDb(storeId: string): ShopifyProduct[] {
-  const db = getDb();
-
-  // Try the shopify endpoint snapshots first (same pattern as Meta snapshots)
+async function getShopifyProducts(storeId: string, request: NextRequest): Promise<ShopifyProduct[]> {
+  // Try the internal Shopify products API (this works on Vercel)
   try {
+    const baseUrl = new URL(request.url).origin;
+    const cookie = request.headers.get('cookie') ?? '';
+    const res = await fetch(`${baseUrl}/api/shopify/products?storeId=${encodeURIComponent(storeId)}&limit=250`, {
+      headers: { cookie },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const products = data.data ?? data.products ?? [];
+      return products.map((p: Record<string, unknown>) => ({
+        id: p.id,
+        title: p.title,
+        handle: p.handle,
+        image: (p.images as Array<{ src: string }> | undefined)?.[0] ?? null,
+        images: p.images,
+      }));
+    }
+  } catch (err) {
+    console.warn('[auto-discover] Shopify API fetch failed:', err);
+  }
+
+  // Fallback: local DB
+  try {
+    const db = getDb();
     const row = db.prepare(`
       SELECT payload_json FROM meta_endpoint_snapshots
       WHERE store_id = ? AND endpoint = 'shopify_products'
-      ORDER BY updated_at DESC
-      LIMIT 1
+      ORDER BY updated_at DESC LIMIT 1
     `).get(storeId) as { payload_json: string } | undefined;
-
-    if (row) {
-      return JSON.parse(row.payload_json) as ShopifyProduct[];
-    }
-  } catch {
-    // Table or column may not exist, continue to fallback
-  }
-
-  // Fallback: try a dedicated shopify_products table
-  try {
-    const rows = db.prepare(
-      'SELECT * FROM shopify_products WHERE store_id = ?'
-    ).all(storeId) as Array<{
-      shopify_id: string;
-      title: string;
-      handle: string;
-      image_url: string | null;
-    }>;
-
-    return rows.map((r) => ({
-      id: r.shopify_id,
-      title: r.title,
-      handle: r.handle,
-      image: r.image_url ? { src: r.image_url } : null,
-    }));
-  } catch {
-    // Table doesn't exist
-  }
+    if (row) return JSON.parse(row.payload_json) as ShopifyProduct[];
+  } catch { /* ignore */ }
 
   return [];
 }
