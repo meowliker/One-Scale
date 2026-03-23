@@ -1,12 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { randomUUID } from 'crypto';
-import { getStoreAdAccounts, getLatestMetaEndpointSnapshot, getDb } from '@/app/api/lib/db';
+import { getStoreAdAccounts, getLatestMetaEndpointSnapshot, getDb, type DbStoreAdAccount } from '@/app/api/lib/db';
+import {
+  isSupabasePersistenceEnabled,
+  listPersistentStores,
+} from '@/app/api/lib/supabase-persistence';
 import {
   getProductProfiles,
   upsertProductProfile,
   upsertProductCampaignLink,
 } from '@/app/api/lib/creative-hub-db';
 import type { Campaign, Ad } from '@/types/campaign';
+
+/**
+ * Get ad accounts for a store, preferring Supabase (cloud) over local SQLite.
+ */
+async function getAdAccountsForStore(storeId: string): Promise<DbStoreAdAccount[]> {
+  // Try Supabase first (used on Vercel)
+  if (isSupabasePersistenceEnabled()) {
+    try {
+      const allStores = await listPersistentStores();
+      const store = allStores.find((s) => s.id === storeId);
+      if (store && store.adAccounts.length > 0) {
+        return store.adAccounts;
+      }
+    } catch (err) {
+      console.warn('[auto-discover] Supabase fallback failed:', err);
+    }
+  }
+  // Fallback to local SQLite
+  return getStoreAdAccounts(storeId);
+}
 
 interface ShopifyProduct {
   id: number | string;
@@ -88,18 +112,16 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // 1. Get all ad accounts for the store
-    const allAccounts = getStoreAdAccounts(storeId);
+    // 1. Get all ad accounts for the store (Supabase-aware)
+    const allAccounts = await getAdAccountsForStore(storeId);
 
     // Accept accounts that are meta or have no platform set (legacy data)
-    // Also accept accounts that are active or have no is_active set
     const adAccounts = allAccounts.filter(
       (a) => (a.platform === 'meta' || !a.platform || a.platform === '') &&
-             (a.is_active === 1 || a.is_active === undefined || a.is_active === null)
+             (a.is_active === 1 || a.is_active === undefined || (a.is_active as unknown) === null)
     );
 
     if (adAccounts.length === 0) {
-      // Log for debugging
       console.error('[auto-discover] No ad accounts match. All accounts for store:',
         JSON.stringify(allAccounts.map(a => ({ id: a.ad_account_id, platform: a.platform, active: a.is_active }))));
       return NextResponse.json(
