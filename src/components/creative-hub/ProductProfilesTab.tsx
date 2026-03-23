@@ -44,10 +44,14 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
     return map;
   }, [inboxCreatives]);
 
-  // Placeholder linked campaigns -- in production these would come from the store
+  // Build linked campaigns map from profile data returned by the API
   const linkedCampaignsMap = useMemo(() => {
     const map = new Map<string, ProductCampaignLink[]>();
-    profiles.forEach((p) => map.set(p.id, []));
+    profiles.forEach((p) => {
+      // campaignLinks comes from the profiles API response
+      const links = (p as unknown as { campaignLinks?: ProductCampaignLink[] }).campaignLinks ?? [];
+      map.set(p.id, links);
+    });
     return map;
   }, [profiles]);
 
