@@ -930,14 +930,23 @@ export async function GET(request: NextRequest) {
         const multiItemTotal = (mic.main || 0) + (mic.upsell || 0) + (mic.addon || 0) + (mic.downsell || 0);
         const singleItemCount = totalAppearances - multiItemTotal;
 
-        if (totalAppearances === 0 || multiItemTotal === 0) {
-          mostCommonCategory = 'pending';
+        if (totalAppearances === 0 && multiItemTotal === 0) {
+          // No order pattern data — use revenue share heuristic
+          const productRevenueShare = totalRevenue > 0 ? agg.revenue / totalRevenue : 0;
+          // Products with >10% revenue share are likely main, others are upsells
+          mostCommonCategory = productRevenueShare >= 0.10 ? 'main' : 'upsell';
+        } else if (multiItemTotal === 0) {
+          // Only single-item orders — this product IS the main product
+          mostCommonCategory = 'main';
         } else {
           const productRevenueShare = totalRevenue > 0 ? agg.revenue / totalRevenue : 0;
           const upsellSignals = (mic.upsell || 0) + (mic.addon || 0) + (mic.downsell || 0);
-          const upsellRate = upsellSignals / multiItemTotal;
+          const mainSignals = (mic.main || 0);
+          const upsellRate = (upsellSignals + mainSignals) > 0 ? upsellSignals / (upsellSignals + mainSignals) : 0;
 
-          if (upsellRate > 0.6 && singleItemCount <= multiItemTotal && productRevenueShare < 0.25) {
+          // Classify as upsell if: mostly appears as non-main in multi-item orders
+          // OR has very low revenue share (< 10%)
+          if (upsellRate > 0.5 || productRevenueShare < 0.05) {
             if ((mic.addon || 0) > (mic.upsell || 0)) mostCommonCategory = 'addon';
             else if ((mic.downsell || 0) > (mic.upsell || 0)) mostCommonCategory = 'downsell';
             else mostCommonCategory = 'upsell';
