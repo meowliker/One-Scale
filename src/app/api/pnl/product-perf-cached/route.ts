@@ -86,7 +86,7 @@ async function fetchMetaMetrics(
 // ── Build product response from a product map + meta metrics ────────────────
 
 function buildResponse(
-  products: Map<string, { name: string; image: string | null; revenue: number; units: number }>,
+  products: Map<string, { name: string; image: string | null; revenue: number; units: number; fees?: number; cogs?: number; orderIds?: Set<string> }>,
   metaMetrics: Map<string, { spend: number; impressions: number; clicks: number; purchases: number }>,
 ) {
   return [...products.entries()].map(([pid, p]) => {
@@ -95,7 +95,9 @@ function buildResponse(
     const imp = meta.impressions;
     const clk = meta.clicks;
     const pur = meta.purchases;
-    const netProfit = round2(p.revenue - spend);
+    const fees = p.fees || 0;
+    const cogs = p.cogs || 0;
+    const netProfit = round2(p.revenue - fees - cogs - spend);
     return {
       productId: pid,
       productName: p.name,
@@ -103,9 +105,9 @@ function buildResponse(
       sku: '',
       unitsSold: p.units,
       revenue: p.revenue,
-      cogs: 0,
+      cogs,
       shipping: 0,
-      fees: 0,
+      fees,
       netProfit,
       margin: p.revenue > 0 ? round2((netProfit / p.revenue) * 100) : 0,
       fbMetrics: {
@@ -182,24 +184,75 @@ export async function GET(request: NextRequest) {
       console.log(`[ProductPerf] Shopify API: ${orders.length} orders for ${from}→${to} (${storeTz})`);
 
       if (orders.length > 0) {
-        // Aggregate by product from line items
-        const byProduct = new Map<string, { name: string; image: string | null; revenue: number; units: number }>();
+        // Aggregate by product from line items + track order→product for fee distribution
+        const byProduct = new Map<string, { name: string; image: string | null; revenue: number; units: number; fees: number; cogs: number; orderIds: Set<string> }>();
+        const orderToProduct = new Map<string, string>(); // orderId → main productId (highest revenue)
+
         for (const order of orders) {
           if (['voided', 'refunded'].includes(order.financialStatus)) continue;
+          let bestPid = 'unknown';
+          let bestRev = 0;
           for (const item of order.lineItems || []) {
             const pid = String(item.productId || 'unknown');
-            const existing = byProduct.get(pid) || { name: item.title || 'Unknown', image: null, revenue: 0, units: 0 };
-            existing.revenue += parseFloat(item.price || '0') * (item.quantity || 1);
+            const itemRev = parseFloat(item.price || '0') * (item.quantity || 1);
+            const existing = byProduct.get(pid) || { name: item.title || 'Unknown', image: null, revenue: 0, units: 0, fees: 0, cogs: 0, orderIds: new Set<string>() };
+            existing.revenue += itemRev;
             existing.units += item.quantity || 1;
+            existing.orderIds.add(String(order.id));
             byProduct.set(pid, existing);
+            if (itemRev > bestRev) { bestRev = itemRev; bestPid = pid; }
           }
+          orderToProduct.set(String(order.id), bestPid);
+        }
+
+        // Fetch fees from balance transactions (same source as P&L)
+        if (isSupabasePersistenceEnabled()) {
+          try {
+            const btFees = await rest<Array<{ fee: number; source_order_id: string | null }>>(
+              `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&type=eq.charge&and=(processed_at.gte.${enc(startUtc.toISOString())},processed_at.lte.${enc(endUtc.toISOString())})&select=fee,source_order_id`
+            );
+            for (const bt of btFees || []) {
+              const fee = Math.abs(Number(bt.fee) || 0);
+              if (fee <= 0) continue;
+              const pid = bt.source_order_id ? orderToProduct.get(bt.source_order_id) : undefined;
+              if (pid && byProduct.has(pid)) {
+                byProduct.get(pid)!.fees += fee;
+              } else {
+                // Distribute unmatched fees proportionally by revenue
+                const totalRev = [...byProduct.values()].reduce((s, p) => s + p.revenue, 0);
+                if (totalRev > 0) {
+                  for (const p of byProduct.values()) {
+                    p.fees += round2(fee * (p.revenue / totalRev));
+                  }
+                }
+              }
+            }
+          } catch { /* fees non-critical */ }
+
+          // Fetch COGS from product costs table
+          try {
+            const costRows = await rest<Array<{ product_id: string; cost_per_unit: number; cost_type: string }>>(
+              `/pnl_product_costs?store_id=eq.${enc(storeId)}&select=product_id,cost_per_unit,cost_type`
+            );
+            for (const cost of costRows || []) {
+              const p = byProduct.get(cost.product_id);
+              if (!p) continue;
+              p.cogs = cost.cost_type === 'fixed'
+                ? round2(cost.cost_per_unit * p.units)
+                : round2(p.revenue * (cost.cost_per_unit / 100));
+            }
+          } catch { /* cogs non-critical */ }
+        }
+
+        // Round revenues and fees
+        for (const p of byProduct.values()) {
+          p.revenue = round2(p.revenue);
+          p.fees = round2(p.fees);
         }
 
         // Enrich with Meta metrics
         const revMap = new Map<string, number>();
-        for (const [pid, p] of byProduct) revMap.set(pid, round2(p.revenue));
-        // Round revenues
-        for (const p of byProduct.values()) p.revenue = round2(p.revenue);
+        for (const [pid, p] of byProduct) revMap.set(pid, p.revenue);
 
         const metaMetrics = await fetchMetaMetrics(storeId, from, to, revMap);
         const data = buildResponse(byProduct, metaMetrics);
