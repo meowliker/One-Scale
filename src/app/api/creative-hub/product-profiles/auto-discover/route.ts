@@ -8,6 +8,8 @@ import {
 import {
   getLatestPersistentMetaEndpointSnapshot,
 } from '@/app/api/lib/supabase-tracking';
+import { getMetaToken } from '@/app/api/lib/tokens';
+import { fetchFromMeta } from '@/app/api/lib/meta-client';
 import {
   getProductProfiles,
   upsertProductProfile,
@@ -133,38 +135,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 2. Read cached campaign data (Supabase-aware)
-    const sortedAccountIds = adAccounts.map((a) => a.ad_account_id).sort();
-    const scopeId = `accounts:${sortedAccountIds.join(',')}`;
-
-    let campaigns: Campaign[] = [];
-
-    // Try Supabase first
-    if (isSupabasePersistenceEnabled()) {
-      try {
-        const supaSnapshot = await getLatestPersistentMetaEndpointSnapshot<Campaign[]>(
-          storeId, 'campaigns', scopeId
-        );
-        if (supaSnapshot?.data && supaSnapshot.data.length > 0) {
-          campaigns = supaSnapshot.data;
-        }
-      } catch (err) {
-        console.warn('[auto-discover] Supabase snapshot fetch failed:', err);
-      }
-    }
-
-    // Fallback to local SQLite
-    if (campaigns.length === 0) {
-      const localSnapshot = getLatestMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId);
-      if (localSnapshot?.data && localSnapshot.data.length > 0) {
-        campaigns = localSnapshot.data;
-      }
-    }
-
-    if (campaigns.length === 0) {
+    // 2. Get Meta token for live API calls
+    const metaToken = await getMetaToken(storeId);
+    if (!metaToken) {
       return NextResponse.json(
-        { error: 'No cached campaign data available. Please sync your Meta data first.' },
-        { status: 404 }
+        { error: 'No Meta access token found. Please reconnect Meta in Settings.' },
+        { status: 400 }
       );
     }
 
@@ -179,71 +155,154 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 4. Match ad destination URLs to Shopify product handles
+    // 4. For each ad account, fetch active ads with destination URLs from Meta API
     const matchesByHandle = new Map<string, DiscoveredMatch>();
     const unmappedCampaigns: UnmappedCampaign[] = [];
+    const seenCampaignIds = new Set<string>();
 
-    // Build ad account lookup for currency
     const accountLookup = new Map(
       adAccounts.map((a) => [a.ad_account_id, a])
     );
 
-    for (const campaign of campaigns) {
-      const urlEntries = collectDestinationUrls(campaign);
+    for (const account of adAccounts) {
+      try {
+        // Fetch ads with their creative destination URLs
+        interface MetaAdResult {
+          data: Array<{
+            id: string;
+            name: string;
+            campaign_id: string;
+            campaign: { id: string; name: string };
+            adset_id: string;
+            creative?: {
+              id: string;
+              effective_object_story_id?: string;
+            };
+            tracking_specs?: Array<Record<string, unknown>>;
+            // The preview link or destination URL
+            effective_status: string;
+          }>;
+        }
 
-      if (urlEntries.length === 0) {
-        continue;
-      }
+        // Fetch ads with campaign info and creative details
+        const adsResult = await fetchFromMeta<MetaAdResult>(
+          metaToken,
+          `${account.ad_account_id}/ads`,
+          {
+            fields: 'id,name,campaign_id,campaign{id,name},adset_id,effective_status',
+            effective_status: '["ACTIVE","PAUSED"]',
+            limit: '100',
+          }
+        );
 
-      let matched = false;
-      const campaignDestUrls: string[] = [];
+        // For each ad, fetch its creative to get the destination URL
+        const adIds = (adsResult.data || []).map(a => a.id).slice(0, 50); // limit to 50 ads
 
-      for (const { url } of urlEntries) {
-        campaignDestUrls.push(url);
-        const handle = extractProductHandle(url);
+        // Batch fetch creatives with destination URLs
+        interface MetaCreativeResult {
+          data: Array<{
+            id: string;
+            object_story_spec?: {
+              link_data?: { link?: string };
+              video_data?: { call_to_action?: { value?: { link?: string } } };
+            };
+            asset_feed_spec?: {
+              link_urls?: Array<{ website_url?: string }>;
+            };
+          }>;
+        }
 
-        if (handle && handleMap.has(handle)) {
-          matched = true;
-          const product = handleMap.get(handle)!;
-
-          // Determine which ad account this campaign belongs to
-          // Use the first ad account as default (campaigns are fetched per-account-scope)
-          const adAccountId = sortedAccountIds[0];
-          const account = accountLookup.get(adAccountId);
-
-          const existing = matchesByHandle.get(handle);
-          if (existing) {
-            // Add this campaign to existing match
-            existing.campaigns.push({
-              campaignId: campaign.id,
-              campaignName: campaign.name,
-              destinationUrl: url,
-            });
-          } else {
-            matchesByHandle.set(handle, {
-              shopifyProduct: product,
-              adAccountId,
-              adAccountCurrency: account?.currency ?? 'USD',
-              campaigns: [{
-                campaignId: campaign.id,
-                campaignName: campaign.name,
-                destinationUrl: url,
-              }],
+        // Build a map of campaign_id -> campaign_name + ad_account from ads
+        const campaignMap = new Map<string, { name: string; adAccountId: string }>();
+        for (const ad of adsResult.data || []) {
+          if (ad.campaign) {
+            campaignMap.set(ad.campaign.id, {
+              name: ad.campaign.name,
+              adAccountId: account.ad_account_id,
             });
           }
         }
-      }
 
-      // Tier 2: unmatched campaigns
-      if (!matched && campaignDestUrls.length > 0) {
-        unmappedCampaigns.push({
-          campaignId: campaign.id,
-          campaignName: campaign.name,
-          adAccountId: sortedAccountIds[0],
-          destinationUrls: [...new Set(campaignDestUrls)],
-        });
+        // Fetch destination URLs via ad creatives
+        for (const ad of (adsResult.data || []).slice(0, 30)) {
+          try {
+            const creativeResult = await fetchFromMeta<{
+              id: string;
+              object_story_spec?: {
+                link_data?: { link?: string; message?: string };
+                video_data?: { call_to_action?: { value?: { link?: string } } };
+              };
+              asset_feed_spec?: {
+                link_urls?: Array<{ website_url?: string }>;
+              };
+            }>(
+              metaToken,
+              `${ad.id}`,
+              { fields: 'creative{object_story_spec,asset_feed_spec}' }
+            );
+
+            // Extract URL from creative
+            const creative = (creativeResult as unknown as { creative?: typeof creativeResult })?.creative ?? creativeResult;
+            let destUrl: string | undefined;
+
+            if (creative.object_story_spec?.link_data?.link) {
+              destUrl = creative.object_story_spec.link_data.link;
+            } else if (creative.object_story_spec?.video_data?.call_to_action?.value?.link) {
+              destUrl = creative.object_story_spec.video_data.call_to_action.value.link;
+            } else if (creative.asset_feed_spec?.link_urls?.[0]?.website_url) {
+              destUrl = creative.asset_feed_spec.link_urls[0].website_url;
+            }
+
+            if (!destUrl || !ad.campaign) continue;
+
+            const campaignId = ad.campaign.id;
+            const campaignName = ad.campaign.name;
+            const handle = extractProductHandle(destUrl);
+
+            if (handle && handleMap.has(handle)) {
+              const product = handleMap.get(handle)!;
+              const existing = matchesByHandle.get(handle);
+
+              if (existing) {
+                if (!existing.campaigns.some(c => c.campaignId === campaignId)) {
+                  existing.campaigns.push({ campaignId, campaignName, destinationUrl: destUrl });
+                }
+              } else {
+                matchesByHandle.set(handle, {
+                  shopifyProduct: product,
+                  adAccountId: account.ad_account_id,
+                  adAccountCurrency: account.currency ?? 'USD',
+                  campaigns: [{ campaignId, campaignName, destinationUrl: destUrl }],
+                });
+              }
+              seenCampaignIds.add(campaignId);
+            } else if (destUrl && !seenCampaignIds.has(campaignId)) {
+              // Unmapped campaign
+              const existing = unmappedCampaigns.find(u => u.campaignId === campaignId);
+              if (existing) {
+                if (!existing.destinationUrls.includes(destUrl)) {
+                  existing.destinationUrls.push(destUrl);
+                }
+              } else {
+                unmappedCampaigns.push({
+                  campaignId,
+                  campaignName,
+                  adAccountId: account.ad_account_id,
+                  destinationUrls: [destUrl],
+                });
+              }
+            }
+          } catch {
+            // Skip individual ad fetch errors
+          }
+        }
+      } catch (err) {
+        console.warn(`[auto-discover] Failed to fetch ads for ${account.ad_account_id}:`, err);
       }
     }
+
+    // Remove unmapped campaigns that were later matched
+    const filteredUnmapped = unmappedCampaigns.filter(u => !seenCampaignIds.has(u.campaignId));
 
     // 5. Get existing profiles to avoid duplicates
     const existingProfiles = getProductProfiles(storeId);
@@ -338,11 +397,11 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       profiles: savedProfiles,
-      unmappedCampaigns,
+      unmappedCampaigns: filteredUnmapped,
       stats: {
-        totalCampaigns: campaigns.length,
+        totalCampaigns: seenCampaignIds.size + filteredUnmapped.length,
         matchedProducts: savedProfiles.length,
-        unmappedCount: unmappedCampaigns.length,
+        unmappedCount: filteredUnmapped.length,
       },
     });
   } catch (err) {
