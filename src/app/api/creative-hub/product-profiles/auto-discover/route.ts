@@ -176,7 +176,7 @@ export async function POST(request: NextRequest) {
       } catch { /* skip malformed */ }
     }
 
-    console.log(`[auto-discover] Found ${allCampaigns.length} campaigns (ACTIVE/PAUSED) from Supabase snapshots`);
+    console.log(`[auto-discover] Found ${allCampaigns.length} ACTIVE campaigns from Supabase snapshots`);
 
     // ━━━ Step 3: For each campaign, get 1 ad → creative_id → object_story_spec ━━━
     const metaTokenObj = await getMetaToken(storeId!);
@@ -489,6 +489,10 @@ export async function POST(request: NextRequest) {
     const existingByShopifyId = new Map(
       existingProfiles.filter((p) => p.shopifyProductId).map((p) => [p.shopifyProductId!, p]),
     );
+    // Also dedup by product name as safety net
+    const existingByName = new Map(
+      existingProfiles.map((p) => [p.productName.toLowerCase().trim(), p]),
+    );
 
     const savedProfiles: Array<
       Awaited<ReturnType<typeof getProductProfiles>>[0] & { campaignLinks: unknown[] }
@@ -496,7 +500,8 @@ export async function POST(request: NextRequest) {
 
     for (const [, match] of matchesByHandle) {
       const shopifyId = String(match.shopifyProduct.id);
-      const existingProfile = existingByShopifyId.get(shopifyId);
+      const existingProfile = existingByShopifyId.get(shopifyId)
+        || existingByName.get(match.shopifyProduct.title.toLowerCase().trim());
 
       // Determine profile-level metadata from MOST COMMON across campaigns
       const profilePageId = mostCommon(match.campaigns.map((c) => c.pageId));
@@ -639,20 +644,6 @@ export async function POST(request: NextRequest) {
         matchedProducts: savedProfiles.length,
         unmappedCount: unmappedCampaigns.length,
         source: 'supabase_snapshots',
-      },
-      _debug: {
-        campaignMetaMapSize: campaignMetaMap.size,
-        campaignMetaEntries: Array.from(campaignMetaMap.entries()).slice(0, 5).map(([, v]) => ({
-          ...v,
-        })),
-        pageNameMapSize: pageNameMap.size,
-        igUsernameMapSize: igUsernameMap.size,
-        pixelNameMapSize: pixelNameMap.size,
-        accountBmMapSize: accountBmMap.size,
-        uniquePageIds: Array.from(uniquePageIds),
-        uniqueIgIds: Array.from(uniqueIgIds),
-        samplePageNames: Array.from(pageNameMap.entries()).slice(0, 3),
-        sampleIgNames: Array.from(igUsernameMap.entries()).slice(0, 3),
       },
     });
   } catch (err) {
