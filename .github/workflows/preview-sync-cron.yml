@@ -1,0 +1,56 @@
+name: Preview Sync Cron
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: preview-sync-cron
+  cancel-in-progress: false
+
+jobs:
+  ping-preview-sync-cron:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Validate required secrets
+        env:
+          PREVIEW_URL_1: ${{ secrets.PREVIEW_URL_1 }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PREVIEW_URL_1}" ]; then
+            echo "Missing required secret: PREVIEW_URL_1"
+            exit 1
+          fi
+          if [ -z "${CRON_SECRET}" ]; then
+            echo "Missing required secret: CRON_SECRET"
+            exit 1
+          fi
+
+      - name: Trigger preview /api/sync/cron
+        env:
+          PREVIEW_URL_1: ${{ secrets.PREVIEW_URL_1 }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          VERCEL_BYPASS_TOKEN_1: ${{ secrets.VERCEL_BYPASS_TOKEN_1 }}
+        run: |
+          set -euo pipefail
+          URL="${PREVIEW_URL_1%/}/api/sync/cron"
+          echo "Calling ${URL} at $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
+          if [ -n "${VERCEL_BYPASS_TOKEN_1:-}" ]; then
+            curl -fsS --retry 2 --retry-delay 2 \
+              -H "Authorization: Bearer ${CRON_SECRET}" \
+              -H "x-vercel-protection-bypass: ${VERCEL_BYPASS_TOKEN_1}" \
+              "${URL}"
+          else
+            curl -fsS --retry 2 --retry-delay 2 \
+              -H "Authorization: Bearer ${CRON_SECRET}" \
+              "${URL}"
+          fi
+
+          echo "Preview cron ping succeeded"
