@@ -16,6 +16,8 @@ import {
   ChevronDown,
   ChevronUp,
   DollarSign,
+  Building2,
+  LayoutGrid,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ProductProfile, ProductCampaignLink, CampaignLinkType } from '@/types/creativeHub';
@@ -23,6 +25,7 @@ import type { ProductProfile, ProductCampaignLink, CampaignLinkType } from '@/ty
 interface ProductProfileCardProps {
   profile: ProductProfile;
   linkedCampaigns: ProductCampaignLink[];
+  creativeCount?: number;
   onEdit: (profile: ProductProfile) => void;
   onViewCopyLibrary: (profileId: string) => void;
 }
@@ -45,35 +48,88 @@ const campaignTypeBadge: Record<CampaignLinkType, { label: string; className: st
   },
 };
 
-function isConfigured(profile: ProductProfile): boolean {
-  return !!(
-    profile.adAccountId &&
-    profile.pageId &&
-    profile.pixelId &&
-    profile.conversionEvent &&
-    profile.destinationUrl
-  );
+/** Collect unique non-empty values from campaign links for a given key */
+function collectUnique<K extends keyof ProductCampaignLink>(
+  links: ProductCampaignLink[],
+  idKey: K,
+  nameKey: K
+): { id: string; name: string }[] {
+  const seen = new Map<string, string>();
+  for (const link of links) {
+    const id = link[idKey] as string | undefined;
+    const name = link[nameKey] as string | undefined;
+    if (id && !seen.has(id)) {
+      seen.set(id, name || id);
+    }
+  }
+  return Array.from(seen.entries()).map(([id, name]) => ({ id, name }));
+}
+
+function formatAggregated(
+  items: { id: string; name: string }[],
+  pluralLabel: string
+): { display: string; tooltip?: string } {
+  if (items.length === 0) return { display: 'Not set' };
+  if (items.length === 1) return { display: items[0].name };
+  return {
+    display: `${items.length} ${pluralLabel}`,
+    tooltip: items.map((i) => i.name).join(', '),
+  };
 }
 
 export function ProductProfileCard({
   profile,
   linkedCampaigns,
+  creativeCount,
   onEdit,
   onViewCopyLibrary,
 }: ProductProfileCardProps) {
   const [campaignsExpanded, setCampaignsExpanded] = useState(true);
-  const configured = isConfigured(profile);
+
+  // Aggregate metadata from campaign links, fall back to profile-level data
+  const pages = collectUnique(linkedCampaigns, 'pageId', 'pageName');
+  const pixels = collectUnique(linkedCampaigns, 'pixelId', 'pixelName');
+  const instagrams = collectUnique(linkedCampaigns, 'instagramActorId', 'instagramUsername');
+  const bms = collectUnique(linkedCampaigns, 'bmId', 'bmName');
+
+  // Fall back to profile-level IDs when no campaign links have metadata
+  const pageDisplay = pages.length > 0
+    ? formatAggregated(pages, 'pages')
+    : { display: profile.pageId || 'Not set' };
+
+  const pixelDisplay = pixels.length > 0
+    ? formatAggregated(pixels, 'pixels')
+    : { display: profile.pixelId || 'Not set' };
+
+  const igItems = instagrams.length > 0
+    ? instagrams.map((i) => ({ ...i, name: i.name.startsWith('@') ? i.name : `@${i.name}` }))
+    : profile.instagramUsername
+      ? [{ id: profile.instagramActorId || '', name: `@${profile.instagramUsername}` }]
+      : profile.instagramActorId
+        ? [{ id: profile.instagramActorId, name: profile.instagramActorId }]
+        : [];
+  const igDisplay = igItems.length > 0
+    ? formatAggregated(igItems, 'accounts')
+    : { display: 'Not set' };
+
+  const bmDisplay = bms.length > 0
+    ? formatAggregated(bms, 'BMs')
+    : { display: 'Not set' };
+
+  const clickupDisplay = profile.clickupListName || 'Not mapped';
+
+  const isConfigured = linkedCampaigns?.some(c => c.pageId || c.pixelId) || !!profile.pageId;
 
   return (
     <div
       className={cn(
         'rounded-xl border bg-surface-elevated shadow-sm p-6 transition-all duration-200 hover:shadow-md',
-        configured
+        isConfigured
           ? 'border-border hover:border-blue-200 border-l-4 border-l-blue-500'
           : 'border-border hover:border-amber-200 border-l-4 border-l-amber-400'
       )}
     >
-      {/* Header: image + name + badge */}
+      {/* Header: image + name + badges */}
       <div className="flex items-start gap-4">
         <div className="h-16 w-16 flex-shrink-0 rounded-lg bg-surface-hover flex items-center justify-center overflow-hidden">
           {profile.productImage ? (
@@ -95,13 +151,18 @@ export function ProductProfileCard({
             <span
               className={cn(
                 'rounded-full px-2.5 py-0.5 text-xs font-medium flex-shrink-0',
-                configured
+                isConfigured
                   ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                   : 'bg-amber-50 text-amber-700 border border-amber-200'
               )}
             >
-              {configured ? 'Configured' : 'Not configured'}
+              {isConfigured ? 'Configured' : 'Not configured'}
             </span>
+            {creativeCount != null && creativeCount > 0 && (
+              <span className="rounded-full bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 text-xs font-medium ml-2">
+                {creativeCount} creative{creativeCount !== 1 ? 's' : ''}
+              </span>
+            )}
           </div>
 
           {profile.averageOrderValue && (
@@ -128,20 +189,36 @@ export function ProductProfileCard({
           <InfoRow
             icon={<Facebook className="h-3.5 w-3.5" />}
             label="Page"
-            value={profile.pageId || 'Not set'}
-            muted={!profile.pageId}
+            value={pageDisplay.display}
+            tooltip={pageDisplay.tooltip}
+            muted={pageDisplay.display === 'Not set'}
           />
           <InfoRow
             icon={<Instagram className="h-3.5 w-3.5" />}
             label="Instagram"
-            value={profile.instagramActorId || 'Not set'}
-            muted={!profile.instagramActorId}
+            value={igDisplay.display}
+            tooltip={igDisplay.tooltip}
+            muted={igDisplay.display === 'Not set'}
           />
           <InfoRow
             icon={<Activity className="h-3.5 w-3.5" />}
             label="Pixel"
-            value={profile.pixelId || 'Not set'}
-            muted={!profile.pixelId}
+            value={pixelDisplay.display}
+            tooltip={pixelDisplay.tooltip}
+            muted={pixelDisplay.display === 'Not set'}
+          />
+          <InfoRow
+            icon={<Building2 className="h-3.5 w-3.5" />}
+            label="BM"
+            value={bmDisplay.display}
+            tooltip={bmDisplay.tooltip}
+            muted={bmDisplay.display === 'Not set'}
+          />
+          <InfoRow
+            icon={<LayoutGrid className="h-3.5 w-3.5" />}
+            label="ClickUp"
+            value={clickupDisplay}
+            muted={clickupDisplay === 'Not mapped'}
           />
           <InfoRow
             icon={<Globe className="h-3.5 w-3.5" />}
@@ -245,6 +322,7 @@ function InfoRow({
   icon,
   label,
   value,
+  tooltip,
   muted = false,
   truncate = false,
   colSpan2 = false,
@@ -252,6 +330,7 @@ function InfoRow({
   icon: React.ReactNode;
   label: string;
   value: string;
+  tooltip?: string;
   muted?: boolean;
   truncate?: boolean;
   colSpan2?: boolean;
@@ -266,6 +345,7 @@ function InfoRow({
           muted ? 'text-text-dimmed italic' : 'text-text-primary',
           truncate && 'truncate'
         )}
+        title={tooltip}
       >
         {value}
       </span>
