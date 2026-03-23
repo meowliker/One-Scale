@@ -698,12 +698,29 @@ export async function POST(request: NextRequest) {
       const tokenObj = await getMetaToken(storeId);
       const tok = tokenObj?.accessToken;
       if (tok) {
-        // Fetch unknown page names
+        // Fetch unknown page names via ad account's promoted_pages (works even for pages not owned by user)
+        // First try each ad account's promoted_pages, then fall back to direct page query
+        for (const acct of adAccounts) {
+          if (unknownPageIds.size === 0) break;
+          try {
+            const promotedPages = await fetchFromMeta<{ data: Array<{ id: string; name: string }> }>(
+              tok, `${acct.ad_account_id}/promote_pages`, { fields: 'id,name', limit: '100' }, 8000, 0,
+            );
+            for (const page of promotedPages.data || []) {
+              if (page.id && page.name && unknownPageIds.has(page.id)) {
+                pageNameMap.set(page.id, page.name);
+                unknownPageIds.delete(page.id);
+              }
+            }
+          } catch { /* skip - endpoint may not exist for this account */ }
+        }
+
+        // Fallback: try direct page query for any still unknown
         const pagePromises = Array.from(unknownPageIds).map(async (pageId) => {
           try {
             const page = await fetchFromMeta<{ id: string; name: string }>(tok, pageId, { fields: 'id,name' }, 5000, 0);
             if (page.name) pageNameMap.set(pageId, page.name);
-          } catch { /* skip */ }
+          } catch { /* skip - may lack pages_read_engagement permission */ }
         });
 
         // Fetch unknown IG usernames
