@@ -16,6 +16,7 @@ import {
   upsertProductCampaignLink,
 } from '@/app/api/lib/creative-hub-db';
 import type { DbStoreAdAccount } from '@/app/api/lib/db';
+import type { ProductCampaignLink } from '@/types/creativeHub';
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -555,7 +556,7 @@ export async function POST(request: NextRequest) {
       }
 
       // Save campaign links
-      const campaignLinks = [];
+      const campaignLinks: ProductCampaignLink[] = [];
       for (const camp of match.campaigns) {
         const linkId = randomUUID();
         const linkBm = accountBmMap.get(camp.adAccountId);
@@ -599,7 +600,6 @@ export async function POST(request: NextRequest) {
             : undefined,
           bmId: linkBm?.bmId,
           bmName: linkBm?.bmName,
-          destinationUrl: camp.destinationUrl,
         });
       }
 
