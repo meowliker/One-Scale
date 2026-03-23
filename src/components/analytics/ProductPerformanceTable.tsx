@@ -110,6 +110,8 @@ function writeWarmCache(storeId: string, preset: string, payload: ProductPerfPay
 }
 
 // ─── Data Fetcher ────────────────────────────────────────────────────────────
+// Uses the SAME endpoint as P&L page (/api/pnl/product-performance) so both
+// pages always show identical products with identical data.
 async function fetchProductPerf(storeId: string, preset: DateRangePreset): Promise<ProductPerfPayload> {
   const range = getDateRange(preset);
   const from = formatDateInTimezone(range.start);
@@ -117,35 +119,36 @@ async function fetchProductPerf(storeId: string, preset: DateRangePreset): Promi
 
   const params = `storeId=${encodeURIComponent(storeId)}&from=${from}&to=${to}`;
 
-  // Try fast cached endpoint first, fallback to full computation
   const [perfRes, alertRes] = await Promise.all([
-    fetch(`/api/pnl/product-perf-cached?${params}`),
+    fetch(`/api/pnl/product-performance?${params}`),
     fetch(`/api/meta/ad-rejections?storeId=${encodeURIComponent(storeId)}`).catch(() => null),
   ]);
 
   let products: ProductRow[] = [];
   let rejectedAds: RejectedAd[] = [];
 
-  const perfJson = await perfRes.json();
-  if (perfJson.ok && perfJson.data) {
-    products = perfJson.data.filter(
-      (p: ProductRow) => p.category === 'main' || p.category === 'MAIN'
-    );
+  if (perfRes.ok) {
+    const perfJson = await perfRes.json();
+    if (perfJson.ok && perfJson.data) {
+      products = perfJson.data.filter(
+        (p: ProductRow) => p.category === 'main' || p.category === 'MAIN'
+      );
+    }
   }
 
-  // If cached endpoint returned empty (common for "today"), try the full product-performance endpoint
+  // Fallback: product-perf-cached (live Shopify) if product-performance returned empty
   if (products.length === 0) {
     try {
-      const fullRes = await fetch(`/api/pnl/product-performance?${params}`);
-      if (fullRes.ok) {
-        const fullJson = await fullRes.json();
-        if (fullJson.ok && fullJson.data) {
-          products = fullJson.data.filter(
-            (p: ProductRow) => (p.category === 'main' || p.category === 'MAIN')
+      const cachedRes = await fetch(`/api/pnl/product-perf-cached?${params}`);
+      if (cachedRes.ok) {
+        const cachedJson = await cachedRes.json();
+        if (cachedJson.ok && cachedJson.data) {
+          products = cachedJson.data.filter(
+            (p: ProductRow) => p.category === 'main' || p.category === 'MAIN'
           );
         }
       }
-    } catch { /* ignore fallback errors */ }
+    } catch { /* ignore */ }
   }
 
   if (alertRes) {
