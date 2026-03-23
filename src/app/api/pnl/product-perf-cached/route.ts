@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { rest, isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
 import { buildProductPerformance } from '@/lib/pnl/appsScriptPort';
 import { getShopifyToken } from '@/app/api/lib/tokens';
+import { fetchShopifyOrders } from '@/app/api/lib/shopify-client';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -156,37 +157,41 @@ async function fetchMetaMetricsByProduct(
 
 /**
  * Live fallback: fetch today's orders from Shopify API and aggregate by product line items.
- * Used when buildProductPerformance returns empty (no product_config or empty order cache).
+ * Uses the proven fetchShopifyOrders client (same one used by getPnLSummary).
  */
-async function fetchLiveProductBreakdown(storeId: string, storeTz: string): Promise<Array<{
+async function fetchLiveProductBreakdown(storeId: string, from: string, to: string): Promise<Array<{
   productId: string; productName: string; productImage: string | null;
   revenue: number; unitsSold: number; fees: number; category: string;
 }>> {
   try {
     const shopToken = await getShopifyToken(storeId);
-    if (!shopToken?.accessToken || !shopToken?.shopDomain) return [];
+    if (!shopToken?.accessToken || !shopToken?.shopDomain) {
+      console.warn('[ProductPerf:LiveFallback] No Shopify token for store', storeId);
+      return [];
+    }
 
-    // Fetch today's orders from Shopify API
-    const todayParts = new Intl.DateTimeFormat('en-CA', { timeZone: storeTz, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
-    const todayStr = `${todayParts.find(p => p.type === 'year')!.value}-${todayParts.find(p => p.type === 'month')!.value}-${todayParts.find(p => p.type === 'day')!.value}`;
-
-    const url = `https://${shopToken.shopDomain}/admin/api/2024-01/orders.json?status=any&created_at_min=${todayStr}T00:00:00&limit=250&fields=id,line_items,total_price,financial_status`;
-    const res = await fetch(url, {
-      headers: { 'X-Shopify-Access-Token': shopToken.accessToken, 'Content-Type': 'application/json' },
+    const orders = await fetchShopifyOrders(shopToken.accessToken, shopToken.shopDomain, {
+      createdAtMin: `${from}T00:00:00`,
+      createdAtMax: `${to}T23:59:59`,
+      status: 'any',
+      limit: 250,
     });
-    if (!res.ok) return [];
-    const json = await res.json() as { orders?: Array<{ id: number; total_price: string; financial_status: string; line_items: Array<{ product_id: number; title: string; price: string; quantity: number; variant_title?: string }> }> };
-    const orders = json.orders || [];
 
-    // Aggregate by product
-    const byProduct = new Map<string, { name: string; revenue: number; units: number }>();
+    console.log(`[ProductPerf:LiveFallback] Fetched ${orders.length} orders from Shopify for ${from} to ${to}`);
+    if (orders.length === 0) return [];
+
+    // Aggregate by product from lineItems (ShopifyOrder type uses camelCase)
+    const byProduct = new Map<string, { name: string; revenue: number; units: number; image: string | null }>();
     for (const order of orders) {
-      if (['voided', 'refunded'].includes(order.financial_status)) continue;
-      for (const item of order.line_items || []) {
-        const pid = String(item.product_id || 'unknown');
-        const existing = byProduct.get(pid) || { name: item.title, revenue: 0, units: 0 };
-        existing.revenue += parseFloat(item.price || '0') * (item.quantity || 1);
-        existing.units += item.quantity || 1;
+      if (['voided', 'refunded'].includes(order.financialStatus)) continue;
+      for (const item of order.lineItems || []) {
+        const pid = String(item.productId || 'unknown');
+        const title = item.title || 'Unknown Product';
+        const price = parseFloat(item.price || '0');
+        const qty = item.quantity || 1;
+        const existing = byProduct.get(pid) || { name: title, revenue: 0, units: 0, image: null };
+        existing.revenue += price * qty;
+        existing.units += qty;
         byProduct.set(pid, existing);
       }
     }
@@ -194,13 +199,14 @@ async function fetchLiveProductBreakdown(storeId: string, storeTz: string): Prom
     return [...byProduct.entries()].map(([pid, v]) => ({
       productId: pid,
       productName: v.name,
-      productImage: null,
+      productImage: v.image,
       revenue: round2(v.revenue),
       unitsSold: v.units,
       fees: 0,
       category: 'main',
     }));
-  } catch {
+  } catch (err) {
+    console.error('[ProductPerf:LiveFallback] Failed:', err instanceof Error ? err.message : err);
     return [];
   }
 }
@@ -391,9 +397,9 @@ export async function GET(request: NextRequest) {
     let results = await buildProductPerformance(storeId, from, to);
 
     // If buildProductPerformance returns empty (no product_config or empty order cache),
-    // fetch today's orders LIVE from Shopify API as fallback
+    // fetch orders LIVE from Shopify API as fallback
     if (results.length === 0) {
-      const liveProducts = await fetchLiveProductBreakdown(storeId, storeTz);
+      const liveProducts = await fetchLiveProductBreakdown(storeId, from, to);
       if (liveProducts.length > 0) {
         const revMap = new Map<string, number>();
         for (const p of liveProducts) revMap.set(p.productId, p.revenue);
