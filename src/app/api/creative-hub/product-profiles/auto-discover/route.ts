@@ -89,13 +89,21 @@ export async function POST(request: NextRequest) {
 
   try {
     // 1. Get all ad accounts for the store
-    const adAccounts = getStoreAdAccounts(storeId).filter(
-      (a) => a.platform === 'meta' && a.is_active === 1
+    const allAccounts = getStoreAdAccounts(storeId);
+
+    // Accept accounts that are meta or have no platform set (legacy data)
+    // Also accept accounts that are active or have no is_active set
+    const adAccounts = allAccounts.filter(
+      (a) => (a.platform === 'meta' || !a.platform || a.platform === '') &&
+             (a.is_active === 1 || a.is_active === undefined || a.is_active === null)
     );
 
     if (adAccounts.length === 0) {
+      // Log for debugging
+      console.error('[auto-discover] No ad accounts match. All accounts for store:',
+        JSON.stringify(allAccounts.map(a => ({ id: a.ad_account_id, platform: a.platform, active: a.is_active }))));
       return NextResponse.json(
-        { error: 'No active Meta ad accounts found for this store' },
+        { error: `No active Meta ad accounts found for this store. Found ${allAccounts.length} total accounts.` },
         { status: 400 }
       );
     }
