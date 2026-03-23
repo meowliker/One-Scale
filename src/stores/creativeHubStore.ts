@@ -147,6 +147,10 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
   },
 
   autoDiscoverProfiles: async (storeId: string) => {
+    if (!storeId) {
+      console.error('[CreativeHub] autoDiscoverProfiles called without storeId');
+      return;
+    }
     set({ profilesLoading: true });
     try {
       const res = await fetch('/api/creative-hub/product-profiles/auto-discover', {
@@ -155,12 +159,23 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
         body: JSON.stringify({ storeId }),
       });
       const data = await res.json();
+      if (!res.ok) {
+        console.error('[CreativeHub] Auto-discover failed:', data.error);
+        set({ profilesLoading: false });
+        return;
+      }
+      console.log('[CreativeHub] Auto-discover result:', {
+        profiles: data.profiles?.length ?? 0,
+        unmapped: data.unmappedCampaigns?.length ?? 0,
+        stats: data.stats,
+      });
       set({
         profiles: data.profiles ?? [],
         unmappedCampaigns: data.unmappedCampaigns ?? [],
         profilesLoading: false,
       });
-    } catch {
+    } catch (err) {
+      console.error('[CreativeHub] Auto-discover error:', err);
       set({ profilesLoading: false });
     }
   },

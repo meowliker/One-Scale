@@ -68,10 +68,20 @@ function collectDestinationUrls(campaign: Campaign): Array<{ url: string; ad: Ad
   return results;
 }
 
-// POST /api/creative-hub/product-profiles/auto-discover?storeId=X
+// POST /api/creative-hub/product-profiles/auto-discover
 export async function POST(request: NextRequest) {
+  // Accept storeId from either query param or request body
   const { searchParams } = new URL(request.url);
-  const storeId = searchParams.get('storeId');
+  let storeId = searchParams.get('storeId');
+
+  if (!storeId) {
+    try {
+      const body = await request.json();
+      storeId = body.storeId ?? null;
+    } catch {
+      // No body or invalid JSON
+    }
+  }
 
   if (!storeId) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });

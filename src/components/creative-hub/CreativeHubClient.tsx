@@ -118,7 +118,7 @@ export default function CreativeHubClient() {
           exit={{ opacity: 0, y: -8 }}
           transition={{ duration: 0.15 }}
         >
-          {activeTab === 'profiles' && <ProductProfilesTab storeId={activeStoreId} />}
+          {activeTab === 'profiles' && activeStoreId && <ProductProfilesTab storeId={activeStoreId} />}
           {activeTab === 'inbox' && <CreativeInboxTab storeId={activeStoreId} />}
           {activeTab === 'active' && <ActiveTestsTab />}
           {activeTab === 'completed' && <CompletedTestsTab storeId={activeStoreId} />}
