@@ -1,13 +1,13 @@
 /**
- * Fast product performance read — serves pre-computed data from product_pnl_cache.
- * For today: live-syncs orders from Shopify, computes, caches, and responds.
- * For past: reads from cache instantly.
+ * Product performance endpoint — ALWAYS works by fetching from Shopify API.
  *
- * GET /api/pnl/product-perf-cached?storeId=xxx&from=2026-03-01&to=2026-03-16
+ * Strategy: Shopify API first, DB cache as enrichment only.
+ * This eliminates all cache-miss / product_config / timezone bugs.
+ *
+ * GET /api/pnl/product-perf-cached?storeId=xxx&from=2026-03-01&to=2026-03-23
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { rest, isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
-import { buildProductPerformance } from '@/lib/pnl/appsScriptPort';
 import { getShopifyToken } from '@/app/api/lib/tokens';
 import { fetchShopifyOrders } from '@/app/api/lib/shopify-client';
 
@@ -17,90 +17,21 @@ export const maxDuration = 120;
 const enc = (v: string) => encodeURIComponent(v);
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-interface CacheRow {
-  product_id: string;
-  date: string;
-  product_name: string;
-  classification: string;
-  revenue: number;
-  orders: number;
-  fees: number;
-  ad_spend: number;
-  cogs: number;
-  net_profit: number;
-  margin: number;
-  impressions: number;
-  clicks: number;
-  purchases: number;
-  product_image: string | null;
-  attribution_method: string;
-  computed_at: string;
-}
+// ── Meta metrics fetcher ────────────────────────────────────────────────────
 
-function mapCacheToResponse(rows: CacheRow[]) {
-  return rows.map(r => {
-    const imp = +(r.impressions ?? 0);
-    const clk = +(r.clicks ?? 0);
-    const pur = +(r.purchases ?? 0);
-    const rev = +r.revenue;
-    const ords = +r.orders;
-    const spend = +r.ad_spend;
-    return {
-      productId: r.product_id,
-      productName: r.product_name,
-      productImage: r.product_image,
-      sku: '',
-      unitsSold: ords,
-      revenue: rev,
-      cogs: +r.cogs,
-      shipping: 0,
-      fees: +r.fees,
-      netProfit: +r.net_profit,
-      margin: +r.margin,
-      fbMetrics: {
-        roas: spend > 0 ? round2(rev / spend) : 0,
-        cpc: clk > 0 ? round2(spend / clk) : 0,
-        cpm: imp > 0 ? round2((spend / imp) * 1000) : 0,
-        ctr: imp > 0 ? round2((clk / imp) * 100) : 0,
-        aov: ords > 0 ? round2(rev / ords) : 0,
-        atcRate: 0,
-        spend,
-        impressions: imp,
-        clicks: clk,
-        purchases: pur,
-        costPerPurchase: pur > 0 ? round2(spend / pur) : 0,
-        frequency: 0,
-        reach: 0,
-      },
-      isAdvertised: spend > 0,
-      adLandingPageUrl: null,
-      adName: null,
-      adSetName: null,
-      campaignName: null,
-      category: r.classification || 'unknown',
-      classificationConfidence: r.classification === 'main' ? 95 : 80,
-      classificationMethod: 'product_config',
-    };
-  });
-}
-
-/**
- * Fetch real Meta metrics (impressions, clicks, purchases) per product
- * by joining meta_spend_cache with meta_ad_account_mappings.
- */
-async function fetchMetaMetricsByProduct(
+async function fetchMetaMetrics(
   storeId: string, from: string, to: string,
-  productRevenues?: Map<string, number>,
+  productRevenues: Map<string, number>,
 ): Promise<Map<string, { spend: number; impressions: number; clicks: number; purchases: number }>> {
   const metricMap = new Map<string, { spend: number; impressions: number; clicks: number; purchases: number }>();
+  if (!isSupabasePersistenceEnabled()) return metricMap;
 
   try {
-    // Get ad account → product mappings
+    // Try product-level mappings first
     const mappings = await rest<Array<{ ad_account_id: string; product_id: string }>>(
       `/meta_ad_account_mappings?store_id=eq.${enc(storeId)}&select=ad_account_id,product_id`
     ).catch(() => []);
 
-    // Fetch ALL meta spend for this store in the date range
     const spendRows = await rest<Array<{
       ad_account_id: string; spend: number; impressions: number; clicks: number; purchases: number;
     }>>(
@@ -110,7 +41,6 @@ async function fetchMetaMetricsByProduct(
     if (spendRows.length === 0) return metricMap;
 
     if (mappings.length > 0) {
-      // Product-level mappings exist — aggregate by product via ad account mapping
       const accountToProduct = new Map(mappings.map(m => [m.ad_account_id, m.product_id]));
       for (const row of spendRows) {
         const productId = accountToProduct.get(row.ad_account_id);
@@ -122,8 +52,8 @@ async function fetchMetaMetricsByProduct(
         existing.purchases += Number(row.purchases) || 0;
         metricMap.set(productId, existing);
       }
-    } else if (productRevenues && productRevenues.size > 0) {
-      // No product-level mappings — distribute TOTAL Meta metrics proportionally by revenue
+    } else if (productRevenues.size > 0) {
+      // No product mappings → distribute total Meta metrics by revenue share
       const totals = { spend: 0, impressions: 0, clicks: 0, purchases: 0 };
       for (const row of spendRows) {
         totals.spend += Number(row.spend) || 0;
@@ -144,9 +74,7 @@ async function fetchMetaMetricsByProduct(
             });
           }
         } else if (productRevenues.size === 1) {
-          // Single product gets all metrics
-          const pid = [...productRevenues.keys()][0];
-          metricMap.set(pid, totals);
+          metricMap.set([...productRevenues.keys()][0], totals);
         }
       }
     }
@@ -155,357 +83,185 @@ async function fetchMetaMetricsByProduct(
   return metricMap;
 }
 
-/**
- * Live fallback: fetch today's orders from Shopify API and aggregate by product line items.
- * Uses the proven fetchShopifyOrders client (same one used by getPnLSummary).
- */
-async function fetchLiveProductBreakdown(storeId: string, from: string, to: string, storeTz: string): Promise<Array<{
-  productId: string; productName: string; productImage: string | null;
-  revenue: number; unitsSold: number; fees: number; category: string;
-}>> {
-  try {
-    const shopToken = await getShopifyToken(storeId);
-    if (!shopToken?.accessToken || !shopToken?.shopDomain) {
-      console.warn('[ProductPerf:LiveFallback] No Shopify token for store', storeId);
-      return [];
-    }
+// ── Build product response from a product map + meta metrics ────────────────
 
-    // Convert store-local dates to UTC (same approach as services/pnl.ts fetchOrdersForDateRange)
-    // This ensures we query the correct UTC window matching the store's timezone
-    const { fromZonedTime } = await import('date-fns-tz');
-    const startUtc = fromZonedTime(`${from}T00:00:00`, storeTz);
-    const endUtc = fromZonedTime(`${to}T23:59:59`, storeTz);
-
-    console.log(`[ProductPerf:LiveFallback] Fetching orders: ${from} to ${to} (${storeTz}) → UTC ${startUtc.toISOString()} to ${endUtc.toISOString()}`);
-
-    const orders = await fetchShopifyOrders(shopToken.accessToken, shopToken.shopDomain, {
-      createdAtMin: startUtc.toISOString(),
-      createdAtMax: endUtc.toISOString(),
-      status: 'any',
-      limit: 250,
-    });
-
-    console.log(`[ProductPerf:LiveFallback] Fetched ${orders.length} orders from Shopify for ${from} to ${to}`);
-    if (orders.length === 0) return [];
-
-    // Aggregate by product from lineItems (ShopifyOrder type uses camelCase)
-    const byProduct = new Map<string, { name: string; revenue: number; units: number; image: string | null }>();
-    for (const order of orders) {
-      if (['voided', 'refunded'].includes(order.financialStatus)) continue;
-      for (const item of order.lineItems || []) {
-        const pid = String(item.productId || 'unknown');
-        const title = item.title || 'Unknown Product';
-        const price = parseFloat(item.price || '0');
-        const qty = item.quantity || 1;
-        const existing = byProduct.get(pid) || { name: title, revenue: 0, units: 0, image: null };
-        existing.revenue += price * qty;
-        existing.units += qty;
-        byProduct.set(pid, existing);
-      }
-    }
-
-    return [...byProduct.entries()].map(([pid, v]) => ({
-      productId: pid,
-      productName: v.name,
-      productImage: v.image,
-      revenue: round2(v.revenue),
-      unitsSold: v.units,
-      fees: 0,
-      category: 'main',
-    }));
-  } catch (err) {
-    console.error('[ProductPerf:LiveFallback] Failed:', err instanceof Error ? err.message : err);
-    return [];
-  }
-}
-
-function mapResultsToResponse(
-  results: Awaited<ReturnType<typeof buildProductPerformance>>,
-  metaByProduct?: Map<string, { spend: number; impressions: number; clicks: number; purchases: number }>
+function buildResponse(
+  products: Map<string, { name: string; image: string | null; revenue: number; units: number }>,
+  metaMetrics: Map<string, { spend: number; impressions: number; clicks: number; purchases: number }>,
 ) {
-  return results.map(r => {
-    const meta = metaByProduct?.get(r.product_id) || { spend: 0, impressions: 0, clicks: 0, purchases: 0 };
-    const spend = meta.spend || r.ad_spend;
-    const impressions = meta.impressions;
-    const clicks = meta.clicks;
-    const purchases = meta.purchases;
-
+  return [...products.entries()].map(([pid, p]) => {
+    const meta = metaMetrics.get(pid) || { spend: 0, impressions: 0, clicks: 0, purchases: 0 };
+    const spend = meta.spend;
+    const imp = meta.impressions;
+    const clk = meta.clicks;
+    const pur = meta.purchases;
+    const netProfit = round2(p.revenue - spend);
     return {
-      productId: r.product_id,
-      productName: r.product_name,
-      productImage: null as string | null,
+      productId: pid,
+      productName: p.name,
+      productImage: p.image,
       sku: '',
-      unitsSold: r.orders,
-      revenue: r.revenue,
-      cogs: r.cogs,
+      unitsSold: p.units,
+      revenue: p.revenue,
+      cogs: 0,
       shipping: 0,
-      fees: r.fees,
-      netProfit: r.net_profit,
-      margin: r.margin,
+      fees: 0,
+      netProfit,
+      margin: p.revenue > 0 ? round2((netProfit / p.revenue) * 100) : 0,
       fbMetrics: {
-        roas: spend > 0 ? round2(r.revenue / spend) : 0,
-        cpc: clicks > 0 ? round2(spend / clicks) : 0,
-        cpm: impressions > 0 ? round2((spend / impressions) * 1000) : 0,
-        ctr: impressions > 0 ? round2((clicks / impressions) * 100) : 0,
-        aov: r.orders > 0 ? round2(r.revenue / r.orders) : 0,
+        roas: spend > 0 ? round2(p.revenue / spend) : 0,
+        cpc: clk > 0 ? round2(spend / clk) : 0,
+        cpm: imp > 0 ? round2((spend / imp) * 1000) : 0,
+        ctr: imp > 0 ? round2((clk / imp) * 100) : 0,
+        aov: p.units > 0 ? round2(p.revenue / p.units) : 0,
         atcRate: 0,
         spend,
-        impressions,
-        clicks,
-        purchases,
-        costPerPurchase: purchases > 0 ? round2(spend / purchases) : 0,
+        impressions: imp,
+        clicks: clk,
+        purchases: pur,
+        costPerPurchase: pur > 0 ? round2(spend / pur) : 0,
         frequency: 0,
         reach: 0,
       },
-      isAdvertised: spend > 0,
+      isAdvertised: spend > 0 || imp > 0 || clk > 0,
       adLandingPageUrl: null,
       adName: null,
       adSetName: null,
       campaignName: null,
-      category: r.classification,
-      classificationConfidence: r.classification === 'main' ? 95 : 80,
-      classificationMethod: 'product_config',
+      category: 'main',
+      classificationConfidence: 80,
+      classificationMethod: 'shopify_live',
     };
   });
 }
 
+// ── GET handler ─────────────────────────────────────────────────────────────
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const storeId = searchParams.get('storeId');
-  const dateFrom = searchParams.get('from');
-  const dateTo = searchParams.get('to');
+  const from = searchParams.get('from') || '';
+  const to = searchParams.get('to') || '';
 
   if (!storeId) {
     return NextResponse.json({ ok: false, error: 'storeId required' }, { status: 400 });
   }
-  if (!isSupabasePersistenceEnabled()) {
-    return NextResponse.json({ ok: false, error: 'Supabase not configured' }, { status: 503 });
-  }
-
-  const from = dateFrom || '';
-  const to = dateTo || '';
-
-  // Determine if range includes today — use store timezone so "today" matches frontend
-  let storeTz = 'America/New_York';
-  try {
-    const tzRows = await rest<Array<{ timezone: string | null }>>(
-      `/store_ad_accounts?store_id=eq.${enc(storeId)}&is_active=eq.true&select=timezone&limit=1`
-    );
-    storeTz = tzRows?.[0]?.timezone || 'America/New_York';
-  } catch { /* use default */ }
-
-  const nowParts = new Intl.DateTimeFormat('en-CA', { timeZone: storeTz, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
-  const todayStr = `${nowParts.find(p => p.type === 'year')!.value}-${nowParts.find(p => p.type === 'month')!.value}-${nowParts.find(p => p.type === 'day')!.value}`;
-  const includesToday = to >= todayStr;
-
   if (!from || !to) {
     return NextResponse.json({ ok: true, data: [], source: 'empty' });
   }
 
-  // ── PAST DATES: read from cache if complete, else compute live ──
-  if (!includesToday) {
-    let cached: CacheRow[] = [];
-    let cacheComplete = false;
-
-    if (from !== to) {
-      // Multi-day: aggregate individual day caches
-      const dayCaches = await rest<CacheRow[]>(
-        `/product_pnl_cache?store_id=eq.${enc(storeId)}&date=gte.${from}&date=lte.${to}&date=not.like.*%2E%2E*&select=*`
-      ).catch(() => []);
-
-      if (dayCaches.length > 0) {
-        // Check how many unique days we have cached
-        const cachedDays = new Set(dayCaches.map(r => r.date));
-        // Count expected days in range
-        const expectedDays = Math.round((new Date(to + 'T12:00:00Z').getTime() - new Date(from + 'T12:00:00Z').getTime()) / 86400000) + 1;
-        cacheComplete = cachedDays.size >= expectedDays;
-
-        if (cacheComplete) {
-          // Aggregate by product_id
-          const byProduct = new Map<string, CacheRow>();
-          for (const row of dayCaches) {
-            const existing = byProduct.get(row.product_id);
-            if (!existing) {
-              byProduct.set(row.product_id, { ...row });
-            } else {
-              existing.revenue = round2(+existing.revenue + +row.revenue);
-              existing.orders += +row.orders;
-              existing.fees = round2(+existing.fees + +row.fees);
-              existing.ad_spend = round2(+existing.ad_spend + +row.ad_spend);
-              existing.cogs = round2(+existing.cogs + +row.cogs);
-              existing.net_profit = round2(+existing.net_profit + +row.net_profit);
-              existing.impressions += +row.impressions;
-              existing.clicks += +row.clicks;
-              existing.purchases += +row.purchases;
-            }
-          }
-          for (const p of byProduct.values()) {
-            p.margin = +p.revenue > 0 ? round2((+p.net_profit / +p.revenue) * 100) : 0;
-          }
-          cached = [...byProduct.values()];
-        }
-      }
-    } else {
-      // Single past day
-      cached = await rest<CacheRow[]>(
-        `/product_pnl_cache?store_id=eq.${enc(storeId)}&date=eq.${enc(from)}&select=*`
-      ).catch(() => []);
-      cacheComplete = cached.length > 0;
-    }
-
-    if (cacheComplete && cached.length > 0) {
-      // Build revenue map for proportional Meta metric distribution
-      const prodRevMap = new Map<string, number>();
-      for (const c of cached) prodRevMap.set(c.product_id, +c.revenue);
-      // Always enrich cache data with real Meta metrics (cache may have 0s for impressions/clicks)
-      const metaMetrics = await fetchMetaMetricsByProduct(storeId, from, to, prodRevMap);
-      const cacheData = mapCacheToResponse(cached);
-      // Merge Meta metrics into cache response
-      const enriched = cacheData.map(p => {
-        const meta = metaMetrics.get(p.productId);
-        if (!meta || (meta.impressions === 0 && meta.clicks === 0 && meta.spend === 0)) return p;
-        const spend = meta.spend || p.fbMetrics.spend;
-        const imp = meta.impressions;
-        const clk = meta.clicks;
-        const pur = meta.purchases;
-        return {
-          ...p,
-          fbMetrics: {
-            ...p.fbMetrics,
-            spend,
-            impressions: imp,
-            clicks: clk,
-            purchases: pur,
-            cpc: clk > 0 ? round2(spend / clk) : 0,
-            cpm: imp > 0 ? round2((spend / imp) * 1000) : 0,
-            ctr: imp > 0 ? round2((clk / imp) * 100) : 0,
-            roas: spend > 0 ? round2(p.revenue / spend) : p.fbMetrics.roas,
-            costPerPurchase: pur > 0 ? round2(spend / pur) : 0,
-          },
-          isAdvertised: spend > 0 || imp > 0 || clk > 0,
-        };
-      });
-      return NextResponse.json({ ok: true, data: enriched, source: 'cache', cachedAt: cached[0]?.computed_at });
-    }
-
-    // Cache incomplete or miss — compute full range live and persist
+  // Get store timezone for correct date → UTC conversion
+  let storeTz = 'America/New_York';
+  if (isSupabasePersistenceEnabled()) {
     try {
-      let results = await buildProductPerformance(storeId, from, to);
-
-      // If buildProductPerformance returns empty, try live Shopify fallback (works for any date range)
-      if (results.length === 0) {
-        const liveProducts = await fetchLiveProductBreakdown(storeId, from, to, storeTz);
-        if (liveProducts.length > 0) {
-          const revMap = new Map<string, number>();
-          for (const p of liveProducts) revMap.set(p.productId, p.revenue);
-          const metaMetrics = await fetchMetaMetricsByProduct(storeId, from, to, revMap);
-          const data = liveProducts.map(p => {
-            const meta = metaMetrics.get(p.productId) || { spend: 0, impressions: 0, clicks: 0, purchases: 0 };
-            const spend = meta.spend;
-            return {
-              productId: p.productId, productName: p.productName, productImage: p.productImage,
-              sku: '', unitsSold: p.unitsSold, revenue: p.revenue, cogs: 0, shipping: 0, fees: p.fees,
-              netProfit: round2(p.revenue - p.fees - spend),
-              margin: p.revenue > 0 ? round2(((p.revenue - p.fees - spend) / p.revenue) * 100) : 0,
-              fbMetrics: {
-                roas: spend > 0 ? round2(p.revenue / spend) : 0,
-                cpc: meta.clicks > 0 ? round2(spend / meta.clicks) : 0,
-                cpm: meta.impressions > 0 ? round2((spend / meta.impressions) * 1000) : 0,
-                ctr: meta.impressions > 0 ? round2((meta.clicks / meta.impressions) * 100) : 0,
-                aov: p.unitsSold > 0 ? round2(p.revenue / p.unitsSold) : 0,
-                atcRate: 0, spend, impressions: meta.impressions, clicks: meta.clicks,
-                purchases: meta.purchases, costPerPurchase: meta.purchases > 0 ? round2(spend / meta.purchases) : 0,
-                frequency: 0, reach: 0,
-              },
-              isAdvertised: spend > 0 || meta.impressions > 0,
-              adLandingPageUrl: null, adName: null, adSetName: null, campaignName: null,
-              category: p.category, classificationConfidence: 70, classificationMethod: 'line_item_live',
-            };
-          });
-          return NextResponse.json({ ok: true, data, source: 'shopify_live' });
-        }
-      }
-
-      const revMap = new Map<string, number>();
-      for (const r of results) revMap.set(r.product_id, r.revenue);
-      const metaMetrics = await fetchMetaMetricsByProduct(storeId, from, to, revMap);
-      return NextResponse.json({ ok: true, data: mapResultsToResponse(results, metaMetrics), source: 'computed' });
-    } catch (err) {
-      return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : 'Error', data: [] }, { status: 500 });
-    }
+      const tzRows = await rest<Array<{ timezone: string | null }>>(
+        `/store_ad_accounts?store_id=eq.${enc(storeId)}&is_active=eq.true&select=timezone&limit=1`
+      );
+      storeTz = tzRows?.[0]?.timezone || 'America/New_York';
+    } catch { /* use default */ }
   }
 
-  // ── TODAY: live sync from Shopify → compute → respond ──
+  // ── PRIMARY PATH: Fetch orders directly from Shopify API ──────────────────
+  // This is the same approach that getPnLSummary uses (which works).
+  // No cache dependency. No product_config dependency. Just Shopify → aggregate.
   try {
-    let results = await buildProductPerformance(storeId, from, to);
+    const shopToken = await getShopifyToken(storeId);
+    if (shopToken?.accessToken && shopToken?.shopDomain) {
+      // Convert store-local dates to UTC (same as services/pnl.ts fetchOrdersForDateRange)
+      const { fromZonedTime } = await import('date-fns-tz');
+      const startUtc = fromZonedTime(`${from}T00:00:00`, storeTz);
+      const endUtc = fromZonedTime(`${to}T23:59:59`, storeTz);
 
-    // If buildProductPerformance returns empty (no product_config or empty order cache),
-    // fetch orders LIVE from Shopify API as fallback
-    if (results.length === 0) {
-      const liveProducts = await fetchLiveProductBreakdown(storeId, from, to, storeTz);
-      if (liveProducts.length > 0) {
+      const orders = await fetchShopifyOrders(shopToken.accessToken, shopToken.shopDomain, {
+        createdAtMin: startUtc.toISOString(),
+        createdAtMax: endUtc.toISOString(),
+        status: 'any',
+        limit: 250,
+      });
+
+      console.log(`[ProductPerf] Shopify API: ${orders.length} orders for ${from}→${to} (${storeTz})`);
+
+      if (orders.length > 0) {
+        // Aggregate by product from line items
+        const byProduct = new Map<string, { name: string; image: string | null; revenue: number; units: number }>();
+        for (const order of orders) {
+          if (['voided', 'refunded'].includes(order.financialStatus)) continue;
+          for (const item of order.lineItems || []) {
+            const pid = String(item.productId || 'unknown');
+            const existing = byProduct.get(pid) || { name: item.title || 'Unknown', image: null, revenue: 0, units: 0 };
+            existing.revenue += parseFloat(item.price || '0') * (item.quantity || 1);
+            existing.units += item.quantity || 1;
+            byProduct.set(pid, existing);
+          }
+        }
+
+        // Enrich with Meta metrics
         const revMap = new Map<string, number>();
-        for (const p of liveProducts) revMap.set(p.productId, p.revenue);
-        const metaMetrics = await fetchMetaMetricsByProduct(storeId, from, to, revMap);
+        for (const [pid, p] of byProduct) revMap.set(pid, round2(p.revenue));
+        // Round revenues
+        for (const p of byProduct.values()) p.revenue = round2(p.revenue);
 
-        const data = liveProducts.map(p => {
-          const meta = metaMetrics.get(p.productId) || { spend: 0, impressions: 0, clicks: 0, purchases: 0 };
-          const spend = meta.spend;
-          return {
-            productId: p.productId,
-            productName: p.productName,
-            productImage: p.productImage,
-            sku: '',
-            unitsSold: p.unitsSold,
-            revenue: p.revenue,
-            cogs: 0,
-            shipping: 0,
-            fees: p.fees,
-            netProfit: round2(p.revenue - p.fees - spend),
-            margin: p.revenue > 0 ? round2(((p.revenue - p.fees - spend) / p.revenue) * 100) : 0,
-            fbMetrics: {
-              roas: spend > 0 ? round2(p.revenue / spend) : 0,
-              cpc: meta.clicks > 0 ? round2(spend / meta.clicks) : 0,
-              cpm: meta.impressions > 0 ? round2((spend / meta.impressions) * 1000) : 0,
-              ctr: meta.impressions > 0 ? round2((meta.clicks / meta.impressions) * 100) : 0,
-              aov: p.unitsSold > 0 ? round2(p.revenue / p.unitsSold) : 0,
-              atcRate: 0,
-              spend,
-              impressions: meta.impressions,
-              clicks: meta.clicks,
-              purchases: meta.purchases,
-              costPerPurchase: meta.purchases > 0 ? round2(spend / meta.purchases) : 0,
-              frequency: 0,
-              reach: 0,
-            },
-            isAdvertised: spend > 0 || meta.impressions > 0,
-            adLandingPageUrl: null, adName: null, adSetName: null, campaignName: null,
-            category: p.category,
-            classificationConfidence: 70,
-            classificationMethod: 'line_item_live',
-          };
-        });
+        const metaMetrics = await fetchMetaMetrics(storeId, from, to, revMap);
+        const data = buildResponse(byProduct, metaMetrics);
+
+        // Try to get product images from Supabase cache (non-blocking)
+        if (isSupabasePersistenceEnabled()) {
+          try {
+            const imgRows = await rest<Array<{ product_id: string; product_image: string | null }>>(
+              `/product_pnl_cache?store_id=eq.${enc(storeId)}&product_image=not.is.null&select=product_id,product_image`
+            );
+            const imgMap = new Map((imgRows || []).map(r => [r.product_id, r.product_image]));
+            for (const p of data) {
+              if (!p.productImage && imgMap.has(p.productId)) {
+                p.productImage = imgMap.get(p.productId) || null;
+              }
+            }
+          } catch { /* images non-critical */ }
+        }
+
         return NextResponse.json({ ok: true, data, source: 'shopify_live' });
       }
     }
-
-    const revMap = new Map<string, number>();
-    for (const r of results) revMap.set(r.product_id, r.revenue);
-    const metaMetrics = await fetchMetaMetricsByProduct(storeId, from, to, revMap);
-
-    // Merge product images from existing cache
-    const imgRows = await rest<Array<{ product_id: string; product_image: string | null }>>(
-      `/product_pnl_cache?store_id=eq.${enc(storeId)}&product_image=not.is.null&select=product_id,product_image`
-    ).catch(() => []);
-    const imgMap = new Map(imgRows.map(r => [r.product_id, r.product_image]));
-
-    const data = mapResultsToResponse(results, metaMetrics).map(p => ({
-      ...p,
-      productImage: imgMap.get(p.productId) || p.productImage,
-    }));
-
-    return NextResponse.json({ ok: true, data, source: 'live' });
   } catch (err) {
-    return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : 'Error', data: [] }, { status: 500 });
+    console.warn('[ProductPerf] Shopify API failed, trying DB fallback:', err instanceof Error ? err.message : err);
   }
+
+  // ── FALLBACK: Read from DB cache (for when Shopify API is unavailable) ────
+  if (isSupabasePersistenceEnabled()) {
+    try {
+      const { buildProductPerformance } = await import('@/lib/pnl/appsScriptPort');
+      const results = await buildProductPerformance(storeId, from, to);
+      if (results.length > 0) {
+        const revMap = new Map<string, number>();
+        for (const r of results) revMap.set(r.product_id, r.revenue);
+        const metaMetrics = await fetchMetaMetrics(storeId, from, to, revMap);
+
+        const data = results.map(r => {
+          const meta = metaMetrics.get(r.product_id) || { spend: 0, impressions: 0, clicks: 0, purchases: 0 };
+          const spend = meta.spend || r.ad_spend;
+          return {
+            productId: r.product_id, productName: r.product_name, productImage: null as string | null,
+            sku: '', unitsSold: r.orders, revenue: r.revenue, cogs: r.cogs, shipping: 0, fees: r.fees,
+            netProfit: r.net_profit, margin: r.margin,
+            fbMetrics: {
+              roas: spend > 0 ? round2(r.revenue / spend) : 0,
+              cpc: meta.clicks > 0 ? round2(spend / meta.clicks) : 0,
+              cpm: meta.impressions > 0 ? round2((spend / meta.impressions) * 1000) : 0,
+              ctr: meta.impressions > 0 ? round2((meta.clicks / meta.impressions) * 100) : 0,
+              aov: r.orders > 0 ? round2(r.revenue / r.orders) : 0,
+              atcRate: 0, spend, impressions: meta.impressions, clicks: meta.clicks,
+              purchases: meta.purchases, costPerPurchase: meta.purchases > 0 ? round2(spend / meta.purchases) : 0,
+              frequency: 0, reach: 0,
+            },
+            isAdvertised: spend > 0 || meta.impressions > 0,
+            adLandingPageUrl: null, adName: null, adSetName: null, campaignName: null,
+            category: r.classification, classificationConfidence: 80, classificationMethod: 'product_config',
+          };
+        });
+        return NextResponse.json({ ok: true, data, source: 'db_cache' });
+      }
+    } catch { /* DB fallback failed */ }
+  }
+
+  return NextResponse.json({ ok: true, data: [], source: 'empty' });
 }
