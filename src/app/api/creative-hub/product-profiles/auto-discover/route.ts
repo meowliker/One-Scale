@@ -136,13 +136,14 @@ export async function POST(request: NextRequest) {
     }
 
     // 2. Get Meta token for live API calls
-    const metaToken = await getMetaToken(storeId);
-    if (!metaToken) {
+    const metaTokenObj = await getMetaToken(storeId);
+    if (!metaTokenObj) {
       return NextResponse.json(
         { error: 'No Meta access token found. Please reconnect Meta in Settings.' },
         { status: 400 }
       );
     }
+    const metaToken = metaTokenObj.accessToken;
 
     // 3. Fetch Shopify products (live API with DB fallback)
     const shopifyProducts = await getShopifyProducts(storeId, request);
