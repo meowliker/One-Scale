@@ -150,8 +150,8 @@ export async function POST(request: NextRequest) {
 
     const allCampaigns: Array<{ id: string; name: string; adAccountId: string }> = [];
     const seenCampaignIds = new Set<string>();
-    // Only process ACTIVE and PAUSED campaigns (skip DELETED/ARCHIVED to save API calls)
-    const allowedStatuses = new Set(['ACTIVE', 'PAUSED', 'active', 'paused', undefined, '']);
+    // Only process ACTIVE campaigns for auto-discover (PAUSED/others can be added via Edit)
+    const allowedStatuses = new Set(['ACTIVE', 'active']);
 
     for (const snap of campaignSnapshots) {
       try {
@@ -164,9 +164,9 @@ export async function POST(request: NextRequest) {
         for (const c of campaigns) {
           if (!c.id || !c.name) continue;
           if (seenCampaignIds.has(c.id)) continue;
-          // Filter: only ACTIVE/PAUSED campaigns
-          const status = c.status || c.effective_status;
-          if (status && !allowedStatuses.has(status)) continue;
+          // Filter: only ACTIVE campaigns (skip PAUSED/DELETED/ARCHIVED)
+          const status = c.status || c.effective_status || '';
+          if (!allowedStatuses.has(status)) continue;
           seenCampaignIds.add(c.id);
 
           const adAccountId =
