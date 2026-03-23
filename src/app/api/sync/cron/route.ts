@@ -8,6 +8,9 @@ import { isMetaCallBlocked, markMetaRateLimited } from '@/app/api/lib/meta-sync-
 import { refreshMetaSetupSnapshots } from '@/app/api/lib/meta-setup-cache';
 import type { Ad, AdSet, Campaign } from '@/types/campaign';
 
+export const dynamic = 'force-dynamic';
+export const maxDuration = 300;
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

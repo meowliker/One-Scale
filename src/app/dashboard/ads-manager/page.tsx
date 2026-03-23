@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { Campaign } from '@/types/campaign';
 import type { DateRangePreset } from '@/types/analytics';
@@ -72,29 +72,12 @@ function writeLocalCache(key: string, data: Campaign[]) {
 }
 
 export default function AdsManagerPage() {
-  const [dateRange, setDateRange] = useState<DateRangeState | null>(null);
-  const didInit = useRef(false);
+  const [dateRange, setDateRange] = useState<DateRangeState>(() => buildDateRangeState(getDateRange('today')));
 
   const connectionLoading = useConnectionStore((s) => s.loading);
   const connectionStatus = useConnectionStore((s) => s.status);
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
   const connectionReady = !connectionLoading && connectionStatus !== null;
-
-  // Initialize date range once connection is ready
-  useEffect(() => {
-    if (connectionReady && !didInit.current) {
-      didInit.current = true;
-      setDateRange(buildDateRangeState(getDateRange('today')));
-    }
-  }, [connectionReady]);
-
-  // Reset on store change
-  useEffect(() => {
-    if (didInit.current) {
-      didInit.current = false;
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeStoreId]);
 
   const cacheKey = activeStoreId && dateRange
     ? `${CAMPAIGNS_CACHE_KEY}:${activeStoreId}:${dateRange.since}:${dateRange.until}`
@@ -108,7 +91,6 @@ export default function AdsManagerPage() {
   } = useQuery<Campaign[], Error>({
     queryKey: ['campaigns', activeStoreId, dateRange?.since, dateRange?.until, dateRange?.preset],
     queryFn: async () => {
-      if (!dateRange) return [];
       const { since, until, preset } = dateRange;
 
       // Cache-first fetch. Live refresh is handled by background sync endpoints.
@@ -130,10 +112,12 @@ export default function AdsManagerPage() {
       if (cacheKey) writeLocalCache(cacheKey, data);
       return data;
     },
-    enabled: connectionReady && !!dateRange && !!activeStoreId,
+    enabled: connectionReady && !!activeStoreId,
     staleTime: CAMPAIGNS_STALE_TIME,
-    placeholderData: () => {
-      // Use localStorage as instant placeholder on first mount
+    placeholderData: (previousData) => {
+      // Keep previous rows visible while switching ranges so the table doesn't blank out.
+      if (previousData && previousData.length > 0) return previousData;
+      // Otherwise, try localStorage hydration for the selected range.
       if (cacheKey) return readLocalCache(cacheKey) ?? undefined;
       return undefined;
     },
@@ -144,8 +128,8 @@ export default function AdsManagerPage() {
   };
 
   const clientDateRange = useMemo(
-    () => dateRange ? { since: dateRange.since, until: dateRange.until, preset: dateRange.preset } : undefined,
-    [dateRange?.since, dateRange?.until, dateRange?.preset]
+    () => ({ since: dateRange.since, until: dateRange.until, preset: dateRange.preset }),
+    [dateRange]
   );
 
   // Determine empty reason from error
@@ -198,9 +182,7 @@ export default function AdsManagerPage() {
             )}
           </h1>
           <div className="flex items-center gap-2">
-            {dateRange && (
-              <DateRangePicker dateRange={dateRange} onRangeChange={handleDateRangeChange} />
-            )}
+            <DateRangePicker dateRange={dateRange} onRangeChange={handleDateRangeChange} />
             <RefreshButton />
           </div>
         </div>

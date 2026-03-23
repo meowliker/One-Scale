@@ -6,7 +6,9 @@
       "maxDuration": 60
     }
   },
-  "crons": [],
+  "crons": [
+    { "path": "/api/sync/cron", "schedule": "*/10 * * * *" }
+  ],
   "headers": [
     {
       "source": "/(.*)",
