@@ -364,11 +364,11 @@ export async function POST(request: NextRequest) {
             `across ${campaignsByAccount.size} ad accounts`
           );
 
-          // For each ad account, do ONE batched call to get ads with creative metadata
+          // For each campaign, fetch 1 ad to get page_id, pixel_id, ig_id
           interface LiveMetaAd {
             id: string;
-            campaign_id?: string;
             creative?: {
+              id?: string;
               object_story_spec?: {
                 page_id?: string;
                 instagram_actor_id?: string;
@@ -379,48 +379,44 @@ export async function POST(request: NextRequest) {
             };
           }
 
-          const liveResults = await Promise.allSettled(
-            Array.from(campaignsByAccount.entries()).map(async ([accountId, campaignIds]) => {
-              // Use filtering to get ads for all campaigns in one call
-              const filterJson = JSON.stringify([{
-                field: 'campaign.id',
-                operator: 'IN',
-                value: campaignIds,
-              }]);
-              const result = await fetchFromMeta<{ data: LiveMetaAd[] }>(
-                metaToken,
-                `${accountId}/ads`,
-                {
-                  filtering: filterJson,
-                  fields: 'campaign_id,creative{object_story_spec},promoted_object',
-                  limit: '100',
-                },
-                15000, 1,
-              );
-              return result.data || [];
-            })
-          );
+          // Process campaigns in parallel (max 10 concurrent)
+          const allCampaignIds = campaignIdsNeedingMeta.map(c => c.campaignId);
+          const batchSize = 10;
+          for (let i = 0; i < allCampaignIds.length; i += batchSize) {
+            const batch = allCampaignIds.slice(i, i + batchSize);
+            const results = await Promise.allSettled(
+              batch.map(async (campaignId) => {
+                try {
+                  const result = await fetchFromMeta<{ data: LiveMetaAd[] }>(
+                    metaToken,
+                    `${campaignId}/ads`,
+                    {
+                      fields: 'id,creative{id,object_story_spec},promoted_object',
+                      limit: '1',
+                    },
+                    10000, 0,
+                  );
+                  const ad = result.data?.[0];
+                  if (!ad) return;
 
-          for (const result of liveResults) {
-            if (result.status !== 'fulfilled') continue;
-            for (const ad of result.value) {
-              const campId = ad.campaign_id;
-              if (!campId || campaignMetaMap.has(campId)) continue;
-
-              const meta: CampaignMeta = {};
-              if (ad.creative?.object_story_spec?.page_id) {
-                meta.pageId = String(ad.creative.object_story_spec.page_id);
-              }
-              if (ad.creative?.object_story_spec?.instagram_actor_id) {
-                meta.instagramActorId = String(ad.creative.object_story_spec.instagram_actor_id);
-              }
-              if (ad.promoted_object?.pixel_id) {
-                meta.pixelId = String(ad.promoted_object.pixel_id);
-              }
-              if (meta.pageId || meta.pixelId || meta.instagramActorId) {
-                campaignMetaMap.set(campId, meta);
-              }
-            }
+                  const meta: CampaignMeta = {};
+                  if (ad.creative?.object_story_spec?.page_id) {
+                    meta.pageId = String(ad.creative.object_story_spec.page_id);
+                  }
+                  if (ad.creative?.object_story_spec?.instagram_actor_id) {
+                    meta.instagramActorId = String(ad.creative.object_story_spec.instagram_actor_id);
+                  }
+                  if (ad.promoted_object?.pixel_id) {
+                    meta.pixelId = String(ad.promoted_object.pixel_id);
+                  }
+                  if (meta.pageId || meta.pixelId || meta.instagramActorId) {
+                    campaignMetaMap.set(campaignId, meta);
+                  }
+                } catch (err) {
+                  console.warn(`[auto-discover] Failed to fetch meta for campaign ${campaignId}:`, err);
+                }
+              })
+            );
           }
 
           console.log(
