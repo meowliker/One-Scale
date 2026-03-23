@@ -381,6 +381,163 @@ export async function POST(request: NextRequest) {
 
     const filteredUnmapped = unmappedCampaigns.filter(u => !seenCampaignIds.has(u.campaignId));
 
+    // 4b. Fetch Page ID, Pixel ID, and Instagram Account ID per ad account
+    //     DB-first (Supabase snapshots), then live Meta API fallback
+    interface AdAccountMeta {
+      pageId?: string;
+      pixelId?: string;
+      instagramAccountId?: string;
+    }
+    const adAccountMetaMap = new Map<string, AdAccountMeta>();
+
+    // Collect unique ad account IDs from matched profiles
+    const usedAdAccountIds = new Set<string>();
+    for (const [, match] of matchesByHandle) {
+      if (match.adAccountId) usedAdAccountIds.add(match.adAccountId);
+    }
+
+    if (usedAdAccountIds.size > 0) {
+      // Try Supabase snapshots first
+      let resolvedFromSnapshots = false;
+
+      if (isSupabasePersistenceEnabled()) {
+        try {
+          interface SnapshotRow { scope_id: string; payload_json: string; }
+
+          const [pagesSnaps, pixelsSnaps, igSnaps] = await Promise.all([
+            supabaseRest<SnapshotRow[]>(
+              `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.pages&variant_key=eq.latest&select=scope_id,payload_json`
+            ).catch(() => [] as SnapshotRow[]),
+            supabaseRest<SnapshotRow[]>(
+              `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.pixels&variant_key=eq.latest&select=scope_id,payload_json`
+            ).catch(() => [] as SnapshotRow[]),
+            supabaseRest<SnapshotRow[]>(
+              `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.instagram&variant_key=eq.latest&select=scope_id,payload_json`
+            ).catch(() => [] as SnapshotRow[]),
+          ]);
+
+          // Parse pages snapshots — pages are fetched via /me/accounts, scope may be global
+          let allPages: Array<{ id: string; name?: string; instagram_business_account?: { id: string; username?: string } }> = [];
+          for (const snap of pagesSnaps) {
+            try { allPages = allPages.concat(JSON.parse(snap.payload_json)); } catch { /* skip */ }
+          }
+
+          // Parse pixels snapshots — keyed by ad account
+          const pixelsByAccount = new Map<string, Array<{ id: string; name?: string }>>();
+          for (const snap of pixelsSnaps) {
+            try {
+              const pixels = JSON.parse(snap.payload_json) as Array<{ id: string; name?: string }>;
+              // scope_id may contain the ad account id
+              const accountMatch = snap.scope_id.match(/(act_[^,\s]+)/);
+              if (accountMatch) pixelsByAccount.set(accountMatch[1], pixels);
+              else for (const acctId of usedAdAccountIds) { if (!pixelsByAccount.has(acctId)) pixelsByAccount.set(acctId, pixels); }
+            } catch { /* skip */ }
+          }
+
+          // Parse instagram snapshots
+          const igByAccount = new Map<string, Array<{ id: string; username?: string }>>();
+          for (const snap of igSnaps) {
+            try {
+              const igs = JSON.parse(snap.payload_json) as Array<{ id: string; username?: string }>;
+              const accountMatch = snap.scope_id.match(/(act_[^,\s]+)/);
+              if (accountMatch) igByAccount.set(accountMatch[1], igs);
+              else for (const acctId of usedAdAccountIds) { if (!igByAccount.has(acctId)) igByAccount.set(acctId, igs); }
+            } catch { /* skip */ }
+          }
+
+          const hasSnapshotData = allPages.length > 0 || pixelsByAccount.size > 0 || igByAccount.size > 0;
+          if (hasSnapshotData) {
+            resolvedFromSnapshots = true;
+            const firstPage = allPages[0];
+            const igFromPage = firstPage?.instagram_business_account;
+
+            for (const acctId of usedAdAccountIds) {
+              const meta: AdAccountMeta = {};
+              if (firstPage) meta.pageId = String(firstPage.id);
+              const pixels = pixelsByAccount.get(acctId);
+              if (pixels?.[0]) meta.pixelId = String(pixels[0].id);
+              const igs = igByAccount.get(acctId);
+              if (igs?.[0]) meta.instagramAccountId = String(igs[0].id);
+              else if (igFromPage) meta.instagramAccountId = String(igFromPage.id);
+              adAccountMetaMap.set(acctId, meta);
+            }
+            console.log(`[auto-discover] Resolved page/pixel/instagram from Supabase snapshots for ${usedAdAccountIds.size} ad account(s)`);
+          }
+        } catch (err) {
+          console.warn('[auto-discover] Supabase snapshot fetch for page/pixel/ig failed:', err);
+        }
+      }
+
+      // Also try local SQLite snapshots
+      if (!resolvedFromSnapshots) {
+        try {
+          for (const acctId of usedAdAccountIds) {
+            const meta: AdAccountMeta = {};
+            const pagesSnap = getLatestMetaEndpointSnapshot<Array<{ id: string; instagram_business_account?: { id: string } }>>(storeId, 'pages', acctId);
+            if (pagesSnap?.data?.[0]) {
+              meta.pageId = String(pagesSnap.data[0].id);
+              if (pagesSnap.data[0].instagram_business_account) {
+                meta.instagramAccountId = String(pagesSnap.data[0].instagram_business_account.id);
+              }
+            }
+            const pixelsSnap = getLatestMetaEndpointSnapshot<Array<{ id: string }>>(storeId, 'pixels', acctId);
+            if (pixelsSnap?.data?.[0]) meta.pixelId = String(pixelsSnap.data[0].id);
+            const igSnap = getLatestMetaEndpointSnapshot<Array<{ id: string }>>(storeId, 'instagram', acctId);
+            if (igSnap?.data?.[0]) meta.instagramAccountId = String(igSnap.data[0].id);
+
+            if (meta.pageId || meta.pixelId || meta.instagramAccountId) {
+              adAccountMetaMap.set(acctId, meta);
+              resolvedFromSnapshots = true;
+            }
+          }
+          if (resolvedFromSnapshots) {
+            console.log(`[auto-discover] Resolved page/pixel/instagram from local SQLite snapshots`);
+          }
+        } catch (err) {
+          console.warn('[auto-discover] Local snapshot fetch for page/pixel/ig failed:', err);
+        }
+      }
+
+      // Fallback: live Meta API calls
+      if (!resolvedFromSnapshots) {
+        const metaTokenObj = await getMetaToken(storeId);
+        if (metaTokenObj) {
+          const metaToken = metaTokenObj.accessToken;
+          const accountResults = await Promise.allSettled(
+            Array.from(usedAdAccountIds).map(async (acctId) => {
+              const [pagesRes, pixelsRes, igRes] = await Promise.all([
+                fetchFromMeta<{ data: Array<{ id: string; instagram_business_account?: { id: string } }> }>(
+                  metaToken, 'me/accounts', { fields: 'id,name,instagram_business_account{id,username}', limit: '10' }, 10000, 1
+                ).catch(() => ({ data: [] as Array<{ id: string; instagram_business_account?: { id: string } }> })),
+                fetchFromMeta<{ data: Array<{ id: string; name?: string }> }>(
+                  metaToken, `${acctId}/adspixels`, { fields: 'id,name', limit: '10' }, 10000, 1
+                ).catch(() => ({ data: [] as Array<{ id: string; name?: string }> })),
+                fetchFromMeta<{ data: Array<{ id: string; username?: string }> }>(
+                  metaToken, `${acctId}/instagram_accounts`, { fields: 'id,username', limit: '10' }, 10000, 1
+                ).catch(() => ({ data: [] as Array<{ id: string; username?: string }> })),
+              ]);
+              const meta: AdAccountMeta = {};
+              if (pagesRes.data?.[0]) {
+                meta.pageId = String(pagesRes.data[0].id);
+                if (pagesRes.data[0].instagram_business_account) {
+                  meta.instagramAccountId = String(pagesRes.data[0].instagram_business_account.id);
+                }
+              }
+              if (pixelsRes.data?.[0]) meta.pixelId = String(pixelsRes.data[0].id);
+              if (igRes.data?.[0] && !meta.instagramAccountId) meta.instagramAccountId = String(igRes.data[0].id);
+              return { acctId, meta };
+            })
+          );
+          for (const result of accountResults) {
+            if (result.status === 'fulfilled') {
+              adAccountMetaMap.set(result.value.acctId, result.value.meta);
+            }
+          }
+          console.log(`[auto-discover] Resolved page/pixel/instagram from live Meta API for ${usedAdAccountIds.size} ad account(s)`);
+        }
+      }
+    }
+
     // 5. Save matches as product profiles
     const existingProfiles = getProductProfiles(storeId);
     const existingByShopifyId = new Map(
@@ -394,8 +551,25 @@ export async function POST(request: NextRequest) {
       let profileId: string;
       const existingProfile = existingByShopifyId.get(shopifyId);
 
+      const acctMeta = adAccountMetaMap.get(match.adAccountId) ?? {};
+
       if (existingProfile) {
         profileId = existingProfile.id;
+        // Update existing profile with page/pixel/instagram if it was missing them
+        const needsMetaUpdate = (!existingProfile.pageId && acctMeta.pageId)
+          || (!existingProfile.pixelId && acctMeta.pixelId)
+          || (!existingProfile.instagramActorId && acctMeta.instagramAccountId);
+        if (needsMetaUpdate) {
+          upsertProductProfile({
+            id: profileId,
+            storeId,
+            productName: existingProfile.productName,
+            adAccountId: existingProfile.adAccountId,
+            pageId: existingProfile.pageId || acctMeta.pageId,
+            pixelId: existingProfile.pixelId || acctMeta.pixelId,
+            instagramActorId: existingProfile.instagramActorId || acctMeta.instagramAccountId,
+          });
+        }
       } else {
         profileId = randomUUID();
         const productImage = match.shopifyProduct.image?.src ?? match.shopifyProduct.images?.[0]?.src;
@@ -408,6 +582,9 @@ export async function POST(request: NextRequest) {
           adAccountId: match.adAccountId,
           adAccountCurrency: match.adAccountCurrency,
           destinationUrl: match.campaigns[0]?.destinationUrl,
+          pageId: acctMeta.pageId,
+          pixelId: acctMeta.pixelId,
+          instagramActorId: acctMeta.instagramAccountId,
         });
       }
 
@@ -444,6 +621,9 @@ export async function POST(request: NextRequest) {
         adAccountId: match.adAccountId,
         adAccountCurrency: match.adAccountCurrency,
         destinationUrl: match.campaigns[0]?.destinationUrl,
+        pageId: existingProfile?.pageId || acctMeta.pageId,
+        pixelId: existingProfile?.pixelId || acctMeta.pixelId,
+        instagramActorId: existingProfile?.instagramActorId || acctMeta.instagramAccountId,
         conversionEvent: 'PURCHASE',
         defaultBudget: 20,
         defaultDuration: 3,
