@@ -20,6 +20,7 @@ import {
   Shield,
   Receipt,
   Rocket,
+  Sparkles,
 } from 'lucide-react';
 import type { SidebarConfig } from '@/types/navigation';
 
@@ -47,6 +48,7 @@ export const sidebarConfig: SidebarConfig = {
     {
       title: 'CORE WORKSPACES',
       items: [
+        { label: 'Creative Hub', href: '/dashboard/creative-hub', icon: Sparkles },
         { label: 'Marketing Acquisition', href: '/dashboard/marketing-acquisition', icon: TrendingUp },
         { label: 'Creative Analysis', href: '/dashboard/creative-analysis', icon: Palette },
         { label: 'Website Conversion', href: '/dashboard/website-conversion', icon: Globe },
