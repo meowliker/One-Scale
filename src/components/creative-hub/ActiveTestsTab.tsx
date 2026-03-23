@@ -19,7 +19,8 @@ export function ActiveTestsTab() {
     fetchActiveTests,
     executeAIActions,
   } = useCreativeHubStore();
-  const { activeStore } = useStoreStore();
+  const { stores, activeStoreId } = useStoreStore();
+  const activeStore = stores.find((s) => s.id === activeStoreId);
   const [lastRefreshAt, setLastRefreshAt] = useState<Date | null>(null);
   const [secondsAgo, setSecondsAgo] = useState(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);

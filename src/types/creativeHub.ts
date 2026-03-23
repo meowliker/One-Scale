@@ -180,6 +180,8 @@ export interface LaunchConfig {
   aiEvalFrequency?: string;
   autoKill?: boolean;
   notifyOnKill?: boolean;
+  // Health check result
+  healthCheckReport?: Record<string, unknown>;
 }
 
 export interface CopyItem {
