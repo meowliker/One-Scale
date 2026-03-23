@@ -797,6 +797,12 @@ export async function POST(request: NextRequest) {
         unmappedCount: filteredUnmapped.length,
         source,
       },
+      _debug: {
+        campaignMetaMapSize: campaignMetaMap.size,
+        campaignMetaEntries: Array.from(campaignMetaMap.entries()).map(([k, v]) => ({ campaignId: k, ...v })),
+        pageNameMapSize: pageNameMap.size,
+        pixelNameMapSize: pixelNameMap.size,
+      },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Auto-discovery failed';
