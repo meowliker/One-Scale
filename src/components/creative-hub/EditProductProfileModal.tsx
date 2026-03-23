@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
+import { useStoreStore } from '@/stores/storeStore';
 import type {
   ProductProfile,
   BidStrategy,
@@ -36,6 +37,7 @@ interface EditProductProfileModalProps {
   onClose: () => void;
   profile: ProductProfile | null;
   linkedCampaigns: ProductCampaignLink[];
+  storeId: string;
 }
 
 type Section =
@@ -103,8 +105,13 @@ export function EditProductProfileModal({
   onClose,
   profile,
   linkedCampaigns,
+  storeId,
 }: EditProductProfileModalProps) {
   const saveProfile = useCreativeHubStore((s) => s.saveProfile);
+  const stores = useStoreStore((s) => s.stores);
+  const activeStoreId = useStoreStore((s) => s.activeStoreId);
+  const activeStore = stores.find((s) => s.id === (storeId || activeStoreId));
+  const adAccounts = activeStore?.adAccounts ?? [];
   const [form, setForm] = useState<Partial<ProductProfile>>(getDefaults());
   const [saving, setSaving] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Set<Section>>(
@@ -190,7 +197,7 @@ export function EditProductProfileModal({
     try {
       await saveProfile({
         ...form,
-        storeId: profile?.storeId ?? form.storeId ?? '',
+        storeId: profile?.storeId ?? storeId,
         id: profile?.id,
       } as Partial<ProductProfile> & { storeId: string });
       onClose();
@@ -253,14 +260,35 @@ export function EditProductProfileModal({
                   <div className="px-4 pb-4 pt-1 border-t border-border bg-surface-hover/20">
                     {id === 'meta' && (
                       <div className="grid grid-cols-2 gap-4">
-                        <FormField label="Ad Account ID">
-                          <input
-                            type="text"
-                            value={form.adAccountId ?? ''}
-                            onChange={(e) => updateField('adAccountId', e.target.value)}
-                            placeholder="act_123456789"
-                            className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                          />
+                        <FormField label="Ad Account" required>
+                          {adAccounts.length > 0 ? (
+                            <select
+                              value={form.adAccountId ?? ''}
+                              onChange={(e) => {
+                                const selected = adAccounts.find((a) => a.accountId === e.target.value);
+                                updateField('adAccountId', e.target.value);
+                                if (selected?.currency) {
+                                  updateField('adAccountCurrency', selected.currency);
+                                }
+                              }}
+                              className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            >
+                              <option value="">Select an ad account...</option>
+                              {adAccounts.map((account) => (
+                                <option key={account.id} value={account.accountId}>
+                                  {account.name || account.accountId} ({account.currency})
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              type="text"
+                              value={form.adAccountId ?? ''}
+                              onChange={(e) => updateField('adAccountId', e.target.value)}
+                              placeholder="act_123456789"
+                              className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            />
+                          )}
                         </FormField>
                         <FormField label="Currency">
                           <select

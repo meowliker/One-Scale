@@ -207,9 +207,10 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
       {/* Edit modal */}
       <EditProductProfileModal
         isOpen={editModalOpen}
-        onClose={() => setEditModalOpen(false)}
+        onClose={() => { setEditModalOpen(false); setEditingProfile(null); }}
         profile={editingProfile}
         linkedCampaigns={editingProfile ? (linkedCampaignsMap.get(editingProfile.id) ?? []) : []}
+        storeId={storeId}
       />
     </div>
   );
