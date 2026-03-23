@@ -259,7 +259,35 @@ export async function GET(request: NextRequest) {
     }
 
     if (cacheComplete && cached.length > 0) {
-      return NextResponse.json({ ok: true, data: mapCacheToResponse(cached), source: 'cache', cachedAt: cached[0]?.computed_at });
+      // Always enrich cache data with real Meta metrics (cache may have 0s for impressions/clicks)
+      const metaMetrics = await fetchMetaMetricsByProduct(storeId, from, to);
+      const cacheData = mapCacheToResponse(cached);
+      // Merge Meta metrics into cache response
+      const enriched = cacheData.map(p => {
+        const meta = metaMetrics.get(p.productId);
+        if (!meta || (meta.impressions === 0 && meta.clicks === 0 && meta.spend === 0)) return p;
+        const spend = meta.spend || p.fbMetrics.spend;
+        const imp = meta.impressions;
+        const clk = meta.clicks;
+        const pur = meta.purchases;
+        return {
+          ...p,
+          fbMetrics: {
+            ...p.fbMetrics,
+            spend,
+            impressions: imp,
+            clicks: clk,
+            purchases: pur,
+            cpc: clk > 0 ? round2(spend / clk) : 0,
+            cpm: imp > 0 ? round2((spend / imp) * 1000) : 0,
+            ctr: imp > 0 ? round2((clk / imp) * 100) : 0,
+            roas: spend > 0 ? round2(p.revenue / spend) : p.fbMetrics.roas,
+            costPerPurchase: pur > 0 ? round2(spend / pur) : 0,
+          },
+          isAdvertised: spend > 0 || imp > 0 || clk > 0,
+        };
+      });
+      return NextResponse.json({ ok: true, data: enriched, source: 'cache', cachedAt: cached[0]?.computed_at });
     }
 
     // Cache incomplete or miss — compute full range live and persist

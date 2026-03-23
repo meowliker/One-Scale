@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -305,28 +306,45 @@ function ColumnCustomizer({
 
 // ─── Alert Tooltip ───────────────────────────────────────────────────────────
 function AlertTooltip({ ads }: { ads: RejectedAd[] }) {
-  return (
+  // Use fixed positioning via portal to avoid overflow clipping from table scroll container
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+
+  useEffect(() => {
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setPos({ top: rect.top - 8, left: rect.right - 320 });
+    }
+  }, []);
+
+  return createPortal(
     <motion.div
-      initial={{ opacity: 0, y: 4 }}
+      initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: 4 }}
-      className="absolute right-0 bottom-full z-50 mb-2 w-80 rounded-xl border border-red-300 dark:border-red-800 bg-white dark:bg-gray-900 shadow-2xl p-4"
+      exit={{ opacity: 0, y: 8 }}
+      style={{ position: 'fixed', top: pos.top, left: pos.left, transform: 'translateY(-100%)' }}
+      className="z-[9999] w-80 rounded-xl border-2 border-red-400 dark:border-red-700 p-4"
+      // Force opaque background — no theme tokens that might be transparent
+      ref={triggerRef}
     >
-      <div className="flex items-center gap-2 mb-3">
-        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/50">
-          <AlertTriangle className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
+      {/* Opaque background layer */}
+      <div className="absolute inset-0 rounded-xl bg-white dark:bg-gray-950" style={{ zIndex: -1 }} />
+
+      <div className="flex items-center gap-2.5 mb-3">
+        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-red-100 dark:bg-red-900">
+          <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-400" />
         </div>
-        <span className="text-sm font-bold text-red-700 dark:text-red-300">
+        <span className="text-sm font-bold" style={{ color: '#dc2626' }}>
           {ads.length} Ad{ads.length > 1 ? 's' : ''} Rejected
         </span>
       </div>
-      <div className="space-y-2 max-h-40 overflow-y-auto">
+      <div className="space-y-2 max-h-48 overflow-y-auto">
         {ads.map((ad) => (
-          <div key={ad.id} className="flex items-start gap-2.5 text-sm bg-red-50 dark:bg-red-950/30 rounded-lg px-3 py-2">
-            <span className="h-2 w-2 rounded-full bg-red-500 mt-1.5 shrink-0" />
-            <div className="min-w-0">
-              <p className="text-gray-900 dark:text-gray-100 font-medium truncate">{ad.name}</p>
-              <p className="text-gray-600 dark:text-gray-400 text-xs mt-0.5">
+          <div key={ad.id} className="flex items-start gap-2.5 rounded-lg px-3 py-2.5" style={{ backgroundColor: 'rgba(254,226,226,0.8)' }}>
+            <span className="h-2.5 w-2.5 rounded-full mt-1 shrink-0" style={{ backgroundColor: '#ef4444' }} />
+            <div className="min-w-0 flex-1">
+              <p className="font-semibold text-sm leading-tight" style={{ color: '#111827' }}>{ad.name}</p>
+              <p className="text-xs mt-1" style={{ color: '#6b7280' }}>
                 {ad.status === 'DISAPPROVED' ? 'Disapproved' : 'Has Issues'} &middot;{' '}
                 {new Date(ad.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </p>
@@ -334,7 +352,8 @@ function AlertTooltip({ ads }: { ads: RejectedAd[] }) {
           </div>
         ))}
       </div>
-    </motion.div>
+    </motion.div>,
+    document.body
   );
 }
 
@@ -365,9 +384,10 @@ export function ProductPerformanceTable({ datePreset = 'last7' }: ProductPerform
     queryFn: () => fetchProductPerf(activeStoreId!, datePreset),
     enabled: !!activeStoreId,
     initialData: warmData || undefined,
-    staleTime: datePreset === 'today' ? 30_000 : 60_000, // Refresh today more frequently
+    staleTime: datePreset === 'today' ? 15_000 : 60_000,
     gcTime: 10 * 60_000,
-    refetchOnWindowFocus: datePreset === 'today', // Auto-refresh today on tab focus
+    refetchOnWindowFocus: true,
+    refetchInterval: datePreset === 'today' ? 30_000 : false, // Auto-poll every 30s for today
   });
 
   // Write to warm cache on fresh data
