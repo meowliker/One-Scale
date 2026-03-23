@@ -95,7 +95,9 @@ interface CreativeHubState {
 
   // Copy library actions
   fetchCopyLibrary: (productProfileId: string) => Promise<void>;
-  generateAICopy: (productProfileId: string, context: string) => Promise<void>;
+  fetchAllCopyLibrary: (storeId: string) => Promise<void>;
+  autoPopulateCopyLibrary: (storeId: string, productProfileId: string) => Promise<{ saved: number; skipped: number; totalAdsFound: number }>;
+  generateAICopy: (productProfileId: string, productName: string, context: string) => Promise<void>;
   saveCopyToLibrary: (copy: Omit<WinningCopy, 'id' | 'createdAt'>) => Promise<void>;
 }
 
@@ -485,18 +487,90 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
     }
   },
 
-  generateAICopy: async (productProfileId: string, context: string) => {
+  fetchAllCopyLibrary: async (_storeId: string) => {
     try {
+      const { profiles } = get();
+      if (profiles.length === 0) {
+        set({ copyLibrary: [] });
+        return;
+      }
+      // Fetch copies for all profiles in parallel
+      const results = await Promise.all(
+        profiles.map(async (p) => {
+          const res = await fetch(`/api/creative-hub/copy-library?productId=${encodeURIComponent(p.id)}`);
+          const data = await res.json();
+          return (data.copies ?? []) as WinningCopy[];
+        }),
+      );
+      set({ copyLibrary: results.flat() });
+    } catch {
+      // silent
+    }
+  },
+
+  autoPopulateCopyLibrary: async (storeId: string, productProfileId: string) => {
+    const res = await fetch('/api/creative-hub/copy-library/auto-populate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ storeId, productProfileId }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Auto-populate failed');
+    }
+    return { saved: data.saved ?? 0, skipped: data.skipped ?? 0, totalAdsFound: data.totalAdsFound ?? 0 };
+  },
+
+  generateAICopy: async (productProfileId: string, productName: string, context: string) => {
+    try {
+      // Fetch existing winners for context
+      const { copyLibrary } = get();
+      const existingWinners = copyLibrary
+        .filter((c) => c.productProfileId === productProfileId)
+        .slice(0, 5)
+        .map((c) => ({ primaryText: c.primaryText, headline: c.headline, roas: c.roas }));
+
       const res = await fetch('/api/creative-hub/copy-library/ai-generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ productProfileId, context }),
+        body: JSON.stringify({ productProfileId, productName, context, existingWinners }),
       });
       const data = await res.json();
 
-      if (data.copies) {
-        const { copyLibrary } = get();
-        set({ copyLibrary: [...data.copies, ...copyLibrary] });
+      // The endpoint returns { primaryTexts, headlines, source }
+      // Convert to WinningCopy objects and save each to the library
+      if (data.primaryTexts && Array.isArray(data.primaryTexts)) {
+        const newCopies: WinningCopy[] = [];
+        for (let i = 0; i < data.primaryTexts.length; i++) {
+          const primaryText = data.primaryTexts[i];
+          const headline = data.headlines?.[i] || undefined;
+          // Save each generated copy to the API
+          const saveRes = await fetch('/api/creative-hub/copy-library', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              productProfileId,
+              primaryText,
+              headline,
+              roas: 0,
+              totalSpend: 0,
+              totalRevenue: 0,
+              totalPurchases: 0,
+              isAiGenerated: true,
+            }),
+          });
+          const saved = await saveRes.json();
+          if (saved.id) {
+            newCopies.push({
+              ...saved,
+              createdAt: saved.createdAt || new Date().toISOString(),
+            });
+          }
+        }
+        if (newCopies.length > 0) {
+          const { copyLibrary: current } = get();
+          set({ copyLibrary: [...newCopies, ...current] });
+        }
       }
     } catch {
       // Error handling deferred to Task 16
@@ -512,9 +586,10 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
       });
       const data = await res.json();
 
-      if (data.copy) {
+      // The POST endpoint returns the copy object flat (not wrapped)
+      if (data.id) {
         const { copyLibrary } = get();
-        set({ copyLibrary: [data.copy, ...copyLibrary] });
+        set({ copyLibrary: [{ ...data, createdAt: data.createdAt || new Date().toISOString() }, ...copyLibrary] });
       }
     } catch {
       // silent
