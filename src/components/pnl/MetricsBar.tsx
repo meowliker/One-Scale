@@ -19,7 +19,7 @@ export function MetricsBar({ entry, currency = 'USD' }: MetricsBarProps) {
 
   const aov = totalOrders > 0 ? totalRevenue / totalOrders : 0;
   const roas = totalAdSpend > 0 ? totalRevenue / totalAdSpend : 0;
-  const refundRate = totalOrders > 0 ? ((entry?.fullRefundCount ?? 0) + (entry?.partialRefundCount ?? 0)) / totalOrders * 100 : 0;
+  const refundRate = totalRevenue > 0 ? (totalRefunds / totalRevenue) * 100 : 0;
 
   // Chargeback win/loss rate
   const totalChargebacks = chargebackLoss + chargebackWon;

@@ -58,18 +58,21 @@ function SourceBadge({ source }: { source: DataSource }) {
   );
 }
 
-/** Generate 7-day sparkline data from a base value with slight variation */
+/** Generate 7-day sparkline data from a base value with deterministic variation.
+ *  Uses a seeded pattern so sparklines are stable across re-renders but vary by baseValue. */
 function generateSparkline(baseValue: number): SparklinePoint[] {
   const points: SparklinePoint[] = [];
+  // Deterministic pattern based on value — stable across renders, changes with data
+  const seed = Math.abs(baseValue) * 137;
+  const pattern = [0.88, 0.92, 0.95, 0.91, 0.97, 1.02, 1.05];
   for (let i = 0; i < 7; i++) {
-    const variance = 0.85 + Math.random() * 0.3; // 85% - 115% of base
-    const dayFactor = i < 3 ? 0.9 + i * 0.04 : 0.95 + (i - 3) * 0.02;
-    points.push({ value: baseValue * variance * dayFactor });
+    const jitter = ((seed * (i + 1) * 7) % 20 - 10) / 100; // -0.10 to +0.10
+    points.push({ value: Math.max(0, baseValue * (pattern[i] + jitter)) });
   }
   return points;
 }
 
-/** Compute a simulated trend % change from sparkline data */
+/** Compute trend % change from sparkline data */
 function computeTrend(sparkline: SparklinePoint[]): number {
   if (sparkline.length < 2) return 0;
   const firstHalf = sparkline.slice(0, 3).reduce((s, p) => s + p.value, 0) / 3;
@@ -99,36 +102,46 @@ function formatAnimated(num: number, decimals: number, useCommas: boolean): stri
 
 function AnimatedNumber({ value }: { value: string }) {
   const [display, setDisplay] = useState(value);
-  const animated = useRef(false);
+  const prevValue = useRef(value);
   const raf = useRef<number | null>(null);
 
-  const animate = useCallback(() => {
+  useEffect(() => {
     const parsed = parseNumericValue(value);
-    if (!parsed || animated.current) {
+    const prevParsed = parseNumericValue(prevValue.current);
+
+    // Cancel any running animation
+    if (raf.current !== null) cancelAnimationFrame(raf.current);
+
+    if (!parsed) {
       setDisplay(value);
+      prevValue.current = value;
       return;
     }
-    animated.current = true;
-    const duration = 900;
-    const start = performance.now();
-    const target = parsed.number;
+
+    // Animate from previous value to new value
+    const startNum = prevParsed?.number ?? 0;
+    const endNum = parsed.number;
+    const duration = 600;
+    const startTime = performance.now();
     const hasCommas = value.includes(',');
 
     const step = (now: number) => {
-      const elapsed = now - start;
+      const elapsed = now - startTime;
       const progress = Math.min(elapsed / duration, 1);
       const eased = 1 - Math.pow(1 - progress, 3);
-      const current = target * eased;
+      const current = startNum + (endNum - startNum) * eased;
       setDisplay(`${parsed.prefix}${formatAnimated(current, parsed.decimals, hasCommas)}${parsed.suffix}`);
-      if (progress < 1) raf.current = requestAnimationFrame(step);
+      if (progress < 1) {
+        raf.current = requestAnimationFrame(step);
+      } else {
+        raf.current = null;
+      }
     };
     raf.current = requestAnimationFrame(step);
-  }, [value]);
+    prevValue.current = value;
 
-  useEffect(() => {
-    animate();
     return () => { if (raf.current !== null) cancelAnimationFrame(raf.current); };
-  }, [animate]);
+  }, [value]);
 
   return <>{display}</>;
 }
