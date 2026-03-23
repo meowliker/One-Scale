@@ -419,7 +419,7 @@ export async function POST(request: NextRequest) {
                 try {
                   // Parallel: fetch adcreatives + ad promoted_object
                   const [creativeRes, adRes] = await Promise.allSettled([
-                    fetchFromMeta<{ data: Array<{ id: string; object_story_spec?: { page_id?: string; instagram_actor_id?: string } }> }>(
+                    fetchFromMeta<{ data: Array<{ id: string; object_story_spec?: { page_id?: string; instagram_actor_id?: string; instagram_user_id?: string } }> }>(
                       metaToken,
                       `${adId}/adcreatives`,
                       { fields: 'id,object_story_spec' },
@@ -437,11 +437,14 @@ export async function POST(request: NextRequest) {
 
                   if (creativeRes.status === 'fulfilled') {
                     const creative = creativeRes.value.data?.[0];
-                    if (creative?.object_story_spec?.page_id) {
-                      meta.pageId = String(creative.object_story_spec.page_id);
+                    const oss = creative?.object_story_spec;
+                    if (oss?.page_id) {
+                      meta.pageId = String(oss.page_id);
                     }
-                    if (creative?.object_story_spec?.instagram_actor_id) {
-                      meta.instagramActorId = String(creative.object_story_spec.instagram_actor_id);
+                    // Meta returns either instagram_actor_id or instagram_user_id
+                    const igId = oss?.instagram_actor_id || oss?.instagram_user_id;
+                    if (igId) {
+                      meta.instagramActorId = String(igId);
                     }
                   }
 
@@ -676,6 +679,51 @@ export async function POST(request: NextRequest) {
         }
       } catch (err) {
         console.warn('[auto-discover] Options API name lookup failed:', err);
+      }
+    }
+
+    // 4c. Resolve unknown page/IG names directly from Meta API
+    // The options API only returns pages connected to the user, but campaigns may use other pages
+    const unknownPageIds = new Set<string>();
+    const unknownIgIds = new Set<string>();
+    const unknownPixelIds = new Set<string>();
+    for (const [, meta] of campaignMetaMap) {
+      if (meta.pageId && !pageNameMap.has(meta.pageId)) unknownPageIds.add(meta.pageId);
+      if (meta.instagramActorId && !igUsernameMap.has(meta.instagramActorId)) unknownIgIds.add(meta.instagramActorId);
+      if (meta.pixelId && !pixelNameMap.has(meta.pixelId)) unknownPixelIds.add(meta.pixelId);
+    }
+
+    if (unknownPageIds.size > 0 || unknownIgIds.size > 0 || unknownPixelIds.size > 0) {
+      // Get a Meta token (may already exist from step 3b)
+      const tokenObj = await getMetaToken(storeId);
+      const tok = tokenObj?.accessToken;
+      if (tok) {
+        // Fetch unknown page names
+        const pagePromises = Array.from(unknownPageIds).map(async (pageId) => {
+          try {
+            const page = await fetchFromMeta<{ id: string; name: string }>(tok, pageId, { fields: 'id,name' }, 5000, 0);
+            if (page.name) pageNameMap.set(pageId, page.name);
+          } catch { /* skip */ }
+        });
+
+        // Fetch unknown IG usernames
+        const igPromises = Array.from(unknownIgIds).map(async (igId) => {
+          try {
+            const ig = await fetchFromMeta<{ id: string; username: string }>(tok, igId, { fields: 'id,username' }, 5000, 0);
+            if (ig.username) igUsernameMap.set(igId, ig.username);
+          } catch { /* skip */ }
+        });
+
+        // Fetch unknown pixel names
+        const pixelPromises = Array.from(unknownPixelIds).map(async (pixelId) => {
+          try {
+            const pixel = await fetchFromMeta<{ id: string; name: string }>(tok, pixelId, { fields: 'id,name' }, 5000, 0);
+            if (pixel.name) pixelNameMap.set(pixelId, pixel.name);
+          } catch { /* skip */ }
+        });
+
+        await Promise.allSettled([...pagePromises, ...igPromises, ...pixelPromises]);
+        console.log(`[auto-discover] Resolved ${unknownPageIds.size} pages, ${unknownIgIds.size} IG, ${unknownPixelIds.size} pixels from Meta API`);
       }
     }
 
