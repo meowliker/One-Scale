@@ -9,7 +9,6 @@ interface MetricsBarProps {
 }
 
 export function MetricsBar({ entry, currency = 'USD' }: MetricsBarProps) {
-  // Calculate metrics from active date range entry
   const totalRevenue = entry?.revenue ?? 0;
   const totalAdSpend = entry?.adSpend ?? 0;
   const totalRefunds = entry?.refunds ?? 0;
@@ -19,11 +18,16 @@ export function MetricsBar({ entry, currency = 'USD' }: MetricsBarProps) {
 
   const aov = totalOrders > 0 ? totalRevenue / totalOrders : 0;
   const roas = totalAdSpend > 0 ? totalRevenue / totalAdSpend : 0;
+
+  // Refund rate: % of revenue lost to refunds — always show if there's revenue
   const refundRate = totalRevenue > 0 ? (totalRefunds / totalRevenue) * 100 : 0;
 
-  // Chargeback win/loss rate
-  const totalChargebacks = chargebackLoss + chargebackWon;
-  const chargebackWinRate = totalChargebacks > 0 ? (chargebackWon / totalChargebacks) * 100 : 0;
+  // Chargeback rate: chargebacks as % of orders
+  const totalChargebackCount = chargebackLoss + chargebackWon;
+  const chargebackRate = totalOrders > 0 ? (totalChargebackCount / totalOrders) * 100 : 0;
+
+  // CB win rate: % of chargebacks that were won
+  const chargebackWinRate = totalChargebackCount > 0 ? (chargebackWon / totalChargebackCount) * 100 : 0;
 
   const metrics = [
     {
@@ -37,18 +41,18 @@ export function MetricsBar({ entry, currency = 'USD' }: MetricsBarProps) {
     },
     {
       label: 'REFUND RATE',
-      value: totalOrders > 0 ? `${refundRate.toFixed(1)}%` : '—',
+      value: totalRevenue > 0 ? `${refundRate.toFixed(1)}%` : '0%',
       valueColor: refundRate > 5 ? 'text-red-500' : refundRate > 0 ? 'text-amber-500' : undefined,
     },
     {
-      label: 'CB WIN RATE',
-      value: totalChargebacks > 0 ? `${chargebackWinRate.toFixed(0)}%` : '—',
-      valueColor: totalChargebacks > 0 ? (chargebackWinRate >= 50 ? 'text-emerald-500' : 'text-red-500') : undefined,
+      label: 'CHARGEBACK RATE',
+      value: totalOrders > 0 ? `${chargebackRate.toFixed(2)}%` : '0%',
+      valueColor: chargebackRate > 1 ? 'text-red-500' : chargebackRate > 0 ? 'text-amber-500' : undefined,
     },
     {
-      label: 'NET CHARGEBACKS',
-      value: totalChargebacks > 0 ? formatCurrency(chargebackLoss - chargebackWon, currency) : '—',
-      valueColor: totalChargebacks > 0 ? (chargebackLoss > chargebackWon ? 'text-red-500' : 'text-emerald-500') : undefined,
+      label: 'CB WIN RATE',
+      value: totalChargebackCount > 0 ? `${chargebackWinRate.toFixed(0)}%` : '—',
+      valueColor: totalChargebackCount > 0 ? (chargebackWinRate >= 50 ? 'text-emerald-500' : 'text-red-500') : undefined,
     },
     {
       label: 'ROAS',

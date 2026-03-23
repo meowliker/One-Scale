@@ -124,11 +124,16 @@ export function PnLDashboardClient({
     setDatePreset(range.preset || 'custom');
   };
 
+  // Helper: check if a PnLEntry has any meaningful data
+  const hasData = (e: PnLEntry) =>
+    e.revenue !== 0 || (e.orderCount ?? 0) !== 0 || e.adSpend !== 0 ||
+    e.fees !== 0 || e.refunds !== 0 || e.netProfit !== 0 ||
+    (e.chargebackLoss ?? 0) !== 0 || (e.chargebackWon ?? 0) !== 0;
+
   const activeEntry = useMemo(() => {
     const entry = computeEntryFromDaily(dailyPnL, dateRange, customExpensesList);
-    // If no data found for the selected range and preset is 'today', use summary.today
-    // This ensures data shows immediately while getDailyPnL loads in background
-    if (entry.revenue === 0 && entry.orderCount === 0 && datePreset === 'today' && summary.today.revenue > 0) {
+    // If dailyPnL has no real data for the selected range but summary has today's data, use it
+    if (!hasData(entry) && datePreset === 'today' && hasData(summary.today)) {
       return summary.today;
     }
     return entry;
@@ -137,9 +142,8 @@ export function PnLDashboardClient({
   const todayEntry = useMemo(() => {
     const todayRange = getDateRange('today');
     const computed = computeEntryFromDaily(dailyPnL, todayRange, customExpensesList);
-    // If dailyPnL has no data for today, fall back to the summary prop
-    // This prevents showing zeros when getDailyPnL hasn't resolved yet
-    if (computed.revenue === 0 && computed.orderCount === 0 && summary.today.revenue > 0) {
+    // Fall back to summary.today if dailyPnL is empty for today
+    if (!hasData(computed) && hasData(summary.today)) {
       return summary.today;
     }
     return computed;

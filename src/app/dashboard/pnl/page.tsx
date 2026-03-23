@@ -234,10 +234,10 @@ export default function PnLPage() {
           // LIVE and has real data. Always prefer the live today entry over a zero snapshot.
           setDailyPnL(() => {
             const todayDate = s.today.date;
-            const liveHasData = s.today.revenue > 0 || (s.today.orderCount ?? 0) > 0;
+            const liveHasData = s.today.revenue !== 0 || (s.today.orderCount ?? 0) !== 0 || s.today.adSpend !== 0 || s.today.fees !== 0 || s.today.netProfit !== 0 || (s.today.chargebackLoss ?? 0) !== 0;
             if (todayDate && liveHasData) {
               const snapshotToday = d.find(e => e.date === todayDate);
-              const snapshotIsEmpty = !snapshotToday || (snapshotToday.revenue === 0 && (snapshotToday.orderCount ?? 0) === 0);
+              const snapshotIsEmpty = !snapshotToday || (snapshotToday.revenue === 0 && (snapshotToday.orderCount ?? 0) === 0 && snapshotToday.adSpend === 0 && snapshotToday.fees === 0 && snapshotToday.netProfit === 0);
               if (snapshotIsEmpty) {
                 // Replace the zero snapshot entry with the live summary entry
                 const withoutToday = d.filter(e => e.date !== todayDate);

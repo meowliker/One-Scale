@@ -54,13 +54,14 @@ const MONTH_NAMES = [
 const DAY_LABELS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
 
 function getDaysInMonth(year: number, month: number): number {
-  return new Date(year, month + 1, 0).getDate();
+  // Use UTC to avoid timezone edge cases
+  return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
 }
 
-/** Monday-first day index (0=Mon, 6=Sun) */
+/** Monday-first day index (0=Mon, 6=Sun). Uses UTC to avoid timezone shifts. */
 function getFirstDayOfWeek(year: number, month: number): number {
-  const d = new Date(year, month, 1).getDay();
-  return d === 0 ? 6 : d - 1; // Convert Sun=0 → 6, Mon=1 → 0
+  const d = new Date(Date.UTC(year, month, 1)).getUTCDay();
+  return d === 0 ? 6 : d - 1;
 }
 
 function formatTriggerLabel(start: Date, end: Date, preset?: DateRangePreset, tz?: string): string {
@@ -188,10 +189,11 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
   const tz = getStoreTimezone();
   const ref = useRef<HTMLDivElement>(null);
 
-  // Calendar navigation
+  // Calendar navigation — always derive from dateRange when not open
   const [viewMonth, setViewMonth] = useState(() => {
-    const z = toZonedTime(dateRange.start, tz);
-    return { year: z.getFullYear(), month: z.getMonth() };
+    const startStr = formatDateInTimezone(dateRange.start, tz);
+    const [y, m] = startStr.split('-').map(Number);
+    return { year: y, month: m - 1 };
   });
 
   // Custom selection state (only used when user clicks calendar dates)
@@ -213,20 +215,20 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
-  // Reset selection state when opening
+  // Reset selection state when opening — use YYYY-MM-DD parsing to avoid timezone bugs
   useEffect(() => {
     if (open) {
       const startStr = formatDateInTimezone(dateRange.start, tz);
       const endStr = formatDateInTimezone(dateRange.end, tz);
       setSelStart(startStr);
-      setSelEnd(startStr === endStr && activePreset !== 'custom' ? startStr : endStr);
+      setSelEnd(endStr);
       setIsSelectingEnd(false);
       setHoverDate(null);
-      // Navigate calendar to start date's month
-      const z = toZonedTime(dateRange.start, tz);
-      setViewMonth({ year: z.getFullYear(), month: z.getMonth() });
+      // Navigate calendar to the END date's month (most relevant for ranges)
+      const [ey, em] = endStr.split('-').map(Number);
+      setViewMonth({ year: ey, month: em - 1 });
     }
-  }, [open, dateRange, tz, activePreset]);
+  }, [open, dateRange, tz]);
 
   // ── Preset click → immediate apply ──
   const handlePresetClick = useCallback((preset: DateRangePreset) => {
@@ -272,16 +274,22 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
     setOpen(false);
   }, [selStart, selEnd, tz, onRangeChange]);
 
-  // ── Month navigation ──
+  // ── Month navigation (clamp: don't go past current month) ──
   const navigateMonth = useCallback((delta: number) => {
     setViewMonth((prev) => {
       let m = prev.month + delta;
       let y = prev.year;
       if (m < 0) { m = 11; y--; }
       else if (m > 11) { m = 0; y++; }
+      // Don't allow navigating past current month
+      const nowStr = formatDateInTimezone(new Date(), tz);
+      const [ny, nm] = nowStr.split('-').map(Number);
+      if (y > ny || (y === ny && m > nm - 1)) {
+        return prev; // block forward navigation past current month
+      }
       return { year: y, month: m };
     });
-  }, []);
+  }, [tz]);
 
   // ── Footer date display ──
   const footerLabel = useMemo(() => {

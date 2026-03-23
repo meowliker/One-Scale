@@ -310,21 +310,23 @@ function AlertTooltip({ ads }: { ads: RejectedAd[] }) {
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 4 }}
-      className="absolute right-0 bottom-full z-50 mb-2 w-72 rounded-xl border border-danger/30 bg-surface shadow-2xl p-3"
+      className="absolute right-0 bottom-full z-50 mb-2 w-80 rounded-xl border border-red-300 dark:border-red-800 bg-white dark:bg-gray-900 shadow-2xl p-4"
     >
-      <div className="flex items-center gap-2 mb-2">
-        <AlertTriangle className="h-3.5 w-3.5 text-danger" />
-        <span className="text-xs font-bold text-danger uppercase tracking-wide">
+      <div className="flex items-center gap-2 mb-3">
+        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/50">
+          <AlertTriangle className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
+        </div>
+        <span className="text-sm font-bold text-red-700 dark:text-red-300">
           {ads.length} Ad{ads.length > 1 ? 's' : ''} Rejected
         </span>
       </div>
-      <div className="space-y-1.5 max-h-32 overflow-y-auto">
+      <div className="space-y-2 max-h-40 overflow-y-auto">
         {ads.map((ad) => (
-          <div key={ad.id} className="flex items-start gap-2 text-xs">
-            <span className="h-1.5 w-1.5 rounded-full bg-danger mt-1 shrink-0" />
-            <div>
-              <p className="text-text-primary font-medium truncate">{ad.name}</p>
-              <p className="text-text-secondary">
+          <div key={ad.id} className="flex items-start gap-2.5 text-sm bg-red-50 dark:bg-red-950/30 rounded-lg px-3 py-2">
+            <span className="h-2 w-2 rounded-full bg-red-500 mt-1.5 shrink-0" />
+            <div className="min-w-0">
+              <p className="text-gray-900 dark:text-gray-100 font-medium truncate">{ad.name}</p>
+              <p className="text-gray-600 dark:text-gray-400 text-xs mt-0.5">
                 {ad.status === 'DISAPPROVED' ? 'Disapproved' : 'Has Issues'} &middot;{' '}
                 {new Date(ad.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </p>
@@ -380,15 +382,20 @@ export function ProductPerformanceTable({ datePreset = 'last7' }: ProductPerform
 
   // ── Computed metrics & sort ──
   const sortedProducts = useMemo(() => {
-    const withMetrics = products.map((p) => ({
-      ...p,
-      computedCpc: computeCpc(p.fbMetrics.spend, p.fbMetrics.clicks),
-      computedCpm: computeCpm(p.fbMetrics.spend, p.fbMetrics.impressions),
-      computedCtr: computeCtr(p.fbMetrics.clicks, p.fbMetrics.impressions),
-      computedAov: computeAov(p.revenue, p.unitsSold),
-      // CVR: use Meta purchases if available, fallback to Shopify order count
-      computedCvr: computeCvr(p.fbMetrics.clicks, p.fbMetrics.purchases > 0 ? p.fbMetrics.purchases : p.unitsSold),
-    }));
+    const withMetrics = products.map((p) => {
+      // hasMetaData: true if any Meta metric exists (not just spend)
+      const hasMetaData = p.isAdvertised || p.fbMetrics.impressions > 0 || p.fbMetrics.clicks > 0 || p.fbMetrics.spend > 0;
+      return {
+        ...p,
+        isAdvertised: hasMetaData, // override: show metrics when ANY Meta data exists
+        computedCpc: computeCpc(p.fbMetrics.spend, p.fbMetrics.clicks),
+        computedCpm: computeCpm(p.fbMetrics.spend, p.fbMetrics.impressions),
+        computedCtr: computeCtr(p.fbMetrics.clicks, p.fbMetrics.impressions),
+        computedAov: computeAov(p.revenue, p.unitsSold),
+        // CVR: use Meta purchases if available, fallback to Shopify order count
+        computedCvr: computeCvr(p.fbMetrics.clicks, p.fbMetrics.purchases > 0 ? p.fbMetrics.purchases : p.unitsSold),
+      };
+    });
 
     return [...withMetrics].sort((a, b) => {
       let aVal = 0;
