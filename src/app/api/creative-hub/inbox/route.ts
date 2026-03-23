@@ -241,7 +241,7 @@ export async function GET(request: NextRequest) {
   const readyStatus = meta.readyStatus || 'ready to launch';
 
   // Get product profiles to resolve clickup_list_id -> product mapping
-  const profiles = getProductProfiles(storeId);
+  const profiles = await getProductProfiles(storeId);
   const targetProfiles = productId
     ? profiles.filter((p) => p.id === productId)
     : profiles;

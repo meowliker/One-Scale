@@ -16,13 +16,15 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const profiles = getProductProfiles(storeId);
+    const profiles = await getProductProfiles(storeId);
 
     // Attach campaign links to each profile
-    const profilesWithLinks = profiles.map((profile) => ({
-      ...profile,
-      campaignLinks: getProductCampaignLinks(profile.id),
-    }));
+    const profilesWithLinks = await Promise.all(
+      profiles.map(async (profile) => ({
+        ...profile,
+        campaignLinks: await getProductCampaignLinks(profile.id),
+      }))
+    );
 
     return NextResponse.json({ profiles: profilesWithLinks });
   } catch (err) {
@@ -46,7 +48,7 @@ export async function POST(request: NextRequest) {
     const id = randomUUID();
     const profile = { ...body, id };
 
-    upsertProductProfile(profile);
+    await upsertProductProfile(profile);
 
     return NextResponse.json({ profile: { ...profile, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }, { status: 201 });
   } catch (err) {

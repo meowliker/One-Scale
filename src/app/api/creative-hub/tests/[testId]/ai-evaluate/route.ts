@@ -159,7 +159,7 @@ export async function POST(
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
 
-  const test = getCreativeTest(testId);
+  const test = await getCreativeTest(testId);
   if (!test) {
     return NextResponse.json({ error: 'Test not found' }, { status: 404 });
   }
@@ -169,7 +169,7 @@ export async function POST(
 
   try {
     // Gather context for AI evaluation
-    const profile = getProductProfile(test.productProfileId);
+    const profile = await getProductProfile(test.productProfileId);
     const aov = profile?.averageOrderValue ?? 50;
     const minSpend = profile?.aiMinSpend ?? aov * 2;
     const launchedAt = new Date(test.launchedAt);
@@ -205,7 +205,7 @@ export async function POST(
 
     // Persist recommendations to DB
     for (const evalItem of items) {
-      updateCreativeTestItem(evalItem.id, {
+      await updateCreativeTestItem(evalItem.id, {
         aiRecommendation: evalItem.recommendation,
         aiReasoning: evalItem.reasoning,
       });

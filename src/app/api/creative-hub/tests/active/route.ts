@@ -13,14 +13,14 @@ export async function GET(request: NextRequest) {
   try {
     // If a specific status is requested (e.g. completed), fetch only that status
     if (statusFilter) {
-      const tests = getCreativeTests(storeId, statusFilter);
+      const tests = await getCreativeTests(storeId, statusFilter);
       return NextResponse.json({ tests });
     }
 
     // Default: fetch tests with active-like statuses: active, launching, partial
-    const activeTests = getCreativeTests(storeId, 'active');
-    const launchingTests = getCreativeTests(storeId, 'launching');
-    const partialTests = getCreativeTests(storeId, 'partial');
+    const activeTests = await getCreativeTests(storeId, 'active');
+    const launchingTests = await getCreativeTests(storeId, 'launching');
+    const partialTests = await getCreativeTests(storeId, 'partial');
 
     const tests = [...launchingTests, ...activeTests, ...partialTests];
 

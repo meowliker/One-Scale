@@ -41,7 +41,7 @@ export async function GET(
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
 
-  const test = getCreativeTest(testId);
+  const test = await getCreativeTest(testId);
   if (!test) {
     return NextResponse.json({ error: 'Test not found' }, { status: 404 });
   }
@@ -108,7 +108,7 @@ export async function GET(
 
       totalSpend += spend;
 
-      updateCreativeTestItem(result.itemId, {
+      await updateCreativeTestItem(result.itemId, {
         spend,
         impressions,
         ctr,
@@ -124,7 +124,7 @@ export async function GET(
     db.prepare('UPDATE creative_tests SET total_spend = ? WHERE id = ?').run(totalSpend, testId);
 
     // Re-fetch the test with updated metrics
-    const updatedTest = getCreativeTest(testId);
+    const updatedTest = await getCreativeTest(testId);
 
     return NextResponse.json({ test: updatedTest });
   } catch (err) {

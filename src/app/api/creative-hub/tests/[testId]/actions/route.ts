@@ -66,7 +66,7 @@ export async function POST(
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
 
-  const test = getCreativeTest(testId);
+  const test = await getCreativeTest(testId);
   if (!test) {
     return NextResponse.json({ error: 'Test not found' }, { status: 404 });
   }
@@ -115,7 +115,7 @@ export async function POST(
             break;
           }
 
-          updateCreativeTestItem(item.id, { testStatus: 'killed' });
+          await updateCreativeTestItem(item.id, { testStatus: 'killed' });
           results.push({ itemId: item.id, action: 'kill', success: true });
           break;
         }
@@ -143,7 +143,7 @@ export async function POST(
             break;
           }
 
-          updateCreativeTestItem(item.id, { testStatus: 'winner' });
+          await updateCreativeTestItem(item.id, { testStatus: 'winner' });
           results.push({ itemId: item.id, action: 'scale', success: true });
           break;
         }
@@ -185,7 +185,7 @@ export async function POST(
             // For full graduation, the frontend should use the existing
             // /api/meta/adsets and /api/meta/ads creation endpoints.
             // Here we mark the item as graduated (winner).
-            updateCreativeTestItem(item.id, { testStatus: 'winner' });
+            await updateCreativeTestItem(item.id, { testStatus: 'winner' });
 
             // Save ad copy to copy library for winner
             const adCopy = test.adCopy;
@@ -194,7 +194,7 @@ export async function POST(
             const description = adCopy.find((c) => c.copyType === 'description');
 
             if (primaryText) {
-              saveCopyToLibrary({
+              await saveCopyToLibrary({
                 id: randomUUID(),
                 productProfileId: test.productProfileId,
                 primaryText: primaryText.copyText,
@@ -242,13 +242,13 @@ export async function POST(
   }
 
   // Check if all items in test are now resolved (winner or killed)
-  const updatedTest = getCreativeTest(testId);
+  const updatedTest = await getCreativeTest(testId);
   if (updatedTest) {
     const allResolved = updatedTest.items.every(
       (i) => i.testStatus === 'winner' || i.testStatus === 'killed' || i.testStatus === 'inconclusive'
     );
     if (allResolved) {
-      updateCreativeTestStatus(testId, 'completed');
+      await updateCreativeTestStatus(testId, 'completed');
     }
   }
 

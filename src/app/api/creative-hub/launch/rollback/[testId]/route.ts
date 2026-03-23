@@ -41,7 +41,7 @@ export async function POST(
       return NextResponse.json({ error: 'Not authenticated with Meta' }, { status: 401 });
     }
 
-    const test = getCreativeTest(testId);
+    const test = await getCreativeTest(testId);
     if (!test) {
       return NextResponse.json({ error: 'Creative test not found' }, { status: 404 });
     }
@@ -77,7 +77,7 @@ export async function POST(
       }
 
       // Update item status
-      updateCreativeTestItem(item.id, {
+      await updateCreativeTestItem(item.id, {
         launchStatus: 'rolled_back',
         metaAdId: undefined,
         metaAdsetId: undefined,
@@ -95,9 +95,9 @@ export async function POST(
     }
 
     // Update test status to failed
-    updateCreativeTestStatus(testId, 'failed');
+    await updateCreativeTestStatus(testId, 'failed');
 
-    const updatedTest = getCreativeTest(testId);
+    const updatedTest = await getCreativeTest(testId);
 
     return NextResponse.json({
       testId,

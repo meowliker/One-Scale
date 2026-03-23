@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 2. Account active
-    const profile = getProductProfile(launchConfig.productProfileId);
+    const profile = await getProductProfile(launchConfig.productProfileId);
     if (!profile) {
       checks.push({
         check: 'account_active',

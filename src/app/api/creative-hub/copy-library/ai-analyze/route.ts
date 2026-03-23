@@ -192,7 +192,7 @@ export async function POST(request: NextRequest) {
     const { productProfileId, storeId } = body;
 
     // Load product profile and existing copy library data from DB
-    const profile = getProductProfile(productProfileId);
+    const profile = await getProductProfile(productProfileId);
     if (!profile || profile.storeId !== storeId) {
       return NextResponse.json(
         { error: 'Product profile not found or does not belong to this store' },
@@ -212,8 +212,8 @@ export async function POST(request: NextRequest) {
       console.warn('[ai-analyze] Auto-populate failed, continuing with existing data:', err);
     }
 
-    const copies = getCopyLibrary(productProfileId);
-    const campaignLinks = getProductCampaignLinks(productProfileId);
+    const copies = await getCopyLibrary(productProfileId);
+    const campaignLinks = await getProductCampaignLinks(productProfileId);
 
     // Try Claude AI analysis first
     let rankedCopies: RankedCopy[] | null = null;

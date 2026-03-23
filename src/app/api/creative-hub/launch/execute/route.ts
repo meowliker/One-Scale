@@ -234,7 +234,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Not authenticated with Meta' }, { status: 401 });
     }
 
-    const profile = getProductProfile(launchConfig.productProfileId);
+    const profile = await getProductProfile(launchConfig.productProfileId);
     if (!profile) {
       return NextResponse.json({ error: 'Product profile not found' }, { status: 404 });
     }
@@ -305,7 +305,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Create creative_tests record
-    createCreativeTest({
+    await createCreativeTest({
       id: testId,
       storeId,
       productProfileId: launchConfig.productProfileId,
@@ -497,7 +497,7 @@ export async function POST(request: NextRequest) {
         }
 
         // Update creative_test_item with Meta IDs
-        updateCreativeTestItem(item.id, {
+        await updateCreativeTestItem(item.id, {
           metaAdsetId: adsetId,
           metaAdId: adId,
           metaCreativeId: creativeId,
@@ -508,7 +508,7 @@ export async function POST(request: NextRequest) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         console.error(`[Launch] Failed to create ads for "${item.creative_name}":`, message);
 
-        updateCreativeTestItem(item.id, {
+        await updateCreativeTestItem(item.id, {
           launchStatus: 'failed',
           reviewFeedback: message,
         });
@@ -524,13 +524,13 @@ export async function POST(request: NextRequest) {
           // Best-effort pause
         }
       }
-      updateCreativeTestStatus(testId, 'partial');
+      await updateCreativeTestStatus(testId, 'partial');
     } else {
-      updateCreativeTestStatus(testId, 'active');
+      await updateCreativeTestStatus(testId, 'active');
     }
 
     // Fetch the updated test to return
-    const test = getCreativeTest(testId);
+    const test = await getCreativeTest(testId);
 
     return NextResponse.json({
       testId,

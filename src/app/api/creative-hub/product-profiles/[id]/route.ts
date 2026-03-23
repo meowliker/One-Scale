@@ -12,7 +12,7 @@ export async function PATCH(
 ) {
   try {
     const { id } = await params;
-    const existing = getProductProfile(id);
+    const existing = await getProductProfile(id);
 
     if (!existing) {
       return NextResponse.json({ error: 'Product profile not found' }, { status: 404 });
@@ -28,9 +28,9 @@ export async function PATCH(
       storeId: existing.storeId,
     };
 
-    upsertProductProfile(merged);
+    await upsertProductProfile(merged);
 
-    const updated = getProductProfile(id);
+    const updated = await getProductProfile(id);
     return NextResponse.json({ profile: updated });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to update product profile';
@@ -45,7 +45,7 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
-    deleteProductProfile(id);
+    await deleteProductProfile(id);
     return NextResponse.json({ success: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to delete product profile';

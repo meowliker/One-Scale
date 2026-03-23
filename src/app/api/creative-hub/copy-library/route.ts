@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const copies = getCopyLibrary(productId);
+    const copies = await getCopyLibrary(productId);
     return NextResponse.json({ copies });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to fetch copy library';
@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
       isAiGenerated: body.isAiGenerated ?? false,
     };
 
-    saveCopyToLibrary(copy);
+    await saveCopyToLibrary(copy);
 
     return NextResponse.json(
       { ...copy, createdAt: new Date().toISOString() },
@@ -69,7 +69,7 @@ export async function DELETE(request: NextRequest) {
   }
 
   try {
-    deleteCopyFromLibrary(id);
+    await deleteCopyFromLibrary(id);
     return NextResponse.json({ success: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to delete copy';

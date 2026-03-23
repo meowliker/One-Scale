@@ -81,7 +81,7 @@ export async function POST(
       return NextResponse.json({ error: 'Not authenticated with Meta' }, { status: 401 });
     }
 
-    const test = getCreativeTest(testId);
+    const test = await getCreativeTest(testId);
     if (!test) {
       return NextResponse.json({ error: 'Creative test not found' }, { status: 404 });
     }
@@ -90,7 +90,7 @@ export async function POST(
       return NextResponse.json({ error: 'Test does not belong to this store' }, { status: 403 });
     }
 
-    const profile = getProductProfile(test.productProfileId);
+    const profile = await getProductProfile(test.productProfileId);
     if (!profile) {
       return NextResponse.json({ error: 'Product profile not found' }, { status: 404 });
     }
@@ -102,7 +102,7 @@ export async function POST(
       return NextResponse.json({ error: 'No failed items to retry' }, { status: 400 });
     }
 
-    updateCreativeTestStatus(testId, 'launching');
+    await updateCreativeTestStatus(testId, 'launching');
 
     let retryFailures = 0;
 
@@ -215,7 +215,7 @@ export async function POST(
           if (!adId) throw new Error('Meta ad creation did not return an ID');
         }
 
-        updateCreativeTestItem(item.id, {
+        await updateCreativeTestItem(item.id, {
           metaAdsetId: adsetId,
           metaAdId: adId,
           metaCreativeId: creativeId,
@@ -226,7 +226,7 @@ export async function POST(
         retryFailures++;
         const message = err instanceof Error ? err.message : 'Unknown error';
         console.error(`[Retry] Failed for "${item.creativeName}":`, message);
-        updateCreativeTestItem(item.id, {
+        await updateCreativeTestItem(item.id, {
           launchStatus: 'failed',
           reviewFeedback: message,
         });
@@ -235,13 +235,13 @@ export async function POST(
 
     // Update overall test status
     if (retryFailures === 0) {
-      updateCreativeTestStatus(testId, 'active');
+      await updateCreativeTestStatus(testId, 'active');
     } else if (retryFailures < failedItems.length) {
-      updateCreativeTestStatus(testId, 'partial');
+      await updateCreativeTestStatus(testId, 'partial');
     }
     // If all retries failed, leave status as-is (still partial/failed)
 
-    const updatedTest = getCreativeTest(testId);
+    const updatedTest = await getCreativeTest(testId);
 
     return NextResponse.json({
       testId,

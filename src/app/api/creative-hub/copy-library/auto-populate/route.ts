@@ -105,13 +105,13 @@ export async function autoPopulateCopyLibrary(
   const errors: string[] = [];
 
   // 1. Read the product profile
-  const profile = getProductProfile(productProfileId);
+  const profile = await getProductProfile(productProfileId);
   if (!profile || profile.storeId !== storeId) {
     throw new Error('Product profile not found or does not belong to this store');
   }
 
   // 2. Get linked campaigns
-  const campaignLinks = getProductCampaignLinks(productProfileId);
+  const campaignLinks = await getProductCampaignLinks(productProfileId);
   if (campaignLinks.length === 0) {
     return { saved: 0, skipped: 0, total: 0, errors: ['No campaigns linked to this product profile'] };
   }
@@ -199,7 +199,7 @@ export async function autoPopulateCopyLibrary(
   const topAds = uniqueAds.slice(0, 10);
 
   // 7. Check existing copy library to avoid duplicates
-  const existingCopies = getCopyLibrary(productProfileId);
+  const existingCopies = await getCopyLibrary(productProfileId);
   const existingTexts = new Set(
     existingCopies.map((c) => `${c.primaryText.trim().toLowerCase()}||${(c.headline || '').trim().toLowerCase()}`),
   );
@@ -215,7 +215,7 @@ export async function autoPopulateCopyLibrary(
     }
 
     try {
-      saveCopyToLibrary({
+      await saveCopyToLibrary({
         id: randomUUID(),
         productProfileId,
         primaryText: ad.primaryText,

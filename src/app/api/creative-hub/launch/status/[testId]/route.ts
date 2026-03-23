@@ -13,7 +13,7 @@ export async function GET(
   try {
     const { testId } = await params;
 
-    const test = getCreativeTest(testId);
+    const test = await getCreativeTest(testId);
     if (!test) {
       return NextResponse.json({ error: 'Creative test not found' }, { status: 404 });
     }

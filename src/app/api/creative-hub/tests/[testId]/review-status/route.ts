@@ -25,7 +25,7 @@ export async function GET(
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
 
-  const test = getCreativeTest(testId);
+  const test = await getCreativeTest(testId);
   if (!test) {
     return NextResponse.json({ error: 'Test not found' }, { status: 404 });
   }
@@ -92,7 +92,7 @@ export async function GET(
           }
 
           // Update DB
-          updateCreativeTestItem(item.id, {
+          await updateCreativeTestItem(item.id, {
             reviewStatus,
             reviewFeedback,
             learningPhase,
