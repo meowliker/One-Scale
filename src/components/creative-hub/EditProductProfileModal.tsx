@@ -371,11 +371,9 @@ export function EditProductProfileModal({
                               onChange={(e) => {
                                 updateField('pageId', e.target.value);
                                 const page = (setupOptions?.pages || []).find((p) => p.id === e.target.value);
-                                // Save the page name alongside the ID
                                 if (page?.name) {
                                   updateField('pageName', page.name);
                                 }
-                                // Auto-link Instagram when page has instagramAccountId
                                 if (page?.instagramAccountId) {
                                   updateField('instagramActorId', page.instagramAccountId);
                                   updateField('instagramUsername', page.instagramUsername ?? '');
@@ -384,6 +382,12 @@ export function EditProductProfileModal({
                               className={selectCls}
                             >
                               <option value="">Select a page...</option>
+                              {/* Include saved page if not in options list */}
+                              {form.pageId && !(setupOptions?.pages || []).some(p => p.id === form.pageId) && (
+                                <option value={form.pageId}>
+                                  {form.pageName || profile?.pageName || form.pageId} (saved)
+                                </option>
+                              )}
                               {(setupOptions?.pages || []).map((page) => (
                                 <option key={page.id} value={page.id}>
                                   {page.name}
@@ -450,6 +454,12 @@ export function EditProductProfileModal({
                               className={selectCls}
                             >
                               <option value="">Select a pixel...</option>
+                              {/* Include saved pixel if not in options list */}
+                              {form.pixelId && !(setupOptions?.pixels || []).some(p => p.id === form.pixelId) && (
+                                <option value={form.pixelId}>
+                                  {form.pixelName || profile?.pixelName || form.pixelId} (saved)
+                                </option>
+                              )}
                               {(setupOptions?.pixels || []).map((pixel) => (
                                 <option key={pixel.id} value={pixel.id}>
                                   {pixel.name}

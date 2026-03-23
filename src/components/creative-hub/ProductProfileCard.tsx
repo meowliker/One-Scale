@@ -85,7 +85,7 @@ export function ProductProfileCard({
   onEdit,
   onViewCopyLibrary,
 }: ProductProfileCardProps) {
-  const [campaignsExpanded, setCampaignsExpanded] = useState(true);
+  const [campaignsExpanded, setCampaignsExpanded] = useState(false);
   const { stores, activeStoreId } = useStoreStore();
   const activeStore = stores.find(s => s.id === activeStoreId);
   const adAccountName = activeStore?.adAccounts?.find(
