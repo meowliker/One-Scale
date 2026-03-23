@@ -53,6 +53,12 @@ interface ShopifyProduct {
   images?: Array<{ src: string }>;
 }
 
+interface CampaignMeta {
+  pageId?: string;
+  pixelId?: string;
+  instagramActorId?: string;
+}
+
 interface DiscoveredMatch {
   shopifyProduct: ShopifyProduct;
   adAccountId: string;
@@ -61,6 +67,7 @@ interface DiscoveredMatch {
     campaignId: string;
     campaignName: string;
     destinationUrl: string;
+    meta?: CampaignMeta;
   }>;
 }
 
@@ -70,6 +77,9 @@ interface UnmappedCampaign {
   adAccountId: string;
   destinationUrls: string[];
 }
+
+const DEFAULT_UTM_TEMPLATE =
+  'utm_source=FbAds&utm_medium={{adset.name}}&utm_campaign={{campaign.name}}&utm_content={{ad.name}}&campaign_id={{campaign.id}}&adset_id={{adset.id}}&ad_id={{ad.id}}';
 
 function extractProductHandle(url: string): string | null {
   try {
@@ -120,22 +130,19 @@ export async function POST(request: NextRequest) {
       if (product.handle) handleMap.set(product.handle.toLowerCase(), product);
     }
 
-    // 3. Try DB-first: creative_assets table (instant, no API calls)
+    // 3. Try DB-first: snapshots (instant, no API calls)
     const matchesByHandle = new Map<string, DiscoveredMatch>();
     const unmappedCampaigns: UnmappedCampaign[] = [];
     const seenCampaignIds = new Set<string>();
     const accountLookup = new Map(adAccounts.map((a) => [a.ad_account_id, a]));
     let source = 'none';
 
+    // Per-campaign metadata extracted from ad snapshots
+    // campaignId → { pageId, pixelId, instagramActorId }
+    const campaignMetaMap = new Map<string, CampaignMeta>();
+
     if (isSupabasePersistenceEnabled()) {
       try {
-        // Query creative_assets joined with campaign info via ads snapshots
-        // creative_assets has: ad_id, destination_url
-        // We need: ad_id → campaign_id mapping
-        //
-        // Strategy: fetch ALL ads snapshots for this store, build ad→campaign map,
-        // then cross-reference with creative_assets destination URLs
-
         interface AdsSnapshotRow {
           scope_id: string;
           payload_json: string;
@@ -162,7 +169,6 @@ export async function POST(request: NextRequest) {
             const campaigns = JSON.parse(snap.payload_json);
             for (const c of campaigns) {
               if (c.id && c.name) {
-                // Extract ad account from scope_id: "accounts:act_123,act_456"
                 const accountMatch = snap.scope_id.match(/accounts:(.+)/);
                 const firstAccount = accountMatch ? accountMatch[1].split(',')[0] : adAccounts[0]?.ad_account_id;
                 campaignNameMap.set(c.id, { name: c.name, adAccountId: firstAccount || '' });
@@ -173,6 +179,7 @@ export async function POST(request: NextRequest) {
 
         // Build ad_id → {campaign_id, destination_url} from ads snapshots
         // Each ad in the payload has: id, name, campaign_id, creative.destinationUrl
+        // The raw creative may also have object_story_spec with page_id
         interface SnapshotAd {
           id: string;
           name?: string;
@@ -183,6 +190,17 @@ export async function POST(request: NextRequest) {
             headline?: string;
             body?: string;
             ctaType?: string;
+            pageId?: string;
+            // Raw Meta fields that might be present
+            object_story_spec?: {
+              page_id?: string;
+              instagram_actor_id?: string;
+            };
+          };
+          // Raw promoted_object that might be present
+          promoted_object?: {
+            pixel_id?: string;
+            page_id?: string;
           };
         }
 
@@ -195,6 +213,27 @@ export async function POST(request: NextRequest) {
             for (const ad of ads) {
               const campId = ad.campaign_id || ad.campaignId;
               if (!campId) continue;
+
+              // Extract per-campaign metadata from ad snapshot fields
+              if (!campaignMetaMap.has(campId)) {
+                const meta: CampaignMeta = {};
+                // Try creative.object_story_spec.page_id or creative.pageId
+                const pageId = ad.creative?.object_story_spec?.page_id
+                  || ad.creative?.pageId;
+                if (pageId) meta.pageId = String(pageId);
+
+                // Try promoted_object.pixel_id
+                const pixelId = ad.promoted_object?.pixel_id;
+                if (pixelId) meta.pixelId = String(pixelId);
+
+                // Try creative.object_story_spec.instagram_actor_id
+                const igId = ad.creative?.object_story_spec?.instagram_actor_id;
+                if (igId) meta.instagramActorId = String(igId);
+
+                if (meta.pageId || meta.pixelId || meta.instagramActorId) {
+                  campaignMetaMap.set(campId, meta);
+                }
+              }
 
               // Skip if we already have a URL for this campaign (1-ad-per-campaign)
               if (campaignToUrl.has(campId)) continue;
@@ -252,14 +291,24 @@ export async function POST(request: NextRequest) {
 
               if (existing) {
                 if (!existing.campaigns.some(c => c.campaignId === campaignId)) {
-                  existing.campaigns.push({ campaignId, campaignName, destinationUrl: destUrl });
+                  existing.campaigns.push({
+                    campaignId,
+                    campaignName,
+                    destinationUrl: destUrl,
+                    meta: campaignMetaMap.get(campaignId),
+                  });
                 }
               } else {
                 matchesByHandle.set(handle, {
                   shopifyProduct: product,
                   adAccountId,
                   adAccountCurrency: account?.currency ?? 'USD',
-                  campaigns: [{ campaignId, campaignName, destinationUrl: destUrl }],
+                  campaigns: [{
+                    campaignId,
+                    campaignName,
+                    destinationUrl: destUrl,
+                    meta: campaignMetaMap.get(campaignId),
+                  }],
                 });
               }
               seenCampaignIds.add(campaignId);
@@ -316,17 +365,22 @@ export async function POST(request: NextRequest) {
                 id: string;
                 creative?: {
                   object_story_spec?: {
+                    page_id?: string;
+                    instagram_actor_id?: string;
                     link_data?: { link?: string };
                     video_data?: { call_to_action?: { value?: { link?: string } } };
                   };
                   asset_feed_spec?: { link_urls?: Array<{ website_url?: string }> };
+                };
+                promoted_object?: {
+                  pixel_id?: string;
                 };
               }
               const result = await fetchFromMeta<{ data: MetaAd[] }>(
                 metaToken,
                 `${campaign.id}/ads`,
                 {
-                  fields: 'id,creative{object_story_spec,asset_feed_spec}',
+                  fields: 'id,creative{object_story_spec,asset_feed_spec},promoted_object',
                   limit: '1', // Just 1 ad per campaign!
                 },
                 10000, 0,
@@ -339,6 +393,15 @@ export async function POST(request: NextRequest) {
               if (c.object_story_spec?.link_data?.link) destUrl = c.object_story_spec.link_data.link;
               else if (c.object_story_spec?.video_data?.call_to_action?.value?.link) destUrl = c.object_story_spec.video_data.call_to_action.value.link;
               else if (c.asset_feed_spec?.link_urls?.[0]?.website_url) destUrl = c.asset_feed_spec.link_urls[0].website_url;
+
+              // Extract per-campaign metadata from live API response
+              const meta: CampaignMeta = {};
+              if (c.object_story_spec?.page_id) meta.pageId = String(c.object_story_spec.page_id);
+              if (c.object_story_spec?.instagram_actor_id) meta.instagramActorId = String(c.object_story_spec.instagram_actor_id);
+              if (ad.promoted_object?.pixel_id) meta.pixelId = String(ad.promoted_object.pixel_id);
+              if (meta.pageId || meta.pixelId || meta.instagramActorId) {
+                campaignMetaMap.set(campaign.id, meta);
+              }
 
               return destUrl ? { campaign, destUrl } : null;
             })
@@ -355,14 +418,24 @@ export async function POST(request: NextRequest) {
               const existing = matchesByHandle.get(handle);
               if (existing) {
                 if (!existing.campaigns.some(c => c.campaignId === campaign.id)) {
-                  existing.campaigns.push({ campaignId: campaign.id, campaignName: campaign.name, destinationUrl: destUrl });
+                  existing.campaigns.push({
+                    campaignId: campaign.id,
+                    campaignName: campaign.name,
+                    destinationUrl: destUrl,
+                    meta: campaignMetaMap.get(campaign.id),
+                  });
                 }
               } else {
                 matchesByHandle.set(handle, {
                   shopifyProduct: product,
                   adAccountId: campaign.adAccountId,
                   adAccountCurrency: account?.currency ?? 'USD',
-                  campaigns: [{ campaignId: campaign.id, campaignName: campaign.name, destinationUrl: destUrl }],
+                  campaigns: [{
+                    campaignId: campaign.id,
+                    campaignName: campaign.name,
+                    destinationUrl: destUrl,
+                    meta: campaignMetaMap.get(campaign.id),
+                  }],
                 });
               }
               seenCampaignIds.add(campaign.id);
@@ -381,14 +454,18 @@ export async function POST(request: NextRequest) {
 
     const filteredUnmapped = unmappedCampaigns.filter(u => !seenCampaignIds.has(u.campaignId));
 
-    // 4b. Fetch Page ID, Pixel ID, and Instagram Account ID per ad account
-    //     DB-first (Supabase snapshots), then live Meta API fallback
-    interface AdAccountMeta {
-      pageId?: string;
-      pixelId?: string;
-      instagramAccountId?: string;
-    }
-    const adAccountMetaMap = new Map<string, AdAccountMeta>();
+    // 4b. Look up names for pages, pixels, instagram, and BM from snapshots
+    //     These provide human-readable names for the IDs extracted per-campaign above,
+    //     and also serve as fallback metadata when ad snapshots lack the IDs.
+    const pageNameMap = new Map<string, string>();   // pageId → pageName
+    const pixelNameMap = new Map<string, string>();   // pixelId → pixelName
+    const igUsernameMap = new Map<string, string>();  // igId → igUsername
+    const accountBmMap = new Map<string, { bmId: string; bmName: string }>();  // adAccountId → BM info
+
+    // Fallback: account-level page/pixel/ig for campaigns that had no per-ad metadata
+    const accountPageMap = new Map<string, string>();  // adAccountId → first pageId
+    const accountPixelMap = new Map<string, string>(); // adAccountId → first pixelId
+    const accountIgMap = new Map<string, string>();    // adAccountId → first igId
 
     // Collect unique ad account IDs from matched profiles
     const usedAdAccountIds = new Set<string>();
@@ -396,145 +473,122 @@ export async function POST(request: NextRequest) {
       if (match.adAccountId) usedAdAccountIds.add(match.adAccountId);
     }
 
-    if (usedAdAccountIds.size > 0) {
-      // Try Supabase snapshots first
-      let resolvedFromSnapshots = false;
+    if (usedAdAccountIds.size > 0 && isSupabasePersistenceEnabled()) {
+      try {
+        interface SnapshotRow { scope_id: string; payload_json: string; }
 
-      if (isSupabasePersistenceEnabled()) {
-        try {
-          interface SnapshotRow { scope_id: string; payload_json: string; }
+        const [pagesSnaps, pixelsSnaps, igSnaps, accountsSnaps] = await Promise.all([
+          supabaseRest<SnapshotRow[]>(
+            `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.pages&variant_key=eq.latest&select=scope_id,payload_json`
+          ).catch(() => [] as SnapshotRow[]),
+          supabaseRest<SnapshotRow[]>(
+            `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.pixels&variant_key=eq.latest&select=scope_id,payload_json`
+          ).catch(() => [] as SnapshotRow[]),
+          supabaseRest<SnapshotRow[]>(
+            `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.instagram&variant_key=eq.latest&select=scope_id,payload_json`
+          ).catch(() => [] as SnapshotRow[]),
+          supabaseRest<SnapshotRow[]>(
+            `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.accounts&variant_key=eq.latest&select=scope_id,payload_json`
+          ).catch(() => [] as SnapshotRow[]),
+        ]);
 
-          const [pagesSnaps, pixelsSnaps, igSnaps] = await Promise.all([
-            supabaseRest<SnapshotRow[]>(
-              `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.pages&variant_key=eq.latest&select=scope_id,payload_json`
-            ).catch(() => [] as SnapshotRow[]),
-            supabaseRest<SnapshotRow[]>(
-              `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.pixels&variant_key=eq.latest&select=scope_id,payload_json`
-            ).catch(() => [] as SnapshotRow[]),
-            supabaseRest<SnapshotRow[]>(
-              `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.instagram&variant_key=eq.latest&select=scope_id,payload_json`
-            ).catch(() => [] as SnapshotRow[]),
-          ]);
-
-          // Parse pages snapshots — pages are fetched via /me/accounts, scope may be global
-          let allPages: Array<{ id: string; name?: string; instagram_business_account?: { id: string; username?: string } }> = [];
-          for (const snap of pagesSnaps) {
-            try { allPages = allPages.concat(JSON.parse(snap.payload_json)); } catch { /* skip */ }
-          }
-
-          // Parse pixels snapshots — keyed by ad account
-          const pixelsByAccount = new Map<string, Array<{ id: string; name?: string }>>();
-          for (const snap of pixelsSnaps) {
-            try {
-              const pixels = JSON.parse(snap.payload_json) as Array<{ id: string; name?: string }>;
-              // scope_id may contain the ad account id
-              const accountMatch = snap.scope_id.match(/(act_[^,\s]+)/);
-              if (accountMatch) pixelsByAccount.set(accountMatch[1], pixels);
-              else for (const acctId of usedAdAccountIds) { if (!pixelsByAccount.has(acctId)) pixelsByAccount.set(acctId, pixels); }
-            } catch { /* skip */ }
-          }
-
-          // Parse instagram snapshots
-          const igByAccount = new Map<string, Array<{ id: string; username?: string }>>();
-          for (const snap of igSnaps) {
-            try {
-              const igs = JSON.parse(snap.payload_json) as Array<{ id: string; username?: string }>;
-              const accountMatch = snap.scope_id.match(/(act_[^,\s]+)/);
-              if (accountMatch) igByAccount.set(accountMatch[1], igs);
-              else for (const acctId of usedAdAccountIds) { if (!igByAccount.has(acctId)) igByAccount.set(acctId, igs); }
-            } catch { /* skip */ }
-          }
-
-          const hasSnapshotData = allPages.length > 0 || pixelsByAccount.size > 0 || igByAccount.size > 0;
-          if (hasSnapshotData) {
-            resolvedFromSnapshots = true;
-            const firstPage = allPages[0];
-            const igFromPage = firstPage?.instagram_business_account;
-
-            for (const acctId of usedAdAccountIds) {
-              const meta: AdAccountMeta = {};
-              if (firstPage) meta.pageId = String(firstPage.id);
-              const pixels = pixelsByAccount.get(acctId);
-              if (pixels?.[0]) meta.pixelId = String(pixels[0].id);
-              const igs = igByAccount.get(acctId);
-              if (igs?.[0]) meta.instagramAccountId = String(igs[0].id);
-              else if (igFromPage) meta.instagramAccountId = String(igFromPage.id);
-              adAccountMetaMap.set(acctId, meta);
-            }
-            console.log(`[auto-discover] Resolved page/pixel/instagram from Supabase snapshots for ${usedAdAccountIds.size} ad account(s)`);
-          }
-        } catch (err) {
-          console.warn('[auto-discover] Supabase snapshot fetch for page/pixel/ig failed:', err);
-        }
-      }
-
-      // Also try local SQLite snapshots
-      if (!resolvedFromSnapshots) {
-        try {
-          for (const acctId of usedAdAccountIds) {
-            const meta: AdAccountMeta = {};
-            const pagesSnap = getLatestMetaEndpointSnapshot<Array<{ id: string; instagram_business_account?: { id: string } }>>(storeId, 'pages', acctId);
-            if (pagesSnap?.data?.[0]) {
-              meta.pageId = String(pagesSnap.data[0].id);
-              if (pagesSnap.data[0].instagram_business_account) {
-                meta.instagramAccountId = String(pagesSnap.data[0].instagram_business_account.id);
-              }
-            }
-            const pixelsSnap = getLatestMetaEndpointSnapshot<Array<{ id: string }>>(storeId, 'pixels', acctId);
-            if (pixelsSnap?.data?.[0]) meta.pixelId = String(pixelsSnap.data[0].id);
-            const igSnap = getLatestMetaEndpointSnapshot<Array<{ id: string }>>(storeId, 'instagram', acctId);
-            if (igSnap?.data?.[0]) meta.instagramAccountId = String(igSnap.data[0].id);
-
-            if (meta.pageId || meta.pixelId || meta.instagramAccountId) {
-              adAccountMetaMap.set(acctId, meta);
-              resolvedFromSnapshots = true;
-            }
-          }
-          if (resolvedFromSnapshots) {
-            console.log(`[auto-discover] Resolved page/pixel/instagram from local SQLite snapshots`);
-          }
-        } catch (err) {
-          console.warn('[auto-discover] Local snapshot fetch for page/pixel/ig failed:', err);
-        }
-      }
-
-      // Fallback: live Meta API calls
-      if (!resolvedFromSnapshots) {
-        const metaTokenObj = await getMetaToken(storeId);
-        if (metaTokenObj) {
-          const metaToken = metaTokenObj.accessToken;
-          const accountResults = await Promise.allSettled(
-            Array.from(usedAdAccountIds).map(async (acctId) => {
-              const [pagesRes, pixelsRes, igRes] = await Promise.all([
-                fetchFromMeta<{ data: Array<{ id: string; instagram_business_account?: { id: string } }> }>(
-                  metaToken, 'me/accounts', { fields: 'id,name,instagram_business_account{id,username}', limit: '10' }, 10000, 1
-                ).catch(() => ({ data: [] as Array<{ id: string; instagram_business_account?: { id: string } }> })),
-                fetchFromMeta<{ data: Array<{ id: string; name?: string }> }>(
-                  metaToken, `${acctId}/adspixels`, { fields: 'id,name', limit: '10' }, 10000, 1
-                ).catch(() => ({ data: [] as Array<{ id: string; name?: string }> })),
-                fetchFromMeta<{ data: Array<{ id: string; username?: string }> }>(
-                  metaToken, `${acctId}/instagram_accounts`, { fields: 'id,username', limit: '10' }, 10000, 1
-                ).catch(() => ({ data: [] as Array<{ id: string; username?: string }> })),
-              ]);
-              const meta: AdAccountMeta = {};
-              if (pagesRes.data?.[0]) {
-                meta.pageId = String(pagesRes.data[0].id);
-                if (pagesRes.data[0].instagram_business_account) {
-                  meta.instagramAccountId = String(pagesRes.data[0].instagram_business_account.id);
+        // Parse pages snapshots → build pageId→pageName and account→pageId maps
+        for (const snap of pagesSnaps) {
+          try {
+            const pages = JSON.parse(snap.payload_json) as Array<{
+              id: string;
+              name?: string;
+              instagram_business_account?: { id: string; username?: string };
+            }>;
+            const accountMatch = snap.scope_id.match(/(act_[^,\s]+)/);
+            for (const page of pages) {
+              if (page.id && page.name) pageNameMap.set(String(page.id), page.name);
+              // Also map IG from page's instagram_business_account
+              if (page.instagram_business_account?.id) {
+                const igId = String(page.instagram_business_account.id);
+                if (page.instagram_business_account.username) {
+                  igUsernameMap.set(igId, page.instagram_business_account.username);
                 }
               }
-              if (pixelsRes.data?.[0]) meta.pixelId = String(pixelsRes.data[0].id);
-              if (igRes.data?.[0] && !meta.instagramAccountId) meta.instagramAccountId = String(igRes.data[0].id);
-              return { acctId, meta };
-            })
-          );
-          for (const result of accountResults) {
-            if (result.status === 'fulfilled') {
-              adAccountMetaMap.set(result.value.acctId, result.value.meta);
             }
-          }
-          console.log(`[auto-discover] Resolved page/pixel/instagram from live Meta API for ${usedAdAccountIds.size} ad account(s)`);
+            // Account-level fallback: first page for each ad account
+            if (pages[0]?.id) {
+              if (accountMatch) {
+                accountPageMap.set(accountMatch[1], String(pages[0].id));
+              } else {
+                for (const acctId of usedAdAccountIds) {
+                  if (!accountPageMap.has(acctId)) accountPageMap.set(acctId, String(pages[0].id));
+                }
+              }
+            }
+          } catch { /* skip */ }
         }
+
+        // Parse pixels snapshots → build pixelId→pixelName and account→pixelId maps
+        for (const snap of pixelsSnaps) {
+          try {
+            const pixels = JSON.parse(snap.payload_json) as Array<{ id: string; name?: string }>;
+            const accountMatch = snap.scope_id.match(/(act_[^,\s]+)/);
+            for (const pixel of pixels) {
+              if (pixel.id && pixel.name) pixelNameMap.set(String(pixel.id), pixel.name);
+            }
+            if (pixels[0]?.id) {
+              if (accountMatch) {
+                accountPixelMap.set(accountMatch[1], String(pixels[0].id));
+              } else {
+                for (const acctId of usedAdAccountIds) {
+                  if (!accountPixelMap.has(acctId)) accountPixelMap.set(acctId, String(pixels[0].id));
+                }
+              }
+            }
+          } catch { /* skip */ }
+        }
+
+        // Parse instagram snapshots → build igId→igUsername and account→igId maps
+        for (const snap of igSnaps) {
+          try {
+            const igs = JSON.parse(snap.payload_json) as Array<{ id: string; username?: string }>;
+            const accountMatch = snap.scope_id.match(/(act_[^,\s]+)/);
+            for (const ig of igs) {
+              if (ig.id && ig.username) igUsernameMap.set(String(ig.id), ig.username);
+            }
+            if (igs[0]?.id) {
+              if (accountMatch) {
+                accountIgMap.set(accountMatch[1], String(igs[0].id));
+              } else {
+                for (const acctId of usedAdAccountIds) {
+                  if (!accountIgMap.has(acctId)) accountIgMap.set(acctId, String(igs[0].id));
+                }
+              }
+            }
+          } catch { /* skip */ }
+        }
+
+        // Parse accounts snapshots for Business Manager info
+        for (const snap of accountsSnaps) {
+          try {
+            const accounts = JSON.parse(snap.payload_json);
+            // Accounts snapshot could be a single object or array
+            const acctList = Array.isArray(accounts) ? accounts : [accounts];
+            for (const acct of acctList) {
+              const acctId = acct.id ? String(acct.id) : undefined;
+              const business = acct.business || acct.owner_business;
+              if (acctId && business && business.id) {
+                accountBmMap.set(acctId, {
+                  bmId: String(business.id),
+                  bmName: String(business.name || business.id),
+                });
+              }
+            }
+          } catch { /* skip */ }
+        }
+
+        console.log(
+          `[auto-discover] Name lookups: ${pageNameMap.size} pages, ${pixelNameMap.size} pixels, ` +
+          `${igUsernameMap.size} IG accounts, ${accountBmMap.size} BM mappings`
+        );
+      } catch (err) {
+        console.warn('[auto-discover] Snapshot name lookup failed:', err);
       }
     }
 
@@ -551,23 +605,29 @@ export async function POST(request: NextRequest) {
       let profileId: string;
       const existingProfile = existingByShopifyId.get(shopifyId);
 
-      const acctMeta = adAccountMetaMap.get(match.adAccountId) ?? {};
+      // Determine profile-level page/pixel/ig from the first campaign's metadata or account fallback
+      const firstCampMeta = match.campaigns[0]?.meta;
+      const profilePageId = firstCampMeta?.pageId || accountPageMap.get(match.adAccountId);
+      const profilePixelId = firstCampMeta?.pixelId || accountPixelMap.get(match.adAccountId);
+      const profileIgId = firstCampMeta?.instagramActorId || accountIgMap.get(match.adAccountId);
+      const bm = accountBmMap.get(match.adAccountId);
 
       if (existingProfile) {
         profileId = existingProfile.id;
         // Update existing profile with page/pixel/instagram if it was missing them
-        const needsMetaUpdate = (!existingProfile.pageId && acctMeta.pageId)
-          || (!existingProfile.pixelId && acctMeta.pixelId)
-          || (!existingProfile.instagramActorId && acctMeta.instagramAccountId);
+        const needsMetaUpdate = (!existingProfile.pageId && profilePageId)
+          || (!existingProfile.pixelId && profilePixelId)
+          || (!existingProfile.instagramActorId && profileIgId);
         if (needsMetaUpdate) {
           upsertProductProfile({
             id: profileId,
             storeId,
             productName: existingProfile.productName,
             adAccountId: existingProfile.adAccountId,
-            pageId: existingProfile.pageId || acctMeta.pageId,
-            pixelId: existingProfile.pixelId || acctMeta.pixelId,
-            instagramActorId: existingProfile.instagramActorId || acctMeta.instagramAccountId,
+            pageId: existingProfile.pageId || profilePageId,
+            pixelId: existingProfile.pixelId || profilePixelId,
+            instagramActorId: existingProfile.instagramActorId || profileIgId,
+            instagramUsername: existingProfile.instagramUsername || (profileIgId ? igUsernameMap.get(profileIgId) : undefined),
           });
         }
       } else {
@@ -582,15 +642,29 @@ export async function POST(request: NextRequest) {
           adAccountId: match.adAccountId,
           adAccountCurrency: match.adAccountCurrency,
           destinationUrl: match.campaigns[0]?.destinationUrl,
-          pageId: acctMeta.pageId,
-          pixelId: acctMeta.pixelId,
-          instagramActorId: acctMeta.instagramAccountId,
+          utmTemplate: DEFAULT_UTM_TEMPLATE,
+          pageId: profilePageId,
+          pixelId: profilePixelId,
+          instagramActorId: profileIgId,
+          instagramUsername: profileIgId ? igUsernameMap.get(profileIgId) : undefined,
         });
       }
 
       const campaignLinks = [];
       for (const camp of match.campaigns) {
         const linkId = randomUUID();
+
+        // Resolve per-campaign metadata: use campaign-level first, then account-level fallback
+        const campMeta = camp.meta || campaignMetaMap.get(camp.campaignId);
+        const linkPageId = campMeta?.pageId || accountPageMap.get(match.adAccountId);
+        const linkPixelId = campMeta?.pixelId || accountPixelMap.get(match.adAccountId);
+        const linkIgId = campMeta?.instagramActorId || accountIgMap.get(match.adAccountId);
+        const linkBm = accountBmMap.get(match.adAccountId);
+
+        const linkPageName = linkPageId ? pageNameMap.get(linkPageId) : undefined;
+        const linkPixelName = linkPixelId ? pixelNameMap.get(linkPixelId) : undefined;
+        const linkIgUsername = linkIgId ? igUsernameMap.get(linkIgId) : undefined;
+
         upsertProductCampaignLink({
           id: linkId,
           productProfileId: profileId,
@@ -599,6 +673,14 @@ export async function POST(request: NextRequest) {
           campaignType: 'testing',
           adAccountId: match.adAccountId,
           isActive: true,
+          pageId: linkPageId,
+          pageName: linkPageName,
+          pixelId: linkPixelId,
+          pixelName: linkPixelName,
+          instagramActorId: linkIgId,
+          instagramUsername: linkIgUsername,
+          bmId: linkBm?.bmId,
+          bmName: linkBm?.bmName,
         });
         campaignLinks.push({
           id: linkId,
@@ -609,6 +691,14 @@ export async function POST(request: NextRequest) {
           adAccountId: match.adAccountId,
           isActive: true,
           linkedAt: new Date().toISOString(),
+          pageId: linkPageId,
+          pageName: linkPageName,
+          pixelId: linkPixelId,
+          pixelName: linkPixelName,
+          instagramActorId: linkIgId,
+          instagramUsername: linkIgUsername,
+          bmId: linkBm?.bmId,
+          bmName: linkBm?.bmName,
         });
       }
 
@@ -621,9 +711,10 @@ export async function POST(request: NextRequest) {
         adAccountId: match.adAccountId,
         adAccountCurrency: match.adAccountCurrency,
         destinationUrl: match.campaigns[0]?.destinationUrl,
-        pageId: existingProfile?.pageId || acctMeta.pageId,
-        pixelId: existingProfile?.pixelId || acctMeta.pixelId,
-        instagramActorId: existingProfile?.instagramActorId || acctMeta.instagramAccountId,
+        pageId: existingProfile?.pageId || profilePageId,
+        pixelId: existingProfile?.pixelId || profilePixelId,
+        instagramActorId: existingProfile?.instagramActorId || profileIgId,
+        instagramUsername: existingProfile?.instagramUsername || (profileIgId ? igUsernameMap.get(profileIgId) : undefined),
         conversionEvent: 'PURCHASE',
         defaultBudget: 20,
         defaultDuration: 3,
