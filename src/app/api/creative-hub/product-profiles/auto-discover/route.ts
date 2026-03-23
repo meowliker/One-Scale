@@ -17,23 +17,35 @@ import {
 } from '@/app/api/lib/creative-hub-db';
 import type { Campaign, Ad } from '@/types/campaign';
 
+// Supabase REST helper (reuse the same pattern as supabase-tracking)
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+
+async function supabaseRest<T>(path: string): Promise<T> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      'Content-Type': 'application/json',
+    },
+  });
+  if (!res.ok) throw new Error(`Supabase ${path}: ${res.status}`);
+  return res.json();
+}
+
 /**
  * Get ad accounts for a store, preferring Supabase (cloud) over local SQLite.
  */
 async function getAdAccountsForStore(storeId: string): Promise<DbStoreAdAccount[]> {
-  // Try Supabase first (used on Vercel)
   if (isSupabasePersistenceEnabled()) {
     try {
       const allStores = await listPersistentStores();
       const store = allStores.find((s) => s.id === storeId);
-      if (store && store.adAccounts.length > 0) {
-        return store.adAccounts;
-      }
+      if (store && store.adAccounts.length > 0) return store.adAccounts;
     } catch (err) {
-      console.warn('[auto-discover] Supabase fallback failed:', err);
+      console.warn('[auto-discover] Supabase store fetch failed:', err);
     }
   }
-  // Fallback to local SQLite
   return getStoreAdAccounts(storeId);
 }
 
@@ -49,8 +61,6 @@ interface DiscoveredMatch {
   shopifyProduct: ShopifyProduct;
   adAccountId: string;
   adAccountCurrency: string;
-  pageId?: string;
-  pixelId?: string;
   campaigns: Array<{
     campaignId: string;
     campaignName: string;
@@ -65,9 +75,14 @@ interface UnmappedCampaign {
   destinationUrls: string[];
 }
 
+interface CreativeAssetRow {
+  ad_id: string;
+  destination_url: string | null;
+  cached_at: string;
+}
+
 /**
  * Extract product handle from a URL path.
- * Matches patterns like /products/{handle} or /products/{handle}?variant=...
  */
 function extractProductHandle(url: string): string | null {
   try {
@@ -75,31 +90,13 @@ function extractProductHandle(url: string): string | null {
     const match = parsed.pathname.match(/\/products\/([^/?#]+)/);
     return match ? match[1].toLowerCase() : null;
   } catch {
-    // Try as a relative path
     const match = url.match(/\/products\/([^/?#]+)/);
     return match ? match[1].toLowerCase() : null;
   }
 }
 
-/**
- * Collect all destination URLs from a campaign's ads.
- */
-function collectDestinationUrls(campaign: Campaign): Array<{ url: string; ad: Ad; adSetId: string }> {
-  const results: Array<{ url: string; ad: Ad; adSetId: string }> = [];
-  for (const adSet of campaign.adSets ?? []) {
-    for (const ad of adSet.ads ?? []) {
-      const url = ad.creative?.destinationUrl;
-      if (url) {
-        results.push({ url, ad, adSetId: adSet.id });
-      }
-    }
-  }
-  return results;
-}
-
 // POST /api/creative-hub/product-profiles/auto-discover
 export async function POST(request: NextRequest) {
-  // Accept storeId from either query param or request body
   const { searchParams } = new URL(request.url);
   let storeId = searchParams.get('storeId');
 
@@ -107,9 +104,7 @@ export async function POST(request: NextRequest) {
     try {
       const body = await request.json();
       storeId = body.storeId ?? null;
-    } catch {
-      // No body or invalid JSON
-    }
+    } catch { /* No body */ }
   }
 
   if (!storeId) {
@@ -117,91 +112,141 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // 1. Get all ad accounts for the store (Supabase-aware)
+    // 1. Get ad accounts (Supabase-aware)
     const allAccounts = await getAdAccountsForStore(storeId);
-
-    // Accept accounts that are meta or have no platform set (legacy data)
     const adAccounts = allAccounts.filter(
       (a) => (a.platform === 'meta' || !a.platform || a.platform === '') &&
              (a.is_active === 1 || a.is_active === undefined || (a.is_active as unknown) === null)
     );
 
     if (adAccounts.length === 0) {
-      console.error('[auto-discover] No ad accounts match. All accounts for store:',
-        JSON.stringify(allAccounts.map(a => ({ id: a.ad_account_id, platform: a.platform, active: a.is_active }))));
       return NextResponse.json(
-        { error: `No active Meta ad accounts found for this store. Found ${allAccounts.length} total accounts.` },
+        { error: `No active Meta ad accounts found. Found ${allAccounts.length} total accounts.` },
         { status: 400 }
       );
     }
 
-    // 2. Get Meta token for live API calls
-    const metaTokenObj = await getMetaToken(storeId);
-    if (!metaTokenObj) {
-      return NextResponse.json(
-        { error: 'No Meta access token found. Please reconnect Meta in Settings.' },
-        { status: 400 }
-      );
-    }
-    const metaToken = metaTokenObj.accessToken;
-
-    // 3. Fetch Shopify products (live API with DB fallback)
+    // 2. Fetch Shopify products (live API)
     const shopifyProducts = await getShopifyProducts(storeId, request);
-
-    // Build a handle-to-product lookup map
     const handleMap = new Map<string, ShopifyProduct>();
     for (const product of shopifyProducts) {
-      if (product.handle) {
-        handleMap.set(product.handle.toLowerCase(), product);
-      }
+      if (product.handle) handleMap.set(product.handle.toLowerCase(), product);
     }
 
-    // 4. For each ad account, fetch active ads with destination URLs from Meta API
+    // 3. Get destination URLs from creative_assets table (already synced by cron)
+    // This is FAST — just a DB read, no Meta API calls
     const matchesByHandle = new Map<string, DiscoveredMatch>();
     const unmappedCampaigns: UnmappedCampaign[] = [];
     const seenCampaignIds = new Set<string>();
+    const accountLookup = new Map(adAccounts.map((a) => [a.ad_account_id, a]));
 
-    const accountLookup = new Map(
-      adAccounts.map((a) => [a.ad_account_id, a])
-    );
+    let usedCreativeAssets = false;
 
-    for (const account of adAccounts) {
+    if (isSupabasePersistenceEnabled()) {
       try {
-        // Fetch ads with their creative destination URLs
-        interface MetaAdResult {
-          data: Array<{
-            id: string;
-            name: string;
-            campaign_id: string;
-            campaign: { id: string; name: string };
-            adset_id: string;
-            creative?: {
-              id: string;
-              effective_object_story_id?: string;
-            };
-            tracking_specs?: Array<Record<string, unknown>>;
-            // The preview link or destination URL
-            effective_status: string;
-          }>;
-        }
-
-        // Fetch ads with campaign info and creative details
-        const adsResult = await fetchFromMeta<MetaAdResult>(
-          metaToken,
-          `${account.ad_account_id}/ads`,
-          {
-            fields: 'id,name,campaign_id,campaign{id,name},adset_id,effective_status',
-            effective_status: '["ACTIVE","PAUSED"]',
-            limit: '100',
-          }
+        // Fetch all creative assets with destination URLs for this store
+        const assets = await supabaseRest<CreativeAssetRow[]>(
+          `/creative_assets?store_id=eq.${encodeURIComponent(storeId)}&destination_url=not.is.null&destination_url=neq.&select=ad_id,destination_url,cached_at`
         );
 
-        // For each ad, fetch its creative to get the destination URL
-        const adIds = (adsResult.data || []).map(a => a.id).slice(0, 50); // limit to 50 ads
+        if (assets.length > 0) {
+          usedCreativeAssets = true;
 
-        // Batch fetch creatives with destination URLs
-        interface MetaCreativeResult {
-          data: Array<{
+          // Get campaign info from the campaigns snapshot
+          // Try each account's campaigns to build ad_id -> campaign mapping
+          const adToCampaign = new Map<string, { campaignId: string; campaignName: string; adAccountId: string }>();
+
+          for (const account of adAccounts) {
+            // Read the cached ads snapshots — ads are stored per-adset
+            // But campaigns snapshot has the hierarchy: campaign -> adSets -> ads
+            const sortedIds = [account.ad_account_id];
+            const scopeId = `accounts:${sortedIds.join(',')}`;
+
+            let campaigns: Campaign[] = [];
+            try {
+              const snap = await getLatestPersistentMetaEndpointSnapshot<Campaign[]>(storeId, 'campaigns', scopeId);
+              if (snap?.data) campaigns = snap.data;
+            } catch { /* continue */ }
+
+            // Build ad_id -> campaign lookup from the nested hierarchy
+            for (const campaign of campaigns) {
+              for (const adSet of campaign.adSets ?? []) {
+                for (const ad of adSet.ads ?? []) {
+                  adToCampaign.set(ad.id, {
+                    campaignId: campaign.id,
+                    campaignName: campaign.name,
+                    adAccountId: account.ad_account_id,
+                  });
+                }
+              }
+            }
+          }
+
+          // Now match creative_assets destination URLs to Shopify products
+          for (const asset of assets) {
+            const destUrl = asset.destination_url;
+            if (!destUrl) continue;
+
+            const handle = extractProductHandle(destUrl);
+            const campInfo = adToCampaign.get(asset.ad_id);
+
+            if (handle && handleMap.has(handle) && campInfo) {
+              const product = handleMap.get(handle)!;
+              const existing = matchesByHandle.get(handle);
+              const account = accountLookup.get(campInfo.adAccountId);
+
+              if (existing) {
+                if (!existing.campaigns.some(c => c.campaignId === campInfo.campaignId)) {
+                  existing.campaigns.push({
+                    campaignId: campInfo.campaignId,
+                    campaignName: campInfo.campaignName,
+                    destinationUrl: destUrl,
+                  });
+                }
+              } else {
+                matchesByHandle.set(handle, {
+                  shopifyProduct: product,
+                  adAccountId: campInfo.adAccountId,
+                  adAccountCurrency: account?.currency ?? 'USD',
+                  campaigns: [{
+                    campaignId: campInfo.campaignId,
+                    campaignName: campInfo.campaignName,
+                    destinationUrl: destUrl,
+                  }],
+                });
+              }
+              seenCampaignIds.add(campInfo.campaignId);
+            } else if (destUrl && campInfo && !seenCampaignIds.has(campInfo.campaignId)) {
+              const existing = unmappedCampaigns.find(u => u.campaignId === campInfo.campaignId);
+              if (existing) {
+                if (!existing.destinationUrls.includes(destUrl)) existing.destinationUrls.push(destUrl);
+              } else {
+                unmappedCampaigns.push({
+                  campaignId: campInfo.campaignId,
+                  campaignName: campInfo.campaignName,
+                  adAccountId: campInfo.adAccountId,
+                  destinationUrls: [destUrl],
+                });
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[auto-discover] creative_assets approach failed:', err);
+      }
+    }
+
+    // 4. Fallback: if creative_assets didn't work, try live Meta API (slower)
+    if (!usedCreativeAssets || (matchesByHandle.size === 0 && unmappedCampaigns.length === 0)) {
+      const metaTokenObj = await getMetaToken(storeId);
+      if (metaTokenObj) {
+        const metaToken = metaTokenObj.accessToken;
+
+        interface MetaAd {
+          id: string;
+          campaign_id: string;
+          campaign: { id: string; name: string };
+          creative?: {
             id: string;
             object_story_spec?: {
               link_data?: { link?: string };
@@ -210,42 +255,35 @@ export async function POST(request: NextRequest) {
             asset_feed_spec?: {
               link_urls?: Array<{ website_url?: string }>;
             };
-          }>;
+          };
         }
 
-        // Build a map of campaign_id -> campaign_name + ad_account from ads
-        const campaignMap = new Map<string, { name: string; adAccountId: string }>();
-        for (const ad of adsResult.data || []) {
-          if (ad.campaign) {
-            campaignMap.set(ad.campaign.id, {
-              name: ad.campaign.name,
-              adAccountId: account.ad_account_id,
-            });
-          }
-        }
-
-        // Fetch destination URLs via ad creatives
-        for (const ad of (adsResult.data || []).slice(0, 30)) {
-          try {
-            const creativeResult = await fetchFromMeta<{
-              id: string;
-              object_story_spec?: {
-                link_data?: { link?: string; message?: string };
-                video_data?: { call_to_action?: { value?: { link?: string } } };
-              };
-              asset_feed_spec?: {
-                link_urls?: Array<{ website_url?: string }>;
-              };
-            }>(
+        const accountResults = await Promise.allSettled(
+          adAccounts.map(async (account) => {
+            const result = await fetchFromMeta<{ data: MetaAd[] }>(
               metaToken,
-              `${ad.id}`,
-              { fields: 'creative{object_story_spec,asset_feed_spec}' }
+              `${account.ad_account_id}/ads`,
+              {
+                fields: 'id,campaign_id,campaign{id,name},creative{id,object_story_spec,asset_feed_spec}',
+                effective_status: '["ACTIVE","PAUSED"]',
+                limit: '50',
+              },
+              25000,
+              1,
             );
+            return { account, ads: result.data || [] };
+          })
+        );
 
-            // Extract URL from creative
-            const creative = (creativeResult as unknown as { creative?: typeof creativeResult })?.creative ?? creativeResult;
+        for (const result of accountResults) {
+          if (result.status !== 'fulfilled') continue;
+          const { account, ads } = result.value;
+
+          for (const ad of ads) {
+            const creative = ad.creative;
+            if (!creative || !ad.campaign) continue;
+
             let destUrl: string | undefined;
-
             if (creative.object_story_spec?.link_data?.link) {
               destUrl = creative.object_story_spec.link_data.link;
             } else if (creative.object_story_spec?.video_data?.call_to_action?.value?.link) {
@@ -253,8 +291,7 @@ export async function POST(request: NextRequest) {
             } else if (creative.asset_feed_spec?.link_urls?.[0]?.website_url) {
               destUrl = creative.asset_feed_spec.link_urls[0].website_url;
             }
-
-            if (!destUrl || !ad.campaign) continue;
+            if (!destUrl) continue;
 
             const campaignId = ad.campaign.id;
             const campaignName = ad.campaign.name;
@@ -263,7 +300,6 @@ export async function POST(request: NextRequest) {
             if (handle && handleMap.has(handle)) {
               const product = handleMap.get(handle)!;
               const existing = matchesByHandle.get(handle);
-
               if (existing) {
                 if (!existing.campaigns.some(c => c.campaignId === campaignId)) {
                   existing.campaigns.push({ campaignId, campaignName, destinationUrl: destUrl });
@@ -277,40 +313,25 @@ export async function POST(request: NextRequest) {
                 });
               }
               seenCampaignIds.add(campaignId);
-            } else if (destUrl && !seenCampaignIds.has(campaignId)) {
-              // Unmapped campaign
+            } else if (!seenCampaignIds.has(campaignId)) {
               const existing = unmappedCampaigns.find(u => u.campaignId === campaignId);
               if (existing) {
-                if (!existing.destinationUrls.includes(destUrl)) {
-                  existing.destinationUrls.push(destUrl);
-                }
+                if (!existing.destinationUrls.includes(destUrl)) existing.destinationUrls.push(destUrl);
               } else {
-                unmappedCampaigns.push({
-                  campaignId,
-                  campaignName,
-                  adAccountId: account.ad_account_id,
-                  destinationUrls: [destUrl],
-                });
+                unmappedCampaigns.push({ campaignId, campaignName, adAccountId: account.ad_account_id, destinationUrls: [destUrl] });
               }
             }
-          } catch {
-            // Skip individual ad fetch errors
           }
         }
-      } catch (err) {
-        console.warn(`[auto-discover] Failed to fetch ads for ${account.ad_account_id}:`, err);
       }
     }
 
-    // Remove unmapped campaigns that were later matched
     const filteredUnmapped = unmappedCampaigns.filter(u => !seenCampaignIds.has(u.campaignId));
 
     // 5. Get existing profiles to avoid duplicates
     const existingProfiles = getProductProfiles(storeId);
     const existingByShopifyId = new Map(
-      existingProfiles
-        .filter((p) => p.shopifyProductId)
-        .map((p) => [p.shopifyProductId!, p])
+      existingProfiles.filter((p) => p.shopifyProductId).map((p) => [p.shopifyProductId!, p])
     );
 
     // 6. Save matches as product profiles + campaign links
@@ -319,18 +340,13 @@ export async function POST(request: NextRequest) {
     for (const [, match] of matchesByHandle) {
       const shopifyId = String(match.shopifyProduct.id);
       let profileId: string;
-
-      // Check if profile already exists for this Shopify product
       const existingProfile = existingByShopifyId.get(shopifyId);
 
       if (existingProfile) {
         profileId = existingProfile.id;
       } else {
-        // Create new profile
         profileId = randomUUID();
-        const productImage =
-          match.shopifyProduct.image?.src ??
-          match.shopifyProduct.images?.[0]?.src;
+        const productImage = match.shopifyProduct.image?.src ?? match.shopifyProduct.images?.[0]?.src;
 
         upsertProductProfile({
           id: profileId,
@@ -374,9 +390,7 @@ export async function POST(request: NextRequest) {
         storeId,
         shopifyProductId: shopifyId,
         productName: match.shopifyProduct.title,
-        productImage:
-          match.shopifyProduct.image?.src ??
-          match.shopifyProduct.images?.[0]?.src,
+        productImage: match.shopifyProduct.image?.src ?? match.shopifyProduct.images?.[0]?.src,
         adAccountId: match.adAccountId,
         adAccountCurrency: match.adAccountCurrency,
         destinationUrl: match.campaigns[0]?.destinationUrl,
@@ -403,6 +417,7 @@ export async function POST(request: NextRequest) {
         totalCampaigns: seenCampaignIds.size + filteredUnmapped.length,
         matchedProducts: savedProfiles.length,
         unmappedCount: filteredUnmapped.length,
+        source: usedCreativeAssets ? 'database' : 'live_api',
       },
     });
   } catch (err) {
@@ -412,11 +427,9 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * Fetch Shopify products — tries internal API first (works on Vercel),
- * then falls back to local DB cache.
+ * Fetch Shopify products — tries internal API first, then local DB.
  */
 async function getShopifyProducts(storeId: string, request: NextRequest): Promise<ShopifyProduct[]> {
-  // Try the internal Shopify products API (this works on Vercel)
   try {
     const baseUrl = new URL(request.url).origin;
     const cookie = request.headers.get('cookie') ?? '';
@@ -438,7 +451,6 @@ async function getShopifyProducts(storeId: string, request: NextRequest): Promis
     console.warn('[auto-discover] Shopify API fetch failed:', err);
   }
 
-  // Fallback: local DB
   try {
     const db = getDb();
     const row = db.prepare(`
