@@ -105,9 +105,11 @@ export function ProductProfileCard({
     a => a.id === profile.adAccountId || a.accountId === profile.adAccountId
   )?.name;
 
-  // Determine active status: active if any linked campaign is active
-  const activeCampaignCount = linkedCampaigns.filter(c => c.isActive).length;
+  // Use Meta-derived counts from API if available, fallback to DB isActive flag
+  const activeCampaignCount = profile.activeCampaignCount ?? linkedCampaigns.filter(c => c.isActive).length;
+  const inactiveCampaignCount = profile.inactiveCampaignCount ?? linkedCampaigns.filter(c => !c.isActive).length;
   const isActive = activeCampaignCount > 0;
+  const isTesting = linkedCampaigns.length > 0 && activeCampaignCount > 0;
 
   // Priority: profile-level name > campaign link names > ID > "Not set"
   // Profile-level name is set by user in Edit Profile, so it takes priority
@@ -154,7 +156,7 @@ export function ProductProfileCard({
     <div
       className={cn(
         'rounded-xl border bg-surface-elevated shadow-sm p-6 transition-all duration-200 hover:shadow-md border-l-4',
-        isActive
+        isTesting
           ? 'border-border hover:border-emerald-200 border-l-emerald-500'
           : 'border-border hover:border-gray-200 border-l-gray-300 opacity-60'
       )}
@@ -181,19 +183,25 @@ export function ProductProfileCard({
             <span
               className={cn(
                 'rounded-full px-2.5 py-0.5 text-xs font-medium flex-shrink-0',
-                isActive
+                isTesting
                   ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                  : 'bg-gray-100 text-gray-500 border border-gray-200'
+                  : linkedCampaigns.length > 0
+                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                    : 'bg-gray-100 text-gray-500 border border-gray-200'
               )}
             >
-              {isActive ? 'Active' : 'Paused'}
+              {isTesting ? 'Active' : linkedCampaigns.length > 0 ? 'Not Testing' : 'No Campaigns'}
             </span>
           </div>
 
           <p className="text-xs text-text-secondary mt-0.5">
-            {isActive
-              ? `${activeCampaignCount} active campaign${activeCampaignCount !== 1 ? 's' : ''}`
-              : 'No active campaigns'}
+            {linkedCampaigns.length === 0
+              ? 'No linked campaigns'
+              : activeCampaignCount > 0 && inactiveCampaignCount > 0
+                ? `${activeCampaignCount} active · ${inactiveCampaignCount} paused`
+                : activeCampaignCount > 0
+                  ? `${activeCampaignCount} active campaign${activeCampaignCount !== 1 ? 's' : ''}`
+                  : `${inactiveCampaignCount} paused — not testing`}
           </p>
 
           {profile.averageOrderValue && (

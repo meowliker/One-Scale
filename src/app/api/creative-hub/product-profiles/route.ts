@@ -5,6 +5,79 @@ import {
   getProductCampaignLinks,
   upsertProductProfile,
 } from '@/app/api/lib/creative-hub-db';
+import { isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
+import {
+  getRecentPersistentMetaEndpointSnapshots,
+} from '@/app/api/lib/supabase-tracking';
+import type { Campaign } from '@/types/campaign';
+import type { ProductCampaignLink } from '@/types/creativeHub';
+
+/**
+ * Build a map of campaignId -> Meta effective status from the latest campaign snapshots.
+ * Falls back gracefully: if snapshots are unavailable, returns an empty map.
+ */
+async function buildCampaignStatusMap(storeId: string): Promise<Map<string, string>> {
+  const statusMap = new Map<string, string>();
+
+  if (!isSupabasePersistenceEnabled()) return statusMap;
+
+  try {
+    // Fetch recent campaign snapshots (each snapshot contains an array of Campaign objects)
+    const snapshots = await getRecentPersistentMetaEndpointSnapshots<Campaign[]>(
+      storeId,
+      'campaigns',
+      20 // enough to cover multiple ad accounts & date ranges
+    );
+
+    // Dedupe: keep the first (most recent) status seen for each campaign ID
+    for (const snapshot of snapshots) {
+      if (!Array.isArray(snapshot.data)) continue;
+      for (const campaign of snapshot.data) {
+        if (campaign.id && campaign.status && !statusMap.has(campaign.id)) {
+          statusMap.set(campaign.id, campaign.status);
+        }
+      }
+    }
+  } catch {
+    // Snapshot lookup failed — fall back to treating all linked campaigns as active
+  }
+
+  return statusMap;
+}
+
+/**
+ * Count active vs inactive campaigns for a profile's linked campaigns using Meta status data.
+ * A campaign is "active" only if Meta reports status === 'ACTIVE'.
+ * If we have no snapshot data for a campaign, we fall back to the DB isActive flag.
+ */
+function countCampaignStatuses(
+  links: ProductCampaignLink[],
+  statusMap: Map<string, string>
+): { activeCampaignCount: number; inactiveCampaignCount: number } {
+  let active = 0;
+  let inactive = 0;
+
+  for (const link of links) {
+    const metaStatus = statusMap.get(link.campaignId);
+    if (metaStatus) {
+      // Use real Meta status
+      if (metaStatus === 'ACTIVE') {
+        active++;
+      } else {
+        inactive++;
+      }
+    } else {
+      // Fallback: use the DB isActive flag
+      if (link.isActive) {
+        active++;
+      } else {
+        inactive++;
+      }
+    }
+  }
+
+  return { activeCampaignCount: active, inactiveCampaignCount: inactive };
+}
 
 // GET /api/creative-hub/product-profiles?storeId=X
 export async function GET(request: NextRequest) {
@@ -18,12 +91,21 @@ export async function GET(request: NextRequest) {
   try {
     const profiles = await getProductProfiles(storeId);
 
-    // Attach campaign links to each profile
+    // Fetch campaign status map once (shared across all profiles)
+    const statusMap = await buildCampaignStatusMap(storeId);
+
+    // Attach campaign links + active/inactive counts to each profile
     const profilesWithLinks = await Promise.all(
-      profiles.map(async (profile) => ({
-        ...profile,
-        campaignLinks: await getProductCampaignLinks(profile.id),
-      }))
+      profiles.map(async (profile) => {
+        const campaignLinks = await getProductCampaignLinks(profile.id);
+        const { activeCampaignCount, inactiveCampaignCount } = countCampaignStatuses(campaignLinks, statusMap);
+        return {
+          ...profile,
+          campaignLinks,
+          activeCampaignCount,
+          inactiveCampaignCount,
+        };
+      })
     );
 
     return NextResponse.json({ profiles: profilesWithLinks });

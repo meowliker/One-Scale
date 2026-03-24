@@ -40,6 +40,9 @@ export interface ProductProfile {
   updatedAt: string;
   // Populated by the profiles API (joined from product_campaign_links table)
   campaignLinks?: ProductCampaignLink[];
+  // Populated by the profiles API from Meta campaign snapshot status
+  activeCampaignCount?: number;
+  inactiveCampaignCount?: number;
 }
 
 export interface NamingTemplate {
