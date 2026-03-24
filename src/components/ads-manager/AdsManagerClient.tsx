@@ -317,6 +317,16 @@ function issueKey(issue: AdIssue): string {
   ].join('|');
 }
 
+function normalizeCampaignHierarchy(rows: Campaign[]): Campaign[] {
+  return rows.map((campaign) => ({
+    ...campaign,
+    adSets: (campaign.adSets || []).map((adSet) => ({
+      ...adSet,
+      ads: adSet.ads || [],
+    })),
+  }));
+}
+
 export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClientProps) {
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
   const stores = useStoreStore((s) => s.stores);
@@ -328,6 +338,11 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     const metaAccount = store.adAccounts.find((a) => a.platform === 'meta' && a.isActive);
     return metaAccount?.accountId || '';
   }, [stores, activeStoreId]);
+  const selectedRangeIsToday = useMemo(() => {
+    if (!dateRange?.since || !dateRange?.until) return false;
+    const today = todayInTimezone();
+    return dateRange.since === today && dateRange.until === today;
+  }, [dateRange?.since, dateRange?.until]);
   const [campaigns, setCampaigns] = useState<Campaign[]>(initialCampaigns);
   const [appPixelMetrics, setAppPixelMetrics] = useState<AppPixelEntityMetricsPayload>({
     campaigns: {},
@@ -505,14 +520,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
 
   // Sync with new initialCampaigns when they change (e.g. reconnect or date change)
   useEffect(() => {
-    // Normalize: ensure every campaign has adSets array, every adSet has ads array
-    const normalized = initialCampaigns.map((c) => ({
-      ...c,
-      adSets: (c.adSets || []).map((as) => ({
-        ...as,
-        ads: as.ads || [],
-      })),
-    }));
+    const normalized = normalizeCampaignHierarchy(initialCampaigns);
     let hydrated = normalized;
     if (typeof window !== 'undefined' && activeStoreId) {
       try {
@@ -573,10 +581,14 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     setActivityData({});
     setActivitiesFullyLoaded(false);
     setActivitiesFullLoading(false);
-    setCorePreloadDone(false);
-    setSyncStatus({ core: 'idle', actions: 'idle', errors: 'idle' });
+    setCorePreloadDone(!selectedRangeIsToday);
+    setSyncStatus({
+      core: selectedRangeIsToday ? 'idle' : 'done',
+      actions: 'idle',
+      errors: 'idle',
+    });
     actionsLoadedRef.current = false;
-  }, [initialCampaigns, activeStoreId, hierarchyCacheKey]);
+  }, [initialCampaigns, activeStoreId, hierarchyCacheKey, selectedRangeIsToday]);
 
   const fetchAppPixelMetrics = useCallback(async () => {
     if (!activeStoreId) return null;
@@ -787,10 +799,11 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
           setCampaigns((prev) =>
             prev.map((campaign) => {
               const update = res.data[campaign.id];
-              if (!update || !update.spend) return campaign;
+              if (!update) return campaign;
               const oldSpend = campaign.metrics.spend ?? 0;
-              const newSpend = update.spend ?? 0;
-              if (Math.abs(newSpend - oldSpend) > 0.01) {
+              const hasSpendUpdate = typeof update.spend === 'number';
+              const newSpend = hasSpendUpdate ? (update.spend as number) : oldSpend;
+              if (hasSpendUpdate && Math.abs(newSpend - oldSpend) > 0.01) {
                 const type = newSpend > oldSpend ? 'success' : 'error';
                 setRowFlash((prev) => ({ ...prev, [campaign.id]: type }));
                 setTimeout(() => {
@@ -1309,6 +1322,11 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
 
   const preloadActiveHierarchy = useCallback(async (force = false, showSyncingUI = false) => {
     if (!activeStoreId) return;
+    if (!selectedRangeIsToday) {
+      setCorePreloadDone(true);
+      setSyncStatus((prev) => ({ ...prev, core: 'done' }));
+      return;
+    }
     if (hierarchySyncInFlightRef.current) return;
 
     hierarchySyncInFlightRef.current = true;
@@ -1424,16 +1442,18 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       preloadingCoreRef.current = false;
       hierarchySyncInFlightRef.current = false;
     }
-  }, [activeStoreId, batchLoadAdSets, campaigns, loadAdsForAdSet, refreshRecentOperationalData]);
+  }, [activeStoreId, batchLoadAdSets, campaigns, loadAdsForAdSet, refreshRecentOperationalData, selectedRangeIsToday]);
 
   // Initial hierarchy preload on first load.
   useEffect(() => {
+    if (!selectedRangeIsToday) return;
     if (!activeStoreId || showErrorCenter || corePreloadDone) return;
     void preloadActiveHierarchy(false);
-  }, [activeStoreId, corePreloadDone, preloadActiveHierarchy, showErrorCenter]);
+  }, [activeStoreId, corePreloadDone, preloadActiveHierarchy, selectedRangeIsToday, showErrorCenter]);
 
   // Kick off a backend hierarchy refresh on page open.
   useEffect(() => {
+    if (!selectedRangeIsToday) return;
     if (!activeStoreId || showErrorCenter) return;
     void apiClient('/api/sync/refresh', {
       method: 'POST',
@@ -1441,11 +1461,12 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       timeoutMs: 20_000,
       maxRetries: 0,
     }).catch(() => {});
-  }, [activeStoreId, showErrorCenter]);
+  }, [activeStoreId, selectedRangeIsToday, showErrorCenter]);
 
   // Keep hierarchy fresh for newly created ad sets/ads every 10 minutes.
   // Queue backend refresh silently, then hydrate from cache snapshots without showing syncing UI.
   useEffect(() => {
+    if (!selectedRangeIsToday) return;
     if (!activeStoreId || showErrorCenter) return;
     const id = window.setInterval(() => {
       if (Date.now() < rateLimitUntilRef.current) return;
@@ -1461,7 +1482,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
       }, 1200);
     }, 10 * 60 * 1000); // 10 minutes
     return () => window.clearInterval(id);
-  }, [activeStoreId, preloadActiveHierarchy, showErrorCenter]);
+  }, [activeStoreId, preloadActiveHierarchy, selectedRangeIsToday, showErrorCenter]);
 
   // Persist active campaign hierarchy cache with timestamp for fast reload.
   useEffect(() => {
@@ -2315,6 +2336,23 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     if (!activeStoreId || hierarchySyncInFlightRef.current) return;
     setSyncStatus({ core: 'loading', actions: 'loading', errors: 'loading' });
     try {
+      if (!selectedRangeIsToday && dateRange?.since && dateRange?.until) {
+        const liveRows = await getCampaigns(
+          {
+            since: dateRange.since,
+            until: dateRange.until,
+            preset: dateRange.preset,
+          },
+          { preferCache: false, forceLive: true }
+        );
+        setCampaigns(normalizeCampaignHierarchy(liveRows));
+        setLastSyncedAt(new Date().toISOString());
+        await refreshRecentOperationalData({ includeIssues: true });
+        await fetchAttributionCoverage();
+        toast.success('Ads Manager refreshed for selected date range');
+        return;
+      }
+
       const res = await apiClient<{
         data: Record<string, Partial<{ spend: number; impressions: number; clicks: number; conversions: number; revenue: number; roas: number }>>;
         lastSyncedAt: string;
@@ -2342,7 +2380,7 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     } finally {
       setSyncStatus((prev) => ({ ...prev, core: 'done', actions: 'done', errors: 'done' }));
     }
-  }, [activeStoreId, fetchAttributionCoverage, preloadActiveHierarchy, refreshRecentOperationalData]);
+  }, [activeStoreId, dateRange?.preset, dateRange?.since, dateRange?.until, fetchAttributionCoverage, preloadActiveHierarchy, refreshRecentOperationalData, selectedRangeIsToday]);
 
   const scrollToRow = useCallback((rowId: string) => {
     const node = document.getElementById(rowId);
