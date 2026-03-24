@@ -12,6 +12,7 @@ import { getOrderFees } from '@/lib/pnl/orderFeeSync';
 import { runAutoSync } from '@/lib/pnl/autoProductConfig';
 import { getShopifyToken } from '@/app/api/lib/tokens';
 import { fetchFromShopify } from '@/app/api/lib/shopify-client';
+import { buildProductPerformance } from '@/lib/pnl/appsScriptPort';
 
 export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
@@ -154,7 +155,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Supabase not configured' }, { status: 500 });
   }
 
-  const stores = await listPersistentStores();
+  const allStores = await listPersistentStores();
+
+  // Support single-store mode via ?store_id= param (avoids 60s Vercel timeout)
+  const requestedStoreId = new URL(req.url).searchParams.get('store_id');
+  const stores = requestedStoreId
+    ? allStores.filter(s => s.id === requestedStoreId)
+    : allStores;
+
   const results: Array<{ storeId: string; status: string; date?: string; warnings?: number; error?: string }> = [];
 
   for (const store of stores) {
@@ -187,10 +195,11 @@ export async function GET(req: NextRequest) {
       // - Refund adjustments (partial refunds, reversals)
       // - Settlement corrections (1-3 day delay)
       // - Meta attribution retroactive updates (up to 7 days)
-      const RETROACTIVE_DAYS = 7;
+      // Default 7 days, override via ?days=30 for full backfill
+      const RETROACTIVE_DAYS = parseInt(new URL(req.url).searchParams.get('days') || '7', 10);
       const enc = (v: string) => encodeURIComponent(v);
 
-      for (let daysBack = 1; daysBack <= RETROACTIVE_DAYS; daysBack++) {
+      for (let daysBack = 0; daysBack <= RETROACTIVE_DAYS; daysBack++) {
       const dayDate = daysAgoInTimezone(daysBack, tz);
       const { start: tzStart, end: tzEnd } = getStoreDateRangeForPeriod(dayDate, dayDate, tz);
 
@@ -247,55 +256,64 @@ export async function GET(req: NextRequest) {
         totalFees += orderFeeMap.get(String(o.shopify_order_id)) ?? 0;
       }
 
-      // 4. Ad spend from meta_spend_cache
-      const spendRows = await rest<Array<{ spend: number }>>(
-        `/meta_spend_cache?store_id=eq.${enc(store.id)}&date=eq.${dayDate}&select=spend`
+      // 4. Ad spend from meta_spend_cache — ONLY for mapped ad accounts
+      // Use meta_ad_account_mappings as source of truth (not store_ad_accounts which has cross-store pollution)
+      const mappedAccounts = await rest<Array<{ ad_account_id: string }>>(
+        `/meta_ad_account_mappings?store_id=eq.${enc(store.id)}&select=ad_account_id`
       ).catch(() => []);
-      const totalAdSpend = spendRows.reduce((s, r) => s + (Number(r.spend) || 0), 0);
+      const mappedAccountIds = [...new Set(mappedAccounts.map(a => a.ad_account_id))];
 
-      // 5. Product breakdown (using product_config classification)
-      const productConfigRows = await rest<Array<{ product_id: string }>>(
-        `/product_config?store_id=eq.${enc(store.id)}&is_active=eq.true&select=product_id`
-      ).catch(() => []);
-      const configMainIds = new Set(productConfigRows.map(r => r.product_id));
-
-      interface ProdAcc { title: string; units: number; revenue: number; fees: number; orders: number; classification: string; }
-      const prodMap = new Map<string, ProdAcc>();
-      let lineItemTotal = 0;
-
-      for (const o of paidOrders) {
-        let items: Array<{ product_id?: string | number; title?: string; price?: string; quantity?: number }>;
-        try { items = typeof o.line_items === 'string' ? JSON.parse(o.line_items) : o.line_items || []; } catch { continue; }
-
-        const oid = String(o.shopify_order_id);
-        const orderFee = orderFeeMap.get(oid) ?? 0;
-        const orderLineTotal = items.reduce((s, i) => s + parseFloat(i.price ?? '0') * (i.quantity ?? 1), 0);
-
-        for (const item of items) {
-          const pid = item.product_id ? String(item.product_id) : '';
-          if (!pid || pid === 'null' || pid === '0') continue;
-          const lineRev = parseFloat(item.price ?? '0') * (item.quantity ?? 1);
-          const lineFee = orderLineTotal > 0 ? orderFee * (lineRev / orderLineTotal) : 0;
-          lineItemTotal += lineRev;
-
-          const cls = configMainIds.size > 0 ? (configMainIds.has(pid) ? 'main' : 'upsell') : 'unknown';
-          const acc = prodMap.get(pid) || { title: item.title || '', units: 0, revenue: 0, fees: 0, orders: 0, classification: cls };
-          acc.units += item.quantity ?? 1;
-          acc.revenue += lineRev;
-          acc.fees += lineFee;
-          acc.orders++;
-          prodMap.set(pid, acc);
-        }
+      let totalAdSpend = 0;
+      if (mappedAccountIds.length > 0) {
+        const accountFilter = mappedAccountIds.map(id => enc(id)).join(',');
+        const spendRows = await rest<Array<{ spend: number }>>(
+          `/meta_spend_cache?store_id=eq.${enc(store.id)}&ad_account_id=in.(${accountFilter})&date=eq.${dayDate}&select=spend`
+        ).catch(() => []);
+        totalAdSpend = spendRows.reduce((s, r) => s + (Number(r.spend) || 0), 0);
       }
 
-      // Scale product revenue to match order total_price
-      const revScale = (orderRevenue > 0 && lineItemTotal > 0) ? orderRevenue / lineItemTotal : 1;
-      const productBreakdownArr = Array.from(prodMap.entries()).map(([pid, acc]) => ({
-        productId: pid, productTitle: acc.title, classification: acc.classification,
-        revenue: Math.round(acc.revenue * revScale * 100) / 100,
-        unitsSold: acc.units, fees: Math.round(acc.fees * 100) / 100,
-        orders: acc.orders,
-      })).sort((a, b) => b.revenue - a.revenue);
+      // 5. Product breakdown (using buildProductPerformance with full rollup)
+      // Ensures snapshot product_breakdown matches Product Performance UI exactly
+      let productBreakdownArr: Array<{ productId: string; productTitle: string; classification: string; revenue: number; unitsSold: number; fees: number; orders: number }> = [];
+      try {
+        const productResults = await buildProductPerformance(store.id, dayDate, dayDate);
+        productBreakdownArr = productResults
+          .filter(p => p.orders > 0 || p.revenue > 0)
+          .map(p => ({
+            productId: p.product_id,
+            productTitle: p.product_name,
+            classification: p.classification,
+            revenue: Math.round(p.revenue * 100) / 100,
+            unitsSold: p.orders,
+            fees: Math.round(p.fees * 100) / 100,
+            orders: p.orders,
+          }))
+          .sort((a, b) => b.revenue - a.revenue);
+
+        // Ensure 100% revenue coverage — any unmatched revenue goes to "Other Orders"
+        const productRevSum = productBreakdownArr.reduce((s, p) => s + p.revenue, 0);
+        const productFeeSum = productBreakdownArr.reduce((s, p) => s + p.fees, 0);
+        const productOrderSum = new Set(productBreakdownArr.filter(p => p.classification === 'main').map(p => p.orders)).size > 0
+          ? productBreakdownArr.filter(p => p.classification === 'main').reduce((s, p) => s + p.orders, 0)
+          : 0;
+        const revenueGap = Math.round((orderRevenue - productRevSum) * 100) / 100;
+        const feeGap = Math.round((totalFees - productFeeSum) * 100) / 100;
+        const orderGap = paidOrders.length - productOrderSum;
+
+        if (revenueGap > 0.01 || orderGap > 0) {
+          productBreakdownArr.push({
+            productId: 'unassigned',
+            productTitle: 'Other Orders',
+            classification: 'unknown',
+            revenue: revenueGap > 0 ? revenueGap : 0,
+            unitsSold: orderGap > 0 ? orderGap : 0,
+            fees: feeGap > 0 ? feeGap : 0,
+            orders: orderGap > 0 ? orderGap : 0,
+          });
+        }
+      } catch (err) {
+        console.warn(`[daily-pnl] Product breakdown failed for ${store.id}/${dayDate}:`, err instanceof Error ? err.message : err);
+      }
 
       const netProfit = orderRevenue - totalFees - totalAdSpend - totalRefunds - totalCbLoss + totalCbWon + totalAdjustments;
       const margin = orderRevenue > 0 ? (netProfit / orderRevenue) * 100 : 0;

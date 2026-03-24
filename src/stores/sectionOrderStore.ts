@@ -10,6 +10,7 @@ export const DEFAULT_SECTION_ORDER = [
   'health-audit',
   'funnel-breakdown',
   'cross-channel',
+  'product-performance',
 ] as const;
 
 export type SectionId = (typeof DEFAULT_SECTION_ORDER)[number];

@@ -232,12 +232,20 @@ export async function POST(request: NextRequest) {
 
       const hasCharges = (btRows ?? []).some(t => (t.type || '').toLowerCase() === 'charge');
 
+      // Ad spend — ONLY from mapped ad accounts (prevents cross-store pollution)
       let adSpend = 0;
       try {
-        const spendRows = await rest<Array<{ spend: number }>>(
-          `/meta_spend_cache?store_id=eq.${encodeURIComponent(storeId)}&date=eq.${dateStr}&select=spend`
-        );
-        adSpend = (spendRows ?? []).reduce((s, r) => s + (Number(r.spend) || 0), 0);
+        const mappedAccounts = await rest<Array<{ ad_account_id: string }>>(
+          `/meta_ad_account_mappings?store_id=eq.${encodeURIComponent(storeId)}&select=ad_account_id`
+        ).catch(() => []);
+        const mappedIds = [...new Set(mappedAccounts.map(a => a.ad_account_id))];
+        if (mappedIds.length > 0) {
+          const accountFilter = mappedIds.map(id => encodeURIComponent(id)).join(',');
+          const spendRows = await rest<Array<{ spend: number }>>(
+            `/meta_spend_cache?store_id=eq.${encodeURIComponent(storeId)}&ad_account_id=in.(${accountFilter})&date=eq.${dateStr}&select=spend`
+          );
+          adSpend = (spendRows ?? []).reduce((s, r) => s + (Number(r.spend) || 0), 0);
+        }
       } catch { /* no meta */ }
 
       if (hasCharges) {

@@ -14,6 +14,7 @@
  */
 
 import { rest } from '@/app/api/lib/supabase-persistence';
+import { scanProductFamilies } from './familyScanner';
 
 const enc = (v: string) => encodeURIComponent(v);
 
@@ -69,6 +70,7 @@ export interface AutoSyncResult {
   adAccountsDiscovered: number;
   productsDetected: number;
   adMappingsSynced: number;
+  familiesScanned: number;
   errors: string[];
 }
 
@@ -84,6 +86,7 @@ export async function runAutoSync(storeId: string): Promise<AutoSyncResult> {
     adAccountsDiscovered: 0,
     productsDetected: 0,
     adMappingsSynced: 0,
+    familiesScanned: 0,
     errors: [],
   };
 
@@ -127,6 +130,19 @@ export async function runAutoSync(storeId: string): Promise<AutoSyncResult> {
       console.log(`[AutoSync] ${storeId}: ${intel.anomalies.length} anomalies detected`);
     }
   } catch { /* non-critical */ }
+
+  // Step 7: Scan orders to build/refresh product family relationships
+  let familiesScanned = 0;
+  try {
+    const familyResult = await scanProductFamilies(storeId);
+    familiesScanned = familyResult.familiesFound;
+    if (familiesScanned > 0) {
+      console.log(`[autoSync] Family scan ${storeId}: ${familyResult.familiesFound} families, ${familyResult.childrenMapped} children, ${familyResult.orphanProducts} orphans from ${familyResult.totalOrdersScanned} orders`);
+    }
+  } catch (err) {
+    console.warn(`[autoSync] Family scan failed for ${storeId}:`, err instanceof Error ? err.message : err);
+  }
+  result.familiesScanned = familiesScanned;
 
   if (result.adAccountsDiscovered > 0 || result.productsDetected > 0 || result.adMappingsSynced > 0) {
     console.log(
