@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X,
@@ -19,6 +19,8 @@ import {
   ChevronDown,
   ChevronUp,
   GripVertical,
+  Search,
+  Check,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
@@ -526,31 +528,18 @@ export function EditProductProfileModal({
                               ClickUp not connected. Connect ClickUp in Settings &rarr; Integrations.
                             </p>
                           ) : clickupLists.length > 0 ? (
-                            <select
-                              value={form.clickupListId ?? ''}
-                              onChange={(e) => {
-                                const list = clickupLists.find((l) => l.id === e.target.value);
-                                updateField('clickupListId', e.target.value);
-                                // Store just the list name (last segment after " > ") for display
-                                const fullName = list?.name ?? '';
-                                const segments = fullName.split(' > ');
-                                updateField('clickupListName', segments[segments.length - 1] || fullName);
+                            <ClickUpListSearchDropdown
+                              lists={clickupLists}
+                              selectedId={form.clickupListId ?? ''}
+                              savedListId={form.clickupListId}
+                              savedListName={form.clickupListName || profile?.clickupListName}
+                              onSelect={(listId, listName) => {
+                                updateField('clickupListId', listId);
+                                const segments = listName.split(' > ');
+                                updateField('clickupListName', segments[segments.length - 1] || listName);
                               }}
                               className={selectCls}
-                            >
-                              <option value="">Select a list...</option>
-                              {/* Include saved list if not in available lists */}
-                              {form.clickupListId && !clickupLists.some(l => l.id === form.clickupListId) && (
-                                <option value={form.clickupListId}>
-                                  {form.clickupListName || profile?.clickupListName || form.clickupListId} (saved)
-                                </option>
-                              )}
-                              {clickupLists.map((list) => (
-                                <option key={list.id} value={list.id}>
-                                  {list.name}
-                                </option>
-                              ))}
-                            </select>
+                            />
                           ) : (
                             <p className="text-xs text-text-secondary py-2">
                               No ClickUp lists found in your workspace. Add lists in ClickUp first.
@@ -864,6 +853,167 @@ export function EditProductProfileModal({
 }
 
 /* ── Reusable form field ── */
+
+// Searchable dropdown for ClickUp lists, grouped by Space > Folder path
+function ClickUpListSearchDropdown({
+  lists,
+  selectedId,
+  savedListId,
+  savedListName,
+  onSelect,
+  className,
+}: {
+  lists: Array<{ id: string; name: string }>;
+  selectedId: string;
+  savedListId?: string;
+  savedListName?: string;
+  onSelect: (listId: string, listName: string) => void;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Include saved list in options if not already present
+  const allLists = useMemo(() => {
+    if (savedListId && !lists.some((l) => l.id === savedListId)) {
+      return [
+        { id: savedListId, name: savedListName || savedListId },
+        ...lists,
+      ];
+    }
+    return lists;
+  }, [lists, savedListId, savedListName]);
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return allLists;
+    const q = search.toLowerCase();
+    return allLists.filter((l) => l.name.toLowerCase().includes(q));
+  }, [allLists, search]);
+
+  const selectedList = allLists.find((l) => l.id === selectedId);
+  const displayName = selectedList?.name ?? '';
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    if (open) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  // Focus input when dropdown opens
+  useEffect(() => {
+    if (open && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [open]);
+
+  return (
+    <div ref={containerRef} className="relative">
+      {/* Trigger button */}
+      <button
+        type="button"
+        onClick={() => {
+          setOpen((prev) => !prev);
+          setSearch('');
+        }}
+        className={cn(
+          className,
+          'flex items-center justify-between gap-2 text-left cursor-pointer',
+          !selectedId && 'text-text-dimmed'
+        )}
+      >
+        <span className="truncate flex-1">
+          {selectedId ? displayName : 'Select a list...'}
+        </span>
+        <ChevronDown className={cn('h-4 w-4 flex-shrink-0 text-text-dimmed transition-transform', open && 'rotate-180')} />
+      </button>
+
+      {/* Dropdown panel */}
+      {open && (
+        <div className="absolute z-50 mt-1 w-full rounded-lg border border-border bg-surface shadow-lg overflow-hidden">
+          {/* Search input */}
+          <div className="p-2 border-b border-border">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-dimmed" />
+              <input
+                ref={inputRef}
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search lists..."
+                className="w-full rounded-md border border-border bg-surface-hover py-1.5 pl-8 pr-3 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    setOpen(false);
+                  } else if (e.key === 'Enter' && filtered.length === 1) {
+                    onSelect(filtered[0].id, filtered[0].name);
+                    setOpen(false);
+                  }
+                }}
+              />
+            </div>
+          </div>
+
+          {/* List items */}
+          <div className="max-h-[220px] overflow-y-auto py-1">
+            {/* Clear selection option */}
+            <button
+              type="button"
+              onClick={() => {
+                onSelect('', '');
+                setOpen(false);
+              }}
+              className={cn(
+                'flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-surface-hover',
+                !selectedId && 'text-primary font-medium'
+              )}
+            >
+              <span className="w-4 h-4 flex-shrink-0" />
+              <span className="text-text-dimmed italic">None</span>
+            </button>
+
+            {filtered.length === 0 ? (
+              <div className="px-3 py-4 text-center text-xs text-text-dimmed">
+                No lists match &ldquo;{search}&rdquo;
+              </div>
+            ) : (
+              filtered.map((list) => {
+                const isSelected = list.id === selectedId;
+                return (
+                  <button
+                    key={list.id}
+                    type="button"
+                    onClick={() => {
+                      onSelect(list.id, list.name);
+                      setOpen(false);
+                    }}
+                    className={cn(
+                      'flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-surface-hover',
+                      isSelected && 'bg-primary/5 text-primary font-medium'
+                    )}
+                  >
+                    <span className="w-4 h-4 flex-shrink-0 flex items-center justify-center">
+                      {isSelected && <Check className="h-3.5 w-3.5 text-primary" />}
+                    </span>
+                    <span className="truncate">{list.name}</span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function FormField({
   label,
