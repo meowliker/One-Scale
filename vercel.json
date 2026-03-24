@@ -4,9 +4,20 @@
   "functions": {
     "src/app/api/**/route.ts": {
       "maxDuration": 60
+    },
+    "src/app/api/cron/**/route.ts": {
+      "maxDuration": 300
+    },
+    "src/app/api/prism/**/route.ts": {
+      "maxDuration": 300
     }
   },
-  "crons": [],
+  "crons": [
+    { "path": "/api/cron/sync-orders-dispatch", "schedule": "*/30 * * * *" },
+    { "path": "/api/cron/sync-balance-transactions", "schedule": "30 */2 * * *" },
+    { "path": "/api/cron/sync-meta-spend", "schedule": "0 * * * *" },
+    { "path": "/api/cron/daily-pnl-dispatch", "schedule": "30 7 * * *" }
+  ],
   "headers": [
     {
       "source": "/(.*)",
