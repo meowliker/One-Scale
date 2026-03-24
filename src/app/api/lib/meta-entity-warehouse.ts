@@ -646,6 +646,11 @@ export async function syncWarehouseSnapshotsForStore(params: {
     ]);
   }
 
+  await upsertRows(
+    '/meta_entity_daily_metrics?on_conflict=store_id,entity_level,entity_id,metric_date',
+    [...dailyMetricMap.values()]
+  );
+
   return {
     campaigns: campaigns.length,
     adsets: adsetCount,
