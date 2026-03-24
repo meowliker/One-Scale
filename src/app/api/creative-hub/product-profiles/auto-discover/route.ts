@@ -348,14 +348,21 @@ export async function POST(request: NextRequest) {
 
     // Second try: for any still-unresolved page IDs, try direct lookup + promote_pages
     const unresolvedPageIds = Array.from(uniquePageIds).filter(id => !pageNameMap.has(id));
+    if (unresolvedPageIds.length > 0) {
+      console.log(`[auto-discover] Attempting direct lookup for ${unresolvedPageIds.length} unresolved page IDs: ${unresolvedPageIds.join(', ')}`);
+    }
     await batchProcess(unresolvedPageIds, 10, async (pageId) => {
       try {
         const page = await fetchFromMeta<{ id: string; name: string }>(
           metaToken, pageId, { fields: 'id,name' }, 5000, 0,
         );
-        if (page.name) pageNameMap.set(pageId, page.name);
-      } catch {
-        // Try promote_pages fallback
+        if (page.name) {
+          pageNameMap.set(pageId, page.name);
+          console.log(`[auto-discover] Resolved cross-BM page ${pageId} → "${page.name}" via direct lookup`);
+        }
+      } catch (directErr) {
+        console.warn(`[auto-discover] Direct page lookup failed for ${pageId}:`, directErr);
+        // Try promote_pages fallback across all ad accounts
         for (const acct of adAccounts) {
           try {
             const promotedPages = await fetchFromMeta<{ data: Array<{ id: string; name: string }> }>(
@@ -364,6 +371,7 @@ export async function POST(request: NextRequest) {
             for (const p of promotedPages.data || []) {
               if (p.id === pageId && p.name) {
                 pageNameMap.set(pageId, p.name);
+                console.log(`[auto-discover] Resolved page ${pageId} → "${p.name}" via promote_pages on ${acct.ad_account_id}`);
                 return;
               }
             }
@@ -372,17 +380,20 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    // 4b: Resolve instagram usernames
-    await batchProcess(Array.from(uniqueIgIds), 10, async (igId) => {
+    // 4b: Resolve instagram usernames (skip already-resolved)
+    const unresolvedIgIds = Array.from(uniqueIgIds).filter(id => !igUsernameMap.has(id));
+    await batchProcess(unresolvedIgIds, 10, async (igId) => {
       try {
         const ig = await fetchFromMeta<{ id: string; username: string }>(
           metaToken, igId, { fields: 'id,username' }, 5000, 0,
         );
         if (ig.username) igUsernameMap.set(igId, ig.username);
-      } catch { /* skip */ }
+      } catch (err) {
+        console.warn(`[auto-discover] Failed to resolve IG username for ${igId}:`, err);
+      }
     });
 
-    // 4c: Resolve pixel names + BM info per ad account
+    // 4c: Resolve pixel names + BM info per ad account (skip already-resolved BMs)
     await batchProcess(Array.from(uniqueAdAccountIds), 10, async (acctId) => {
       try {
         // Fetch pixels for this ad account
@@ -394,15 +405,17 @@ export async function POST(request: NextRequest) {
         }
       } catch { /* skip */ }
 
-      try {
-        // Fetch BM info for this ad account
-        const acctRes = await fetchFromMeta<{ business?: { id: string; name: string } }>(
-          metaToken, acctId, { fields: 'business{id,name}' }, 8000, 0,
-        );
-        if (acctRes.business) {
-          accountBmMap.set(acctId, { bmId: acctRes.business.id, bmName: acctRes.business.name });
-        }
-      } catch { /* skip */ }
+      // Only fetch BM info if not already resolved from options API
+      if (!accountBmMap.has(acctId)) {
+        try {
+          const acctRes = await fetchFromMeta<{ business?: { id: string; name: string } }>(
+            metaToken, acctId, { fields: 'business{id,name}' }, 8000, 0,
+          );
+          if (acctRes.business) {
+            accountBmMap.set(acctId, { bmId: acctRes.business.id, bmName: acctRes.business.name });
+          }
+        } catch { /* skip */ }
+      }
     });
 
     // For any pixel IDs still not resolved, try direct lookup
@@ -417,9 +430,25 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Log unresolved IDs for debugging cross-BM issues
+    const stillUnresolvedPages = Array.from(uniquePageIds).filter(id => !pageNameMap.has(id));
+    const stillUnresolvedIgs = Array.from(uniqueIgIds).filter(id => !igUsernameMap.has(id));
+    const stillUnresolvedBms = Array.from(uniqueAdAccountIds).filter(id => !accountBmMap.has(id));
+    if (stillUnresolvedPages.length > 0) {
+      console.warn(`[auto-discover] Unresolved page IDs (will show as raw IDs): ${stillUnresolvedPages.join(', ')}`);
+    }
+    if (stillUnresolvedIgs.length > 0) {
+      console.warn(`[auto-discover] Unresolved IG IDs (will show as raw IDs): ${stillUnresolvedIgs.join(', ')}`);
+    }
+    if (stillUnresolvedBms.length > 0) {
+      console.warn(`[auto-discover] Unresolved BM for ad accounts: ${stillUnresolvedBms.join(', ')}`);
+    }
+
     console.log(
-      `[auto-discover] Name resolution: ${pageNameMap.size} pages, ${igUsernameMap.size} IG, ` +
-      `${pixelNameMap.size} pixels, ${accountBmMap.size} BM`,
+      `[auto-discover] Name resolution: ${pageNameMap.size}/${uniquePageIds.size} pages, ` +
+      `${igUsernameMap.size}/${uniqueIgIds.size} IG, ` +
+      `${pixelNameMap.size}/${uniquePixelIds.size} pixels, ` +
+      `${accountBmMap.size}/${uniqueAdAccountIds.size} BM`,
     );
 
     // ━━━ Step 5: Match URLs to Shopify products ━━━

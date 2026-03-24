@@ -216,6 +216,23 @@ export async function GET(request: NextRequest) {
         .filter((row) => row.id)
     );
 
+    // Enrich accounts with BM info (best-effort, parallel)
+    const bmInfoResults = await Promise.allSettled(
+      baseOptions.accounts.map(async (acct) => {
+        const res = await fetchFromMeta<{ business?: { id: string; name: string } }>(
+          token.accessToken, acct.id, { fields: 'business{id,name}' }, 5000, 0,
+        );
+        return { accountId: acct.id, business: res.business };
+      }),
+    );
+    const enrichedAccounts: CampaignSetupAccountOption[] = baseOptions.accounts.map((acct, idx) => {
+      const result = bmInfoResults[idx];
+      if (result.status === 'fulfilled' && result.value.business) {
+        return { ...acct, businessId: result.value.business.id, businessName: result.value.business.name };
+      }
+      return acct;
+    });
+
     const fetchedAnyRows =
       pagesRaw.length > 0 ||
       pixelsRaw.length > 0 ||
@@ -227,13 +244,14 @@ export async function GET(request: NextRequest) {
       }
       return NextResponse.json({
         ...baseOptions,
+        accounts: enrichedAccounts,
         stale: true,
         warning: 'Meta setup sync timed out. Showing linked account defaults.',
       });
     }
 
     const options: CampaignSetupOptions = {
-      accounts: baseOptions.accounts,
+      accounts: enrichedAccounts,
       pages: uniqueById([...(cached?.data.pages || []), ...pages]),
       instagramAccounts: uniqueById([...(cached?.data.instagramAccounts || []), ...instagramAccounts]),
       pixels: uniqueById([...(cached?.data.pixels || []), ...pixels]),

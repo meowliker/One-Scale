@@ -63,6 +63,8 @@ export interface CampaignSetupAccountOption {
   id: string;
   name: string;
   accountId?: string;
+  businessId?: string;
+  businessName?: string;
 }
 
 export interface CampaignSetupPageOption {
