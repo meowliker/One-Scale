@@ -1,6 +1,11 @@
 import { subDays } from 'date-fns';
 import type { Ad, AdSet, Campaign } from '@/types/campaign';
-import { fetchMetaAdSetsByAccount, fetchMetaAdsByAccount, fetchMetaCampaigns } from '@/app/api/lib/meta-client';
+import {
+  fetchMetaAdSetsByAccount,
+  fetchMetaAdsByAccount,
+  fetchMetaCampaigns,
+  fetchMetaDailyEntityMetricsByAccount,
+} from '@/app/api/lib/meta-client';
 import { getMetaToken } from '@/app/api/lib/tokens';
 import { refreshMetaSetupSnapshots } from '@/app/api/lib/meta-setup-cache';
 import { rest } from '@/app/api/lib/supabase-persistence';
@@ -163,6 +168,22 @@ type AdEntityRow = {
   policy_json: Record<string, unknown>;
   metrics_json: Record<string, unknown>;
   raw_json: Record<string, unknown>;
+  source_window_start: string | null;
+  source_window_end: string | null;
+  source_synced_at: string;
+  updated_at: string;
+};
+
+type DailyMetricRow = {
+  store_id: string;
+  entity_level: 'campaign' | 'adset' | 'ad';
+  entity_id: string;
+  campaign_id: string | null;
+  adset_id: string | null;
+  ad_id: string | null;
+  ad_account_id: string | null;
+  metric_date: string;
+  metrics_json: Record<string, unknown>;
   source_window_start: string | null;
   source_window_end: string | null;
   source_synced_at: string;
@@ -437,6 +458,8 @@ export async function syncWarehouseSnapshotsForStore(params: {
   const adsetMap = new Map<string, AdSetWithContext>();
   const adsMap = new Map<string, AdWithContext>();
   const adsetIdsFromSuccessfulAdsFetch = new Set<string>();
+  const dailyMetricMap = new Map<string, DailyMetricRow>();
+  const nowIso = new Date().toISOString();
 
   for (const account of activeAccounts) {
     const accountId = account.ad_account_id;
@@ -496,6 +519,82 @@ export async function syncWarehouseSnapshotsForStore(params: {
       console.warn(`[Warehouse] ads bulk fetch failed for account ${accountId}: ${msg}`);
     }
     await sleep(120);
+
+    try {
+      const [campaignDaily, adsetDaily, adDaily] = await Promise.all([
+        fetchMetaDailyEntityMetricsByAccount(token.accessToken, accountId, 'campaign', dateRange, {
+          disableDateFallback: true,
+        }),
+        fetchMetaDailyEntityMetricsByAccount(token.accessToken, accountId, 'adset', dateRange, {
+          disableDateFallback: true,
+        }),
+        fetchMetaDailyEntityMetricsByAccount(token.accessToken, accountId, 'ad', dateRange, {
+          disableDateFallback: true,
+        }),
+      ]);
+
+      for (const row of campaignDaily) {
+        const key = `campaign|${row.entityId}|${row.metricDate}`;
+        dailyMetricMap.set(key, {
+          store_id: storeId,
+          entity_level: 'campaign',
+          entity_id: row.entityId,
+          campaign_id: row.campaignId,
+          adset_id: null,
+          ad_id: null,
+          ad_account_id: normalizeMetaAccountId(accountId) || null,
+          metric_date: row.metricDate,
+          metrics_json: row.metrics as unknown as Record<string, unknown>,
+          source_window_start: asDateKey(since),
+          source_window_end: asDateKey(until),
+          source_synced_at: nowIso,
+          updated_at: nowIso,
+        });
+      }
+
+      for (const row of adsetDaily) {
+        const adsetCtx = adsetMap.get(row.entityId);
+        const key = `adset|${row.entityId}|${row.metricDate}`;
+        dailyMetricMap.set(key, {
+          store_id: storeId,
+          entity_level: 'adset',
+          entity_id: row.entityId,
+          campaign_id: row.campaignId || adsetCtx?.campaign_id || adsetCtx?.campaignId || null,
+          adset_id: row.entityId,
+          ad_id: null,
+          ad_account_id: normalizeMetaAccountId(accountId) || null,
+          metric_date: row.metricDate,
+          metrics_json: row.metrics as unknown as Record<string, unknown>,
+          source_window_start: asDateKey(since),
+          source_window_end: asDateKey(until),
+          source_synced_at: nowIso,
+          updated_at: nowIso,
+        });
+      }
+
+      for (const row of adDaily) {
+        const adCtx = adsMap.get(row.entityId);
+        const key = `ad|${row.entityId}|${row.metricDate}`;
+        dailyMetricMap.set(key, {
+          store_id: storeId,
+          entity_level: 'ad',
+          entity_id: row.entityId,
+          campaign_id: row.campaignId || adCtx?.campaign_id || null,
+          adset_id: row.adsetId || adCtx?.adset_id || adCtx?.adSetId || null,
+          ad_id: row.entityId,
+          ad_account_id: normalizeMetaAccountId(accountId) || null,
+          metric_date: row.metricDate,
+          metrics_json: row.metrics as unknown as Record<string, unknown>,
+          source_window_start: asDateKey(since),
+          source_window_end: asDateKey(until),
+          source_synced_at: nowIso,
+          updated_at: nowIso,
+        });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'daily metrics fetch failed';
+      console.warn(`[Warehouse] daily metrics fetch failed for account ${accountId}: ${msg}`);
+    }
   }
 
   const allAdsets = [...adsetMap.values()];

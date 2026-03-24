@@ -908,6 +908,93 @@ export async function fetchMetaAdsByAccount(
   });
 }
 
+export type MetaDailyEntityMetricRow = {
+  level: 'campaign' | 'adset' | 'ad';
+  entityId: string;
+  metricDate: string;
+  campaignId: string | null;
+  adsetId: string | null;
+  adId: string | null;
+  metrics: PerformanceMetrics;
+};
+
+export async function fetchMetaDailyEntityMetricsByAccount(
+  token: string,
+  accountId: string,
+  level: 'campaign' | 'adset' | 'ad',
+  dateRange?: { since: string; until: string },
+  options?: { disableDateFallback?: boolean; datePreset?: string }
+): Promise<MetaDailyEntityMetricRow[]> {
+  const insightsFields = level === 'campaign'
+    ? 'campaign_id,date_start,spend,impressions,reach,clicks,actions,action_values,ctr,cpc,cpm,unique_clicks,unique_ctr,quality_ranking,engagement_rate_ranking,conversion_rate_ranking'
+    : level === 'adset'
+      ? 'campaign_id,adset_id,date_start,spend,impressions,reach,clicks,actions,action_values,ctr,cpc,cpm,unique_clicks,unique_ctr,quality_ranking,engagement_rate_ranking,conversion_rate_ranking'
+      : 'campaign_id,adset_id,ad_id,date_start,spend,impressions,reach,clicks,actions,action_values,ctr,cpc,cpm,unique_clicks,unique_ctr,quality_ranking,engagement_rate_ranking,conversion_rate_ranking';
+
+  const baseParams: Record<string, string> = {
+    fields: insightsFields,
+    level,
+    time_increment: '1',
+    limit: '500',
+    action_attribution_windows: JSON.stringify(['7d_click', '1d_view']),
+    ...(options?.datePreset
+      ? { date_preset: options.datePreset }
+      : dateRange
+        ? { time_range: JSON.stringify(dateRange) }
+        : { date_preset: 'last_30d' }),
+  };
+
+  let insightRows = await fetchMetaPagedRows(
+    token,
+    `/${accountId}/insights`,
+    baseParams
+  ).catch(() => [] as Record<string, unknown>[]);
+
+  if (
+    dateRange &&
+    !options?.datePreset &&
+    !options?.disableDateFallback &&
+    insightRows.length === 0
+  ) {
+    insightRows = await fetchMetaPagedRows(
+      token,
+      `/${accountId}/insights`,
+      {
+        ...baseParams,
+        date_preset: 'last_30d',
+      }
+    ).catch(() => [] as Record<string, unknown>[]);
+  }
+
+  const rows: MetaDailyEntityMetricRow[] = [];
+  for (const row of insightRows) {
+    const metricDate = typeof row.date_start === 'string' ? row.date_start : '';
+    if (!metricDate) continue;
+
+    const campaignId = typeof row.campaign_id === 'string' ? row.campaign_id : null;
+    const adsetId = typeof row.adset_id === 'string' ? row.adset_id : null;
+    const adId = typeof row.ad_id === 'string' ? row.ad_id : null;
+
+    const entityId = level === 'campaign'
+      ? (campaignId || '')
+      : level === 'adset'
+        ? (adsetId || '')
+        : (adId || '');
+    if (!entityId) continue;
+
+    rows.push({
+      level,
+      entityId,
+      metricDate,
+      campaignId,
+      adsetId,
+      adId,
+      metrics: mapInsightsToMetrics(row),
+    });
+  }
+  return rows;
+}
+
 /**
  * Fetch all ad sets for a campaign using a SINGLE campaign-level insights call
  * with level=adset instead of N individual per-adset calls.

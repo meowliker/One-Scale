@@ -421,6 +421,42 @@ create index if not exists idx_meta_ad_entities_store_status
 create index if not exists idx_meta_ad_entities_store_account
   on meta_ad_entities(store_id, ad_account_id);
 
+create table if not exists meta_entity_daily_metrics (
+  id bigserial primary key,
+  store_id text not null references stores(id) on delete cascade,
+  entity_level text not null check (entity_level in ('campaign', 'adset', 'ad')),
+  entity_id text not null,
+  campaign_id text,
+  adset_id text,
+  ad_id text,
+  ad_account_id text,
+  metric_date date not null,
+  metrics_json jsonb not null default '{}'::jsonb,
+  source_window_start date,
+  source_window_end date,
+  source_synced_at timestamptz,
+  updated_at timestamptz not null default now(),
+  unique (store_id, entity_level, entity_id, metric_date)
+);
+
+create index if not exists idx_meta_daily_metrics_store_date
+  on meta_entity_daily_metrics(store_id, metric_date desc);
+
+create index if not exists idx_meta_daily_metrics_store_level
+  on meta_entity_daily_metrics(store_id, entity_level, metric_date desc);
+
+create index if not exists idx_meta_daily_metrics_store_campaign
+  on meta_entity_daily_metrics(store_id, campaign_id, metric_date desc)
+  where campaign_id is not null;
+
+create index if not exists idx_meta_daily_metrics_store_adset
+  on meta_entity_daily_metrics(store_id, adset_id, metric_date desc)
+  where adset_id is not null;
+
+create index if not exists idx_meta_daily_metrics_store_ad
+  on meta_entity_daily_metrics(store_id, ad_id, metric_date desc)
+  where ad_id is not null;
+
 create or replace view meta_entities_flat_v as
 select
   a.store_id,
