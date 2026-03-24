@@ -75,16 +75,12 @@ function collectUnique<K extends keyof ProductCampaignLink>(
   return Array.from(seen.entries()).map(([id, name]) => ({ id, name }));
 }
 
-function formatAggregated(
-  items: { id: string; name: string }[],
-  pluralLabel: string
-): { display: string; tooltip?: string } {
-  if (items.length === 0) return { display: 'Not set' };
-  if (items.length === 1) return { display: items[0].name };
-  return {
-    display: `${items.length} ${pluralLabel}`,
-    tooltip: items.map((i) => i.name).join(', '),
-  };
+/** When multiple items exist, return all names for pill rendering */
+function resolveItems(
+  items: { id: string; name: string }[]
+): { names: string[]; muted: boolean } {
+  if (items.length === 0) return { names: ['Not set'], muted: true };
+  return { names: items.map((i) => i.name), muted: false };
 }
 
 export function ProductProfileCard({
@@ -101,9 +97,6 @@ export function ProductProfileCard({
   const [campaignsExpanded, setCampaignsExpanded] = useState(false);
   const { stores, activeStoreId } = useStoreStore();
   const activeStore = stores.find(s => s.id === activeStoreId);
-  const adAccountName = activeStore?.adAccounts?.find(
-    a => a.id === profile.adAccountId || a.accountId === profile.adAccountId
-  )?.name;
 
   // Use Meta-derived counts from API if available, fallback to DB isActive flag
   const activeCampaignCount = profile.activeCampaignCount ?? linkedCampaigns.filter(c => c.isActive).length;
@@ -122,17 +115,32 @@ export function ProductProfileCard({
   const pagesWithNames = pages.filter(p => p.name && !/^\d+$/.test(p.name));
   const pixelsWithNames = pixels.filter(p => p.name && !/^\d+$/.test(p.name));
 
-  const pageDisplay = profile.pageName
-    ? { display: profile.pageName }
-    : pagesWithNames.length > 0
-      ? formatAggregated(pagesWithNames, 'pages')
-      : { display: profile.pageId || 'Not set' };
+  // Collect unique ad accounts from linked campaigns
+  const adAccountIds = new Set<string>();
+  for (const link of linkedCampaigns) {
+    if (link.adAccountId) adAccountIds.add(link.adAccountId);
+  }
+  // Also include the profile-level ad account
+  if (profile.adAccountId) adAccountIds.add(profile.adAccountId);
 
-  const pixelDisplay = profile.pixelName
-    ? { display: profile.pixelName }
+  const adAccountItems: { id: string; name: string }[] = Array.from(adAccountIds).map((id) => {
+    const acct = activeStore?.adAccounts?.find(a => a.id === id || a.accountId === id);
+    const name = acct ? `${acct.name} (${acct.currency})` : id;
+    return { id, name };
+  });
+  const adAccountResolved = resolveItems(adAccountItems);
+
+  const pageResolved = profile.pageName
+    ? { names: [profile.pageName], muted: false }
+    : pagesWithNames.length > 0
+      ? resolveItems(pagesWithNames)
+      : { names: [profile.pageId || 'Not set'], muted: !profile.pageId };
+
+  const pixelResolved = profile.pixelName
+    ? { names: [profile.pixelName], muted: false }
     : pixelsWithNames.length > 0
-      ? formatAggregated(pixelsWithNames, 'pixels')
-      : { display: profile.pixelId || 'Not set' };
+      ? resolveItems(pixelsWithNames)
+      : { names: [profile.pixelId || 'Not set'], muted: !profile.pixelId };
 
   // Only show IG items that have a real username (not raw numeric IDs)
   const igItems = instagrams.length > 0
@@ -142,13 +150,9 @@ export function ProductProfileCard({
     : profile.instagramUsername
       ? [{ id: profile.instagramActorId || '', name: `@${profile.instagramUsername}` }]
       : [];
-  const igDisplay = igItems.length > 0
-    ? formatAggregated(igItems, 'accounts')
-    : { display: 'Not set' };
+  const igResolved = resolveItems(igItems);
 
-  const bmDisplay = bms.length > 0
-    ? formatAggregated(bms, 'BMs')
-    : { display: 'Not set' };
+  const bmResolved = resolveItems(bms);
 
   const clickupDisplay = profile.clickupListName || 'Not mapped';
 
@@ -218,54 +222,43 @@ export function ProductProfileCard({
           <InfoRow
             icon={<DollarSign className="h-3.5 w-3.5" />}
             label="Ad Account"
-            value={
-              adAccountName
-                ? `${adAccountName} (${profile.adAccountCurrency})`
-                : profile.adAccountId
-                  ? `${profile.adAccountId} (${profile.adAccountCurrency})`
-                  : 'Not set'
-            }
-            tooltip={profile.adAccountId}
-            muted={!profile.adAccountId}
+            values={adAccountResolved.names}
+            muted={adAccountResolved.muted}
           />
           <InfoRow
             icon={<Facebook className="h-3.5 w-3.5" />}
             label="Page"
-            value={pageDisplay.display}
-            tooltip={pageDisplay.tooltip}
-            muted={pageDisplay.display === 'Not set'}
+            values={pageResolved.names}
+            muted={pageResolved.muted}
           />
           <InfoRow
             icon={<Instagram className="h-3.5 w-3.5" />}
             label="Instagram"
-            value={igDisplay.display}
-            tooltip={igDisplay.tooltip}
-            muted={igDisplay.display === 'Not set'}
+            values={igResolved.names}
+            muted={igResolved.muted}
           />
           <InfoRow
             icon={<Activity className="h-3.5 w-3.5" />}
             label="Pixel"
-            value={pixelDisplay.display}
-            tooltip={pixelDisplay.tooltip}
-            muted={pixelDisplay.display === 'Not set'}
+            values={pixelResolved.names}
+            muted={pixelResolved.muted}
           />
           <InfoRow
             icon={<Building2 className="h-3.5 w-3.5" />}
             label="BM"
-            value={bmDisplay.display}
-            tooltip={bmDisplay.tooltip}
-            muted={bmDisplay.display === 'Not set'}
+            values={bmResolved.names}
+            muted={bmResolved.muted}
           />
           <InfoRow
             icon={<LayoutGrid className="h-3.5 w-3.5" />}
             label="ClickUp"
-            value={clickupDisplay}
+            values={[clickupDisplay]}
             muted={clickupDisplay === 'Not mapped'}
           />
           <InfoRow
             icon={<Globe className="h-3.5 w-3.5" />}
             label="URL"
-            value={profile.destinationUrl || 'Not set'}
+            values={[profile.destinationUrl || 'Not set']}
             href={profile.destinationUrl}
             muted={!profile.destinationUrl}
             truncate
@@ -415,8 +408,7 @@ function StatBadge({
 function InfoRow({
   icon,
   label,
-  value,
-  tooltip,
+  values,
   href,
   muted = false,
   truncate = false,
@@ -424,38 +416,51 @@ function InfoRow({
 }: {
   icon: React.ReactNode;
   label: string;
-  value: string;
-  tooltip?: string;
+  values: string[];
   href?: string;
   muted?: boolean;
   truncate?: boolean;
   colSpan2?: boolean;
 }) {
+  const isSingle = values.length <= 1;
+  const displayValue = values[0] || 'Not set';
+
   return (
-    <div className={cn('flex items-center gap-2 min-w-0', colSpan2 && 'col-span-2')}>
-      <span className="text-text-dimmed flex-shrink-0">{icon}</span>
-      <span className="text-text-secondary flex-shrink-0">{label}:</span>
+    <div className={cn('flex items-start gap-2 min-w-0', colSpan2 && 'col-span-2')}>
+      <span className="text-text-dimmed flex-shrink-0 mt-0.5">{icon}</span>
+      <span className="text-text-secondary flex-shrink-0 mt-0.5">{label}:</span>
       {href && !muted ? (
         <a
           href={href}
           target="_blank"
           rel="noopener noreferrer"
           className="font-medium text-blue-600 hover:text-blue-700 truncate"
-          title={tooltip || href}
+          title={href}
         >
-          {value}
+          {displayValue}
         </a>
-      ) : (
+      ) : isSingle ? (
         <span
           className={cn(
             'font-medium',
             muted ? 'text-text-dimmed italic' : 'text-text-primary',
             truncate && 'truncate'
           )}
-          title={tooltip}
         >
-          {value}
+          {displayValue}
         </span>
+      ) : (
+        <div className="flex flex-wrap gap-1 min-w-0">
+          {values.map((v, i) => (
+            <span
+              key={i}
+              className="inline-block max-w-[180px] truncate rounded-full bg-gray-100 dark:bg-white/10 px-2 py-0.5 text-xs font-medium text-text-primary"
+              title={v}
+            >
+              {v}
+            </span>
+          ))}
+        </div>
       )}
     </div>
   );
