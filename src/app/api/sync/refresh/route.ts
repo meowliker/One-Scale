@@ -219,6 +219,19 @@ export async function POST(request: NextRequest) {
         completedAt: new Date().toISOString(),
       });
     } catch (err) {
+      if (err instanceof MetaRateLimitError) {
+        markMetaRateLimited(storeId, 90);
+        return NextResponse.json(
+          {
+            ok: false,
+            mode: 'warehouse_refresh',
+            storeId,
+            rateLimited: true,
+            error: err.message,
+          },
+          { status: 429, headers: { 'Retry-After': '90' } }
+        );
+      }
       const message = err instanceof Error ? err.message : 'Warehouse refresh failed';
       console.error('[sync/refresh][warehouse] Error:', message);
       return NextResponse.json(
