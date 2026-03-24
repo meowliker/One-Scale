@@ -100,8 +100,8 @@ export function LaunchStep2AdCopy() {
       ].filter(Boolean).join('. ');
 
       // Get product name from the selected profile for better AI context
-      const profiles = useCreativeHubStore.getState().profiles;
-      const selectedProfile = profiles.find((p) => p.id === productProfileId);
+      const latestProfiles = useCreativeHubStore.getState().profiles;
+      const selectedProfile = latestProfiles.find((p) => p.id === productProfileId);
       const productName = selectedProfile?.productName || 'Product';
       await generateAICopy(productProfileId, productName, context || 'Generate fresh ad copy suggestions');
 

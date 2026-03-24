@@ -159,6 +159,13 @@ export function LaunchStep1Campaign() {
                     bidStrategy: profile.defaultBidStrategy,
                     structure: profile.defaultStructure,
                     launchStatus: profile.defaultLaunchStatus,
+                    // Pre-fill UTM template from profile
+                    utmTemplate: profile.utmTemplate,
+                    // Pre-fill AI rule defaults from profile
+                    aiMinSpend: profile.aiMinSpend,
+                    aiMinImpressions: profile.aiMinImpressions,
+                    aiMinHours: profile.aiMinHours,
+                    aiEvalFrequency: profile.aiEvalFrequency,
                     // Reset campaign selection when switching products
                     existingCampaignId: undefined,
                     existingAdsetAssignments: undefined,
