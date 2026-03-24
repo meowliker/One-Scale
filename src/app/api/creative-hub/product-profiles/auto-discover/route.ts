@@ -554,6 +554,7 @@ export async function POST(request: NextRequest) {
           storeId: storeId!,
           productName: existingProfile.productName,
           adAccountId: profileAdAccountId,
+          destinationUrl: match.campaigns[0]?.destinationUrl || existingProfile.destinationUrl,
           pageId: profilePageId || existingProfile.pageId,
           pageName: profilePageName || existingProfile.pageName,
           pixelId: profilePixelId || existingProfile.pixelId,

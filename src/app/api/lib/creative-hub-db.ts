@@ -47,9 +47,11 @@ interface ProductProfileRow {
   ad_account_id: string;
   ad_account_currency: string;
   page_id: string | null;
+  page_name: string | null;
   instagram_actor_id: string | null;
   instagram_username: string | null;
   pixel_id: string | null;
+  pixel_name: string | null;
   conversion_event: string;
   destination_url: string | null;
   utm_template: string | null;
@@ -208,9 +210,11 @@ function mapProfileRow(row: ProductProfileRow): ProductProfile {
     adAccountId: row.ad_account_id,
     adAccountCurrency: row.ad_account_currency,
     pageId: row.page_id ?? undefined,
+    pageName: row.page_name ?? undefined,
     instagramActorId: row.instagram_actor_id ?? undefined,
     instagramUsername: row.instagram_username ?? undefined,
     pixelId: row.pixel_id ?? undefined,
+    pixelName: row.pixel_name ?? undefined,
     conversionEvent: row.conversion_event,
     destinationUrl: row.destination_url ?? undefined,
     utmTemplate: row.utm_template ?? undefined,
