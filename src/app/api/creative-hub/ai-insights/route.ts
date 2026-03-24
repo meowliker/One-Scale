@@ -303,6 +303,7 @@ export async function POST(request: NextRequest) {
     const body = (await request.json()) as {
       storeId?: string;
       productProfileId?: string;
+      refresh?: boolean;
     };
 
     const { storeId, productProfileId } = body;
@@ -368,40 +369,89 @@ export async function POST(request: NextRequest) {
     const productName = winningAdsData.productName || 'Unknown Product';
     const analyzedAds = Math.min(winningAdsData.ads?.length ?? 0, 20);
 
-    // Try Claude AI analysis first
+    // --- CACHING: Check Supabase for cached insights (< 24h old) ---
+    const forceRefresh = body.refresh === true;
+    const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+    if (!forceRefresh) {
+      try {
+        const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+        const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+        if (SUPABASE_URL && SUPABASE_KEY) {
+          const cacheRes = await fetch(
+            `${SUPABASE_URL}/rest/v1/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.ai_insights&scope_id=eq.${encodeURIComponent(productProfileId)}&variant_key=eq.latest&select=payload_json,updated_at&limit=1`,
+            { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+          );
+          if (cacheRes.ok) {
+            const cached = await cacheRes.json();
+            if (cached.length > 0) {
+              const age = Date.now() - new Date(cached[0].updated_at).getTime();
+              if (age < CACHE_TTL_MS) {
+                const cachedData = JSON.parse(cached[0].payload_json);
+                console.log('[ai-insights] Returning cached insights (age:', Math.round(age / 60000), 'min)');
+                return NextResponse.json({ ...cachedData, cached: true, cacheAge: Math.round(age / 60000) });
+              }
+            }
+          }
+        }
+      } catch { /* cache miss, continue to fresh call */ }
+    }
+
+    // --- FRESH CALL: Claude AI or fallback ---
     let insights: AiInsights | null = null;
     let source: 'ai' | 'fallback' = 'fallback';
     let model = process.env.ANTHROPIC_CREATIVE_MODEL || 'claude-opus-4-6';
 
     try {
-      console.log('[ai-insights] ANTHROPIC_API_KEY:', process.env.ANTHROPIC_API_KEY ? 'SET (' + process.env.ANTHROPIC_API_KEY.substring(0, 15) + '...)' : 'NOT SET');
       console.log('[ai-insights] Calling Claude with', winningAdsData.ads.length, 'ads');
       insights = await callClaudeForInsights(winningAdsData);
       if (insights) {
         source = 'ai';
         console.log('[ai-insights] Claude returned insights successfully');
-      } else {
-        console.log('[ai-insights] Claude returned null (no API key?)');
       }
     } catch (err) {
       console.error('[ai-insights] Claude API call failed:', err);
-      // Fall through to fallback
     }
 
-    // Fallback to rule-based analysis
     if (!insights) {
       insights = buildFallbackInsights(winningAdsData);
       source = 'fallback';
       model = 'rule-based';
     }
 
-    return NextResponse.json({
-      insights,
-      source,
-      model,
-      analyzedAds,
-      productName,
-    });
+    const responseData = { insights, source, model, analyzedAds, productName };
+
+    // --- SAVE TO CACHE ---
+    try {
+      const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (SUPABASE_URL && SUPABASE_KEY && source === 'ai') {
+        await fetch(
+          `${SUPABASE_URL}/rest/v1/meta_endpoint_snapshots?on_conflict=store_id,endpoint,scope_id,variant_key`,
+          {
+            method: 'POST',
+            headers: {
+              apikey: SUPABASE_KEY,
+              Authorization: `Bearer ${SUPABASE_KEY}`,
+              'Content-Type': 'application/json',
+              Prefer: 'resolution=merge-duplicates',
+            },
+            body: JSON.stringify({
+              store_id: storeId,
+              endpoint: 'ai_insights',
+              scope_id: productProfileId,
+              variant_key: 'latest',
+              row_count: analyzedAds,
+              payload_json: JSON.stringify(responseData),
+              updated_at: new Date().toISOString(),
+            }),
+          }
+        );
+        console.log('[ai-insights] Cached to Supabase');
+      }
+    } catch { /* cache write failed, non-critical */ }
+
+    return NextResponse.json(responseData);
   } catch (err) {
     const message =
       err instanceof Error ? err.message : 'Failed to generate AI insights';

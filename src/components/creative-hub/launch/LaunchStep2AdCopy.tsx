@@ -54,11 +54,16 @@ interface WinningAd {
 
 interface UniqueText {
   text: string;
-  roas: number;
-  spend: number;
-  purchases: number;
-  ctr: number;
-  adCount: number;
+  roas?: number;
+  combinedRoas?: number;
+  spend?: number;
+  combinedSpend?: number;
+  combinedRevenue?: number;
+  purchases?: number;
+  ctr?: number;
+  avgCtr?: number;
+  avgCpa?: number;
+  adCount?: number;
 }
 
 interface AutoFill {
@@ -83,15 +88,17 @@ interface AiInsight {
   suggestedHeadlines: string[];
 }
 
-function roasColor(roas: number) {
-  if (roas >= 2) return 'text-emerald-700 bg-emerald-100';
-  if (roas >= 1) return 'text-amber-700 bg-amber-100';
+function roasColor(roas: number | undefined) {
+  const r = roas ?? 0;
+  if (r >= 2) return 'text-emerald-700 bg-emerald-100';
+  if (r >= 1) return 'text-amber-700 bg-amber-100';
   return 'text-red-700 bg-red-100';
 }
 
-function roasBorderColor(roas: number) {
-  if (roas >= 2) return 'border-emerald-200';
-  if (roas >= 1) return 'border-amber-200';
+function roasBorderColor(roas: number | undefined) {
+  const r = roas ?? 0;
+  if (r >= 2) return 'border-emerald-200';
+  if (r >= 1) return 'border-amber-200';
   return 'border-red-200';
 }
 
