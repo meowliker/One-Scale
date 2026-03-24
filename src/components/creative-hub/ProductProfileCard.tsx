@@ -405,6 +405,12 @@ function StatBadge({
   );
 }
 
+/** Truncate long numeric IDs to first 6 chars + "..." */
+function truncateId(value: string): string {
+  if (/^\d{10,}$/.test(value)) return value.slice(0, 6) + '...';
+  return value;
+}
+
 function InfoRow({
   icon,
   label,
@@ -425,10 +431,14 @@ function InfoRow({
   const isSingle = values.length <= 1;
   const displayValue = values[0] || 'Not set';
 
+  // For multi-value: show first 2 as pills, then "+N more" if 3+
+  const visiblePills = values.slice(0, 2);
+  const overflowCount = values.length - 2;
+
   return (
-    <div className={cn('flex items-start gap-2 min-w-0', colSpan2 && 'col-span-2')}>
-      <span className="text-text-dimmed flex-shrink-0 mt-0.5">{icon}</span>
-      <span className="text-text-secondary flex-shrink-0 mt-0.5">{label}:</span>
+    <div className={cn('flex items-center gap-2 min-w-0', colSpan2 && 'col-span-2')}>
+      <span className="text-text-dimmed flex-shrink-0">{icon}</span>
+      <span className="text-text-secondary flex-shrink-0">{label}:</span>
       {href && !muted ? (
         <a
           href={href}
@@ -437,7 +447,7 @@ function InfoRow({
           className="font-medium text-blue-600 hover:text-blue-700 truncate"
           title={href}
         >
-          {displayValue}
+          {truncateId(displayValue)}
         </a>
       ) : isSingle ? (
         <span
@@ -446,20 +456,29 @@ function InfoRow({
             muted ? 'text-text-dimmed italic' : 'text-text-primary',
             truncate && 'truncate'
           )}
+          title={displayValue}
         >
-          {displayValue}
+          {truncateId(displayValue)}
         </span>
       ) : (
-        <div className="flex flex-wrap gap-1 min-w-0">
-          {values.map((v, i) => (
+        <div className="inline-flex items-center gap-1 min-w-0 overflow-hidden">
+          {visiblePills.map((v, i) => (
             <span
               key={i}
-              className="inline-block max-w-[180px] truncate rounded-full bg-gray-100 dark:bg-white/10 px-2 py-0.5 text-xs font-medium text-text-primary"
+              className="inline-flex max-w-[160px] truncate rounded-full bg-gray-100 dark:bg-white/10 px-2 py-0.5 text-xs font-medium text-text-primary flex-shrink-0"
               title={v}
             >
-              {v}
+              {truncateId(v)}
             </span>
           ))}
+          {overflowCount > 0 && (
+            <span
+              className="text-[10px] text-text-dimmed flex-shrink-0 cursor-default"
+              title={values.slice(2).join(', ')}
+            >
+              +{overflowCount} more
+            </span>
+          )}
         </div>
       )}
     </div>
