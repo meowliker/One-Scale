@@ -685,12 +685,12 @@ export async function fetchMetaAdSetsByAccount(
       'targeting', 'start_time', 'end_time', 'effective_status', 'configured_status', 'issues_info', 'ad_review_feedback',
     ].join(',');
 
-  const listTimeoutMs = options?.preferLightweight ? 7000 : 15000;
-  const listRetries = options?.preferLightweight ? 0 : undefined;
+  const listTimeoutMs = options?.preferLightweight ? 15000 : 25000;
+  const listRetries = options?.preferLightweight ? 1 : undefined;
   const listRows = await fetchMetaPagedRows(
     token,
     `/${accountId}/adsets`,
-    { fields, limit: '500' },
+    { fields, limit: '100' },
     listTimeoutMs,
     listRetries
   );
@@ -808,12 +808,12 @@ export async function fetchMetaAdsByAccount(
       'creative{id,title,body,call_to_action_type,image_url,thumbnail_url,video_id,object_story_spec,url_tags}',
     ].join(',');
 
-  const listTimeoutMs = options?.preferLightweight ? 7000 : 15000;
-  const listRetries = options?.preferLightweight ? 0 : undefined;
+  const listTimeoutMs = options?.preferLightweight ? 15000 : 30000;
+  const listRetries = options?.preferLightweight ? 1 : undefined;
   const listRows = await fetchMetaPagedRows(
     token,
     `/${accountId}/ads`,
-    { fields, limit: '500' },
+    { fields, limit: '100' },
     listTimeoutMs,
     listRetries
   );

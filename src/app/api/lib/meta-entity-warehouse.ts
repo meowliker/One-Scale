@@ -436,43 +436,66 @@ export async function syncWarehouseSnapshotsForStore(params: {
 
   const adsetMap = new Map<string, AdSetWithContext>();
   const adsMap = new Map<string, AdWithContext>();
+  const adsetIdsFromSuccessfulAdsFetch = new Set<string>();
 
   for (const account of activeAccounts) {
     const accountId = account.ad_account_id;
-    const adsets = await fetchMetaAdSetsByAccount(token.accessToken, accountId, dateRange, {
-      disableDateFallback: true,
-      preferLightweight: true,
-      basicOnly: false,
-    });
-
-    for (const adset of adsets) {
-      if (!adset.id) continue;
-      if (adsetMap.has(adset.id)) continue;
-      adsetMap.set(adset.id, {
-        ...adset,
-        campaign_id: adset.campaignId || undefined,
-        ad_account_id: accountId,
+    try {
+      const adsets = await fetchMetaAdSetsByAccount(token.accessToken, accountId, dateRange, {
+        disableDateFallback: true,
+        preferLightweight: false,
+        basicOnly: false,
       });
+
+      for (const adset of adsets) {
+        if (!adset.id) continue;
+        if (adsetMap.has(adset.id)) continue;
+        adsetMap.set(adset.id, {
+          ...adset,
+          campaign_id: adset.campaignId || undefined,
+          ad_account_id: accountId,
+        });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'adset fetch failed';
+      console.warn(`[Warehouse] adset bulk fetch failed for account ${accountId}: ${msg}`);
+    }
+    await sleep(100);
+
+    try {
+      const ads = await fetchMetaAdsByAccount(token.accessToken, accountId, dateRange, {
+        disableDateFallback: true,
+        preferLightweight: false,
+        basicOnly: false,
+      });
+      for (const ad of ads) {
+        if (!ad.id) continue;
+        if (adsMap.has(ad.id)) continue;
+        const raw = ad as unknown as Record<string, unknown>;
+        const adsetId = asString(raw.adset_id) || ad.adSetId || undefined;
+        if (adsetId) {
+          adsetIdsFromSuccessfulAdsFetch.add(adsetId);
+        }
+        adsMap.set(ad.id, {
+          ...(ad as Ad),
+          adset_id: adsetId,
+          campaign_id: asString(raw.campaign_id) || undefined,
+          ad_account_id: accountId,
+        });
+      }
+
+      // Also persist explicit empty ads lists for adsets that belong to accounts
+      // where ads fetch succeeded but returned zero rows for those adsets.
+      for (const adset of adsetMap.values()) {
+        if (normalizeMetaAccountId(adset.ad_account_id || '') === normalizeMetaAccountId(accountId)) {
+          adsetIdsFromSuccessfulAdsFetch.add(adset.id);
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'ad fetch failed';
+      console.warn(`[Warehouse] ads bulk fetch failed for account ${accountId}: ${msg}`);
     }
     await sleep(120);
-
-    const ads = await fetchMetaAdsByAccount(token.accessToken, accountId, dateRange, {
-      disableDateFallback: true,
-      preferLightweight: true,
-      basicOnly: false,
-    });
-    for (const ad of ads) {
-      if (!ad.id) continue;
-      if (adsMap.has(ad.id)) continue;
-      const raw = ad as unknown as Record<string, unknown>;
-      adsMap.set(ad.id, {
-        ...(ad as Ad),
-        adset_id: asString(raw.adset_id) || ad.adSetId || undefined,
-        campaign_id: asString(raw.campaign_id) || undefined,
-        ad_account_id: accountId,
-      });
-    }
-    await sleep(140);
   }
 
   const allAdsets = [...adsetMap.values()];
@@ -512,7 +535,7 @@ export async function syncWarehouseSnapshotsForStore(params: {
   }
 
   const adsetIdsToPersist = new Set<string>([
-    ...allAdsets.map((s) => s.id),
+    ...adsetIdsFromSuccessfulAdsFetch,
     ...adsByAdset.keys(),
   ]);
 
