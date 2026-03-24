@@ -18,6 +18,11 @@ import {
   DollarSign,
   Building2,
   LayoutGrid,
+  Rocket,
+  ImageIcon,
+  TestTube2,
+  Trophy,
+  Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useStoreStore } from '@/stores/storeStore';
@@ -32,6 +37,7 @@ interface ProductProfileCardProps {
   winnersCount?: number;
   onEdit: (profile: ProductProfile) => void;
   onViewCopyLibrary: (profileId: string) => void;
+  onLaunch?: (profile: ProductProfile) => void;
 }
 
 const campaignTypeBadge: Record<CampaignLinkType, { label: string; className: string; Icon: typeof FlaskConical }> = {
@@ -85,11 +91,12 @@ export function ProductProfileCard({
   profile,
   linkedCampaigns,
   creativeCount,
-  testingCount = 0,
-  launchedCount = 0,
-  winnersCount = 0,
+  testingCount,
+  launchedCount,
+  winnersCount,
   onEdit,
   onViewCopyLibrary,
+  onLaunch,
 }: ProductProfileCardProps) {
   const [campaignsExpanded, setCampaignsExpanded] = useState(false);
   const { stores, activeStoreId } = useStoreStore();
@@ -97,6 +104,10 @@ export function ProductProfileCard({
   const adAccountName = activeStore?.adAccounts?.find(
     a => a.id === profile.adAccountId || a.accountId === profile.adAccountId
   )?.name;
+
+  // Determine active status: active if any linked campaign is active
+  const activeCampaignCount = linkedCampaigns.filter(c => c.isActive).length;
+  const isActive = activeCampaignCount > 0;
 
   // Priority: profile-level name > campaign link names > ID > "Not set"
   // Profile-level name is set by user in Edit Profile, so it takes priority
@@ -139,18 +150,16 @@ export function ProductProfileCard({
 
   const clickupDisplay = profile.clickupListName || 'Not mapped';
 
-  const isConfigured = linkedCampaigns?.some(c => c.pageId || c.pixelId) || !!profile.pageId;
-
   return (
     <div
       className={cn(
-        'rounded-xl border bg-surface-elevated shadow-sm p-6 transition-all duration-200 hover:shadow-md',
-        isConfigured
-          ? 'border-border hover:border-blue-200 border-l-4 border-l-blue-500'
-          : 'border-border hover:border-amber-200 border-l-4 border-l-amber-400'
+        'rounded-xl border bg-surface-elevated shadow-sm p-6 transition-all duration-200 hover:shadow-md border-l-4',
+        isActive
+          ? 'border-border hover:border-emerald-200 border-l-emerald-500'
+          : 'border-border hover:border-gray-200 border-l-gray-300 opacity-60'
       )}
     >
-      {/* Header: image + name + badges */}
+      {/* Header: image + name + active/paused badge */}
       <div className="flex items-start gap-4">
         <div className="h-16 w-16 flex-shrink-0 rounded-lg bg-surface-hover flex items-center justify-center overflow-hidden">
           {profile.productImage ? (
@@ -165,41 +174,27 @@ export function ProductProfileCard({
         </div>
 
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2.5 flex-wrap">
+          <div className="flex items-center justify-between gap-2">
             <h3 className="text-base font-semibold text-text-primary truncate">
               {profile.productName}
             </h3>
             <span
               className={cn(
                 'rounded-full px-2.5 py-0.5 text-xs font-medium flex-shrink-0',
-                isConfigured
+                isActive
                   ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                  : 'bg-amber-50 text-amber-700 border border-amber-200'
+                  : 'bg-gray-100 text-gray-500 border border-gray-200'
               )}
             >
-              {isConfigured ? 'Configured' : 'Not configured'}
+              {isActive ? 'Active' : 'Paused'}
             </span>
-            {creativeCount != null && creativeCount > 0 && (
-              <span className="rounded-full bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 text-xs font-medium ml-2">
-                {creativeCount} creative{creativeCount !== 1 ? 's' : ''}
-              </span>
-            )}
-            {testingCount > 0 && (
-              <span className="rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 text-xs font-medium">
-                {testingCount} testing
-              </span>
-            )}
-            {launchedCount > 0 && (
-              <span className="rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 text-xs font-medium">
-                {launchedCount} launched
-              </span>
-            )}
-            {winnersCount > 0 && (
-              <span className="rounded-full bg-purple-50 text-purple-700 border border-purple-200 px-2 py-0.5 text-xs font-medium">
-                {winnersCount} winner{winnersCount !== 1 ? 's' : ''}
-              </span>
-            )}
           </div>
+
+          <p className="text-xs text-text-secondary mt-0.5">
+            {isActive
+              ? `${activeCampaignCount} active campaign${activeCampaignCount !== 1 ? 's' : ''}`
+              : 'No active campaigns'}
+          </p>
 
           {profile.averageOrderValue && (
             <p className="text-xs text-text-secondary mt-0.5">
@@ -263,6 +258,7 @@ export function ProductProfileCard({
             icon={<Globe className="h-3.5 w-3.5" />}
             label="URL"
             value={profile.destinationUrl || 'Not set'}
+            href={profile.destinationUrl}
             muted={!profile.destinationUrl}
             truncate
             colSpan2
@@ -270,7 +266,37 @@ export function ProductProfileCard({
         </div>
       </div>
 
-      {/* Linked campaigns */}
+      {/* Stat badges */}
+      <div className="border-t border-border mt-4 pt-4">
+        <div className="flex items-center gap-2 flex-wrap">
+          <StatBadge
+            icon={<ImageIcon className="h-3 w-3" />}
+            label="Ready"
+            count={creativeCount ?? 0}
+            className="bg-blue-50 text-blue-700 border-blue-200"
+          />
+          <StatBadge
+            icon={<TestTube2 className="h-3 w-3" />}
+            label="Testing"
+            count={testingCount ?? 0}
+            className="bg-amber-50 text-amber-700 border-amber-200"
+          />
+          <StatBadge
+            icon={<Zap className="h-3 w-3" />}
+            label="Launched"
+            count={launchedCount ?? 0}
+            className="bg-green-50 text-green-700 border-green-200"
+          />
+          <StatBadge
+            icon={<Trophy className="h-3 w-3" />}
+            label="Winners"
+            count={winnersCount ?? 0}
+            className="bg-purple-50 text-purple-700 border-purple-200"
+          />
+        </div>
+      </div>
+
+      {/* Linked campaigns (collapsed by default) */}
       {linkedCampaigns.length > 0 && (
         <div className="border-t border-border mt-4 pt-4">
           <button
@@ -315,16 +341,6 @@ export function ProductProfileCard({
         </div>
       )}
 
-      {/* Test defaults summary */}
-      <div className="border-t border-border mt-4 pt-4">
-        <p className="text-xs text-text-secondary">
-          <span className="font-medium text-text-primary">Defaults:</span>{' '}
-          {profile.defaultStructure} &middot; ${profile.defaultBudget}/day &middot;{' '}
-          {profile.defaultDuration}d &middot;{' '}
-          {profile.defaultBidStrategy.replace(/_/g, ' ').toLowerCase()}
-        </p>
-      </div>
-
       {/* Footer actions */}
       <div className="border-t border-border mt-4 pt-4 flex items-center gap-3">
         <button
@@ -335,11 +351,18 @@ export function ProductProfileCard({
           Edit Profile
         </button>
         <button
+          onClick={() => onLaunch?.(profile)}
+          className="inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 transition-colors"
+        >
+          <Rocket className="h-3.5 w-3.5" />
+          Launch
+        </button>
+        <button
           onClick={() => onViewCopyLibrary(profile.id)}
           className="inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50 transition-colors"
         >
           <BookOpen className="h-3.5 w-3.5" />
-          View Copy Library
+          Copy Library
         </button>
         {profile.destinationUrl && (
           <a
@@ -357,11 +380,36 @@ export function ProductProfileCard({
   );
 }
 
+function StatBadge({
+  icon,
+  label,
+  count,
+  className,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  count: number;
+  className: string;
+}) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
+        className
+      )}
+    >
+      {icon}
+      {count} {label}
+    </span>
+  );
+}
+
 function InfoRow({
   icon,
   label,
   value,
   tooltip,
+  href,
   muted = false,
   truncate = false,
   colSpan2 = false,
@@ -370,6 +418,7 @@ function InfoRow({
   label: string;
   value: string;
   tooltip?: string;
+  href?: string;
   muted?: boolean;
   truncate?: boolean;
   colSpan2?: boolean;
@@ -378,16 +427,28 @@ function InfoRow({
     <div className={cn('flex items-center gap-2 min-w-0', colSpan2 && 'col-span-2')}>
       <span className="text-text-dimmed flex-shrink-0">{icon}</span>
       <span className="text-text-secondary flex-shrink-0">{label}:</span>
-      <span
-        className={cn(
-          'font-medium',
-          muted ? 'text-text-dimmed italic' : 'text-text-primary',
-          truncate && 'truncate'
-        )}
-        title={tooltip}
-      >
-        {value}
-      </span>
+      {href && !muted ? (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-medium text-blue-600 hover:text-blue-700 truncate"
+          title={tooltip || href}
+        >
+          {value}
+        </a>
+      ) : (
+        <span
+          className={cn(
+            'font-medium',
+            muted ? 'text-text-dimmed italic' : 'text-text-primary',
+            truncate && 'truncate'
+          )}
+          title={tooltip}
+        >
+          {value}
+        </span>
+      )}
     </div>
   );
 }
