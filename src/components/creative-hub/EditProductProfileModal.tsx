@@ -21,6 +21,8 @@ import {
   GripVertical,
   Search,
   Check,
+  Unlink,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
@@ -117,18 +119,121 @@ export function EditProductProfileModal({
   );
   const [newPresetName, setNewPresetName] = useState('');
 
-  // Meta setup options state
-  const [setupOptions, setSetupOptions] = useState<{
-    pages: Array<{ id: string; name: string; instagramAccountId?: string; instagramUsername?: string }>;
-    pixels: Array<{ id: string; name: string }>;
-    instagramAccounts: Array<{ id: string; username: string }>;
-  } | null>(null);
+  // Meta setup options state — keyed by adAccountId for multi-account support
+  const [setupOptionsMap, setSetupOptionsMap] = useState<
+    Record<
+      string,
+      {
+        pages: Array<{ id: string; name: string; instagramAccountId?: string; instagramUsername?: string }>;
+        pixels: Array<{ id: string; name: string }>;
+        instagramAccounts: Array<{ id: string; username: string }>;
+      }
+    >
+  >({});
   const [optionsLoading, setOptionsLoading] = useState(false);
 
   // ClickUp lists state
   const [clickupLists, setClickupLists] = useState<Array<{ id: string; name: string }>>([]);
   const [clickupLoading, setClickupLoading] = useState(false);
   const [clickupConnected, setClickupConnected] = useState(true);
+
+  // Link account dropdown state
+  const [showLinkDropdown, setShowLinkDropdown] = useState(false);
+  const linkDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Derive linked ad account IDs from linkedCampaigns
+  const linkedAccountIds = useMemo(() => {
+    const ids = new Set<string>();
+    linkedCampaigns.forEach((link) => {
+      if (link.adAccountId) ids.add(link.adAccountId);
+    });
+    // Also include the profile's own adAccountId
+    if (form.adAccountId) ids.add(form.adAccountId);
+    return ids;
+  }, [linkedCampaigns, form.adAccountId]);
+
+  // Derive BM info from linked campaigns
+  const bmPills = useMemo(() => {
+    const bms = new Map<string, string>();
+    linkedCampaigns.forEach((link) => {
+      if (link.bmId && link.bmName) {
+        bms.set(link.bmId, link.bmName);
+      }
+    });
+    return Array.from(bms.entries()).map(([id, name]) => ({ id, name }));
+  }, [linkedCampaigns]);
+
+  // Derive linked accounts with metadata
+  const linkedAccountsInfo = useMemo(() => {
+    const accountMap = new Map<string, { accountId: string; name: string; currency: string; campaignCount: number }>();
+    linkedCampaigns.forEach((link) => {
+      if (!link.adAccountId) return;
+      const existing = accountMap.get(link.adAccountId);
+      if (existing) {
+        existing.campaignCount++;
+      } else {
+        // Find name from store ad accounts
+        const storeAccount = adAccounts.find((a) => a.accountId === link.adAccountId);
+        accountMap.set(link.adAccountId, {
+          accountId: link.adAccountId,
+          name: storeAccount?.name || link.adAccountId,
+          currency: storeAccount?.currency || 'USD',
+          campaignCount: 1,
+        });
+      }
+    });
+    // Also include the profile's own adAccountId if not already present
+    if (form.adAccountId && !accountMap.has(form.adAccountId)) {
+      const storeAccount = adAccounts.find((a) => a.accountId === form.adAccountId);
+      accountMap.set(form.adAccountId, {
+        accountId: form.adAccountId,
+        name: storeAccount?.name || form.adAccountId,
+        currency: storeAccount?.currency || form.adAccountCurrency || 'USD',
+        campaignCount: 0,
+      });
+    }
+    return Array.from(accountMap.values());
+  }, [linkedCampaigns, form.adAccountId, form.adAccountCurrency, adAccounts]);
+
+  // Stable string key for effect dependencies
+  const linkedAccountIdsKey = useMemo(() => Array.from(linkedAccountIds).sort().join(','), [linkedAccountIds]);
+
+  // Available accounts to link (not already linked)
+  const availableAccountsToLink = useMemo(() => {
+    return adAccounts.filter((a) => !linkedAccountIds.has(a.accountId));
+  }, [adAccounts, linkedAccountIds]);
+
+  // Merged setup options across all linked accounts
+  const mergedSetupOptions = useMemo(() => {
+    const pages: Array<{ id: string; name: string; instagramAccountId?: string; instagramUsername?: string }> = [];
+    const pixels: Array<{ id: string; name: string }> = [];
+    const instagramAccounts: Array<{ id: string; username: string }> = [];
+    const seenPageIds = new Set<string>();
+    const seenPixelIds = new Set<string>();
+    const seenIgIds = new Set<string>();
+
+    Object.values(setupOptionsMap).forEach((opts) => {
+      opts.pages.forEach((p) => {
+        if (!seenPageIds.has(p.id)) {
+          seenPageIds.add(p.id);
+          pages.push(p);
+        }
+      });
+      opts.pixels.forEach((p) => {
+        if (!seenPixelIds.has(p.id)) {
+          seenPixelIds.add(p.id);
+          pixels.push(p);
+        }
+      });
+      opts.instagramAccounts.forEach((ig) => {
+        if (!seenIgIds.has(ig.id)) {
+          seenIgIds.add(ig.id);
+          instagramAccounts.push(ig);
+        }
+      });
+    });
+    return { pages, pixels, instagramAccounts };
+  }, [setupOptionsMap]);
 
   useEffect(() => {
     if (isOpen) {
@@ -138,31 +243,48 @@ export function EditProductProfileModal({
         setForm(getDefaults());
       }
       setExpandedSections(new Set(['meta', 'clickup', 'destination']));
+      setSetupOptionsMap({});
     }
   }, [isOpen, profile]);
 
-  // Fetch Meta setup options and ClickUp lists when modal opens
+  // Fetch Meta setup options for ALL linked ad accounts
   useEffect(() => {
     if (!isOpen) return;
 
-    // Fetch Meta setup options
-    if (form.adAccountId) {
-      setOptionsLoading(true);
-      fetch(`/api/meta/campaign-setup/options?storeId=${storeId}&accountId=${form.adAccountId}`)
-        .then((r) => r.json())
-        .then((data) => setSetupOptions(data))
-        .catch(() => {})
-        .finally(() => setOptionsLoading(false));
-    }
+    const accountIdsToFetch = linkedAccountIdsKey ? linkedAccountIdsKey.split(',').filter(Boolean) : [];
+    if (accountIdsToFetch.length === 0) return;
 
-    // Fetch ClickUp lists — prefer available-lists (all workspace lists) with fallback to list-mappings
+    setOptionsLoading(true);
+    let completed = 0;
+
+    accountIdsToFetch.forEach((accountId) => {
+      fetch(`/api/meta/campaign-setup/options?storeId=${storeId}&accountId=${accountId}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data && !data.error) {
+            setSetupOptionsMap((prev) => ({ ...prev, [accountId]: data }));
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          completed++;
+          if (completed >= accountIdsToFetch.length) {
+            setOptionsLoading(false);
+          }
+        });
+    });
+  }, [isOpen, linkedAccountIdsKey, storeId]);
+
+  // Fetch ClickUp lists
+  useEffect(() => {
+    if (!isOpen) return;
+
     setClickupLoading(true);
     setClickupConnected(true);
     fetch(`/api/integrations/clickup/available-lists?storeId=${storeId}`)
       .then((r) => r.json())
       .then((data) => {
         if (data.error) {
-          // available-lists failed (not connected or no workspace), try list-mappings
           return fetch(`/api/integrations/clickup/list-mappings?storeId=${storeId}`)
             .then((r2) => r2.json())
             .then((fallback) => {
@@ -173,7 +295,6 @@ export function EditProductProfileModal({
               }
             });
         }
-        // available-lists returned workspace lists
         if (data.lists && data.lists.length > 0) {
           setClickupLists(
             data.lists.map((l: Record<string, unknown>) => ({
@@ -187,7 +308,20 @@ export function EditProductProfileModal({
       })
       .catch(() => {})
       .finally(() => setClickupLoading(false));
-  }, [isOpen, form.adAccountId, storeId]);
+  }, [isOpen, storeId]);
+
+  // Close link dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (linkDropdownRef.current && !linkDropdownRef.current.contains(e.target as Node)) {
+        setShowLinkDropdown(false);
+      }
+    }
+    if (showLinkDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showLinkDropdown]);
 
   const handleEscape = useCallback(
     (e: KeyboardEvent) => {
@@ -250,6 +384,29 @@ export function EditProductProfileModal({
     }));
   };
 
+  const handleLinkAccount = (accountId: string, currency: string) => {
+    // Set as the primary ad account if none set yet
+    if (!form.adAccountId) {
+      updateField('adAccountId', accountId);
+      updateField('adAccountCurrency', currency);
+    }
+    setShowLinkDropdown(false);
+  };
+
+  const handleUnlinkAccount = (accountId: string) => {
+    // If this is the primary ad account, clear it or replace with another linked account
+    if (form.adAccountId === accountId) {
+      const remaining = linkedAccountsInfo.filter((a) => a.accountId !== accountId);
+      if (remaining.length > 0) {
+        updateField('adAccountId', remaining[0].accountId);
+        updateField('adAccountCurrency', remaining[0].currency);
+      } else {
+        updateField('adAccountId', '');
+        updateField('adAccountCurrency', 'USD');
+      }
+    }
+  };
+
   const handleSave = async () => {
     if (!form.productName?.trim()) return;
     setSaving(true);
@@ -261,7 +418,6 @@ export function EditProductProfileModal({
       } as Partial<ProductProfile> & { storeId: string });
 
       // Bidirectional ClickUp list mapping save
-      // For existing profiles, use profile.id; for new ones, find by name in the updated store
       const profileId = profile?.id ??
         useCreativeHubStore.getState().profiles.find(
           (p) => p.storeId === storeId && p.productName === form.productName?.trim()
@@ -300,15 +456,32 @@ export function EditProductProfileModal({
 
       {/* Panel */}
       <div className="relative z-10 w-full max-w-3xl mx-4 rounded-xl bg-surface-elevated shadow-2xl flex flex-col max-h-[90vh]">
-        {/* Header */}
+        {/* Header — with product image thumbnail and bold name */}
         <div className="flex items-center justify-between border-b border-border px-6 py-4 flex-shrink-0">
-          <div>
-            <h2 className="text-lg font-semibold text-text-primary">
-              {isNew ? 'New Product Profile' : 'Edit Product Profile'}
-            </h2>
-            <p className="text-xs text-text-secondary mt-0.5">
-              {isNew ? 'Configure once, launch many times' : form.productName}
-            </p>
+          <div className="flex items-center gap-3">
+            {!isNew && form.productImage ? (
+              <img
+                src={form.productImage}
+                alt={form.productName ?? ''}
+                className="h-8 w-8 rounded-lg object-cover border border-border flex-shrink-0"
+              />
+            ) : !isNew ? (
+              <div className="h-8 w-8 rounded-lg bg-surface-hover border border-border flex items-center justify-center flex-shrink-0">
+                <ImageIcon className="h-4 w-4 text-text-dimmed" />
+              </div>
+            ) : null}
+            <div>
+              <h2 className="text-lg font-semibold text-text-primary">
+                {isNew ? 'New Product Profile' : 'Edit Product Profile'}
+              </h2>
+              <p className="text-sm text-text-secondary mt-0.5">
+                {isNew ? (
+                  'Configure once, launch many times'
+                ) : (
+                  <span className="font-semibold text-text-primary">{form.productName}</span>
+                )}
+              </p>
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -340,181 +513,247 @@ export function EditProductProfileModal({
                 {isExpanded && (
                   <div className="px-4 pb-4 pt-1 border-t border-border bg-surface-hover/20">
                     {id === 'meta' && (
-                      <div className="grid grid-cols-2 gap-4">
-                        <FormField label="Ad Account" required>
-                          {adAccounts.length > 0 ? (
-                            <select
-                              value={form.adAccountId ?? ''}
-                              onChange={(e) => {
-                                const selected = adAccounts.find((a) => a.accountId === e.target.value);
-                                updateField('adAccountId', e.target.value);
-                                if (selected?.currency) {
-                                  updateField('adAccountCurrency', selected.currency);
-                                }
-                              }}
-                              className={selectCls}
-                            >
-                              <option value="">Select an ad account...</option>
-                              {adAccounts.map((account) => (
-                                <option key={account.id} value={account.accountId}>
-                                  {account.name || account.accountId} ({account.currency})
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input
-                              type="text"
-                              value={form.adAccountId ?? ''}
-                              onChange={(e) => updateField('adAccountId', e.target.value)}
-                              placeholder="act_123456789"
-                              className={inputCls}
-                            />
-                          )}
-                        </FormField>
-                        <FormField label="Currency">
-                          <select
-                            value={form.adAccountCurrency ?? 'USD'}
-                            onChange={(e) => updateField('adAccountCurrency', e.target.value)}
-                            className={selectCls}
-                          >
-                            <option value="USD">USD</option>
-                            <option value="EUR">EUR</option>
-                            <option value="GBP">GBP</option>
-                            <option value="CAD">CAD</option>
-                            <option value="AUD">AUD</option>
-                          </select>
-                        </FormField>
+                      <div className="space-y-5">
+                        {/* ── Linked Ad Accounts Section ── */}
+                        <div>
+                          <p className="text-xs font-medium text-text-secondary uppercase tracking-wider mb-2">
+                            Linked Ad Accounts
+                          </p>
+                          <div className="space-y-1.5">
+                            {linkedAccountsInfo.length === 0 && (
+                              <p className="text-sm text-text-dimmed italic py-2">
+                                No ad accounts linked. Add one below.
+                              </p>
+                            )}
+                            {linkedAccountsInfo.map((account) => (
+                              <div
+                                key={account.accountId}
+                                className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 bg-surface"
+                              >
+                                <Check className="h-3.5 w-3.5 text-emerald-500 flex-shrink-0" />
+                                <span className="text-sm text-text-primary flex-1 truncate">
+                                  {account.name}
+                                </span>
+                                <span className="text-xs text-text-dimmed">
+                                  ({account.currency})
+                                </span>
+                                {account.campaignCount > 0 && (
+                                  <span className="text-[10px] text-text-dimmed bg-surface-hover px-1.5 py-0.5 rounded">
+                                    {account.campaignCount} campaign{account.campaignCount !== 1 ? 's' : ''}
+                                  </span>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => handleUnlinkAccount(account.accountId)}
+                                  className="text-text-dimmed hover:text-red-500 transition-colors ml-1"
+                                  title="Unlink account"
+                                >
+                                  <Unlink className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            ))}
 
-                        {/* Facebook Page — dropdown with names */}
-                        <FormField label="Facebook Page">
-                          {optionsLoading ? (
-                            <p className="text-xs text-text-secondary py-2">Loading pages...</p>
-                          ) : (setupOptions?.pages || []).length > 0 ? (
-                            <select
-                              value={form.pageId ?? ''}
-                              onChange={(e) => {
-                                updateField('pageId', e.target.value);
-                                const page = (setupOptions?.pages || []).find((p) => p.id === e.target.value);
-                                if (page?.name) {
-                                  updateField('pageName', page.name);
-                                }
-                                if (page?.instagramAccountId) {
-                                  updateField('instagramActorId', page.instagramAccountId);
-                                  updateField('instagramUsername', page.instagramUsername ?? '');
-                                }
-                              }}
-                              className={selectCls}
-                            >
-                              <option value="">Select a page...</option>
-                              {/* Include saved page if not in options list */}
-                              {form.pageId && !(setupOptions?.pages || []).some(p => p.id === form.pageId) && (
-                                <option value={form.pageId}>
-                                  {form.pageName || profile?.pageName || form.pageId} (saved)
-                                </option>
+                            {/* Link Ad Account dropdown */}
+                            <div ref={linkDropdownRef} className="relative">
+                              <button
+                                type="button"
+                                onClick={() => setShowLinkDropdown((prev) => !prev)}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-border px-3 py-2 text-sm text-text-secondary hover:bg-surface-hover hover:border-primary/50 transition-colors"
+                              >
+                                <Plus className="h-3.5 w-3.5" />
+                                Link Ad Account
+                                <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', showLinkDropdown && 'rotate-180')} />
+                              </button>
+                              {showLinkDropdown && (
+                                <div className="absolute z-50 mt-1 w-80 rounded-lg border border-border bg-surface shadow-lg overflow-hidden">
+                                  {availableAccountsToLink.length === 0 ? (
+                                    <div className="px-3 py-4 text-center text-xs text-text-dimmed">
+                                      All store ad accounts are already linked.
+                                    </div>
+                                  ) : (
+                                    <div className="max-h-[200px] overflow-y-auto py-1">
+                                      {availableAccountsToLink.map((account) => (
+                                        <button
+                                          key={account.id}
+                                          type="button"
+                                          onClick={() => handleLinkAccount(account.accountId, account.currency)}
+                                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-hover transition-colors"
+                                        >
+                                          <Plus className="h-3.5 w-3.5 text-text-dimmed flex-shrink-0" />
+                                          <span className="truncate flex-1 text-text-primary">
+                                            {account.name || account.accountId}
+                                          </span>
+                                          <span className="text-xs text-text-dimmed">
+                                            ({account.currency})
+                                          </span>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
                               )}
-                              {(setupOptions?.pages || []).map((page) => (
-                                <option key={page.id} value={page.id}>
-                                  {page.name}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input
-                              type="text"
-                              value={form.pageId ?? ''}
-                              onChange={(e) => updateField('pageId', e.target.value)}
-                              placeholder="Page ID"
-                              className={inputCls}
-                            />
-                          )}
-                        </FormField>
+                            </div>
+                          </div>
+                        </div>
 
-                        {/* Instagram — dropdown with @usernames */}
-                        <FormField label="Instagram Account">
-                          {optionsLoading ? (
-                            <p className="text-xs text-text-secondary py-2">Loading...</p>
-                          ) : (setupOptions?.instagramAccounts || []).length > 0 ? (
+                        {/* ── BM Display (read-only pills) ── */}
+                        {bmPills.length > 0 && (
+                          <div>
+                            <p className="text-xs font-medium text-text-secondary uppercase tracking-wider mb-2">
+                              Business Managers
+                            </p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {bmPills.map((bm) => (
+                                <span
+                                  key={bm.id}
+                                  className="inline-flex items-center gap-1 rounded-full bg-blue-50 dark:bg-blue-900/20 px-2.5 py-1 text-xs font-medium text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800"
+                                >
+                                  {bm.name}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* ── Page / Pixel / IG / Conversion ── */}
+                        <div className="grid grid-cols-2 gap-4">
+                          {/* Facebook Page — dropdown with names */}
+                          <FormField label="Facebook Page">
+                            {optionsLoading ? (
+                              <p className="text-xs text-text-secondary py-2">Loading pages...</p>
+                            ) : mergedSetupOptions.pages.length > 0 ? (
+                              <select
+                                value={form.pageId ?? ''}
+                                onChange={(e) => {
+                                  updateField('pageId', e.target.value);
+                                  const page = mergedSetupOptions.pages.find((p) => p.id === e.target.value);
+                                  if (page?.name) {
+                                    updateField('pageName', page.name);
+                                  }
+                                  if (page?.instagramAccountId) {
+                                    updateField('instagramActorId', page.instagramAccountId);
+                                    updateField('instagramUsername', page.instagramUsername ?? '');
+                                  }
+                                }}
+                                className={selectCls}
+                              >
+                                <option value="">Select a page...</option>
+                                {/* Include saved page if not in options list */}
+                                {form.pageId && !mergedSetupOptions.pages.some(p => p.id === form.pageId) && (
+                                  <option value={form.pageId}>
+                                    {form.pageName || profile?.pageName || form.pageId} (saved)
+                                  </option>
+                                )}
+                                {mergedSetupOptions.pages.map((page) => (
+                                  <option key={page.id} value={page.id}>
+                                    {page.name}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                type="text"
+                                value={form.pageId ?? ''}
+                                onChange={(e) => updateField('pageId', e.target.value)}
+                                placeholder="Page ID"
+                                className={inputCls}
+                              />
+                            )}
+                          </FormField>
+
+                          {/* Instagram — dropdown with @usernames */}
+                          <FormField label="Instagram Account">
+                            {optionsLoading ? (
+                              <p className="text-xs text-text-secondary py-2">Loading...</p>
+                            ) : mergedSetupOptions.instagramAccounts.length > 0 ? (
+                              <select
+                                value={form.instagramActorId ?? ''}
+                                onChange={(e) => {
+                                  updateField('instagramActorId', e.target.value);
+                                  const ig = mergedSetupOptions.instagramAccounts.find((i) => i.id === e.target.value);
+                                  updateField('instagramUsername', ig?.username ?? '');
+                                }}
+                                className={selectCls}
+                              >
+                                <option value="">No Instagram actor</option>
+                                {/* Include saved IG if not in options list */}
+                                {form.instagramActorId && !mergedSetupOptions.instagramAccounts.some(ig => ig.id === form.instagramActorId) && (
+                                  <option value={form.instagramActorId}>
+                                    @{form.instagramUsername || form.instagramActorId} (saved)
+                                  </option>
+                                )}
+                                {mergedSetupOptions.instagramAccounts.map((ig) => (
+                                  <option key={ig.id} value={ig.id}>
+                                    @{ig.username}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                type="text"
+                                value={form.instagramActorId ?? ''}
+                                onChange={(e) => updateField('instagramActorId', e.target.value)}
+                                placeholder="Instagram actor ID"
+                                className={inputCls}
+                              />
+                            )}
+                          </FormField>
+
+                          {/* Pixel — dropdown with names */}
+                          <FormField label="Pixel">
+                            {optionsLoading ? (
+                              <p className="text-xs text-text-secondary py-2">Loading pixels...</p>
+                            ) : mergedSetupOptions.pixels.length > 0 ? (
+                              <select
+                                value={form.pixelId ?? ''}
+                                onChange={(e) => {
+                                  updateField('pixelId', e.target.value);
+                                  const pixel = mergedSetupOptions.pixels.find((p) => p.id === e.target.value);
+                                  if (pixel?.name) {
+                                    updateField('pixelName', pixel.name);
+                                  }
+                                }}
+                                className={selectCls}
+                              >
+                                <option value="">Select a pixel...</option>
+                                {/* Include saved pixel if not in options list */}
+                                {form.pixelId && !mergedSetupOptions.pixels.some(p => p.id === form.pixelId) && (
+                                  <option value={form.pixelId}>
+                                    {form.pixelName || profile?.pixelName || form.pixelId} (saved)
+                                  </option>
+                                )}
+                                {mergedSetupOptions.pixels.map((pixel) => (
+                                  <option key={pixel.id} value={pixel.id}>
+                                    {pixel.name}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                type="text"
+                                value={form.pixelId ?? ''}
+                                onChange={(e) => updateField('pixelId', e.target.value)}
+                                placeholder="Pixel ID"
+                                className={inputCls}
+                              />
+                            )}
+                          </FormField>
+
+                          <FormField label="Conversion Event">
                             <select
-                              value={form.instagramActorId ?? ''}
-                              onChange={(e) => {
-                                updateField('instagramActorId', e.target.value);
-                                const ig = (setupOptions?.instagramAccounts || []).find((i) => i.id === e.target.value);
-                                updateField('instagramUsername', ig?.username ?? '');
-                              }}
+                              value={form.conversionEvent ?? 'PURCHASE'}
+                              onChange={(e) => updateField('conversionEvent', e.target.value)}
                               className={selectCls}
                             >
-                              <option value="">No Instagram actor</option>
-                              {(setupOptions?.instagramAccounts || []).map((ig) => (
-                                <option key={ig.id} value={ig.id}>
-                                  @{ig.username}
-                                </option>
-                              ))}
+                              <option value="PURCHASE">Purchase</option>
+                              <option value="ADD_TO_CART">Add to Cart</option>
+                              <option value="INITIATE_CHECKOUT">Initiate Checkout</option>
+                              <option value="LEAD">Lead</option>
+                              <option value="COMPLETE_REGISTRATION">Complete Registration</option>
+                              <option value="VIEW_CONTENT">View Content</option>
                             </select>
-                          ) : (
-                            <input
-                              type="text"
-                              value={form.instagramActorId ?? ''}
-                              onChange={(e) => updateField('instagramActorId', e.target.value)}
-                              placeholder="Instagram actor ID"
-                              className={inputCls}
-                            />
-                          )}
-                        </FormField>
-
-                        {/* Pixel — dropdown with names */}
-                        <FormField label="Pixel">
-                          {optionsLoading ? (
-                            <p className="text-xs text-text-secondary py-2">Loading pixels...</p>
-                          ) : (setupOptions?.pixels || []).length > 0 ? (
-                            <select
-                              value={form.pixelId ?? ''}
-                              onChange={(e) => {
-                                updateField('pixelId', e.target.value);
-                                const pixel = (setupOptions?.pixels || []).find((p) => p.id === e.target.value);
-                                if (pixel?.name) {
-                                  updateField('pixelName', pixel.name);
-                                }
-                              }}
-                              className={selectCls}
-                            >
-                              <option value="">Select a pixel...</option>
-                              {/* Include saved pixel if not in options list */}
-                              {form.pixelId && !(setupOptions?.pixels || []).some(p => p.id === form.pixelId) && (
-                                <option value={form.pixelId}>
-                                  {form.pixelName || profile?.pixelName || form.pixelId} (saved)
-                                </option>
-                              )}
-                              {(setupOptions?.pixels || []).map((pixel) => (
-                                <option key={pixel.id} value={pixel.id}>
-                                  {pixel.name}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input
-                              type="text"
-                              value={form.pixelId ?? ''}
-                              onChange={(e) => updateField('pixelId', e.target.value)}
-                              placeholder="Pixel ID"
-                              className={inputCls}
-                            />
-                          )}
-                        </FormField>
-
-                        <FormField label="Conversion Event">
-                          <select
-                            value={form.conversionEvent ?? 'PURCHASE'}
-                            onChange={(e) => updateField('conversionEvent', e.target.value)}
-                            className={selectCls}
-                          >
-                            <option value="PURCHASE">Purchase</option>
-                            <option value="ADD_TO_CART">Add to Cart</option>
-                            <option value="INITIATE_CHECKOUT">Initiate Checkout</option>
-                            <option value="LEAD">Lead</option>
-                            <option value="COMPLETE_REGISTRATION">Complete Registration</option>
-                            <option value="VIEW_CONTENT">View Content</option>
-                          </select>
-                        </FormField>
+                          </FormField>
+                        </div>
                       </div>
                     )}
 
@@ -796,9 +1035,12 @@ export function EditProductProfileModal({
                         {linkedCampaigns.map((link) => (
                           <div
                             key={link.id}
-                            className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5 bg-white"
+                            className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5 bg-surface"
                           >
                             <span className="text-sm text-text-primary flex-1 truncate">{link.campaignName}</span>
+                            <span className="text-[10px] text-text-dimmed bg-surface-hover px-1.5 py-0.5 rounded">
+                              {adAccounts.find((a) => a.accountId === link.adAccountId)?.name || link.adAccountId}
+                            </span>
                             <select
                               value={link.campaignType}
                               className="w-28 rounded-lg border border-border bg-surface-hover px-2 py-1 text-xs text-text-primary focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
