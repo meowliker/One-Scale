@@ -10,13 +10,22 @@ import {
 } from '@/app/api/lib/supabase-tracking';
 import { enqueueMetaSyncTask, isMetaCallBlocked, markMetaRateLimited } from '@/app/api/lib/meta-sync-queue';
 import { refreshMetaSetupSnapshots } from '@/app/api/lib/meta-setup-cache';
+import {
+  buildWarehouseDateRange,
+  buildWarehouseVariantKey,
+  materializeStoreMetaEntitiesFromSnapshots,
+  syncWarehouseSnapshotsForStore,
+} from '@/app/api/lib/meta-entity-warehouse';
 import type { Campaign, AdSet, Ad, PerformanceMetrics } from '@/types/campaign';
 
 interface RefreshRequestBody {
   storeId?: string;
   includeHierarchy?: boolean;
   force?: boolean;
+  warehouseMode?: boolean;
 }
+
+export const maxDuration = 300;
 
 function buildCampaignScopeId(adAccountIds: string[]): string {
   const sorted = [...new Set(adAccountIds)].sort();
@@ -147,6 +156,70 @@ export async function POST(request: NextRequest) {
     : getStoreAdAccounts(storeId);
 
   const activeAccounts = adAccounts.filter((a) => a.is_active);
+  const warehouseMode = body.warehouseMode === true;
+
+  if (warehouseMode) {
+    const CRON_SECRET = process.env.CRON_SECRET;
+    if (!CRON_SECRET) {
+      return NextResponse.json({ error: 'CRON_SECRET not configured' }, { status: 500 });
+    }
+    const authHeader = request.headers.get('authorization') || '';
+    if (authHeader !== `Bearer ${CRON_SECRET}`) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    if (!useSupabase) {
+      return NextResponse.json({ error: 'Warehouse mode requires Supabase persistence' }, { status: 400 });
+    }
+    if (activeAccounts.length === 0) {
+      return NextResponse.json({
+        ok: true,
+        mode: 'warehouse_refresh',
+        storeId,
+        skipped: true,
+        reason: 'no_active_meta_accounts',
+      });
+    }
+
+    const accountTz = activeAccounts.find((a) => a.timezone)?.timezone || 'America/New_York';
+    const { since, until } = buildWarehouseDateRange(accountTz);
+    const variantKey = buildWarehouseVariantKey(since, until);
+
+    const synced = await syncWarehouseSnapshotsForStore({
+      storeId,
+      activeAccounts: activeAccounts.map((a) => ({
+        ad_account_id: a.ad_account_id,
+        ad_account_name: a.ad_account_name,
+        timezone: a.timezone,
+      })),
+      since,
+      until,
+      variantKey,
+    });
+
+    const materialized = await materializeStoreMetaEntitiesFromSnapshots({
+      storeId,
+      activeAccounts: activeAccounts.map((a) => ({
+        ad_account_id: a.ad_account_id,
+        ad_account_name: a.ad_account_name,
+        timezone: a.timezone,
+      })),
+      since,
+      until,
+      variantKey,
+    });
+
+    return NextResponse.json({
+      ok: true,
+      mode: 'warehouse_refresh',
+      storeId,
+      since,
+      until,
+      variantKey,
+      syncedSnapshots: synced,
+      materialized,
+      completedAt: new Date().toISOString(),
+    });
+  }
 
   // Use the ad account's timezone (not server UTC) to determine "today".
   // This ensures we fetch the correct day's data regardless of server location.
