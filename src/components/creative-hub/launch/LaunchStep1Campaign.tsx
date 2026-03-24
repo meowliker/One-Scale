@@ -83,8 +83,10 @@ export function LaunchStep1Campaign() {
 
   const selectedCreatives = inboxCreatives.filter((c) => selectedCreativeIds.has(c.id));
 
-  // Get the campaign links from the selected product profile (populated by the profiles API)
-  const linkedCampaigns: ProductCampaignLink[] = selectedProfile?.campaignLinks ?? [];
+  // Get the campaign links from the selected product profile — only show ACTIVE campaigns
+  const linkedCampaigns: ProductCampaignLink[] = (selectedProfile?.campaignLinks ?? []).filter(
+    (link) => link.isActive
+  );
 
   // Fetch adsets when an existing campaign is selected
   const fetchAdsets = useCallback(async (campaignId: string) => {
@@ -279,9 +281,12 @@ export function LaunchStep1Campaign() {
                     />
                     <div className="flex-1">
                       <p className="text-sm font-medium text-slate-900">{campaign.campaignName}</p>
-                      <p className="mt-0.5 text-xs text-slate-500">
+                      <p className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-500">
                         {campaign.campaignType.charAt(0).toUpperCase() + campaign.campaignType.slice(1)} &middot;{' '}
-                        {campaign.isActive ? 'Active' : 'Paused'}
+                        <span className="inline-flex items-center gap-1">
+                          <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+                          Active
+                        </span>
                       </p>
                     </div>
                   </label>
