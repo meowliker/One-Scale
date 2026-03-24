@@ -147,12 +147,15 @@ export async function GET(request: NextRequest) {
   let pnlChargebackLoss = 0;
   let pnlChargebackWon = 0;
   let pnlOrderCount = 0;
+  // Load snapshots with product_breakdown — this is the source of truth for Period View
+  let snapshotProductBreakdowns: Array<{ productId: string; productTitle: string; classification: string; revenue: number; unitsSold: number; fees: number; orders: number }> = [];
   try {
     const snapshots = await rest<Array<{
       revenue: number; transaction_fees: number; ad_spend: number;
       refunds: number; chargeback_loss: number; chargeback_won: number; order_count: number;
+      product_breakdown: string;
     }>>(
-      `/daily_pnl_snapshots?store_id=eq.${enc(storeId)}&date=gte.${from}&date=lte.${to}&select=revenue,transaction_fees,ad_spend,refunds,chargeback_loss,chargeback_won,order_count`
+      `/daily_pnl_snapshots?store_id=eq.${enc(storeId)}&date=gte.${from}&date=lte.${to}&select=revenue,transaction_fees,ad_spend,refunds,chargeback_loss,chargeback_won,order_count,product_breakdown`
     );
     for (const s of snapshots ?? []) {
       pnlRevenue += Number(s.revenue) || 0;
@@ -162,19 +165,114 @@ export async function GET(request: NextRequest) {
       pnlChargebackLoss += Number(s.chargeback_loss) || 0;
       pnlChargebackWon += Number(s.chargeback_won) || 0;
       pnlOrderCount += Number(s.order_count) || 0;
+      // Collect product breakdowns from snapshots
+      try {
+        const pb = JSON.parse(s.product_breakdown || '[]');
+        snapshotProductBreakdowns.push(...pb);
+      } catch { /* malformed JSON */ }
     }
   } catch { /* table may not exist */ }
   const hasPnlData = pnlRevenue > 0 || pnlFees > 0;
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // CLASSIFICATION: Always load/run classifier BEFORE any data path.
+  // This ensures both PRIMARY and FALLBACK paths use the same classifications.
+  // ══════════════════════════════════════════════════════════════════════════
+  const masterClassMap = new Map<string, string>(); // product_id → classification
+  try {
+    // 1. Load stored classifications from DB
+    const storedCls = await rest<Array<{ product_id: string; classification: string; manual_override: boolean; classification_method: string }>>(
+      `/product_classifications?store_id=eq.${enc(storeId)}&select=product_id,classification,manual_override,classification_method`
+    ).catch(() => []);
+    for (const sc of storedCls) masterClassMap.set(sc.product_id, sc.classification);
+
+    // 2. If no behavioral classifications, run the classifier
+    const hasBehavioral = storedCls.some(sc => sc.classification_method?.startsWith('behavioral') || sc.classification_method === 'shopify_tag' || sc.classification_method === 'manual_override');
+    if (!hasBehavioral) {
+      const behaviors = await extractAllProductBehaviors(storeId!);
+      if (behaviors.length > 0) {
+        const storeProfile = await buildStoreProfile(storeId!, behaviors);
+        const overrides = new Map<string, string>();
+        for (const sc of storedCls) {
+          if (sc.manual_override) overrides.set(sc.product_id, sc.classification);
+        }
+        const results = classifyAllProducts(behaviors, storeProfile, overrides, new Map());
+        for (const r of results) {
+          if (!masterClassMap.has(r.product_id) || !overrides.has(r.product_id)) {
+            masterClassMap.set(r.product_id, r.classification);
+          }
+        }
+        console.log(`[PRISM:ProductPerf] Classifier: ${results.length} products classified (${results.filter(r => r.classification === 'main').length} main)`);
+      }
+    }
+  } catch (err) {
+    console.warn('[PRISM:ProductPerf] Classification failed (non-fatal):', err instanceof Error ? err.message : err);
+  }
+
   try {
     // ══════════════════════════════════════════════════════════════════════
-    // PRIMARY PATH: Apps Script V4.4 Port — EXACT line-for-line port
-    // Uses order.total_price for revenue (not line items).
-    // Results passed through directly. No normalization. No overrides.
-    // Ad spend normalized to P&L ground truth only.
+    // PRIMARY PATH: Read from snapshot product_breakdown (same source as Period View)
+    // Classifications from masterClassMap OVERRIDE snapshot classifications.
     // ══════════════════════════════════════════════════════════════════════
     try {
-      const appsScriptResults = await buildProductPerformance(storeId, from, to);
+      // Aggregate multi-day snapshot breakdowns by product_id
+      let appsScriptResults: Awaited<ReturnType<typeof buildProductPerformance>>;
+
+      if (snapshotProductBreakdowns.length > 0) {
+        // Use snapshot data — guaranteed to match Period View
+        const byProduct = new Map<string, { revenue: number; orders: number; fees: number; classification: string; title: string }>();
+        for (const p of snapshotProductBreakdowns) {
+          const existing = byProduct.get(p.productId);
+          if (existing) {
+            existing.revenue += p.revenue;
+            existing.orders += p.orders;
+            existing.fees += p.fees;
+          } else {
+            byProduct.set(p.productId, {
+              revenue: p.revenue,
+              orders: p.orders,
+              fees: p.fees,
+              classification: p.classification,
+              title: p.productTitle,
+            });
+          }
+        }
+
+        // Distribute ad spend proportionally to main products by revenue
+        // Use masterClassMap for accurate classification
+        const mainProducts = [...byProduct.entries()].filter(([pid, v]) => (masterClassMap.get(pid) || v.classification) === 'main' && v.revenue > 0);
+        const totalMainRev = mainProducts.reduce((s, [, v]) => s + v.revenue, 0);
+
+        appsScriptResults = [...byProduct.entries()].map(([pid, v]) => {
+          // Use masterClassMap classification (from DB/classifier) over snapshot classification
+          const cls = masterClassMap.get(pid) || v.classification;
+          const adSpendShare = (cls === 'main' && totalMainRev > 0)
+            ? round2(pnlAdSpend * (v.revenue / totalMainRev))
+            : 0;
+          const netProfit = round2(v.revenue - v.fees - adSpendShare);
+          const margin = v.revenue > 0 ? round2((netProfit / v.revenue) * 100) : 0;
+          return {
+            product_id: pid,
+            product_name: v.title,
+            classification: cls as 'main' | 'upsell' | 'downsell' | 'bundle' | 'excluded' | 'pending',
+            revenue: round2(v.revenue),
+            orders: v.orders,
+            fees: round2(v.fees),
+            fees_estimated: false,
+            ad_spend: adSpendShare,
+            cogs: 0,
+            net_profit: netProfit,
+            margin,
+            attribution_method: 'snapshot',
+            parent_product_id: null,
+            parent_product_name: null,
+          };
+        });
+      } else {
+        // Fallback: compute live (no snapshot data available)
+        appsScriptResults = await buildProductPerformance(storeId, from, to);
+      }
+
       if (appsScriptResults.length > 0) {
         // Fetch product images
         const imgMap = new Map<string, string>();
@@ -194,7 +292,64 @@ export async function GET(request: NextRequest) {
         const totalRevenue = round2(appsScriptResults.reduce((s, r) => s + r.revenue, 0));
         const totalAdSpend = round2(appsScriptResults.reduce((s, r) => s + r.ad_spend, 0));
 
-        const data = appsScriptResults.map(r => ({
+        // Fetch real Meta metrics (CPC/CTR/CPM) from meta_spend_cache
+        const metaByProduct = new Map<string, { spend: number; impressions: number; clicks: number; purchases: number }>();
+        try {
+          const adMappings = await rest<Array<{ ad_account_id: string; product_id: string }>>(
+            `/meta_ad_account_mappings?store_id=eq.${enc(storeId)}&select=ad_account_id,product_id`
+          ).catch(() => []);
+          const metaRows = await rest<Array<{ ad_account_id: string; spend: number; impressions: number; clicks: number; purchases: number }>>(
+            `/meta_spend_cache?store_id=eq.${enc(storeId)}&date=gte.${from}&date=lte.${to}&select=ad_account_id,spend,impressions,clicks,purchases`
+          ).catch(() => []);
+
+          if (metaRows.length > 0) {
+            // Total Meta metrics for the date range
+            const metaTotals = { spend: 0, impressions: 0, clicks: 0, purchases: 0 };
+            for (const row of metaRows) {
+              metaTotals.spend += Number(row.spend) || 0;
+              metaTotals.impressions += Number(row.impressions) || 0;
+              metaTotals.clicks += Number(row.clicks) || 0;
+              metaTotals.purchases += Number(row.purchases) || 0;
+            }
+
+            if (adMappings.length > 0) {
+              // Product-level mapping
+              const acctToProduct = new Map(adMappings.map(m => [m.ad_account_id, m.product_id]));
+              for (const row of metaRows) {
+                const pid = acctToProduct.get(row.ad_account_id);
+                if (!pid) continue;
+                const ex = metaByProduct.get(pid) || { spend: 0, impressions: 0, clicks: 0, purchases: 0 };
+                ex.spend += Number(row.spend) || 0;
+                ex.impressions += Number(row.impressions) || 0;
+                ex.clicks += Number(row.clicks) || 0;
+                ex.purchases += Number(row.purchases) || 0;
+                metaByProduct.set(pid, ex);
+              }
+            } else {
+              // No mappings — distribute by revenue share
+              const totalRev = appsScriptResults.reduce((s, r) => s + r.revenue, 0);
+              if (totalRev > 0) {
+                for (const r of appsScriptResults) {
+                  const share = r.revenue / totalRev;
+                  metaByProduct.set(r.product_id, {
+                    spend: round2(metaTotals.spend * share),
+                    impressions: Math.round(metaTotals.impressions * share),
+                    clicks: Math.round(metaTotals.clicks * share),
+                    purchases: Math.round(metaTotals.purchases * share),
+                  });
+                }
+              }
+            }
+          }
+        } catch { /* Meta metrics non-critical */ }
+
+        const data = appsScriptResults.map(r => {
+          const meta = metaByProduct.get(r.product_id) || { spend: 0, impressions: 0, clicks: 0, purchases: 0 };
+          const metaSpend = meta.spend || r.ad_spend;
+          const imp = meta.impressions;
+          const clk = meta.clicks;
+          const pur = meta.purchases;
+          return {
           productId: r.product_id,
           productName: r.product_name,
           productImage: imgMap.get(r.product_id) ?? null,
@@ -209,13 +364,18 @@ export async function GET(request: NextRequest) {
           netProfit: r.net_profit,
           margin: r.margin,
           fbMetrics: {
-            roas: r.ad_spend > 0 ? Math.round((r.revenue / r.ad_spend) * 100) / 100 : 0,
-            cpc: 0, cpm: 0, ctr: 0, aov: 0, atcRate: 0,
-            spend: r.ad_spend,
-            impressions: 0, clicks: 0, purchases: 0,
-            costPerPurchase: 0, frequency: 0, reach: 0,
+            roas: metaSpend > 0 ? round2(r.revenue / metaSpend) : 0,
+            cpc: clk > 0 ? round2(metaSpend / clk) : 0,
+            cpm: imp > 0 ? round2((metaSpend / imp) * 1000) : 0,
+            ctr: imp > 0 ? round2((clk / imp) * 100) : 0,
+            aov: r.orders > 0 ? round2(r.revenue / r.orders) : 0,
+            atcRate: 0,
+            spend: metaSpend,
+            impressions: imp, clicks: clk, purchases: pur,
+            costPerPurchase: pur > 0 ? round2(metaSpend / pur) : 0,
+            frequency: 0, reach: 0,
           },
-          isAdvertised: r.ad_spend > 0,
+          isAdvertised: metaSpend > 0 || imp > 0 || clk > 0,
           adLandingPageUrl: null, adName: null, adSetName: null, campaignName: null,
           category: r.classification as 'main' | 'upsell' | 'downsell' | 'addon',
           classificationConfidence: r.classification === 'main' ? 95 : 80,
@@ -232,7 +392,8 @@ export async function GET(request: NextRequest) {
             totalSpend: totalAdSpend,
             totalOrders,
           },
-        }));
+        };
+        });
 
         console.log(`[PRISM:ProductPerf] Apps Script direct: ${data.length} products, ${totalOrders} orders, rev=$${totalRevenue}, ads=$${totalAdSpend}`);
 
@@ -793,9 +954,10 @@ export async function GET(request: NextRequest) {
       const fees = round2(agg.fees * fbFeeScale);
       const shipping = round2(agg.shipping);
 
-      // Use stored classification from adaptive intelligence if available
+      // Use masterClassMap first (populated at top from DB + classifier), then local classificationMap
+      const masterClass = masterClassMap.get(productId);
       const storedClassObj = classificationMap.get(productId);
-      const storedClass = storedClassObj?.classification;
+      const storedClass = masterClass || storedClassObj?.classification;
       let mostCommonCategory: string;
       if (storedClass && storedClass !== 'pending' && storedClass !== 'unknown') {
         mostCommonCategory = storedClass;
@@ -806,14 +968,23 @@ export async function GET(request: NextRequest) {
         const multiItemTotal = (mic.main || 0) + (mic.upsell || 0) + (mic.addon || 0) + (mic.downsell || 0);
         const singleItemCount = totalAppearances - multiItemTotal;
 
-        if (totalAppearances === 0 || multiItemTotal === 0) {
-          mostCommonCategory = 'pending';
+        if (totalAppearances === 0 && multiItemTotal === 0) {
+          // No order pattern data — use revenue share heuristic
+          const productRevenueShare = totalRevenue > 0 ? agg.revenue / totalRevenue : 0;
+          // Products with >10% revenue share are likely main, others are upsells
+          mostCommonCategory = productRevenueShare >= 0.10 ? 'main' : 'upsell';
+        } else if (multiItemTotal === 0) {
+          // Only single-item orders — this product IS the main product
+          mostCommonCategory = 'main';
         } else {
           const productRevenueShare = totalRevenue > 0 ? agg.revenue / totalRevenue : 0;
           const upsellSignals = (mic.upsell || 0) + (mic.addon || 0) + (mic.downsell || 0);
-          const upsellRate = upsellSignals / multiItemTotal;
+          const mainSignals = (mic.main || 0);
+          const upsellRate = (upsellSignals + mainSignals) > 0 ? upsellSignals / (upsellSignals + mainSignals) : 0;
 
-          if (upsellRate > 0.6 && singleItemCount <= multiItemTotal && productRevenueShare < 0.25) {
+          // Classify as upsell if: mostly appears as non-main in multi-item orders
+          // OR has very low revenue share (< 10%)
+          if (upsellRate > 0.5 || productRevenueShare < 0.05) {
             if ((mic.addon || 0) > (mic.upsell || 0)) mostCommonCategory = 'addon';
             else if ((mic.downsell || 0) > (mic.upsell || 0)) mostCommonCategory = 'downsell';
             else mostCommonCategory = 'upsell';

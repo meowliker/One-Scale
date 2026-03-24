@@ -36,6 +36,7 @@ function mapPresetToMeta(preset?: DateRangePreset): string {
     case 'last7': return 'last_7d';
     case 'last7today': return 'last_7d';
     case 'last14': return 'last_14d';
+    case 'last28': return 'last_28d';
     case 'last30': return 'last_30d';
     case 'thisMonth': return 'this_month';
     case 'lastMonth': return 'last_month';

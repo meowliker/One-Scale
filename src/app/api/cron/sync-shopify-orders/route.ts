@@ -3,10 +3,10 @@ import {
   rest,
   isSupabasePersistenceEnabled,
   listPersistentStores,
-  getPersistentConnection,
   logStoreError,
 } from '@/app/api/lib/supabase-persistence';
 import { fetchFromShopify } from '@/app/api/lib/shopify-client';
+import { getShopifyToken } from '@/app/api/lib/tokens';
 import { fetchDisputesGraphQL, normalizeDisputeStatus } from '@/app/api/lib/shopify-graphql';
 
 export const maxDuration = 300;
@@ -84,28 +84,41 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Supabase not configured' }, { status: 500 });
   }
 
-  const stores = await listPersistentStores();
+  const allStores = await listPersistentStores();
+
+  // Support single-store mode via ?store_id= param (avoids 60s timeout, deeper pagination)
+  const requestedStoreId = new URL(req.url).searchParams.get('store_id');
+  const stores = requestedStoreId
+    ? allStores.filter(s => s.id === requestedStoreId)
+    : allStores;
+
   const results: Array<{ storeId: string; status: string; rows?: number; error?: string }> = [];
 
   for (const store of stores) {
     const start = Date.now();
     try {
-      // Get Shopify connection
-      const shopifyConn = await getPersistentConnection(store.id, 'shopify');
-      if (!shopifyConn || !shopifyConn.access_token || !shopifyConn.shop_domain) {
+      // Get Shopify token (with auto-refresh if expired)
+      const shopifyToken = await getShopifyToken(store.id);
+      if (!shopifyToken?.accessToken || !shopifyToken?.shopDomain) {
         results.push({ storeId: store.id, status: 'skipped', error: 'No Shopify connection' });
         continue;
       }
 
-      const accessToken = shopifyConn.access_token;
-      const shopDomain = shopifyConn.shop_domain;
+      const accessToken = shopifyToken.accessToken;
+      const shopDomain = shopifyToken.shopDomain;
 
       // Smart lookback: check when last order was synced for this store.
       // If cron was down, auto-recover by looking back further.
-      const backfillDays = parseInt(new URL(req.url).searchParams.get('days') || '0', 10);
+      const urlParams = new URL(req.url).searchParams;
+      const backfillDays = parseInt(urlParams.get('days') || '0', 10);
+      const explicitFrom = urlParams.get('from'); // YYYY-MM-DD override for targeted backfill
+      const explicitTo = urlParams.get('to');     // YYYY-MM-DD override
       let sinceMs: number;
 
-      if (backfillDays > 0) {
+      if (explicitFrom) {
+        // Targeted date range backfill (e.g. ?from=2026-03-18&to=2026-03-19)
+        sinceMs = Date.now() - new Date(explicitFrom + 'T00:00:00Z').getTime();
+      } else if (backfillDays > 0) {
         // Explicit backfill mode
         sinceMs = backfillDays * 24 * 60 * 60 * 1000;
       } else {
@@ -140,6 +153,14 @@ export async function GET(req: NextRequest) {
           status: 'any',
           limit: '250',
         };
+        // Add 1 day buffer to cover timezone offsets (store may be UTC-6 to UTC+12)
+        // e.g. to=2026-03-19 → max=2026-03-20T12:00:00Z covers all timezones
+        if (explicitTo) {
+          const toDate = new Date(explicitTo + 'T00:00:00Z');
+          toDate.setDate(toDate.getDate() + 1);
+          toDate.setHours(12, 0, 0, 0);
+          params.created_at_max = toDate.toISOString();
+        }
         if (sinceId) params.since_id = sinceId;
 
         const data = await fetchFromShopify<{ orders: ShopifyOrderRaw[] }>(
@@ -226,22 +247,22 @@ export async function GET(req: NextRequest) {
         });
       }
 
+      if (page > 1) console.log(`[sync-shopify-orders] ${store.id}: ${page} pages, ${allOrders.length} total orders fetched`);
       const upserted = rows.length;
 
       // ---- Sync disputes/chargebacks via GraphQL ----
+      // Skip disputes during targeted backfill (from/to params) — BT sync handles these
       let disputesSynced = 0;
-      try {
-        const disputes = await fetchDisputesGraphQL(store.id);
-        for (const dispute of disputes) {
-          const normalized = normalizeDisputeStatus(dispute.status);
-          const orderId = dispute.order?.id
-            ? dispute.order.id.replace('gid://shopify/Order/', '')
-            : null;
-
-          await rest('/shopify_chargebacks', {
-            method: 'POST',
-            headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-            body: JSON.stringify({
+      if (!explicitFrom) {
+        try {
+          const disputes = await fetchDisputesGraphQL(store.id);
+          // Batch upsert disputes instead of one-by-one
+          const disputeRows = disputes.map(dispute => {
+            const normalized = normalizeDisputeStatus(dispute.status);
+            const orderId = dispute.order?.id
+              ? dispute.order.id.replace('gid://shopify/Order/', '')
+              : null;
+            return {
               store_id: store.id,
               order_id: orderId || dispute.id,
               amount: parseFloat(dispute.amount.amount),
@@ -251,13 +272,19 @@ export async function GET(req: NextRequest) {
               shopify_status: dispute.status,
               created_at: dispute.initiatedAt,
               updated_at: dispute.finalizedAt || dispute.initiatedAt,
-            }),
+            };
           });
-          disputesSynced++;
+          if (disputeRows.length > 0) {
+            await rest('/shopify_chargebacks', {
+              method: 'POST',
+              headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+              body: JSON.stringify(disputeRows),
+            });
+            disputesSynced = disputeRows.length;
+          }
+        } catch (err) {
+          console.warn(`[sync-shopify-orders] Disputes fetch failed for ${store.id}:`, err instanceof Error ? err.message : err);
         }
-      } catch (err) {
-        // Disputes fetch may fail if scope not granted yet — log but don't fail
-        console.warn(`[sync-shopify-orders] Disputes fetch failed for ${store.id}:`, err instanceof Error ? err.message : err);
       }
 
       const elapsed = Date.now() - start;

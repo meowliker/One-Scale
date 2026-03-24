@@ -25,6 +25,7 @@ import { AccountHealthScore } from './AccountHealthScore';
 import { AccountAudit } from './AccountAudit';
 import { FunnelStageBreakdown } from './FunnelStageBreakdown';
 import { CrossChannelView } from './CrossChannelView';
+import { ProductPerformanceTable } from './ProductPerformanceTable';
 
 export interface AnalyticsDashboardClientProps {
   blendedMetrics: Record<string, number>;
@@ -107,6 +108,7 @@ export function AnalyticsDashboardClient({
         <FunnelStageBreakdown metrics={blendedMetrics} topCampaigns={topCampaigns} />
       ),
       'cross-channel': <CrossChannelView metrics={blendedMetrics} />,
+      'product-performance': <ProductPerformanceTable datePreset={datePreset} />,
     }),
     [blendedMetrics, timeSeries, topCampaigns, datePreset]
   );
