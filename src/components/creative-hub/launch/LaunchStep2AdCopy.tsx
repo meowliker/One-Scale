@@ -383,13 +383,13 @@ export function LaunchStep2AdCopy() {
                 <p className="mb-2 line-clamp-3 text-xs text-slate-700">{pt.text}</p>
                 <div className="flex items-center justify-between">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className={cn('rounded-md px-1.5 py-0.5 text-[10px] font-bold', roasColor(pt.roas))}>
-                      ROAS: {pt.roas.toFixed(1)}x
+                    <span className={cn('rounded-md px-1.5 py-0.5 text-[10px] font-bold', roasColor(pt.combinedRoas ?? pt.roas ?? 0))}>
+                      ROAS: {(pt.combinedRoas ?? pt.roas ?? 0).toFixed(1)}x
                     </span>
-                    <span className="text-[10px] text-slate-500">${pt.spend.toFixed(0)} spend</span>
-                    <span className="text-[10px] text-slate-500">{pt.purchases} purchases</span>
-                    <span className="text-[10px] text-slate-500">CTR: {pt.ctr.toFixed(1)}%</span>
-                    <span className="text-[10px] text-slate-400">Used in {pt.adCount} ads</span>
+                    <span className="text-[10px] text-slate-500">${(pt.combinedSpend ?? pt.spend ?? 0).toFixed(0)} spend</span>
+                    <span className="text-[10px] text-slate-500">{pt.purchases ?? 0} purchases</span>
+                    {(pt.avgCtr ?? pt.ctr) != null && <span className="text-[10px] text-slate-500">CTR: {(pt.avgCtr ?? pt.ctr ?? 0).toFixed(1)}%</span>}
+                    <span className="text-[10px] text-slate-400">Used in {pt.adCount ?? 0} ads</span>
                   </div>
                   <button
                     onClick={() =>
@@ -446,13 +446,13 @@ export function LaunchStep2AdCopy() {
                 <p className="mb-2 text-xs font-semibold text-slate-700">{hl.text}</p>
                 <div className="flex items-center justify-between">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className={cn('rounded-md px-1.5 py-0.5 text-[10px] font-bold', roasColor(hl.roas))}>
-                      ROAS: {hl.roas.toFixed(1)}x
+                    <span className={cn('rounded-md px-1.5 py-0.5 text-[10px] font-bold', roasColor(hl.combinedRoas ?? hl.roas ?? 0))}>
+                      ROAS: {(hl.combinedRoas ?? hl.roas ?? 0).toFixed(1)}x
                     </span>
-                    <span className="text-[10px] text-slate-500">${hl.spend.toFixed(0)} spend</span>
-                    <span className="text-[10px] text-slate-500">{hl.purchases} purchases</span>
-                    <span className="text-[10px] text-slate-500">CTR: {hl.ctr.toFixed(1)}%</span>
-                    <span className="text-[10px] text-slate-400">Used in {hl.adCount} ads</span>
+                    <span className="text-[10px] text-slate-500">${(hl.combinedSpend ?? hl.spend ?? 0).toFixed(0)} spend</span>
+                    <span className="text-[10px] text-slate-500">{hl.purchases ?? 0} purchases</span>
+                    {(hl.avgCtr ?? hl.ctr) != null && <span className="text-[10px] text-slate-500">CTR: {(hl.avgCtr ?? hl.ctr ?? 0).toFixed(1)}%</span>}
+                    <span className="text-[10px] text-slate-400">Used in {hl.adCount ?? 0} ads</span>
                   </div>
                   <button
                     onClick={() =>

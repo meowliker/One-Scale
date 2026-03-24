@@ -148,7 +148,7 @@ Return your analysis as a JSON object with this exact schema:
   const model = process.env.ANTHROPIC_CREATIVE_MODEL || 'claude-opus-4-6';
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30_000);
+  const timeout = setTimeout(() => controller.abort(), 90_000); // 90s for Claude Opus
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -331,7 +331,40 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const winningAdsData = (await winningAdsRes.json()) as WinningAdsResponse;
+    const rawData = await winningAdsRes.json();
+
+    // Map winning-ads API response to the expected WinningAdsResponse shape
+    const winningAdsData: WinningAdsResponse = {
+      ads: (rawData.winningAds || []).map((ad: Record<string, unknown>) => ({
+        adId: (ad as { id?: string }).id || '',
+        adName: (ad as { name?: string }).name || '',
+        primaryText: ((ad as { creative?: { body?: string } }).creative?.body) || '',
+        headline: ((ad as { creative?: { headline?: string } }).creative?.headline) || '',
+        callToAction: ((ad as { creative?: { ctaType?: string } }).creative?.ctaType) || '',
+        roas: ((ad as { metrics?: { roas?: number } }).metrics?.roas) || 0,
+        cpa: ((ad as { metrics?: { cpa?: number } }).metrics?.cpa) || 0,
+        cpm: ((ad as { metrics?: { cpm?: number } }).metrics?.cpm) || 0,
+        ctr: ((ad as { metrics?: { ctr?: number } }).metrics?.ctr) || 0,
+        spend: ((ad as { metrics?: { spend?: number } }).metrics?.spend) || 0,
+        impressions: ((ad as { metrics?: { impressions?: number } }).metrics?.impressions) || 0,
+        purchases: ((ad as { metrics?: { conversions?: number } }).metrics?.conversions) || 0,
+      })),
+      productName: rawData.productName || 'Unknown Product',
+      topPrimaryTexts: (rawData.uniquePTs || []).map((pt: Record<string, unknown>) => ({
+        text: (pt as { text?: string }).text || '',
+        adCount: (pt as { adCount?: number }).adCount || 0,
+        avgRoas: (pt as { combinedRoas?: number }).combinedRoas || 0,
+        totalSpend: (pt as { combinedSpend?: number }).combinedSpend || 0,
+        totalPurchases: (pt as { purchases?: number }).purchases || 0,
+      })),
+      topHeadlines: (rawData.uniqueHeadlines || []).map((hl: Record<string, unknown>) => ({
+        text: (hl as { text?: string }).text || '',
+        adCount: (hl as { adCount?: number }).adCount || 0,
+        avgRoas: (hl as { combinedRoas?: number }).combinedRoas || 0,
+        totalSpend: (hl as { combinedSpend?: number }).combinedSpend || 0,
+        totalPurchases: (hl as { purchases?: number }).purchases || 0,
+      })),
+    };
     const productName = winningAdsData.productName || 'Unknown Product';
     const analyzedAds = Math.min(winningAdsData.ads?.length ?? 0, 20);
 
@@ -341,12 +374,18 @@ export async function POST(request: NextRequest) {
     let model = process.env.ANTHROPIC_CREATIVE_MODEL || 'claude-opus-4-6';
 
     try {
+      console.log('[ai-insights] ANTHROPIC_API_KEY:', process.env.ANTHROPIC_API_KEY ? 'SET (' + process.env.ANTHROPIC_API_KEY.substring(0, 15) + '...)' : 'NOT SET');
+      console.log('[ai-insights] Calling Claude with', winningAdsData.ads.length, 'ads');
       insights = await callClaudeForInsights(winningAdsData);
       if (insights) {
         source = 'ai';
+        console.log('[ai-insights] Claude returned insights successfully');
+      } else {
+        console.log('[ai-insights] Claude returned null (no API key?)');
       }
-    } catch {
-      // Claude API call failed — fall through to fallback
+    } catch (err) {
+      console.error('[ai-insights] Claude API call failed:', err);
+      // Fall through to fallback
     }
 
     // Fallback to rule-based analysis
