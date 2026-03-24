@@ -28,6 +28,8 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
   const autoDiscoverProfiles = useCreativeHubStore((s) => s.autoDiscoverProfiles);
   const setActiveTab = useCreativeHubStore((s) => s.setActiveTab);
   const inboxCreatives = useCreativeHubStore((s) => s.inboxCreatives);
+  const activeTests = useCreativeHubStore((s) => s.activeTests);
+  const completedTests = useCreativeHubStore((s) => s.completedTests);
 
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<ProductProfile | null>(null);
@@ -53,6 +55,46 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
       map.set(p.id, links);
     });
     return map;
+  }, [profiles]);
+
+  // Count active tests (testing) per product profile
+  const testingCountMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const test of activeTests) {
+      map.set(test.productProfileId, (map.get(test.productProfileId) ?? 0) + 1);
+    }
+    return map;
+  }, [activeTests]);
+
+  // Count launched (completed) tests per product profile
+  const launchedCountMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const test of completedTests) {
+      map.set(test.productProfileId, (map.get(test.productProfileId) ?? 0) + 1);
+    }
+    return map;
+  }, [completedTests]);
+
+  // Count winners per product profile (completed tests with a winner)
+  const winnersCountMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const test of completedTests) {
+      if (test.winnerCreativeId) {
+        map.set(test.productProfileId, (map.get(test.productProfileId) ?? 0) + 1);
+      }
+    }
+    return map;
+  }, [completedTests]);
+
+  // Sort profiles: active (has active campaign links) first, then paused
+  const sortedProfiles = useMemo(() => {
+    return [...profiles].sort((a, b) => {
+      const aActive = (a.campaignLinks ?? []).some((l) => l.isActive);
+      const bActive = (b.campaignLinks ?? []).some((l) => l.isActive);
+      if (aActive && !bActive) return -1;
+      if (!aActive && bActive) return 1;
+      return 0;
+    });
   }, [profiles]);
 
   const mappedCount = profiles.length;
@@ -136,12 +178,15 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
       {/* Profile cards grid */}
       {profiles.length > 0 ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {profiles.map((profile) => (
+          {sortedProfiles.map((profile) => (
             <ProductProfileCard
               key={profile.id}
               profile={profile}
               linkedCampaigns={linkedCampaignsMap.get(profile.id) ?? []}
               creativeCount={creativeCountMap.get(profile.id) ?? 0}
+              testingCount={testingCountMap.get(profile.id) ?? 0}
+              launchedCount={launchedCountMap.get(profile.id) ?? 0}
+              winnersCount={winnersCountMap.get(profile.id) ?? 0}
               onEdit={handleEdit}
               onViewCopyLibrary={handleViewCopyLibrary}
             />

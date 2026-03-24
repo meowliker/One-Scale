@@ -51,6 +51,8 @@ export default function CreativeHubClient() {
       case 'profiles':
         fetchProfiles(activeStoreId);
         fetchInbox(activeStoreId);
+        fetchActiveTests(activeStoreId);
+        fetchCompletedTests(activeStoreId);
         break;
       case 'inbox':
         fetchInbox(activeStoreId);

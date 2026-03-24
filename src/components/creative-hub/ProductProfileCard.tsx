@@ -27,6 +27,9 @@ interface ProductProfileCardProps {
   profile: ProductProfile;
   linkedCampaigns: ProductCampaignLink[];
   creativeCount?: number;
+  testingCount?: number;
+  launchedCount?: number;
+  winnersCount?: number;
   onEdit: (profile: ProductProfile) => void;
   onViewCopyLibrary: (profileId: string) => void;
 }
@@ -82,6 +85,9 @@ export function ProductProfileCard({
   profile,
   linkedCampaigns,
   creativeCount,
+  testingCount = 0,
+  launchedCount = 0,
+  winnersCount = 0,
   onEdit,
   onViewCopyLibrary,
 }: ProductProfileCardProps) {
@@ -176,6 +182,21 @@ export function ProductProfileCard({
             {creativeCount != null && creativeCount > 0 && (
               <span className="rounded-full bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 text-xs font-medium ml-2">
                 {creativeCount} creative{creativeCount !== 1 ? 's' : ''}
+              </span>
+            )}
+            {testingCount > 0 && (
+              <span className="rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 text-xs font-medium">
+                {testingCount} testing
+              </span>
+            )}
+            {launchedCount > 0 && (
+              <span className="rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 text-xs font-medium">
+                {launchedCount} launched
+              </span>
+            )}
+            {winnersCount > 0 && (
+              <span className="rounded-full bg-purple-50 text-purple-700 border border-purple-200 px-2 py-0.5 text-xs font-medium">
+                {winnersCount} winner{winnersCount !== 1 ? 's' : ''}
               </span>
             )}
           </div>
