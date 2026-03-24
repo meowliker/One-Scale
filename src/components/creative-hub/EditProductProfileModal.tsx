@@ -323,7 +323,7 @@ export function EditProductProfileModal({
           {sectionConfig.map(({ id, label, Icon }) => {
             const isExpanded = expandedSections.has(id);
             return (
-              <div key={id} className="border border-border rounded-lg overflow-hidden">
+              <div key={id} className={cn("border border-border rounded-lg", isExpanded ? 'overflow-visible' : 'overflow-hidden')}>
                 <button
                   onClick={() => toggleSection(id)}
                   className="flex items-center gap-3 w-full px-4 py-3 text-left hover:bg-surface-hover/50 transition-colors"
