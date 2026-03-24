@@ -1,6 +1,6 @@
 import { subDays } from 'date-fns';
 import type { Ad, AdSet, Campaign } from '@/types/campaign';
-import { fetchMetaAdSets, fetchMetaAds, fetchMetaCampaigns } from '@/app/api/lib/meta-client';
+import { fetchMetaAdSetsByAccount, fetchMetaAdsByAccount, fetchMetaCampaigns } from '@/app/api/lib/meta-client';
 import { getMetaToken } from '@/app/api/lib/tokens';
 import { refreshMetaSetupSnapshots } from '@/app/api/lib/meta-setup-cache';
 import { rest } from '@/app/api/lib/supabase-persistence';
@@ -434,48 +434,94 @@ export async function syncWarehouseSnapshotsForStore(params: {
   let adsetCount = 0;
   let adCount = 0;
 
-  for (const campaign of campaigns) {
-    const campaignAccountId = asString((campaign as unknown as Record<string, unknown>).ad_account_id) || null;
-    const adsets = await fetchMetaAdSets(token.accessToken, campaign.id, dateRange, {
+  const adsetMap = new Map<string, AdSetWithContext>();
+  const adsMap = new Map<string, AdWithContext>();
+
+  for (const account of activeAccounts) {
+    const accountId = account.ad_account_id;
+    const adsets = await fetchMetaAdSetsByAccount(token.accessToken, accountId, dateRange, {
       disableDateFallback: true,
       preferLightweight: true,
       basicOnly: false,
     });
-    const adsetsWithContext: AdSetWithContext[] = adsets.map((adset) => ({
-      ...adset,
-      campaign_id: campaign.id,
-      ad_account_id: campaignAccountId || undefined,
-    }));
 
-    await Promise.all([
-      upsertPersistentMetaEndpointSnapshot(storeId, 'adsets', campaign.id, variantKey, adsetsWithContext),
-      upsertPersistentMetaEndpointSnapshot(storeId, 'adsets', campaign.id, WAREHOUSE_LATEST_VARIANT, adsetsWithContext),
-    ]);
-    adsetCount += adsetsWithContext.length;
-
+    for (const adset of adsets) {
+      if (!adset.id) continue;
+      if (adsetMap.has(adset.id)) continue;
+      adsetMap.set(adset.id, {
+        ...adset,
+        campaign_id: adset.campaignId || undefined,
+        ad_account_id: accountId,
+      });
+    }
     await sleep(120);
 
-    for (const adset of adsetsWithContext) {
-      const ads = await fetchMetaAds(token.accessToken, adset.id, dateRange, {
-        disableDateFallback: true,
-        preferLightweight: true,
-        basicOnly: false,
+    const ads = await fetchMetaAdsByAccount(token.accessToken, accountId, dateRange, {
+      disableDateFallback: true,
+      preferLightweight: true,
+      basicOnly: false,
+    });
+    for (const ad of ads) {
+      if (!ad.id) continue;
+      if (adsMap.has(ad.id)) continue;
+      const raw = ad as unknown as Record<string, unknown>;
+      adsMap.set(ad.id, {
+        ...(ad as Ad),
+        adset_id: asString(raw.adset_id) || ad.adSetId || undefined,
+        campaign_id: asString(raw.campaign_id) || undefined,
+        ad_account_id: accountId,
       });
-      const adsWithContext: AdWithContext[] = ads.map((ad) => ({
-        ...ad,
-        adset_id: adset.id,
-        campaign_id: campaign.id,
-        ad_account_id: campaignAccountId || undefined,
-      }));
-
-      await Promise.all([
-        upsertPersistentMetaEndpointSnapshot(storeId, 'ads', adset.id, variantKey, adsWithContext),
-        upsertPersistentMetaEndpointSnapshot(storeId, 'ads', adset.id, WAREHOUSE_LATEST_VARIANT, adsWithContext),
-      ]);
-      adCount += adsWithContext.length;
-      await sleep(90);
     }
-    await sleep(150);
+    await sleep(140);
+  }
+
+  const allAdsets = [...adsetMap.values()];
+  const allAds = [...adsMap.values()];
+  adsetCount = allAdsets.length;
+  adCount = allAds.length;
+
+  const adsetsByCampaign = new Map<string, AdSetWithContext[]>();
+  for (const adset of allAdsets) {
+    const campaignId = adset.campaign_id || adset.campaignId;
+    if (!campaignId) continue;
+    const rows = adsetsByCampaign.get(campaignId) || [];
+    rows.push(adset);
+    adsetsByCampaign.set(campaignId, rows);
+  }
+
+  const adsByAdset = new Map<string, AdWithContext[]>();
+  for (const ad of allAds) {
+    const adsetId = ad.adset_id || ad.adSetId;
+    if (!adsetId) continue;
+    const rows = adsByAdset.get(adsetId) || [];
+    rows.push(ad);
+    adsByAdset.set(adsetId, rows);
+  }
+
+  const campaignIdsToPersist = new Set<string>([
+    ...campaigns.map((c) => c.id),
+    ...adsetsByCampaign.keys(),
+  ]);
+
+  for (const campaignId of campaignIdsToPersist) {
+    const campaignAdsets = adsetsByCampaign.get(campaignId) || [];
+    await Promise.all([
+      upsertPersistentMetaEndpointSnapshot(storeId, 'adsets', campaignId, variantKey, campaignAdsets),
+      upsertPersistentMetaEndpointSnapshot(storeId, 'adsets', campaignId, WAREHOUSE_LATEST_VARIANT, campaignAdsets),
+    ]);
+  }
+
+  const adsetIdsToPersist = new Set<string>([
+    ...allAdsets.map((s) => s.id),
+    ...adsByAdset.keys(),
+  ]);
+
+  for (const adsetId of adsetIdsToPersist) {
+    const adsetAds = adsByAdset.get(adsetId) || [];
+    await Promise.all([
+      upsertPersistentMetaEndpointSnapshot(storeId, 'ads', adsetId, variantKey, adsetAds),
+      upsertPersistentMetaEndpointSnapshot(storeId, 'ads', adsetId, WAREHOUSE_LATEST_VARIANT, adsetAds),
+    ]);
   }
 
   return {
