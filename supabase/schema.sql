@@ -288,3 +288,197 @@ create table if not exists creative_assets (
 
 create index if not exists idx_creative_assets_store_ad
   on creative_assets(store_id, ad_id);
+
+-- Meta entity warehouse (latest-only, query-friendly)
+create table if not exists meta_campaign_entities (
+  id bigserial primary key,
+  store_id text not null references stores(id) on delete cascade,
+  campaign_id text not null,
+  campaign_name text not null,
+  ad_account_id text,
+  ad_account_name text,
+  business_manager_id text,
+  business_manager_name text,
+  facebook_page_id text,
+  facebook_page_name text,
+  instagram_id text,
+  instagram_username text,
+  pixel_id text,
+  pixel_name text,
+  objective text,
+  status text,
+  daily_budget numeric(12,2),
+  lifetime_budget numeric(12,2),
+  bid_strategy text,
+  start_date text,
+  end_date text,
+  meta_updated_time text,
+  policy_json jsonb not null default '{}'::jsonb,
+  metrics_json jsonb not null default '{}'::jsonb,
+  raw_json jsonb not null default '{}'::jsonb,
+  source_window_start date,
+  source_window_end date,
+  source_synced_at timestamptz,
+  updated_at timestamptz not null default now(),
+  unique (store_id, campaign_id)
+);
+
+create table if not exists meta_adset_entities (
+  id bigserial primary key,
+  store_id text not null references stores(id) on delete cascade,
+  adset_id text not null,
+  campaign_id text not null,
+  adset_name text not null,
+  ad_account_id text,
+  ad_account_name text,
+  business_manager_id text,
+  business_manager_name text,
+  facebook_page_id text,
+  facebook_page_name text,
+  instagram_id text,
+  instagram_username text,
+  pixel_id text,
+  pixel_name text,
+  status text,
+  daily_budget numeric(12,2),
+  bid_amount numeric(12,2),
+  start_date text,
+  end_date text,
+  meta_updated_time text,
+  targeting_age_min integer,
+  targeting_age_max integer,
+  targeting_genders jsonb not null default '[]'::jsonb,
+  targeting_locations jsonb not null default '[]'::jsonb,
+  targeting_interests jsonb not null default '[]'::jsonb,
+  targeting_custom_audiences jsonb not null default '[]'::jsonb,
+  targeting_json jsonb not null default '{}'::jsonb,
+  policy_json jsonb not null default '{}'::jsonb,
+  metrics_json jsonb not null default '{}'::jsonb,
+  raw_json jsonb not null default '{}'::jsonb,
+  source_window_start date,
+  source_window_end date,
+  source_synced_at timestamptz,
+  updated_at timestamptz not null default now(),
+  unique (store_id, adset_id)
+);
+
+create table if not exists meta_ad_entities (
+  id bigserial primary key,
+  store_id text not null references stores(id) on delete cascade,
+  ad_id text not null,
+  adset_id text not null,
+  campaign_id text not null,
+  ad_name text not null,
+  ad_account_id text,
+  ad_account_name text,
+  business_manager_id text,
+  business_manager_name text,
+  facebook_page_id text,
+  facebook_page_name text,
+  instagram_id text,
+  instagram_username text,
+  pixel_id text,
+  pixel_name text,
+  status text,
+  creative_id text,
+  creative_type text,
+  primary_text text,
+  headline text,
+  cta_type text,
+  media_url text,
+  thumbnail_url text,
+  video_id text,
+  destination_url text,
+  url_tags text,
+  policy_json jsonb not null default '{}'::jsonb,
+  metrics_json jsonb not null default '{}'::jsonb,
+  raw_json jsonb not null default '{}'::jsonb,
+  source_window_start date,
+  source_window_end date,
+  source_synced_at timestamptz,
+  updated_at timestamptz not null default now(),
+  unique (store_id, ad_id)
+);
+
+create index if not exists idx_meta_campaign_entities_store_status
+  on meta_campaign_entities(store_id, status);
+create index if not exists idx_meta_campaign_entities_store_account
+  on meta_campaign_entities(store_id, ad_account_id);
+
+create index if not exists idx_meta_adset_entities_store_campaign
+  on meta_adset_entities(store_id, campaign_id);
+create index if not exists idx_meta_adset_entities_store_status
+  on meta_adset_entities(store_id, status);
+create index if not exists idx_meta_adset_entities_store_account
+  on meta_adset_entities(store_id, ad_account_id);
+
+create index if not exists idx_meta_ad_entities_store_adset
+  on meta_ad_entities(store_id, adset_id);
+create index if not exists idx_meta_ad_entities_store_campaign
+  on meta_ad_entities(store_id, campaign_id);
+create index if not exists idx_meta_ad_entities_store_status
+  on meta_ad_entities(store_id, status);
+create index if not exists idx_meta_ad_entities_store_account
+  on meta_ad_entities(store_id, ad_account_id);
+
+create or replace view meta_entities_flat_v as
+select
+  a.store_id,
+  c.campaign_id,
+  s.adset_id,
+  a.ad_id,
+  c.campaign_name,
+  s.adset_name,
+  a.ad_name,
+  c.status as campaign_status,
+  s.status as adset_status,
+  a.status as ad_status,
+  coalesce(a.ad_account_id, s.ad_account_id, c.ad_account_id) as ad_account_id,
+  coalesce(a.ad_account_name, s.ad_account_name, c.ad_account_name) as ad_account_name,
+  coalesce(a.business_manager_id, s.business_manager_id, c.business_manager_id) as business_manager_id,
+  coalesce(a.business_manager_name, s.business_manager_name, c.business_manager_name) as business_manager_name,
+  coalesce(a.facebook_page_id, s.facebook_page_id, c.facebook_page_id) as facebook_page_id,
+  coalesce(a.facebook_page_name, s.facebook_page_name, c.facebook_page_name) as facebook_page_name,
+  coalesce(a.instagram_id, s.instagram_id, c.instagram_id) as instagram_id,
+  coalesce(a.instagram_username, s.instagram_username, c.instagram_username) as instagram_username,
+  coalesce(a.pixel_id, s.pixel_id, c.pixel_id) as pixel_id,
+  coalesce(a.pixel_name, s.pixel_name, c.pixel_name) as pixel_name,
+  c.objective,
+  c.daily_budget as campaign_daily_budget,
+  c.lifetime_budget as campaign_lifetime_budget,
+  c.bid_strategy,
+  c.start_date as campaign_start_date,
+  c.end_date as campaign_end_date,
+  s.daily_budget as adset_daily_budget,
+  s.bid_amount as adset_bid_amount,
+  s.start_date as adset_start_date,
+  s.end_date as adset_end_date,
+  s.targeting_json,
+  a.creative_id,
+  a.creative_type,
+  a.primary_text,
+  a.headline,
+  a.cta_type,
+  a.media_url,
+  a.thumbnail_url,
+  a.video_id,
+  a.destination_url,
+  a.url_tags,
+  c.metrics_json as campaign_metrics_json,
+  s.metrics_json as adset_metrics_json,
+  a.metrics_json as ad_metrics_json,
+  c.policy_json as campaign_policy_json,
+  s.policy_json as adset_policy_json,
+  a.policy_json as ad_policy_json,
+  a.raw_json as ad_raw_json,
+  a.source_window_start,
+  a.source_window_end,
+  a.source_synced_at,
+  a.updated_at
+from meta_ad_entities a
+join meta_adset_entities s
+  on s.store_id = a.store_id
+ and s.adset_id = a.adset_id
+join meta_campaign_entities c
+  on c.store_id = a.store_id
+ and c.campaign_id = a.campaign_id;
