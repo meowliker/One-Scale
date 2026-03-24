@@ -9,6 +9,8 @@ import type {
   WinningCopy,
   FatigueAlert,
   PreLaunchReport,
+  WinningAdsData,
+  AIInsightsData,
 } from '@/types/creativeHub';
 
 // Inline type for unmapped campaigns returned by auto-discover
@@ -59,6 +61,14 @@ interface CreativeHubState {
   // Health Check
   healthCheckReport: PreLaunchReport | null;
 
+  // Winning Ads
+  winningAds: WinningAdsData | null;
+  winningAdsLoading: boolean;
+
+  // AI Insights
+  aiInsights: AIInsightsData | null;
+  aiInsightsLoading: boolean;
+
   // Actions
   setActiveTab: (tab: CreativeHubTab) => void;
 
@@ -92,6 +102,12 @@ interface CreativeHubState {
 
   // Launch actions
   runHealthCheck: (storeId: string) => Promise<void>;
+
+  // Winning ads actions
+  fetchWinningAds: (storeId: string, productProfileId: string) => Promise<void>;
+
+  // AI insights actions
+  fetchAIInsights: (storeId: string, productProfileId: string) => Promise<void>;
 
   // Copy library actions
   fetchCopyLibrary: (productProfileId: string) => Promise<void>;
@@ -132,6 +148,12 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
   fatigueAlerts: [],
 
   healthCheckReport: null,
+
+  winningAds: null,
+  winningAdsLoading: false,
+
+  aiInsights: null,
+  aiInsightsLoading: false,
 
   // ── Tab navigation ──
 
@@ -472,6 +494,40 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
       });
     } catch {
       // Error handling deferred to Task 16
+    }
+  },
+
+  // ── Winning Ads ──
+
+  fetchWinningAds: async (storeId: string, productProfileId: string) => {
+    set({ winningAdsLoading: true });
+    try {
+      const res = await fetch(`/api/creative-hub/winning-ads?storeId=${encodeURIComponent(storeId)}&productProfileId=${encodeURIComponent(productProfileId)}`);
+      if (!res.ok) throw new Error('Failed to fetch winning ads');
+      const data = await res.json();
+      set({ winningAds: data, winningAdsLoading: false });
+    } catch (err) {
+      console.error('[CreativeHub] Failed to fetch winning ads:', err);
+      set({ winningAdsLoading: false });
+    }
+  },
+
+  // ── AI Insights ──
+
+  fetchAIInsights: async (storeId: string, productProfileId: string) => {
+    set({ aiInsightsLoading: true });
+    try {
+      const res = await fetch('/api/creative-hub/ai-insights', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storeId, productProfileId }),
+      });
+      if (!res.ok) throw new Error('Failed to fetch AI insights');
+      const data = await res.json();
+      set({ aiInsights: data, aiInsightsLoading: false });
+    } catch (err) {
+      console.error('[CreativeHub] Failed to fetch AI insights:', err);
+      set({ aiInsightsLoading: false });
     }
   },
 

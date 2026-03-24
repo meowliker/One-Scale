@@ -355,6 +355,86 @@ export interface FatigueAlert {
   createdAt: string;
 }
 
+// ── Winning Ads ──
+
+export interface WinningPT {
+  text: string;
+  combinedRoas: number;
+  combinedSpend: number;
+  combinedRevenue: number;
+  purchases: number;
+  adCount: number;
+  avgCtr: number;
+  avgCpa: number;
+}
+
+export interface WinningHeadline {
+  text: string;
+  combinedRoas: number;
+  combinedSpend: number;
+  purchases: number;
+  adCount: number;
+}
+
+export interface WinningAd {
+  id: string;
+  name: string;
+  creative: {
+    headline: string;
+    body: string;
+    ctaType: string;
+    thumbnailUrl?: string;
+    destinationUrl?: string;
+    type?: string;
+  };
+  metrics: {
+    spend: number;
+    revenue: number;
+    roas: number;
+    cpa: number;
+    cpm: number;
+    cpc: number;
+    ctr: number;
+    impressions: number;
+    clicks: number;
+    conversions: number;
+  };
+  allPTs?: string[];
+  allHeadlines?: string[];
+}
+
+export interface WinningAdsData {
+  uniquePTs: WinningPT[];
+  uniqueHeadlines: WinningHeadline[];
+  winningAds: WinningAd[];
+  autoFill: {
+    primaryTexts: string[];
+    headlines: string[];
+    cta: string;
+  };
+  bestCTA: { type: string; usagePercent: number };
+  stats: { totalAds: number; totalLinkedCampaigns: number };
+}
+
+// ── AI Insights ──
+
+export interface AIInsightsData {
+  insights: {
+    winningPatterns: Array<{ pattern: string; avgRoas: number; example: string; reasoning: string }>;
+    bestAngle: { name: string; avgRoas: number; description: string };
+    worstAngle: { name: string; avgRoas: number; description: string };
+    suggestedPTs: Array<{ text: string; reasoning: string }>;
+    suggestedHeadlines: Array<{ text: string; reasoning: string }>;
+    bestCTA: { type: string; usagePercent: number; reasoning: string };
+    summary: string;
+    actionItems: string[];
+  };
+  source: 'ai' | 'fallback';
+  model: string;
+  analyzedAds: number;
+  productName: string;
+}
+
 // ── Store State ──
 
 export type CreativeHubTab = 'profiles' | 'inbox' | 'active' | 'completed' | 'copy-library';
