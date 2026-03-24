@@ -34,6 +34,7 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<ProductProfile | null>(null);
   const [unmappedExpanded, setUnmappedExpanded] = useState(true);
+  const [notTestingExpanded, setNotTestingExpanded] = useState(true);
 
   // Count creatives per product profile
   const creativeCountMap = useMemo(() => {
@@ -86,15 +87,19 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
     return map;
   }, [completedTests]);
 
-  // Sort profiles: active (has active campaign links) first, then paused
-  const sortedProfiles = useMemo(() => {
-    return [...profiles].sort((a, b) => {
-      const aActive = (a.campaignLinks ?? []).some((l) => l.isActive);
-      const bActive = (b.campaignLinks ?? []).some((l) => l.isActive);
-      if (aActive && !bActive) return -1;
-      if (!aActive && bActive) return 1;
-      return 0;
-    });
+  // Split profiles into active (testing) and not testing
+  const { activeProfiles, notTestingProfiles } = useMemo(() => {
+    const active: ProductProfile[] = [];
+    const notTesting: ProductProfile[] = [];
+    for (const p of profiles) {
+      const isActive = (p.activeCampaignCount ?? 0) > 0 || (p.campaignLinks ?? []).some((l) => l.isActive);
+      if (isActive) {
+        active.push(p);
+      } else {
+        notTesting.push(p);
+      }
+    }
+    return { activeProfiles: active, notTestingProfiles: notTesting };
   }, [profiles]);
 
   const mappedCount = profiles.length;
@@ -175,22 +180,72 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
         </div>
       </div>
 
-      {/* Profile cards grid */}
+      {/* Profile cards — split into Active Products and Not Testing sections */}
       {profiles.length > 0 ? (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {sortedProfiles.map((profile) => (
-            <ProductProfileCard
-              key={profile.id}
-              profile={profile}
-              linkedCampaigns={linkedCampaignsMap.get(profile.id) ?? []}
-              creativeCount={creativeCountMap.get(profile.id) ?? 0}
-              testingCount={testingCountMap.get(profile.id) ?? 0}
-              launchedCount={launchedCountMap.get(profile.id) ?? 0}
-              winnersCount={winnersCountMap.get(profile.id) ?? 0}
-              onEdit={handleEdit}
-              onViewCopyLibrary={handleViewCopyLibrary}
-            />
-          ))}
+        <div className="space-y-6">
+          {/* Active Products section */}
+          {activeProfiles.length > 0 && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-semibold text-text-primary">
+                  Active Products ({activeProfiles.length})
+                </span>
+                <span className="flex-1 border-t border-border" />
+              </div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {activeProfiles.map((profile) => (
+                  <ProductProfileCard
+                    key={profile.id}
+                    profile={profile}
+                    linkedCampaigns={linkedCampaignsMap.get(profile.id) ?? []}
+                    creativeCount={creativeCountMap.get(profile.id) ?? 0}
+                    testingCount={testingCountMap.get(profile.id) ?? 0}
+                    launchedCount={launchedCountMap.get(profile.id) ?? 0}
+                    winnersCount={winnersCountMap.get(profile.id) ?? 0}
+                    onEdit={handleEdit}
+                    onViewCopyLibrary={handleViewCopyLibrary}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Not Testing section (collapsible) */}
+          {notTestingProfiles.length > 0 && (
+            <div className="space-y-4">
+              <button
+                onClick={() => setNotTestingExpanded(!notTestingExpanded)}
+                className="flex items-center gap-3 w-full group"
+              >
+                <span className="text-sm font-semibold text-text-secondary">
+                  Not Testing ({notTestingProfiles.length})
+                </span>
+                {notTestingExpanded ? (
+                  <ChevronUp className="h-4 w-4 text-text-dimmed group-hover:text-text-secondary transition-colors" />
+                ) : (
+                  <ChevronDown className="h-4 w-4 text-text-dimmed group-hover:text-text-secondary transition-colors" />
+                )}
+                <span className="flex-1 border-t border-border" />
+              </button>
+              {notTestingExpanded && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 opacity-75">
+                  {notTestingProfiles.map((profile) => (
+                    <ProductProfileCard
+                      key={profile.id}
+                      profile={profile}
+                      linkedCampaigns={linkedCampaignsMap.get(profile.id) ?? []}
+                      creativeCount={creativeCountMap.get(profile.id) ?? 0}
+                      testingCount={testingCountMap.get(profile.id) ?? 0}
+                      launchedCount={launchedCountMap.get(profile.id) ?? 0}
+                      winnersCount={winnersCountMap.get(profile.id) ?? 0}
+                      onEdit={handleEdit}
+                      onViewCopyLibrary={handleViewCopyLibrary}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       ) : !profilesLoading ? (
         /* Empty state */
