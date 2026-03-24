@@ -12,6 +12,7 @@ import {
   AlertTriangle,
   Link2Off,
   Settings,
+  Package,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
@@ -83,10 +84,11 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
     return groups;
   }, [filteredCreatives]);
 
-  // Stats — based on driveUrl presence, not upload status
-  const selectedCount = selectedCreativeIds.size;
+  // Stats
+  const totalCount = inboxCreatives.length;
   const readyCount = inboxCreatives.filter((c) => !!c.driveUrl).length;
   const noLinkCount = inboxCreatives.filter((c) => !c.driveUrl).length;
+  const selectedCount = selectedCreativeIds.size;
   const readySelectedCount = inboxCreatives.filter(
     (c) => selectedCreativeIds.has(c.id) && !!c.driveUrl
   ).length;
@@ -102,6 +104,19 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
       return next;
     });
   };
+
+  // Select all creatives for a specific product group
+  const selectProductCreatives = useCallback(
+    (creatives: InboxCreative[]) => {
+      const readyIds = creatives.filter((c) => !!c.driveUrl).map((c) => c.id);
+      for (const id of readyIds) {
+        if (!selectedCreativeIds.has(id)) {
+          toggleCreativeSelection(id);
+        }
+      }
+    },
+    [selectedCreativeIds, toggleCreativeSelection]
+  );
 
   // Unique product names for filter
   const productOptions = useMemo(() => {
@@ -204,19 +219,19 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
   }
 
   return (
-    <div className="space-y-4 pb-24">
+    <div className="space-y-3 pb-24">
       {/* Header */}
       <InboxHeader syncing={syncing} onSync={handleSync} />
 
-      {/* Filter bar */}
-      <div className="flex flex-wrap items-center gap-3">
-        <Filter className="h-4 w-4 text-text-dimmed" />
+      {/* Filter bar + summary */}
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface-elevated px-3 py-2">
+        <Filter className="h-3.5 w-3.5 text-text-dimmed" />
 
         {/* Product filter */}
         <select
           value={productFilter}
           onChange={(e) => setProductFilter(e.target.value)}
-          className="rounded-lg border border-border bg-surface-elevated px-3 py-1.5 text-sm text-text-primary focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-primary focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
         >
           <option value="all">All Products</option>
           {productOptions.map((p) => (
@@ -230,7 +245,7 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
         <select
           value={formatFilter}
           onChange={(e) => setFormatFilter(e.target.value)}
-          className="rounded-lg border border-border bg-surface-elevated px-3 py-1.5 text-sm text-text-primary focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-primary focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
         >
           <option value="all">All Formats</option>
           <option value="video">Video</option>
@@ -242,26 +257,42 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
-          className="rounded-lg border border-border bg-surface-elevated px-3 py-1.5 text-sm text-text-primary focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-primary focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
         >
           <option value="all">All Statuses</option>
           <option value="ready">Ready</option>
           <option value="no_link">No Link</option>
         </select>
 
+        {/* Divider */}
+        <span className="h-4 w-px bg-border" />
+
+        {/* Summary stats */}
+        <span className="text-xs text-text-secondary">
+          <span className="font-semibold text-text-primary">{totalCount}</span> creatives total
+          <span className="mx-1.5 text-text-dimmed">&middot;</span>
+          <span className="font-semibold text-emerald-600">{readyCount}</span> ready
+          {noLinkCount > 0 && (
+            <>
+              <span className="mx-1.5 text-text-dimmed">&middot;</span>
+              <span className="font-semibold text-gray-500">{noLinkCount}</span> no link
+            </>
+          )}
+        </span>
+
         {/* Bulk select */}
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-1">
           <button
             onClick={selectAllCreatives}
-            className="rounded-md px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 transition-colors"
+            className="rounded px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 transition-colors"
           >
             Select All
           </button>
           <button
             onClick={deselectAllCreatives}
-            className="rounded-md px-2 py-1 text-xs font-medium text-text-dimmed hover:bg-surface-hover transition-colors"
+            className="rounded px-2 py-1 text-xs font-medium text-text-dimmed hover:bg-surface-hover transition-colors"
           >
-            Deselect All
+            Clear
           </button>
         </div>
       </div>
@@ -280,10 +311,14 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
 
       {/* Grouped creative list */}
       {!inboxLoading && (
-        <div className="space-y-6">
+        <div className="space-y-4">
           <AnimatePresence mode="popLayout">
             {Object.entries(groupedCreatives).map(([groupKey, group]) => {
               const isCollapsed = collapsedGroups.has(groupKey);
+              const groupReadyCount = group.creatives.filter((c) => !!c.driveUrl).length;
+              const groupNoLinkCount = group.creatives.length - groupReadyCount;
+              const productInitial = group.productName.charAt(0).toUpperCase();
+
               return (
                 <motion.div
                   key={groupKey}
@@ -291,24 +326,54 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -8 }}
                   transition={{ duration: 0.2 }}
+                  className="rounded-xl border border-border bg-surface-elevated overflow-hidden"
                 >
                   {/* Group header */}
-                  <button
-                    onClick={() => toggleGroup(groupKey)}
-                    className="mb-2 flex w-full items-center gap-2 text-left"
-                  >
-                    {isCollapsed ? (
-                      <ChevronRight className="h-4 w-4 text-text-dimmed" />
-                    ) : (
-                      <ChevronDown className="h-4 w-4 text-text-dimmed" />
+                  <div className="flex items-center gap-3 px-4 py-3 bg-surface">
+                    <button
+                      onClick={() => toggleGroup(groupKey)}
+                      className="flex flex-1 items-center gap-3 text-left"
+                    >
+                      {isCollapsed ? (
+                        <ChevronRight className="h-4 w-4 text-text-dimmed flex-shrink-0" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4 text-text-dimmed flex-shrink-0" />
+                      )}
+
+                      {/* Product avatar */}
+                      <div className="flex-shrink-0 h-8 w-8 rounded-lg bg-blue-100 flex items-center justify-center">
+                        <Package className="h-4 w-4 text-blue-600" />
+                      </div>
+
+                      {/* Product name */}
+                      <h3 className="text-sm font-semibold text-text-primary truncate">
+                        {group.productName}
+                      </h3>
+
+                      {/* Badges */}
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                          {groupReadyCount} ready
+                        </span>
+                        {groupNoLinkCount > 0 && (
+                          <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-500">
+                            {groupNoLinkCount} no link
+                          </span>
+                        )}
+                      </div>
+                    </button>
+
+                    {/* Launch Ready button for this product */}
+                    {groupReadyCount > 0 && (
+                      <button
+                        onClick={() => selectProductCreatives(group.creatives)}
+                        className="flex-shrink-0 inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 transition-colors shadow-sm"
+                      >
+                        <Rocket className="h-3 w-3" />
+                        Launch Ready
+                      </button>
                     )}
-                    <h3 className="text-sm font-semibold text-text-primary">
-                      {group.productName}
-                    </h3>
-                    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-text-secondary">
-                      {group.creatives.length}
-                    </span>
-                  </button>
+                  </div>
 
                   {/* Creative rows */}
                   <AnimatePresence>
@@ -318,17 +383,19 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
                         animate={{ opacity: 1, height: 'auto' }}
                         exit={{ opacity: 0, height: 0 }}
                         transition={{ duration: 0.2 }}
-                        className="space-y-2 overflow-hidden"
+                        className="overflow-hidden"
                       >
-                        {group.creatives.map((creative) => (
-                          <InboxCreativeRow
-                            key={creative.id}
-                            creative={creative}
-                            isSelected={selectedCreativeIds.has(creative.id)}
-                            onToggleSelect={() => toggleCreativeSelection(creative.id)}
-                            onPreview={() => setPreviewCreative(creative)}
-                          />
-                        ))}
+                        <div className="space-y-1 px-3 pb-3 pt-1">
+                          {group.creatives.map((creative) => (
+                            <InboxCreativeRow
+                              key={creative.id}
+                              creative={creative}
+                              isSelected={selectedCreativeIds.has(creative.id)}
+                              onToggleSelect={() => toggleCreativeSelection(creative.id)}
+                              onPreview={() => setPreviewCreative(creative)}
+                            />
+                          ))}
+                        </div>
                       </motion.div>
                     )}
                   </AnimatePresence>
@@ -371,7 +438,7 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
                 <span className="h-3 w-px bg-border" />
                 <span>
                   No Link:{' '}
-                  <span className="font-semibold text-amber-600">{noLinkCount}</span>
+                  <span className="font-semibold text-gray-500">{noLinkCount}</span>
                 </span>
               </>
             )}
@@ -407,7 +474,7 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
   );
 }
 
-/* ── Extracted sub-component ── */
+/* -- Extracted sub-component -- */
 
 function InboxHeader({
   syncing,

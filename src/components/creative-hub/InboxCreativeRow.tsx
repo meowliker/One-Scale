@@ -32,8 +32,8 @@ const formatBadgeStyles: Record<string, string> = {
 
 /**
  * Inbox status is derived from whether the creative has a Drive URL:
- * - driveUrl present → "Ready" (green)
- * - driveUrl missing → "No Link" (amber)
+ * - driveUrl present -> "Ready" (green)
+ * - driveUrl missing -> "No Link" (gray)
  * Upload to Meta happens only during launch (Step 4 of Launch Wizard).
  */
 function getInboxStatus(creative: InboxCreative): {
@@ -50,16 +50,10 @@ function getInboxStatus(creative: InboxCreative): {
   }
   return {
     label: 'No Link',
-    style: 'bg-amber-50 text-amber-700',
+    style: 'bg-gray-100 text-gray-500',
     icon: Link2Off,
   };
 }
-
-const pastTestStatusColors: Record<string, string> = {
-  winner: 'text-emerald-700',
-  killed: 'text-red-700',
-  inconclusive: 'text-amber-700',
-};
 
 export function InboxCreativeRow({
   creative,
@@ -74,13 +68,13 @@ export function InboxCreativeRow({
   return (
     <div
       className={cn(
-        'rounded-xl border p-4 transition-all',
+        'group rounded-lg border px-3 py-2.5 transition-all',
         isSelected
           ? 'border-blue-300 bg-blue-50/30'
           : 'border-border bg-surface-elevated hover:border-gray-300'
       )}
     >
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3">
         {/* Checkbox */}
         <label className="flex-shrink-0 cursor-pointer">
           <input
@@ -92,7 +86,7 @@ export function InboxCreativeRow({
         </label>
 
         {/* Thumbnail */}
-        <div className="flex-shrink-0 h-12 w-12 rounded-lg overflow-hidden bg-gray-100 flex items-center justify-center">
+        <div className="flex-shrink-0 h-10 w-10 rounded-lg overflow-hidden bg-gray-100 flex items-center justify-center">
           {creative.thumbnailUrl ? (
             <img
               src={creative.thumbnailUrl}
@@ -100,7 +94,7 @@ export function InboxCreativeRow({
               className="h-full w-full object-cover"
             />
           ) : (
-            <FormatIcon className="h-5 w-5 text-gray-400" />
+            <FormatIcon className="h-4 w-4 text-gray-400" />
           )}
         </div>
 
@@ -123,47 +117,8 @@ export function InboxCreativeRow({
             </span>
           </div>
           {creative.hook && (
-            <p className="text-sm text-text-secondary truncate mt-0.5">
+            <p className="text-xs text-text-secondary truncate mt-0.5 max-w-md">
               {creative.hook}
-            </p>
-          )}
-          <div className="flex items-center gap-2 mt-0.5">
-            {(creative.angle || creative.creator) && (
-              <p className="text-xs text-text-dimmed truncate">
-                {[creative.angle, creative.creator].filter(Boolean).join(' / ')}
-              </p>
-            )}
-            <span className="inline-flex items-center rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-mono text-text-dimmed">
-              {creative.clickupTaskId}
-            </span>
-          </div>
-
-          {/* Already tested badge + past result */}
-          {creative.alreadyTested && (
-            <div className="flex items-center gap-2 mt-1">
-              <span className="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">
-                Already Tested
-              </span>
-              {creative.pastTestResult && (
-                <span
-                  className={cn(
-                    'text-[10px] font-medium',
-                    pastTestStatusColors[creative.pastTestResult.status]
-                  )}
-                >
-                  {creative.pastTestResult.roas.toFixed(2)}x ROAS &middot;{' '}
-                  <span className="capitalize">
-                    {creative.pastTestResult.status}
-                  </span>
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* No Drive link hint */}
-          {!creative.driveUrl && (
-            <p className="mt-1 text-xs text-amber-600">
-              Add a Google Drive link to this ClickUp task to enable launching.
             </p>
           )}
         </div>
@@ -172,11 +127,11 @@ export function InboxCreativeRow({
         <div className="flex-shrink-0">
           <span
             className={cn(
-              'inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium',
+              'inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium',
               status.style
             )}
           >
-            {StatusIcon && <StatusIcon className="h-3 w-3" />}
+            <StatusIcon className="h-3 w-3" />
             {status.label}
           </span>
         </div>
@@ -184,7 +139,7 @@ export function InboxCreativeRow({
         {/* Preview button */}
         <button
           onClick={onPreview}
-          className="flex-shrink-0 rounded-lg p-2 text-text-dimmed hover:bg-surface-hover hover:text-text-secondary transition-colors"
+          className="flex-shrink-0 rounded-lg p-1.5 text-text-dimmed opacity-0 group-hover:opacity-100 hover:bg-surface-hover hover:text-text-secondary transition-all"
           title="Preview creative"
         >
           <Eye className="h-4 w-4" />
