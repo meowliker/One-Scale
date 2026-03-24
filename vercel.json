@@ -14,7 +14,7 @@
   },
   "crons": [
     { "path": "/api/sync/cron", "schedule": "*/10 * * * *" },
-    { "path": "/api/cron/materialize-meta-entities", "schedule": "0 */12 * * *" }
+    { "path": "/api/cron/materialize-meta-entities", "schedule": "0 */12 * * *" },
     { "path": "/api/cron/sync-orders-dispatch", "schedule": "*/30 * * * *" },
     { "path": "/api/cron/sync-balance-transactions", "schedule": "30 */2 * * *" },
     { "path": "/api/cron/sync-meta-spend", "schedule": "0 * * * *" },
