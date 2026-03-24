@@ -180,45 +180,57 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const accountTz = activeAccounts.find((a) => a.timezone)?.timezone || 'America/New_York';
-    const { since, until } = buildWarehouseDateRange(accountTz);
-    const variantKey = buildWarehouseVariantKey(since, until);
+    try {
+      const accountTz = activeAccounts.find((a) => a.timezone)?.timezone || 'America/New_York';
+      const { since, until } = buildWarehouseDateRange(accountTz);
+      const variantKey = buildWarehouseVariantKey(since, until);
 
-    const synced = await syncWarehouseSnapshotsForStore({
-      storeId,
-      activeAccounts: activeAccounts.map((a) => ({
+      const mappedAccounts = activeAccounts.map((a) => ({
         ad_account_id: a.ad_account_id,
         ad_account_name: a.ad_account_name,
         timezone: a.timezone,
-      })),
-      since,
-      until,
-      variantKey,
-    });
+      }));
 
-    const materialized = await materializeStoreMetaEntitiesFromSnapshots({
-      storeId,
-      activeAccounts: activeAccounts.map((a) => ({
-        ad_account_id: a.ad_account_id,
-        ad_account_name: a.ad_account_name,
-        timezone: a.timezone,
-      })),
-      since,
-      until,
-      variantKey,
-    });
+      const synced = await syncWarehouseSnapshotsForStore({
+        storeId,
+        activeAccounts: mappedAccounts,
+        since,
+        until,
+        variantKey,
+      });
 
-    return NextResponse.json({
-      ok: true,
-      mode: 'warehouse_refresh',
-      storeId,
-      since,
-      until,
-      variantKey,
-      syncedSnapshots: synced,
-      materialized,
-      completedAt: new Date().toISOString(),
-    });
+      const materialized = await materializeStoreMetaEntitiesFromSnapshots({
+        storeId,
+        activeAccounts: mappedAccounts,
+        since,
+        until,
+        variantKey,
+      });
+
+      return NextResponse.json({
+        ok: true,
+        mode: 'warehouse_refresh',
+        storeId,
+        since,
+        until,
+        variantKey,
+        syncedSnapshots: synced,
+        materialized,
+        completedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Warehouse refresh failed';
+      console.error('[sync/refresh][warehouse] Error:', message);
+      return NextResponse.json(
+        {
+          ok: false,
+          mode: 'warehouse_refresh',
+          storeId,
+          error: message,
+        },
+        { status: 500 }
+      );
+    }
   }
 
   // Use the ad account's timezone (not server UTC) to determine "today".
