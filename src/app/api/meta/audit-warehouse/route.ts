@@ -8,6 +8,7 @@ type CampaignEntityRow = {
   store_id: string;
   campaign_id: string;
   campaign_name: string;
+  ad_account_id?: string | null;
   objective: string | null;
   status: string | null;
   daily_budget: number | null;
@@ -28,6 +29,7 @@ type AdSetEntityRow = {
   adset_id: string;
   campaign_id: string;
   adset_name: string;
+  ad_account_id?: string | null;
   status: string | null;
   daily_budget: number | null;
   bid_amount: number | null;
@@ -54,6 +56,7 @@ type AdEntityRow = {
   adset_id: string;
   campaign_id: string;
   ad_name: string;
+  ad_account_id?: string | null;
   status: string | null;
   creative_id: string | null;
   creative_type: string | null;
@@ -77,6 +80,7 @@ type FlatCreativeRow = {
   campaign_id: string | null;
   adset_id: string | null;
   ad_id: string;
+  ad_account_id?: string | null;
   campaign_name: string | null;
   adset_name: string | null;
   ad_name: string | null;
@@ -94,6 +98,25 @@ type FlatCreativeRow = {
   source_window_start: string | null;
   source_window_end: string | null;
   source_synced_at: string | null;
+};
+
+type DailyMetricRow = {
+  store_id: string;
+  entity_level: 'campaign' | 'adset' | 'ad';
+  entity_id: string;
+  campaign_id: string | null;
+  adset_id: string | null;
+  ad_id: string | null;
+  ad_account_id: string | null;
+  metric_date: string;
+  metrics_json: Record<string, unknown> | null;
+};
+
+type SpendDay = {
+  date: string;
+  spend: number;
+  revenue: number;
+  roas: number;
 };
 
 type TargetingSpec = {
@@ -135,6 +158,34 @@ function asStringArray(value: unknown): string[] {
   return value.map((item) => asString(item)).filter(Boolean);
 }
 
+function mergeMetrics(
+  target: Record<string, unknown>,
+  source: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  const next = { ...target };
+  const src = asRecord(source);
+  for (const [key, value] of Object.entries(src)) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      next[key] = asNumber(next[key], 0) + value;
+    } else if (!(key in next)) {
+      next[key] = value;
+    }
+  }
+
+  const spend = asNumber(next.spend, 0);
+  const revenue = asNumber(next.revenue, 0);
+  const clicks = asNumber(next.clicks, 0);
+  const impressions = asNumber(next.impressions, 0);
+  const conversions = asNumber(next.conversions, 0);
+
+  next.roas = spend > 0 ? revenue / spend : 0;
+  next.cpc = clicks > 0 ? spend / clicks : 0;
+  next.cpm = impressions > 0 ? (spend / impressions) * 1000 : 0;
+  next.ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+  next.cpa = conversions > 0 ? spend / conversions : 0;
+  return next;
+}
+
 function toTargeting(row: AdSetEntityRow): TargetingSpec {
   const targeting = asRecord(row.targeting_json);
   const gendersRaw = (Array.isArray(row.targeting_genders) ? row.targeting_genders : []) as unknown[];
@@ -171,14 +222,16 @@ function toTargeting(row: AdSetEntityRow): TargetingSpec {
 async function fetchAllRows<T>(
   resource: string,
   storeId: string,
-  select: string
+  select: string,
+  extraQuery?: string
 ): Promise<T[]> {
   const rows: T[] = [];
   let offset = 0;
 
   while (true) {
+    const extra = extraQuery ? `&${extraQuery}` : '';
     const page = await rest<T[]>(
-      `/${resource}?store_id=eq.${encodeURIComponent(storeId)}&select=${encodeURIComponent(select)}&limit=${PAGE_SIZE}&offset=${offset}`
+      `/${resource}?store_id=eq.${encodeURIComponent(storeId)}&select=${encodeURIComponent(select)}${extra}&limit=${PAGE_SIZE}&offset=${offset}`
     );
     if (!Array.isArray(page) || page.length === 0) break;
     rows.push(...page);
@@ -203,6 +256,9 @@ export async function GET(request: NextRequest) {
   const storeId = searchParams.get('storeId');
   const includeAds = searchParams.get('includeAds') !== '0';
   const accountIds = searchParams.get('accountIds');
+  const since = searchParams.get('since');
+  const until = searchParams.get('until');
+  const hasRange = !!since && !!until;
 
   if (!storeId) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
@@ -221,7 +277,7 @@ export async function GET(request: NextRequest) {
     : null;
 
   try {
-    const [campaignRowsRaw, adSetRowsRaw, adRowsRaw, flatRowsRaw] = await Promise.all([
+    const [campaignRowsRaw, adSetRowsRaw, adRowsRaw, flatRowsRaw, dailyRowsRaw] = await Promise.all([
       fetchAllRows<CampaignEntityRow>(
         'meta_campaign_entities',
         storeId,
@@ -244,19 +300,30 @@ export async function GET(request: NextRequest) {
         storeId,
         'store_id,campaign_id,adset_id,ad_id,campaign_name,adset_name,ad_name,ad_status,creative_type,primary_text,headline,cta_type,media_url,thumbnail_url,video_id,destination_url,url_tags,ad_metrics_json,source_window_start,source_window_end,source_synced_at,ad_account_id'
       ),
+      hasRange
+        ? fetchAllRows<DailyMetricRow>(
+          'meta_entity_daily_metrics',
+          storeId,
+          'store_id,entity_level,entity_id,campaign_id,adset_id,ad_id,ad_account_id,metric_date,metrics_json',
+          `metric_date=gte.${encodeURIComponent(since!)}&metric_date=lte.${encodeURIComponent(until!)}&order=metric_date.asc`
+        )
+        : Promise.resolve([] as DailyMetricRow[]),
     ]);
 
     const campaignRows = campaignRowsRaw.filter((row) =>
-      matchAccount(accountFilter, asString((row as unknown as Record<string, unknown>).ad_account_id))
+      matchAccount(accountFilter, row.ad_account_id || '')
     );
     const adSetRows = adSetRowsRaw.filter((row) =>
-      matchAccount(accountFilter, asString((row as unknown as Record<string, unknown>).ad_account_id))
+      matchAccount(accountFilter, row.ad_account_id || '')
     );
     const adRows = adRowsRaw.filter((row) =>
-      matchAccount(accountFilter, asString((row as unknown as Record<string, unknown>).ad_account_id))
+      matchAccount(accountFilter, row.ad_account_id || '')
     );
     const flatRows = flatRowsRaw.filter((row) =>
-      matchAccount(accountFilter, asString((row as unknown as Record<string, unknown>).ad_account_id))
+      matchAccount(accountFilter, row.ad_account_id || '')
+    );
+    const dailyRows = dailyRowsRaw.filter((row) =>
+      matchAccount(accountFilter, row.ad_account_id || '')
     );
 
     const adRowsByAdSet = new Map<string, AdEntityRow[]>();
@@ -273,10 +340,42 @@ export async function GET(request: NextRequest) {
       adSetsByCampaign.set(row.campaign_id, list);
     }
 
+    const campaignMetricsById = new Map<string, Record<string, unknown>>();
+    const adsetMetricsById = new Map<string, Record<string, unknown>>();
+    const adMetricsById = new Map<string, Record<string, unknown>>();
+    const dailySpendByDate = new Map<string, { spend: number; revenue: number }>();
+
+    for (const row of dailyRows) {
+      const metrics = asRecord(row.metrics_json);
+      if (row.entity_level === 'campaign') {
+        campaignMetricsById.set(
+          row.entity_id,
+          mergeMetrics(campaignMetricsById.get(row.entity_id) || {}, metrics)
+        );
+        const day = dailySpendByDate.get(row.metric_date) || { spend: 0, revenue: 0 };
+        day.spend += asNumber(metrics.spend, 0);
+        day.revenue += asNumber(metrics.revenue, 0);
+        dailySpendByDate.set(row.metric_date, day);
+      } else if (row.entity_level === 'adset') {
+        adsetMetricsById.set(
+          row.entity_id,
+          mergeMetrics(adsetMetricsById.get(row.entity_id) || {}, metrics)
+        );
+      } else if (row.entity_level === 'ad') {
+        adMetricsById.set(
+          row.entity_id,
+          mergeMetrics(adMetricsById.get(row.entity_id) || {}, metrics)
+        );
+      }
+    }
+
     const campaigns = campaignRows.map((campaign) => {
       const adSets = (adSetsByCampaign.get(campaign.campaign_id) || []).map((adSet) => {
         const ads = includeAds
           ? (adRowsByAdSet.get(adSet.adset_id) || []).map((ad) => ({
+            ...(hasRange
+              ? { metrics: adMetricsById.get(ad.ad_id) || asRecord(ad.metrics_json) }
+              : { metrics: asRecord(ad.metrics_json) }),
             id: ad.ad_id,
             adSetId: ad.adset_id,
             name: ad.ad_name || `Ad ${ad.ad_id}`,
@@ -296,9 +395,12 @@ export async function GET(request: NextRequest) {
               destinationUrl: ad.destination_url || undefined,
               urlTags: ad.url_tags || undefined,
             },
-            metrics: asRecord(ad.metrics_json),
           }))
           : [];
+
+        const adSetMetrics = hasRange
+          ? (adsetMetricsById.get(adSet.adset_id) || asRecord(adSet.metrics_json))
+          : asRecord(adSet.metrics_json);
 
         return {
           id: adSet.adset_id,
@@ -313,9 +415,13 @@ export async function GET(request: NextRequest) {
           endDate: adSet.end_date || null,
           updatedTime: adSet.meta_updated_time || undefined,
           ads,
-          metrics: asRecord(adSet.metrics_json),
+          metrics: adSetMetrics,
         };
       });
+
+      const campaignMetrics = hasRange
+        ? (campaignMetricsById.get(campaign.campaign_id) || asRecord(campaign.metrics_json))
+        : asRecord(campaign.metrics_json);
 
       return {
         id: campaign.campaign_id,
@@ -330,12 +436,14 @@ export async function GET(request: NextRequest) {
         endDate: campaign.end_date || null,
         updatedTime: campaign.meta_updated_time || undefined,
         adSets,
-        metrics: asRecord(campaign.metrics_json),
+        metrics: campaignMetrics,
       };
     });
 
     const creatives = flatRows.map((row, idx) => {
-      const metrics = asRecord(row.ad_metrics_json);
+      const metrics = hasRange
+        ? (adMetricsById.get(row.ad_id) || asRecord(row.ad_metrics_json))
+        : asRecord(row.ad_metrics_json);
       const spend = asNumber(metrics.spend, 0);
       const revenue = asNumber(metrics.revenue, 0);
       const impressions = asNumber(metrics.impressions, 0);
@@ -382,6 +490,15 @@ export async function GET(request: NextRequest) {
       };
     });
 
+    const dailySpendByDay: SpendDay[] = [...dailySpendByDate.entries()]
+      .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
+      .map(([date, totals]) => ({
+        date,
+        spend: totals.spend,
+        revenue: totals.revenue,
+        roas: totals.spend > 0 ? totals.revenue / totals.spend : 0,
+      }));
+
     const sourceSyncedAt = [
       ...campaignRows.map((row) => row.source_synced_at || ''),
       ...adSetRows.map((row) => row.source_synced_at || ''),
@@ -416,6 +533,7 @@ export async function GET(request: NextRequest) {
       data: {
         campaigns,
         creatives,
+        dailySpendByDay,
         sourceSyncedAt,
         sourceWindowStart,
         sourceWindowEnd,
@@ -428,4 +546,3 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-

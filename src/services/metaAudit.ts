@@ -94,7 +94,14 @@ import {
 
 interface InsightDay {
   date: string;
-  metrics: Record<string, number>;
+  metrics: PerformanceMetrics;
+}
+
+interface WarehouseSpendDay {
+  date: string;
+  spend: number;
+  revenue: number;
+  roas: number;
 }
 
 interface InsightBreakdownRow {
@@ -109,6 +116,7 @@ interface InsightBreakdownRow {
 interface WarehouseAuditPayload {
   campaigns: Campaign[];
   creatives: Creative[];
+  dailySpendByDay?: WarehouseSpendDay[];
   sourceSyncedAt?: string | null;
   sourceWindowStart?: string | null;
   sourceWindowEnd?: string | null;
@@ -423,13 +431,19 @@ async function fetchWarehouseAuditData(
 
   const promise = (async () => {
     try {
+      const params: Record<string, string> = {
+        includeAds: includeAds ? '1' : '0',
+        preferCache: '1',
+      };
+      if (query?.dateRange) {
+        params.since = formatDateInTimezone(query.dateRange.start);
+        params.until = formatDateInTimezone(query.dateRange.end);
+      }
+
       const res = await apiClient<{ data?: WarehouseAuditPayload }>(
         '/api/meta/audit-warehouse',
         {
-          params: {
-            includeAds: includeAds ? '1' : '0',
-            preferCache: '1',
-          },
+          params,
           timeoutMs: 20_000,
           maxRetries: 1,
         }
@@ -439,6 +453,14 @@ async function fetchWarehouseAuditData(
       return {
         campaigns: normalizeCampaignTree(payload.campaigns || [], includeAds),
         creatives: safeArray<Creative>(payload.creatives),
+        dailySpendByDay: safeArray(payload.dailySpendByDay)
+          .map((row) => ({
+            date: safeString((row as Record<string, unknown>).date),
+            spend: safeNumber((row as Record<string, unknown>).spend, 0),
+            revenue: safeNumber((row as Record<string, unknown>).revenue, 0),
+            roas: safeNumber((row as Record<string, unknown>).roas, 0),
+          }))
+          .filter((row) => row.date),
         sourceSyncedAt: payload.sourceSyncedAt || null,
         sourceWindowStart: payload.sourceWindowStart || null,
         sourceWindowEnd: payload.sourceWindowEnd || null,
@@ -626,6 +648,18 @@ export async function primeMetaAuditSnapshotCache(): Promise<void> {
 }
 
 async function fetchInsights(query?: MetaAuditQuery): Promise<InsightDay[]> {
+  const warehouse = await fetchWarehouseAuditData(query, false);
+  if (warehouse?.dailySpendByDay && warehouse.dailySpendByDay.length > 0) {
+    return warehouse.dailySpendByDay.map((day) => ({
+      date: day.date,
+      metrics: normalizeMetrics({
+        spend: day.spend,
+        revenue: day.revenue,
+        roas: day.roas,
+      }),
+    }));
+  }
+
   const res = await apiClient<{ data: InsightDay[] }>('/api/meta/insights', {
     params: {
       datePreset: toMetaDatePreset(query?.dateRange),
