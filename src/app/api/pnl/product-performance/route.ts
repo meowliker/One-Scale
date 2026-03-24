@@ -174,11 +174,45 @@ export async function GET(request: NextRequest) {
   } catch { /* table may not exist */ }
   const hasPnlData = pnlRevenue > 0 || pnlFees > 0;
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // CLASSIFICATION: Always load/run classifier BEFORE any data path.
+  // This ensures both PRIMARY and FALLBACK paths use the same classifications.
+  // ══════════════════════════════════════════════════════════════════════════
+  const masterClassMap = new Map<string, string>(); // product_id → classification
+  try {
+    // 1. Load stored classifications from DB
+    const storedCls = await rest<Array<{ product_id: string; classification: string; manual_override: boolean; classification_method: string }>>(
+      `/product_classifications?store_id=eq.${enc(storeId)}&select=product_id,classification,manual_override,classification_method`
+    ).catch(() => []);
+    for (const sc of storedCls) masterClassMap.set(sc.product_id, sc.classification);
+
+    // 2. If no behavioral classifications, run the classifier
+    const hasBehavioral = storedCls.some(sc => sc.classification_method?.startsWith('behavioral') || sc.classification_method === 'shopify_tag' || sc.classification_method === 'manual_override');
+    if (!hasBehavioral) {
+      const behaviors = await extractAllProductBehaviors(storeId!);
+      if (behaviors.length > 0) {
+        const storeProfile = await buildStoreProfile(storeId!, behaviors);
+        const overrides = new Map<string, string>();
+        for (const sc of storedCls) {
+          if (sc.manual_override) overrides.set(sc.product_id, sc.classification);
+        }
+        const results = classifyAllProducts(behaviors, storeProfile, overrides, new Map());
+        for (const r of results) {
+          if (!masterClassMap.has(r.product_id) || !overrides.has(r.product_id)) {
+            masterClassMap.set(r.product_id, r.classification);
+          }
+        }
+        console.log(`[PRISM:ProductPerf] Classifier: ${results.length} products classified (${results.filter(r => r.classification === 'main').length} main)`);
+      }
+    }
+  } catch (err) {
+    console.warn('[PRISM:ProductPerf] Classification failed (non-fatal):', err instanceof Error ? err.message : err);
+  }
+
   try {
     // ══════════════════════════════════════════════════════════════════════
     // PRIMARY PATH: Read from snapshot product_breakdown (same source as Period View)
-    // This ensures Product Performance section always matches Period View numbers.
-    // Falls back to live buildProductPerformance only if no snapshot data exists.
+    // Classifications from masterClassMap OVERRIDE snapshot classifications.
     // ══════════════════════════════════════════════════════════════════════
     try {
       // Aggregate multi-day snapshot breakdowns by product_id
@@ -205,11 +239,14 @@ export async function GET(request: NextRequest) {
         }
 
         // Distribute ad spend proportionally to main products by revenue
-        const mainProducts = [...byProduct.entries()].filter(([, v]) => v.classification === 'main' && v.revenue > 0);
+        // Use masterClassMap for accurate classification
+        const mainProducts = [...byProduct.entries()].filter(([pid, v]) => (masterClassMap.get(pid) || v.classification) === 'main' && v.revenue > 0);
         const totalMainRev = mainProducts.reduce((s, [, v]) => s + v.revenue, 0);
 
         appsScriptResults = [...byProduct.entries()].map(([pid, v]) => {
-          const adSpendShare = (v.classification === 'main' && totalMainRev > 0)
+          // Use masterClassMap classification (from DB/classifier) over snapshot classification
+          const cls = masterClassMap.get(pid) || v.classification;
+          const adSpendShare = (cls === 'main' && totalMainRev > 0)
             ? round2(pnlAdSpend * (v.revenue / totalMainRev))
             : 0;
           const netProfit = round2(v.revenue - v.fees - adSpendShare);
@@ -217,7 +254,7 @@ export async function GET(request: NextRequest) {
           return {
             product_id: pid,
             product_name: v.title,
-            classification: v.classification as 'main' | 'upsell' | 'downsell' | 'bundle' | 'excluded' | 'pending',
+            classification: cls as 'main' | 'upsell' | 'downsell' | 'bundle' | 'excluded' | 'pending',
             revenue: round2(v.revenue),
             orders: v.orders,
             fees: round2(v.fees),
@@ -917,9 +954,10 @@ export async function GET(request: NextRequest) {
       const fees = round2(agg.fees * fbFeeScale);
       const shipping = round2(agg.shipping);
 
-      // Use stored classification from adaptive intelligence if available
+      // Use masterClassMap first (populated at top from DB + classifier), then local classificationMap
+      const masterClass = masterClassMap.get(productId);
       const storedClassObj = classificationMap.get(productId);
-      const storedClass = storedClassObj?.classification;
+      const storedClass = masterClass || storedClassObj?.classification;
       let mostCommonCategory: string;
       if (storedClass && storedClass !== 'pending' && storedClass !== 'unknown') {
         mostCommonCategory = storedClass;
