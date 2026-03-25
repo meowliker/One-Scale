@@ -325,6 +325,19 @@ export async function togglePersistentStoreAdAccount(storeId: string, adAccountI
   );
 }
 
+export async function prunePersistentStoreMetaDataToActiveAccounts(
+  storeId: string,
+  activeAccountIds: string[]
+): Promise<unknown> {
+  return rest('/rpc/prune_store_meta_data_to_active_accounts', {
+    method: 'POST',
+    body: JSON.stringify({
+      p_store_id: storeId,
+      p_active_account_ids: activeAccountIds,
+    }),
+  });
+}
+
 export async function hydrateStoreFromSupabase(storeId: string): Promise<void> {
   if (!isSupabasePersistenceEnabled()) return;
 

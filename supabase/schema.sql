@@ -163,6 +163,277 @@ $$;
 
 grant execute on function ensure_meta_snapshot_store_table(text) to service_role;
 
+create or replace function prune_store_meta_data_to_active_accounts(
+  p_store_id text,
+  p_active_account_ids text[]
+)
+returns jsonb
+language plpgsql
+security definer
+as $$
+declare
+  snapshot_table text;
+  normalized_active_ids text[];
+  updated_campaign_snapshot_rows integer := 0;
+  updated_adset_snapshot_rows integer := 0;
+  updated_ads_snapshot_rows integer := 0;
+  deleted_setup_scope_rows integer := 0;
+  updated_campaign_entities integer := 0;
+  updated_adset_entities integer := 0;
+  updated_ad_entities integer := 0;
+begin
+  if p_store_id is null or btrim(p_store_id) = '' then
+    raise exception 'store_id is required';
+  end if;
+
+  normalized_active_ids := coalesce(
+    array(
+      select distinct regexp_replace(lower(btrim(x)), '^act_', '')
+      from unnest(coalesce(p_active_account_ids, array[]::text[])) as x
+      where btrim(x) <> ''
+      order by 1
+    ),
+    array[]::text[]
+  );
+
+  snapshot_table := ensure_meta_snapshot_store_table(p_store_id);
+
+  execute format(
+    'delete from %I
+     where store_id = $1
+       and endpoint in (''accounts'',''pages'',''pixels'',''instagram'')',
+    snapshot_table
+  )
+  using p_store_id;
+  get diagnostics deleted_setup_scope_rows = row_count;
+
+  -- Mark snapshot payload rows from inactive ad accounts as ACCOUNT_INACTIVE.
+  if coalesce(array_length(normalized_active_ids, 1), 0) = 0 then
+    execute format(
+      $sql$
+      update %I t
+      set payload_json = coalesce((
+            select jsonb_agg(
+              case
+                when jsonb_typeof(elem) = 'object'
+                  then jsonb_set(elem, '{status}', '"ACCOUNT_INACTIVE"'::jsonb, true)
+                else elem
+              end
+            )
+            from jsonb_array_elements(
+              case
+                when jsonb_typeof(t.payload_json::jsonb) = 'array' then t.payload_json::jsonb
+                else '[]'::jsonb
+              end
+            ) as elem
+          ), '[]'::jsonb)::text,
+          updated_at = now()
+      where t.store_id = $1
+        and t.endpoint = $2
+      $sql$,
+      snapshot_table
+    )
+    using p_store_id, 'campaigns';
+    get diagnostics updated_campaign_snapshot_rows = row_count;
+
+    execute format(
+      $sql$
+      update %I t
+      set payload_json = coalesce((
+            select jsonb_agg(
+              case
+                when jsonb_typeof(elem) = 'object'
+                  then jsonb_set(elem, '{status}', '"ACCOUNT_INACTIVE"'::jsonb, true)
+                else elem
+              end
+            )
+            from jsonb_array_elements(
+              case
+                when jsonb_typeof(t.payload_json::jsonb) = 'array' then t.payload_json::jsonb
+                else '[]'::jsonb
+              end
+            ) as elem
+          ), '[]'::jsonb)::text,
+          updated_at = now()
+      where t.store_id = $1
+        and t.endpoint = $2
+      $sql$,
+      snapshot_table
+    )
+    using p_store_id, 'adsets';
+    get diagnostics updated_adset_snapshot_rows = row_count;
+
+    execute format(
+      $sql$
+      update %I t
+      set payload_json = coalesce((
+            select jsonb_agg(
+              case
+                when jsonb_typeof(elem) = 'object'
+                  then jsonb_set(elem, '{status}', '"ACCOUNT_INACTIVE"'::jsonb, true)
+                else elem
+              end
+            )
+            from jsonb_array_elements(
+              case
+                when jsonb_typeof(t.payload_json::jsonb) = 'array' then t.payload_json::jsonb
+                else '[]'::jsonb
+              end
+            ) as elem
+          ), '[]'::jsonb)::text,
+          updated_at = now()
+      where t.store_id = $1
+        and t.endpoint = $2
+      $sql$,
+      snapshot_table
+    )
+    using p_store_id, 'ads';
+    get diagnostics updated_ads_snapshot_rows = row_count;
+  else
+    execute format(
+      $sql$
+      update %I t
+      set payload_json = coalesce((
+            select jsonb_agg(
+              case
+                when jsonb_typeof(elem) = 'object'
+                  and coalesce(nullif(elem->>'ad_account_id', ''), '') <> ''
+                  and regexp_replace(lower(elem->>'ad_account_id'), '^act_', '') <> all($2)
+                  then jsonb_set(elem, '{status}', '"ACCOUNT_INACTIVE"'::jsonb, true)
+                else elem
+              end
+            )
+            from jsonb_array_elements(
+              case
+                when jsonb_typeof(t.payload_json::jsonb) = 'array' then t.payload_json::jsonb
+                else '[]'::jsonb
+              end
+            ) as elem
+          ), '[]'::jsonb)::text,
+          updated_at = now()
+      where t.store_id = $1
+        and t.endpoint = $3
+      $sql$,
+      snapshot_table
+    )
+    using p_store_id, normalized_active_ids, 'campaigns';
+    get diagnostics updated_campaign_snapshot_rows = row_count;
+
+    execute format(
+      $sql$
+      update %I t
+      set payload_json = coalesce((
+            select jsonb_agg(
+              case
+                when jsonb_typeof(elem) = 'object'
+                  and coalesce(nullif(elem->>'ad_account_id', ''), '') <> ''
+                  and regexp_replace(lower(elem->>'ad_account_id'), '^act_', '') <> all($2)
+                  then jsonb_set(elem, '{status}', '"ACCOUNT_INACTIVE"'::jsonb, true)
+                else elem
+              end
+            )
+            from jsonb_array_elements(
+              case
+                when jsonb_typeof(t.payload_json::jsonb) = 'array' then t.payload_json::jsonb
+                else '[]'::jsonb
+              end
+            ) as elem
+          ), '[]'::jsonb)::text,
+          updated_at = now()
+      where t.store_id = $1
+        and t.endpoint = $3
+      $sql$,
+      snapshot_table
+    )
+    using p_store_id, normalized_active_ids, 'adsets';
+    get diagnostics updated_adset_snapshot_rows = row_count;
+
+    execute format(
+      $sql$
+      update %I t
+      set payload_json = coalesce((
+            select jsonb_agg(
+              case
+                when jsonb_typeof(elem) = 'object'
+                  and coalesce(nullif(elem->>'ad_account_id', ''), '') <> ''
+                  and regexp_replace(lower(elem->>'ad_account_id'), '^act_', '') <> all($2)
+                  then jsonb_set(elem, '{status}', '"ACCOUNT_INACTIVE"'::jsonb, true)
+                else elem
+              end
+            )
+            from jsonb_array_elements(
+              case
+                when jsonb_typeof(t.payload_json::jsonb) = 'array' then t.payload_json::jsonb
+                else '[]'::jsonb
+              end
+            ) as elem
+          ), '[]'::jsonb)::text,
+          updated_at = now()
+      where t.store_id = $1
+        and t.endpoint = $3
+      $sql$,
+      snapshot_table
+    )
+    using p_store_id, normalized_active_ids, 'ads';
+    get diagnostics updated_ads_snapshot_rows = row_count;
+  end if;
+
+  -- Mark entity tables inactive by account, keep rows.
+  update meta_campaign_entities
+  set ad_account_is_active = (
+        coalesce(nullif(regexp_replace(lower(coalesce(ad_account_id, '')), '^act_', ''), ''), '') = any(normalized_active_ids)
+      ),
+      status = case
+        when coalesce(nullif(regexp_replace(lower(coalesce(ad_account_id, '')), '^act_', ''), ''), '') = any(normalized_active_ids)
+          then coalesce(nullif(raw_json->>'status', ''), status)
+        else 'ACCOUNT_INACTIVE'
+      end,
+      updated_at = now()
+  where store_id = p_store_id;
+  get diagnostics updated_campaign_entities = row_count;
+
+  update meta_adset_entities
+  set ad_account_is_active = (
+        coalesce(nullif(regexp_replace(lower(coalesce(ad_account_id, '')), '^act_', ''), ''), '') = any(normalized_active_ids)
+      ),
+      status = case
+        when coalesce(nullif(regexp_replace(lower(coalesce(ad_account_id, '')), '^act_', ''), ''), '') = any(normalized_active_ids)
+          then coalesce(nullif(raw_json->>'status', ''), status)
+        else 'ACCOUNT_INACTIVE'
+      end,
+      updated_at = now()
+  where store_id = p_store_id;
+  get diagnostics updated_adset_entities = row_count;
+
+  update meta_ad_entities
+  set ad_account_is_active = (
+        coalesce(nullif(regexp_replace(lower(coalesce(ad_account_id, '')), '^act_', ''), ''), '') = any(normalized_active_ids)
+      ),
+      status = case
+        when coalesce(nullif(regexp_replace(lower(coalesce(ad_account_id, '')), '^act_', ''), ''), '') = any(normalized_active_ids)
+          then coalesce(nullif(raw_json->>'status', ''), status)
+        else 'ACCOUNT_INACTIVE'
+      end,
+      updated_at = now()
+  where store_id = p_store_id;
+  get diagnostics updated_ad_entities = row_count;
+
+  return jsonb_build_object(
+    'store_id', p_store_id,
+    'active_accounts', coalesce(array_length(normalized_active_ids, 1), 0),
+    'updated_campaign_snapshot_rows', updated_campaign_snapshot_rows,
+    'updated_adset_snapshot_rows', updated_adset_snapshot_rows,
+    'updated_ads_snapshot_rows', updated_ads_snapshot_rows,
+    'deleted_setup_scope_rows', deleted_setup_scope_rows,
+    'updated_campaign_entities', updated_campaign_entities,
+    'updated_adset_entities', updated_adset_entities,
+    'updated_ad_entities', updated_ad_entities
+  );
+end;
+$$;
+
+grant execute on function prune_store_meta_data_to_active_accounts(text, text[]) to service_role;
+
 -- Daily command-center tables (phase A baseline)
 create table if not exists decision_rulesets (
   id bigserial primary key,
@@ -347,6 +618,7 @@ create table if not exists meta_campaign_entities (
   campaign_id text not null,
   campaign_name text not null,
   ad_account_id text,
+  ad_account_is_active boolean not null default true,
   ad_account_name text,
   business_manager_id text,
   business_manager_name text,
@@ -381,6 +653,7 @@ create table if not exists meta_adset_entities (
   campaign_id text not null,
   adset_name text not null,
   ad_account_id text,
+  ad_account_is_active boolean not null default true,
   ad_account_name text,
   business_manager_id text,
   business_manager_name text,
@@ -421,6 +694,7 @@ create table if not exists meta_ad_entities (
   campaign_id text not null,
   ad_name text not null,
   ad_account_id text,
+  ad_account_is_active boolean not null default true,
   ad_account_name text,
   business_manager_id text,
   business_manager_name text,
@@ -455,6 +729,8 @@ create index if not exists idx_meta_campaign_entities_store_status
   on meta_campaign_entities(store_id, status);
 create index if not exists idx_meta_campaign_entities_store_account
   on meta_campaign_entities(store_id, ad_account_id);
+create index if not exists idx_meta_campaign_entities_store_account_active
+  on meta_campaign_entities(store_id, ad_account_is_active);
 
 create index if not exists idx_meta_adset_entities_store_campaign
   on meta_adset_entities(store_id, campaign_id);
@@ -462,6 +738,8 @@ create index if not exists idx_meta_adset_entities_store_status
   on meta_adset_entities(store_id, status);
 create index if not exists idx_meta_adset_entities_store_account
   on meta_adset_entities(store_id, ad_account_id);
+create index if not exists idx_meta_adset_entities_store_account_active
+  on meta_adset_entities(store_id, ad_account_is_active);
 
 create index if not exists idx_meta_ad_entities_store_adset
   on meta_ad_entities(store_id, adset_id);
@@ -471,6 +749,8 @@ create index if not exists idx_meta_ad_entities_store_status
   on meta_ad_entities(store_id, status);
 create index if not exists idx_meta_ad_entities_store_account
   on meta_ad_entities(store_id, ad_account_id);
+create index if not exists idx_meta_ad_entities_store_account_active
+  on meta_ad_entities(store_id, ad_account_is_active);
 
 create table if not exists meta_entity_daily_metrics (
   id bigserial primary key,
@@ -522,6 +802,7 @@ select
   a.status as ad_status,
   coalesce(a.ad_account_id, s.ad_account_id, c.ad_account_id) as ad_account_id,
   coalesce(a.ad_account_name, s.ad_account_name, c.ad_account_name) as ad_account_name,
+  coalesce(a.ad_account_is_active, s.ad_account_is_active, c.ad_account_is_active, true) as ad_account_is_active,
   coalesce(a.business_manager_id, s.business_manager_id, c.business_manager_id) as business_manager_id,
   coalesce(a.business_manager_name, s.business_manager_name, c.business_manager_name) as business_manager_name,
   coalesce(a.facebook_page_id, s.facebook_page_id, c.facebook_page_id) as facebook_page_id,

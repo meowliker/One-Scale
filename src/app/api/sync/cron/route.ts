@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllStores, getStoreAdAccounts, upsertMetaEndpointSnapshot } from '@/app/api/lib/db';
-import { isSupabasePersistenceEnabled, listPersistentStores } from '@/app/api/lib/supabase-persistence';
+import {
+  isSupabasePersistenceEnabled,
+  listPersistentStores,
+  prunePersistentStoreMetaDataToActiveAccounts,
+} from '@/app/api/lib/supabase-persistence';
 import { getMetaToken } from '@/app/api/lib/tokens';
-import { fetchMetaCampaigns, fetchMetaAdSets, fetchMetaAds, MetaRateLimitError } from '@/app/api/lib/meta-client';
-import { upsertPersistentMetaEndpointSnapshot } from '@/app/api/lib/supabase-tracking';
+import { fetchFromMeta, fetchMetaCampaigns, fetchMetaAdSets, fetchMetaAds, MetaRateLimitError } from '@/app/api/lib/meta-client';
+import { prunePersistentAdsSnapshotsToActiveAccounts, upsertPersistentMetaEndpointSnapshot } from '@/app/api/lib/supabase-tracking';
 import { isMetaCallBlocked, markMetaRateLimited } from '@/app/api/lib/meta-sync-queue';
-import { refreshMetaSetupSnapshots } from '@/app/api/lib/meta-setup-cache';
+import { type MetaSetupCachePayload, refreshMetaSetupSnapshots } from '@/app/api/lib/meta-setup-cache';
 import type { Ad, AdSet, Campaign } from '@/types/campaign';
 
 export const dynamic = 'force-dynamic';
@@ -13,6 +17,102 @@ export const maxDuration = 300;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
+function buildPageNameById(setupCache: MetaSetupCachePayload): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const page of setupCache.pages || []) {
+    if (!page?.id) continue;
+    out.set(page.id, page.name || page.id);
+  }
+  return out;
+}
+
+function buildInstagramUsernameById(setupCache: MetaSetupCachePayload): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const ig of setupCache.instagram || []) {
+    if (!ig?.id) continue;
+    const username = ig.username || ig.name || ig.id;
+    if (username) out.set(ig.id, username);
+  }
+  for (const page of setupCache.pages || []) {
+    if (!page?.instagramId) continue;
+    const username = page.instagramUsername;
+    if (username) out.set(page.instagramId, username);
+  }
+  return out;
+}
+
+function shouldSyncHierarchyCampaign(campaign: Campaign): boolean {
+  return campaign.status === 'ACTIVE' || campaign.status === 'PAUSED';
+}
+
+function buildInstagramUsernameResolver(
+  accessToken: string,
+  usernameById: Map<string, string>
+): (instagramUserId: string | null) => Promise<string | null> {
+  const attempted = new Set<string>();
+  return async (instagramUserId: string | null) => {
+    if (!instagramUserId) return null;
+    const cached = usernameById.get(instagramUserId);
+    if (cached) return cached;
+    if (attempted.has(instagramUserId)) return null;
+    attempted.add(instagramUserId);
+
+    try {
+      const resolved = await fetchFromMeta<Record<string, unknown>>(
+        accessToken,
+        `/${instagramUserId}`,
+        { fields: 'id,username' },
+        8000,
+        1
+      );
+      const username = asString(resolved.username);
+      if (username) {
+        usernameById.set(instagramUserId, username);
+        return username;
+      }
+    } catch {
+      // Best effort only; ID is still useful without username.
+    }
+    return null;
+  };
+}
+
+async function enrichAdsWithIdentity(params: {
+  ads: Ad[];
+  adSetId: string;
+  campaignId: string;
+  adAccountId: string;
+  pageNameById: Map<string, string>;
+  resolveInstagramUsername: (instagramUserId: string | null) => Promise<string | null>;
+}): Promise<Ad[]> {
+  const { ads, adSetId, campaignId, adAccountId, pageNameById, resolveInstagramUsername } = params;
+  const out: Ad[] = [];
+
+  for (const ad of ads) {
+    const raw = ad as unknown as Record<string, unknown>;
+    const pageId = asString(raw.page_id);
+    const instagramUserId = asString(raw.instagram_user_id);
+    const instagramUsername = await resolveInstagramUsername(instagramUserId);
+
+    out.push({
+      ...ad,
+      adset_id: adSetId,
+      campaign_id: campaignId,
+      ad_account_id: adAccountId,
+      page_id: pageId,
+      page_name: pageId ? (pageNameById.get(pageId) || null) : null,
+      instagram_user_id: instagramUserId,
+      instagram_username: instagramUsername,
+    } as Ad);
+  }
+
+  return out;
 }
 
 /**
@@ -47,6 +147,7 @@ export async function GET(request: NextRequest) {
   let errors = 0;
   let adSetsSynced = 0;
   let adsSynced = 0;
+  let prunedAds = 0;
 
   try {
     const useSupabase = isSupabasePersistenceEnabled();
@@ -60,15 +161,25 @@ export async function GET(request: NextRequest) {
           if (!token) continue;
 
           const activeAccounts = (store.adAccounts || []).filter((a) => Number(a.is_active) === 1);
+          await prunePersistentStoreMetaDataToActiveAccounts(
+            store.id,
+            activeAccounts.map((a) => a.ad_account_id)
+          );
           if (activeAccounts.length === 0) continue;
 
-          await refreshMetaSetupSnapshots({
+          const setupCache = await refreshMetaSetupSnapshots({
             accessToken: token.accessToken,
             adAccounts: activeAccounts,
             writeSnapshot: async (endpoint, scopeId, variantKey, payload) => {
               await upsertPersistentMetaEndpointSnapshot(store.id, endpoint, scopeId, variantKey, payload);
             },
           });
+          const pageNameById = buildPageNameById(setupCache);
+          const instagramUsernameById = buildInstagramUsernameById(setupCache);
+          const resolveInstagramUsername = buildInstagramUsernameResolver(
+            token.accessToken,
+            instagramUsernameById
+          );
 
           const allCampaigns = await Promise.all(
             activeAccounts.map(async (account) => ({
@@ -102,8 +213,8 @@ export async function GET(request: NextRequest) {
 
           synced++;
 
-          // Sync ad sets and ads for ACTIVE campaigns only
-          const activeCampaigns = mergedCampaigns.filter((c) => c.status === 'ACTIVE');
+          // Sync ad sets and ads for ACTIVE + PAUSED campaigns
+          const activeCampaigns = mergedCampaigns.filter(shouldSyncHierarchyCampaign);
           
           for (const campaign of activeCampaigns) {
             if (isMetaCallBlocked(store.id)) {
@@ -112,6 +223,10 @@ export async function GET(request: NextRequest) {
             }
             const campaignWithAccount = campaign as Campaign & { ad_account_id?: string };
             const campaignAccountId = campaignWithAccount.ad_account_id || '';
+            if (!campaignAccountId) {
+              console.warn(`[sync/cron] Missing ad_account_id for campaign ${campaign.id}, skipping hierarchy sync for this campaign.`);
+              continue;
+            }
 
             try {
               // Fetch ad sets for this campaign
@@ -147,12 +262,14 @@ export async function GET(request: NextRequest) {
                     preferLightweight: true,
                     basicOnly: false,
                   });
-                  const adsWithContext = ads.map((ad) => ({
-                    ...ad,
-                    adset_id: adSet.id,
-                    campaign_id: campaign.id,
-                    ad_account_id: campaignAccountId,
-                  })) as Ad[];
+                  const adsWithContext = await enrichAdsWithIdentity({
+                    ads,
+                    adSetId: adSet.id,
+                    campaignId: campaign.id,
+                    adAccountId: campaignAccountId,
+                    pageNameById,
+                    resolveInstagramUsername,
+                  });
 
                   if (adsWithContext.length > 0) {
                     await Promise.all([
@@ -183,6 +300,12 @@ export async function GET(request: NextRequest) {
               }
             }
           }
+
+          const cleanup = await prunePersistentAdsSnapshotsToActiveAccounts(
+            store.id,
+            activeAccounts.map((a) => a.ad_account_id)
+          );
+          prunedAds += cleanup.removedAds;
         } catch {
           errors++;
         }
@@ -194,6 +317,7 @@ export async function GET(request: NextRequest) {
         storeCount: stores.length, 
         adSetsSynced,
         adsSynced,
+        prunedAds,
         mode: 'supabase' 
       });
     }
@@ -207,13 +331,19 @@ export async function GET(request: NextRequest) {
         const accounts = getStoreAdAccounts(store.id).filter((a) => a.is_active);
         if (accounts.length === 0) continue;
 
-        await refreshMetaSetupSnapshots({
+        const setupCache = await refreshMetaSetupSnapshots({
           accessToken: token.accessToken,
           adAccounts: accounts,
           writeSnapshot: async (endpoint, scopeId, variantKey, payload) => {
             upsertMetaEndpointSnapshot(store.id, endpoint, scopeId, variantKey, payload);
           },
         });
+        const pageNameById = buildPageNameById(setupCache);
+        const instagramUsernameById = buildInstagramUsernameById(setupCache);
+        const resolveInstagramUsername = buildInstagramUsernameResolver(
+          token.accessToken,
+          instagramUsernameById
+        );
 
         const allCampaigns = await Promise.all(
           accounts.map(async (account) => ({
@@ -244,13 +374,17 @@ export async function GET(request: NextRequest) {
 
         synced++;
 
-        // Sync ad sets and ads for ACTIVE campaigns only (SQLite mode)
-        const activeCampaigns = mergedCampaigns.filter((c) => c.status === 'ACTIVE');
+        // Sync ad sets and ads for ACTIVE + PAUSED campaigns (SQLite mode)
+        const activeCampaigns = mergedCampaigns.filter(shouldSyncHierarchyCampaign);
         
         for (const campaign of activeCampaigns) {
           if (isMetaCallBlocked(store.id)) break;
           const campaignWithAccount = campaign as Campaign & { ad_account_id?: string };
           const campaignAccountId = campaignWithAccount.ad_account_id || '';
+          if (!campaignAccountId) {
+            console.warn(`[sync/cron] Missing ad_account_id for campaign ${campaign.id}, skipping hierarchy sync for this campaign.`);
+            continue;
+          }
 
           try {
             const adSets = await fetchMetaAdSets(token.accessToken, campaign.id, dateRange, {
@@ -281,12 +415,14 @@ export async function GET(request: NextRequest) {
                   preferLightweight: true,
                   basicOnly: false,
                 });
-                const adsWithContext = ads.map((ad) => ({
-                  ...ad,
-                  adset_id: adSet.id,
-                  campaign_id: campaign.id,
-                  ad_account_id: campaignAccountId,
-                })) as Ad[];
+                const adsWithContext = await enrichAdsWithIdentity({
+                  ads,
+                  adSetId: adSet.id,
+                  campaignId: campaign.id,
+                  adAccountId: campaignAccountId,
+                  pageNameById,
+                  resolveInstagramUsername,
+                });
 
                 if (adsWithContext.length > 0) {
                   upsertMetaEndpointSnapshot(store.id, 'ads', adSet.id, adsVariant, adsWithContext);

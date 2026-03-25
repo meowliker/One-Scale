@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isSupabasePersistenceEnabled, listPersistentStores, rest } from '@/app/api/lib/supabase-persistence';
+import {
+  isSupabasePersistenceEnabled,
+  listPersistentStores,
+  prunePersistentStoreMetaDataToActiveAccounts,
+  rest,
+} from '@/app/api/lib/supabase-persistence';
 import {
   buildWarehouseDateRange,
   buildWarehouseVariantKey,
@@ -88,6 +93,10 @@ async function runBackfill(request: NextRequest, body?: unknown) {
     const start = Date.now();
     const activeAccounts = (store.adAccounts || []).filter(
       (a) => a.platform === 'meta' && Number(a.is_active) === 1
+    );
+    await prunePersistentStoreMetaDataToActiveAccounts(
+      store.id,
+      activeAccounts.map((a) => a.ad_account_id)
     );
     if (activeAccounts.length === 0) {
       results.push({ storeId: store.id, status: 'skipped', error: 'no_active_meta_accounts' });
@@ -180,4 +189,3 @@ export async function POST(request: NextRequest) {
   }
   return runBackfill(request, body);
 }
-

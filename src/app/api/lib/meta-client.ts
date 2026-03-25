@@ -496,6 +496,33 @@ function extractDestinationUrlFromCreative(creative: Record<string, unknown>): s
   return typeof link === 'string' ? link : '';
 }
 
+function extractStoryIdentifiersFromCreative(creative: Record<string, unknown>): {
+  pageId: string | null;
+  instagramUserId: string | null;
+} {
+  const story = (creative.object_story_spec && typeof creative.object_story_spec === 'object')
+    ? creative.object_story_spec as Record<string, unknown>
+    : null;
+  if (!story) {
+    return { pageId: null, instagramUserId: null };
+  }
+
+  const pageId = typeof story.page_id === 'string' && story.page_id.trim().length > 0
+    ? story.page_id
+    : null;
+
+  // Meta can return either instagram_user_id or instagram_actor_id depending on placement/objective.
+  const instagramUserId = typeof story.instagram_user_id === 'string' && story.instagram_user_id.trim().length > 0
+    ? story.instagram_user_id
+    : (
+      typeof story.instagram_actor_id === 'string' && story.instagram_actor_id.trim().length > 0
+        ? story.instagram_actor_id
+        : null
+    );
+
+  return { pageId, instagramUserId };
+}
+
 // ------ Fetchers ------
 
 export async function fetchMetaAdAccounts(
@@ -530,7 +557,7 @@ export async function fetchMetaCampaigns(
 ): Promise<Campaign[]> {
   const fields = [
     'id', 'name', 'objective', 'status', 'daily_budget', 'lifetime_budget',
-    'bid_strategy', 'start_time', 'stop_time', 'updated_time',
+    'bid_strategy', 'buying_type', 'start_time', 'stop_time', 'updated_time',
     'effective_status', 'configured_status', 'issues_info', 'ad_review_feedback',
   ].join(',');
 
@@ -645,6 +672,7 @@ export async function fetchMetaCampaigns(
       name: raw.name,
       objective: mapObjective(raw.objective || ''),
       status: mapStatus(raw.status || ''),
+      buying_type: typeof raw.buying_type === 'string' ? raw.buying_type : null,
       policyInfo: {
         effectiveStatus: raw.effective_status || undefined,
         configuredStatus: raw.configured_status || undefined,
@@ -877,6 +905,7 @@ export async function fetchMetaAdsByAccount(
       : getEmptyMetrics();
 
     const creative = raw.creative || {};
+    const storyIds = extractStoryIdentifiersFromCreative(creative);
     const isVideo = !!creative.video_id;
     return {
       id: raw.id,
@@ -885,6 +914,8 @@ export async function fetchMetaAdsByAccount(
       adset_id: raw.adset_id || '',
       name: raw.name,
       status: mapStatus(raw.status || ''),
+      page_id: storyIds.pageId,
+      instagram_user_id: storyIds.instagramUserId,
       policyInfo: {
         effectiveStatus: raw.effective_status || undefined,
         configuredStatus: raw.configured_status || undefined,
@@ -1146,28 +1177,6 @@ export async function fetchMetaAds(
   dateRange?: { since: string; until: string },
   options?: { disableDateFallback?: boolean; preferLightweight?: boolean; basicOnly?: boolean; datePreset?: string }
 ): Promise<Ad[]> {
-  function extractDestinationUrl(creative: Record<string, unknown>): string {
-    const story = (creative.object_story_spec && typeof creative.object_story_spec === 'object')
-      ? creative.object_story_spec as Record<string, unknown>
-      : null;
-    if (!story) return '';
-
-    const linkData = (story.link_data && typeof story.link_data === 'object')
-      ? story.link_data as Record<string, unknown>
-      : null;
-    const videoData = (story.video_data && typeof story.video_data === 'object')
-      ? story.video_data as Record<string, unknown>
-      : null;
-    const link = typeof linkData?.link === 'string'
-      ? linkData.link
-      : (
-        (videoData?.call_to_action && typeof videoData.call_to_action === 'object')
-          ? ((videoData.call_to_action as Record<string, unknown>).value as Record<string, unknown> | undefined)
-          : undefined
-      )?.link;
-    return typeof link === 'string' ? link : '';
-  }
-
   const fields = options?.basicOnly
     ? [
         'id', 'name', 'status', 'effective_status', 'configured_status', 'ad_review_feedback', 'issues_info',
@@ -1192,12 +1201,15 @@ export async function fetchMetaAds(
   if (options?.basicOnly) {
     return data.data.map((raw) => {
       const creative = raw.creative || {};
+      const storyIds = extractStoryIdentifiersFromCreative(creative);
       const isVideo = !!creative.video_id;
       return {
         id: raw.id,
         adSetId,
         name: raw.name,
         status: mapStatus(raw.status || ''),
+        page_id: storyIds.pageId,
+        instagram_user_id: storyIds.instagramUserId,
         policyInfo: {
           effectiveStatus: raw.effective_status || undefined,
           configuredStatus: raw.configured_status || undefined,
@@ -1213,7 +1225,7 @@ export async function fetchMetaAds(
           mediaUrl: isVideo ? '' : (creative.image_url || ''),
           thumbnailUrl: creative.thumbnail_url || creative.image_url || '',
           videoId: isVideo ? creative.video_id : undefined,
-          destinationUrl: extractDestinationUrl(creative),
+          destinationUrl: extractDestinationUrlFromCreative(creative),
           urlTags: typeof creative.url_tags === 'string' ? creative.url_tags : undefined,
         },
         metrics: getEmptyMetrics(),
@@ -1317,6 +1329,7 @@ export async function fetchMetaAds(
       : getEmptyMetrics();
 
     const creative = raw.creative || {};
+    const storyIds = extractStoryIdentifiersFromCreative(creative);
     const isVideo = !!creative.video_id;
     let videoThumbnailUrl = creative.thumbnail_url || '';
 
@@ -1331,6 +1344,8 @@ export async function fetchMetaAds(
       adSetId,
       name: raw.name,
       status: mapStatus(raw.status || ''),
+      page_id: storyIds.pageId,
+      instagram_user_id: storyIds.instagramUserId,
       policyInfo: {
         effectiveStatus: raw.effective_status || undefined,
         configuredStatus: raw.configured_status || undefined,
@@ -1348,7 +1363,7 @@ export async function fetchMetaAds(
           ? (videoThumbnailUrl || creative.image_url || '')
           : (creative.thumbnail_url || creative.image_url || ''),
         videoId: isVideo ? creative.video_id : undefined,
-        destinationUrl: extractDestinationUrl(creative),
+        destinationUrl: extractDestinationUrlFromCreative(creative),
         urlTags: typeof creative.url_tags === 'string' ? creative.url_tags : undefined,
       },
       metrics,

@@ -33,7 +33,16 @@ interface MetaPixelOption {
 }
 
 export interface MetaSetupCachePayload {
-  accounts: Array<{ id: string; name: string; accountId: string; businessId?: string; businessName?: string }>;
+  accounts: Array<{
+    id: string;
+    name: string;
+    accountId: string;
+    account_status?: number;
+    currency?: string;
+    businessId?: string;
+    businessName?: string;
+    business?: { id?: string; name?: string };
+  }>;
   pages: MetaPageOption[];
   instagram: MetaInstagramOption[];
   pixels: MetaPixelOption[];
@@ -115,14 +124,17 @@ export async function refreshMetaSetupSnapshots(params: {
         id: account.ad_account_id,
         name: account.ad_account_name || account.ad_account_id,
         accountId: normalizeAccountId(account.ad_account_id),
+        account_status: undefined as number | undefined,
+        currency: undefined as string | undefined,
         businessId: undefined as string | undefined,
         businessName: undefined as string | undefined,
+        business: undefined as { id?: string; name?: string } | undefined,
       };
       try {
         const details = await fetchFromMeta<Record<string, unknown>>(
           accessToken,
           `/${account.ad_account_id}`,
-          { fields: 'id,name,account_id,business{id,name},owner_business{id,name}' },
+          { fields: 'id,name,account_id,account_status,currency,business{id,name},owner_business{id,name}' },
           8000,
           1
         );
@@ -140,6 +152,18 @@ export async function refreshMetaSetupSnapshots(params: {
           (business && typeof business.name === 'string' ? business.name : '')
           || (ownerBusiness && typeof ownerBusiness.name === 'string' ? ownerBusiness.name : '')
           || undefined;
+        accountRow.business = (accountRow.businessId || accountRow.businessName)
+          ? {
+              id: accountRow.businessId,
+              name: accountRow.businessName,
+            }
+          : undefined;
+        accountRow.account_status = typeof details.account_status === 'number'
+          ? details.account_status
+          : undefined;
+        accountRow.currency = typeof details.currency === 'string'
+          ? details.currency
+          : undefined;
       } catch {
         // Keep fallback row from store cache
       }
@@ -281,21 +305,7 @@ export async function refreshMetaSetupSnapshots(params: {
         }
 
         for (const pageId of pageIds) {
-          let pageName = pageNameById.get(pageId) || '';
-          if (!pageName) {
-            try {
-              const pageDetails = await fetchFromMeta<Record<string, unknown>>(
-                accessToken,
-                `/${pageId}`,
-                { fields: 'id,name' },
-                8000,
-                1
-              );
-              pageName = typeof pageDetails.name === 'string' ? pageDetails.name : '';
-            } catch {
-              // Best effort, keep fallback id-only name.
-            }
-          }
+          const pageName = pageNameById.get(pageId) || '';
           accountPages.push({
             id: pageId,
             name: pageName || pageId,

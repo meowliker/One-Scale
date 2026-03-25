@@ -112,6 +112,10 @@ export interface Ad {
   adSetId: string;
   name: string;
   status: EntityStatus;
+  page_id?: string | null;
+  page_name?: string | null;
+  instagram_user_id?: string | null;
+  instagram_username?: string | null;
   policyInfo?: MetaPolicyInfo;
   creative: AdCreative;
   metrics: PerformanceMetrics;
@@ -147,6 +151,7 @@ export interface Campaign {
   name: string;
   objective: CampaignObjective;
   status: EntityStatus;
+  buying_type?: string | null;
   policyInfo?: MetaPolicyInfo;
   dailyBudget: number;
   lifetimeBudget: number | null;

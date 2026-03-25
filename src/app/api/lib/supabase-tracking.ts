@@ -115,6 +115,11 @@ function snapshotTablePath(tableName: string): string {
   return `/${tableName}`;
 }
 
+function normalizeMetaAccountId(value: string | null | undefined): string {
+  if (!value) return '';
+  return value.trim().toLowerCase().replace(/^act_/, '');
+}
+
 async function resolveMetaSnapshotTable(storeId: string): Promise<string> {
   const cached = metaSnapshotTableByStore.get(storeId);
   if (cached) return cached;
@@ -260,6 +265,95 @@ export async function getRecentPersistentMetaEndpointSnapshots<T>(
     }
   }
   return parsed;
+}
+
+export async function prunePersistentAdsSnapshotsToActiveAccounts(
+  storeId: string,
+  activeAccountIds: string[]
+): Promise<{
+  scannedRows: number;
+  updatedRows: number;
+  deletedRows: number;
+  removedAds: number;
+  removedMissingAccountAds: number;
+}> {
+  const tableName = await resolveMetaSnapshotTable(storeId);
+  const normalizedActiveIds = new Set(
+    activeAccountIds
+      .map((id) => normalizeMetaAccountId(id))
+      .filter((id) => id.length > 0)
+  );
+
+  const rows = await rest<Array<Pick<SnapshotRow, 'id' | 'payload_json'>>>(
+    `${snapshotTablePath(tableName)}?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.ads&select=id,payload_json`
+  );
+
+  let updatedRows = 0;
+  let deletedRows = 0;
+  let removedAds = 0;
+  let removedMissingAccountAds = 0;
+
+  for (const row of rows || []) {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(row.payload_json);
+    } catch {
+      payload = [];
+    }
+    const items = Array.isArray(payload) ? payload : [];
+
+    const filtered = items.filter((item) => {
+      const ad = item && typeof item === 'object' ? item as Record<string, unknown> : null;
+      if (!ad) return false;
+      const accountIdRaw = typeof ad.ad_account_id === 'string' ? ad.ad_account_id : '';
+      const normalized = normalizeMetaAccountId(accountIdRaw);
+      if (!normalized) {
+        removedMissingAccountAds += 1;
+        removedAds += 1;
+        return false;
+      }
+      if (!normalizedActiveIds.has(normalized)) {
+        removedAds += 1;
+        return false;
+      }
+      return true;
+    });
+
+    if (filtered.length === items.length) continue;
+
+    if (filtered.length === 0) {
+      await rest(
+        `${snapshotTablePath(tableName)}?id=eq.${row.id}`,
+        { method: 'DELETE' }
+      );
+      deletedRows += 1;
+      continue;
+    }
+
+    await rest(
+      `${snapshotTablePath(tableName)}?id=eq.${row.id}`,
+      {
+        method: 'PATCH',
+        headers: headers({
+          Prefer: 'return=minimal',
+        }),
+        body: JSON.stringify({
+          payload_json: JSON.stringify(filtered),
+          row_count: filtered.length,
+          updated_at: new Date().toISOString(),
+        }),
+      }
+    );
+    updatedRows += 1;
+  }
+
+  return {
+    scannedRows: rows.length,
+    updatedRows,
+    deletedRows,
+    removedAds,
+    removedMissingAccountAds,
+  };
 }
 
 // ------ Tracking Event Persistence (Supabase-backed) ------

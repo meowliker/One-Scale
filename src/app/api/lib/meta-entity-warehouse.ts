@@ -1,6 +1,7 @@
 import { subDays } from 'date-fns';
 import type { Ad, AdSet, Campaign } from '@/types/campaign';
 import {
+  fetchFromMeta,
   fetchMetaAdSetsByAccount,
   fetchMetaAdsByAccount,
   fetchMetaCampaigns,
@@ -75,6 +76,7 @@ type CampaignEntityRow = {
   campaign_id: string;
   campaign_name: string;
   ad_account_id: string | null;
+  ad_account_is_active: boolean;
   ad_account_name: string | null;
   business_manager_id: string | null;
   business_manager_name: string | null;
@@ -107,6 +109,7 @@ type AdSetEntityRow = {
   campaign_id: string;
   adset_name: string;
   ad_account_id: string | null;
+  ad_account_is_active: boolean;
   ad_account_name: string | null;
   business_manager_id: string | null;
   business_manager_name: string | null;
@@ -145,6 +148,7 @@ type AdEntityRow = {
   campaign_id: string;
   ad_name: string;
   ad_account_id: string | null;
+  ad_account_is_active: boolean;
   ad_account_name: string | null;
   business_manager_id: string | null;
   business_manager_name: string | null;
@@ -226,6 +230,36 @@ function pickArray(value: unknown): unknown[] {
 
 function pickFirst<T>(rows: T[]): T | null {
   return rows.length > 0 ? rows[0] : null;
+}
+
+function buildPageNameByIdFromSetupPages(pages: SetupPage[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const page of pages) {
+    const id = asString(page.id);
+    if (!id) continue;
+    out.set(id, asString(page.name) || id);
+  }
+  return out;
+}
+
+function buildInstagramUsernameByIdFromSetup(
+  pages: SetupPage[],
+  instagramRows: SetupInstagram[]
+): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const ig of instagramRows) {
+    const id = asString(ig.id);
+    if (!id) continue;
+    const username = asString(ig.username) || asString(ig.name) || id;
+    out.set(id, username);
+  }
+  for (const page of pages) {
+    const instagramId = asString(page.instagramId);
+    if (!instagramId) continue;
+    const username = asString(page.instagramUsername);
+    if (username) out.set(instagramId, username);
+  }
+  return out;
 }
 
 export function normalizeMetaAccountId(value: string | null | undefined): string {
@@ -414,7 +448,7 @@ export async function syncWarehouseSnapshotsForStore(params: {
 
   const dateRange = { since, until };
 
-  await refreshMetaSetupSnapshots({
+  const setupCache = await refreshMetaSetupSnapshots({
     accessToken: token.accessToken,
     adAccounts: activeAccounts.map((a) => ({
       ad_account_id: a.ad_account_id,
@@ -424,6 +458,36 @@ export async function syncWarehouseSnapshotsForStore(params: {
       await upsertPersistentMetaEndpointSnapshot(storeId, endpoint, scopeId, variant, payload);
     },
   });
+  const pageNameById = buildPageNameByIdFromSetupPages(toArray<SetupPage>(setupCache.pages));
+  const instagramUsernameById = buildInstagramUsernameByIdFromSetup(
+    toArray<SetupPage>(setupCache.pages),
+    toArray<SetupInstagram>(setupCache.instagram)
+  );
+  const attemptedInstagramIds = new Set<string>();
+  const resolveInstagramUsername = async (instagramUserId: string | null): Promise<string | null> => {
+    if (!instagramUserId) return null;
+    const cached = instagramUsernameById.get(instagramUserId);
+    if (cached) return cached;
+    if (attemptedInstagramIds.has(instagramUserId)) return null;
+    attemptedInstagramIds.add(instagramUserId);
+    try {
+      const resolved = await fetchFromMeta<Record<string, unknown>>(
+        token.accessToken,
+        `/${instagramUserId}`,
+        { fields: 'id,username' },
+        8000,
+        1
+      );
+      const username = asString(resolved.username);
+      if (username) {
+        instagramUsernameById.set(instagramUserId, username);
+        return username;
+      }
+    } catch {
+      // Best effort only.
+    }
+    return null;
+  };
 
   const allCampaigns = await Promise.all(
     activeAccounts.map(async (account) => ({
@@ -496,6 +560,9 @@ export async function syncWarehouseSnapshotsForStore(params: {
         if (adsMap.has(ad.id)) continue;
         const raw = ad as unknown as Record<string, unknown>;
         const adsetId = asString(raw.adset_id) || ad.adSetId || undefined;
+        const pageId = asString(raw.page_id);
+        const instagramUserId = asString(raw.instagram_user_id);
+        const instagramUsername = await resolveInstagramUsername(instagramUserId);
         if (adsetId) {
           adsetIdsFromSuccessfulAdsFetch.add(adsetId);
         }
@@ -504,6 +571,10 @@ export async function syncWarehouseSnapshotsForStore(params: {
           adset_id: adsetId,
           campaign_id: asString(raw.campaign_id) || undefined,
           ad_account_id: accountId,
+          page_id: pageId,
+          page_name: pageId ? (pageNameById.get(pageId) || null) : null,
+          instagram_user_id: instagramUserId,
+          instagram_username: instagramUsername,
         });
       }
 
@@ -752,6 +823,7 @@ export async function materializeStoreMetaEntitiesFromSnapshots(params: {
       campaign_id: campaign.id,
       campaign_name: campaign.name,
       ad_account_id: enrichment.adAccountId,
+      ad_account_is_active: true,
       ad_account_name: enrichment.adAccountName,
       business_manager_id: enrichment.businessManagerId,
       business_manager_name: enrichment.businessManagerName,
@@ -793,6 +865,7 @@ export async function materializeStoreMetaEntitiesFromSnapshots(params: {
       campaign_id: campaignId,
       adset_name: adset.name,
       ad_account_id: enrichment.adAccountId,
+      ad_account_is_active: true,
       ad_account_name: enrichment.adAccountName,
       business_manager_id: enrichment.businessManagerId,
       business_manager_name: enrichment.businessManagerName,
@@ -844,6 +917,7 @@ export async function materializeStoreMetaEntitiesFromSnapshots(params: {
       campaign_id: campaignId,
       ad_name: ad.name,
       ad_account_id: enrichment.adAccountId,
+      ad_account_is_active: true,
       ad_account_name: enrichment.adAccountName,
       business_manager_id: enrichment.businessManagerId,
       business_manager_name: enrichment.businessManagerName,
