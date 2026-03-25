@@ -62,6 +62,7 @@ interface MetaInsightRow {
   action_values_1d_view?: any[];
   date_start: string;
   date_stop: string;
+  website_url?: string;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -92,56 +93,45 @@ function mapRowToUpsert(storeId: string, adAccountId: string, row: MetaInsightRo
     purchase_value_7d_click: parseFloat(String(extractPurchases(row.action_values_7d_click))) || 0,
     purchases_1d_view: parseInt(String(extractPurchases(row.actions_1d_view))) || 0,
     purchase_value_1d_view: parseFloat(String(extractPurchases(row.action_values_1d_view))) || 0,
+    destination_url: row.website_url || null,
     updated_at: new Date().toISOString(),
   };
 }
 
-// ---- Auto-discover new ad accounts from Meta API ----
+// ---- Refresh metadata for EXISTING ad accounts (no auto-discover) ----
+// Auto-discover was adding ALL Meta ad accounts to EVERY store,
+// causing cross-store spend pollution. Now we only update metadata
+// (timezone, currency) for accounts already mapped via meta_ad_account_mappings.
 
 async function refreshAdAccountList(storeId: string, accessToken: string): Promise<number> {
   try {
+    // Only refresh accounts that are already mapped to this store
+    const existing = await listPersistentStoreAdAccounts(storeId);
+    if (existing.length === 0) return 0;
+
+    const existingIds = new Set(existing.map(a => a.ad_account_id));
+
     const metaAccounts = await fetchFromMeta<{ data: Array<{ id: string; name: string; account_id: string; currency: string; timezone_name: string; account_status: number }> }>(
       accessToken, '/me/adaccounts', { fields: 'id,name,account_id,currency,timezone_name,account_status', limit: '100' }
     );
 
     const activeAccounts = (metaAccounts?.data || []).filter(a => a.account_status === 1);
-    if (activeAccounts.length === 0) return 0;
+    let updated = 0;
 
-    // Get existing registered accounts
-    const existing = await listPersistentStoreAdAccounts(storeId);
-    const existingIds = new Set(existing.map(a => a.ad_account_id));
-
-    let discovered = 0;
     for (const acc of activeAccounts) {
       const accId = acc.id.startsWith('act_') ? acc.id : `act_${acc.account_id}`;
 
-      // Update timezone/currency for existing accounts (metadata refresh)
+      // Only update metadata for accounts already registered to this store
       if (existingIds.has(accId)) {
         await rest(`/store_ad_accounts?store_id=eq.${encodeURIComponent(storeId)}&ad_account_id=eq.${encodeURIComponent(accId)}`, {
           method: 'PATCH',
           body: JSON.stringify({ timezone: acc.timezone_name, currency: acc.currency }),
         }).catch(() => {});
-        continue;
+        updated++;
       }
-
-      // Auto-register new account (active by default so spend gets synced)
-      await rest('/store_ad_accounts', {
-        method: 'POST',
-        headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-        body: JSON.stringify({
-          store_id: storeId,
-          ad_account_id: accId,
-          ad_account_name: acc.name,
-          timezone: acc.timezone_name,
-          currency: acc.currency,
-          is_active: true,
-        }),
-      }).catch(() => {});
-      discovered++;
-      console.log(`[sync-meta-spend] Auto-discovered new ad account ${accId} (${acc.name}) for ${storeId}`);
     }
 
-    return discovered;
+    return updated;
   } catch (err) {
     console.warn(`[sync-meta-spend] Ad account refresh failed for ${storeId}:`, err instanceof Error ? err.message : err);
     return 0;
@@ -214,7 +204,7 @@ export async function GET(req: NextRequest) {
           }>(metaConn.access_token, `/${adAccountId}/insights`, {
             time_range: JSON.stringify({ since: sevenDaysAgo, until: today }),
             time_increment: '1',
-            fields: 'campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,actions,action_values',
+            fields: 'campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,actions,action_values,website_url',
             level: 'ad',
             limit: '500',
             action_attribution_windows: '7d_click,1d_view',

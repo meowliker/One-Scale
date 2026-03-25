@@ -92,7 +92,7 @@ function sumCampaignTraffic(campaigns: Campaign[]): { clicks: number; impression
 }
 
 function parsePreset(value: string | null): DateRangePreset {
-  const allowed: DateRangePreset[] = ['today', 'yesterday', 'last3', 'last7', 'last7today', 'last14', 'last30', 'thisMonth', 'lastMonth'];
+  const allowed: DateRangePreset[] = ['today', 'yesterday', 'last3', 'last7', 'last7today', 'last14', 'last28', 'last30', 'thisMonth', 'lastMonth'];
   if (!value) return 'today';
   return allowed.includes(value as DateRangePreset) ? (value as DateRangePreset) : 'today';
 }
@@ -105,6 +105,7 @@ function mapPresetToMeta(preset: DateRangePreset): string {
     case 'last7': return 'last_7d';
     case 'last7today': return 'last_7d';
     case 'last14': return 'last_14d';
+    case 'last28': return 'last_28d';
     case 'last30': return 'last_30d';
     case 'thisMonth': return 'this_month';
     case 'lastMonth': return 'last_month';

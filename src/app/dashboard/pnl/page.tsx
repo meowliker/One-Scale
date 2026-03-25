@@ -105,6 +105,7 @@ export default function PnLPage() {
   const latestProductPnLRef = useRef<ProductPnLData[]>([]);
   const latestDailyPnLRef = useRef<PnLEntry[]>([]);
   const latestLastRefreshedRef = useRef<Date | null>(null);
+  const [productRefreshKey, setProductRefreshKey] = useState(0);
 
   // Track the storeId that data was fetched for, to prevent stale updates
   const fetchStoreIdRef = useRef<string>('');
@@ -222,8 +223,37 @@ export default function PnLPage() {
       getDailyPnL()
         .then((d) => {
           if (isStale()) return;
+          // CRITICAL: never replace good data with empty
+          if (d.length === 0) {
+            console.warn('[P&L] getDailyPnL returned empty — keeping existing data');
+            return;
+          }
           const refreshedAt = new Date();
-          setDailyPnL(d);
+          // CRITICAL: getDailyPnL snapshots may have zeros for today (snapshot
+          // not yet generated). The summary.today from getPnLSummary() is computed
+          // LIVE and has real data. Always prefer the live today entry over a zero snapshot.
+          setDailyPnL(() => {
+            const todayDate = s.today.date;
+            if (!todayDate) return d;
+
+            // Count how many non-zero fields each entry has
+            const countFields = (e: PnLEntry) =>
+              (e.revenue !== 0 ? 1 : 0) + ((e.orderCount ?? 0) !== 0 ? 1 : 0) +
+              (e.adSpend !== 0 ? 1 : 0) + (e.fees !== 0 ? 1 : 0) +
+              (e.refunds !== 0 ? 1 : 0) + (e.netProfit !== 0 ? 1 : 0) +
+              ((e.chargebackLoss ?? 0) !== 0 ? 1 : 0) + (e.shipping !== 0 ? 1 : 0);
+
+            const liveFields = countFields(s.today);
+            const snapshotToday = d.find(e => e.date === todayDate);
+            const snapFields = snapshotToday ? countFields(snapshotToday) : 0;
+
+            // ALWAYS prefer the entry with MORE populated fields (richer data)
+            if (liveFields > snapFields) {
+              const withoutToday = d.filter(e => e.date !== todayDate);
+              return [...withoutToday, s.today].sort((a, b) => a.date.localeCompare(b.date));
+            }
+            return d;
+          });
           setLastRefreshed(refreshedAt);
           setLastRefreshedLabel(formatLastRefreshed(refreshedAt));
           writePnLCache(fetchForStore, {
@@ -373,6 +403,8 @@ export default function PnLPage() {
         const now = new Date();
         setLastRefreshed(now);
         setLastRefreshedLabel(formatLastRefreshed(now));
+        // Trigger product performance refresh when live data changes
+        setProductRefreshKey(k => k + 1);
       } catch {
         // Silent — retry on next interval
       }
@@ -456,6 +488,7 @@ export default function PnLPage() {
         productType={summary.productType || 'physical'}
         hourlyPnL={hourlyPnL}
         currency={currency}
+        refreshKey={productRefreshKey}
       />
     </div>
   );

@@ -34,6 +34,7 @@ interface PnLDashboardClientProps {
   productType?: 'physical' | 'digital';
   hourlyPnL?: HourlyPnLEntry[];
   currency?: string;
+  refreshKey?: number;
 }
 
 
@@ -96,6 +97,7 @@ export function PnLDashboardClient({
   productType = 'physical',
   hourlyPnL = [],
   currency = 'USD',
+  refreshKey = 0,
 }: PnLDashboardClientProps) {
   const [datePreset, setDatePreset] = useState<DateRangePreset>('today');
   const [customRange, setCustomRange] = useState<DateRange | null>(null);
@@ -122,15 +124,31 @@ export function PnLDashboardClient({
     setDatePreset(range.preset || 'custom');
   };
 
+  // Count non-zero fields to determine which entry has richer data
+  const richness = (e: PnLEntry) =>
+    (e.revenue !== 0 ? 1 : 0) + ((e.orderCount ?? 0) !== 0 ? 1 : 0) +
+    (e.adSpend !== 0 ? 1 : 0) + (e.fees !== 0 ? 1 : 0) +
+    (e.refunds !== 0 ? 1 : 0) + (e.netProfit !== 0 ? 1 : 0) +
+    ((e.chargebackLoss ?? 0) !== 0 ? 1 : 0) + (e.shipping !== 0 ? 1 : 0);
+
   const activeEntry = useMemo(() => {
     const entry = computeEntryFromDaily(dailyPnL, dateRange, customExpensesList);
+    // For 'today': prefer whichever entry (computed vs summary) has richer data
+    if (datePreset === 'today' && richness(summary.today) > richness(entry)) {
+      return summary.today;
+    }
     return entry;
-  }, [dailyPnL, dateRange, customExpensesList]);
+  }, [dailyPnL, dateRange, customExpensesList, datePreset, summary.today]);
 
   const todayEntry = useMemo(() => {
     const todayRange = getDateRange('today');
-    return computeEntryFromDaily(dailyPnL, todayRange, customExpensesList);
-  }, [dailyPnL, customExpensesList]);
+    const computed = computeEntryFromDaily(dailyPnL, todayRange, customExpensesList);
+    // Prefer summary.today if it has richer data
+    if (richness(summary.today) > richness(computed)) {
+      return summary.today;
+    }
+    return computed;
+  }, [dailyPnL, customExpensesList, summary.today]);
 
   // Filter dailyPnL and hourlyPnL by the global date range
   const filteredDailyPnL = useMemo(() => {
@@ -275,9 +293,21 @@ export function PnLDashboardClient({
       }
 
       const json = await res.json() as { ok?: boolean; data?: ProductPnLData[] };
-      if (json.ok && json.data) {
+      if (json.ok && json.data && json.data.length > 0) {
         setLiveProductPnL(json.data);
       } else {
+        // product-performance returned empty — try product-perf-cached which has live Shopify fallback
+        try {
+          const cachedParams = new URLSearchParams({ storeId: activeStoreId, from, to });
+          const cachedRes = await fetch(`/api/pnl/product-perf-cached?${cachedParams}`, { signal: controller.signal });
+          if (cachedRes.ok) {
+            const cachedJson = await cachedRes.json() as { ok?: boolean; data?: ProductPnLData[] };
+            if (cachedJson.ok && cachedJson.data && cachedJson.data.length > 0) {
+              setLiveProductPnL(cachedJson.data);
+              return;
+            }
+          }
+        } catch { /* ignore */ }
         setLiveProductPnL([]);
       }
     } catch (err) {
@@ -291,17 +321,18 @@ export function PnLDashboardClient({
     }
   }, [activeStoreId]);
 
-  // Re-fetch product data when date range changes
+  // Re-fetch product data when date range changes OR live poll detects new data
   useEffect(() => {
     const from = formatDateInTimezone(dateRange.start);
     const to = formatDateInTimezone(dateRange.end);
     fetchProductsForRange(from, to);
 
     return () => { productAbortRef.current?.abort(); };
-  }, [dateRange, fetchProductsForRange]);
+  }, [dateRange, fetchProductsForRange, refreshKey]);
 
-  // Use live-fetched data if available, otherwise fall back to props
-  const effectiveProductPnL = liveProductPnL ?? productPnL;
+  // Use live-fetched data ONLY — never fall back to stale props from previous store/date
+  // This prevents "random amounts" flashing when switching stores or dates
+  const effectiveProductPnL = productLoading ? [] : (liveProductPnL ?? []);
   // ── End product performance fetching ────────────────────────────────────────
 
 
@@ -375,7 +406,7 @@ export function PnLDashboardClient({
 
       {/* S6: Key Metrics Bar (AOV, Orders, Upsell Rate, ROAS) — always visible */}
       <SectionWrapper label="Key Metrics">
-        <MetricsBar entry={activeEntry} products={productLoading ? [] : effectiveProductPnL} currency={currency} />
+        <MetricsBar entry={activeEntry} currency={currency} />
       </SectionWrapper>
 
       {/* S7: Product Performance */}

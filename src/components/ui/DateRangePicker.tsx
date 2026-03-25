@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useRef, useEffect, useMemo } from 'react';
-import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { Calendar, ChevronLeft, ChevronRight, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getDateRange } from '@/lib/dateUtils';
 import { formatInTimezone, formatDateInTimezone, getStoreTimezone } from '@/lib/timezone';
@@ -13,31 +13,56 @@ export interface DateRangePickerProps {
   onRangeChange: (range: { start: Date; end: Date; preset?: DateRangePreset }) => void;
 }
 
-const presets: { label: string; value: DateRangePreset }[] = [
-  { label: 'Today', value: 'today' },
-  { label: 'Yesterday', value: 'yesterday' },
-  { label: 'Last 7 days', value: 'last7' },
-  { label: 'Last 14 days', value: 'last14' },
-  { label: 'Last 28 days', value: 'last3' },
-  { label: 'Last 30 days', value: 'last30' },
-  { label: 'This month', value: 'thisMonth' },
-  { label: 'Last month', value: 'lastMonth' },
+// ── Presets ──────────────────────────────────────────────────────────────────
+
+interface PresetDef {
+  label: string;
+  value: DateRangePreset;
+  shortLabel?: string;
+}
+
+const presets: PresetDef[] = [
+  { label: 'Today', value: 'today', shortLabel: 'Today' },
+  { label: 'Yesterday', value: 'yesterday', shortLabel: 'Yest.' },
+  { label: 'Last 7 days', value: 'last7', shortLabel: '7D' },
+  { label: 'Last 14 days', value: 'last14', shortLabel: '14D' },
+  { label: 'Last 28 days', value: 'last28', shortLabel: '28D' },
+  { label: 'Last 30 days', value: 'last30', shortLabel: '30D' },
+  { label: 'This month', value: 'thisMonth', shortLabel: 'MTD' },
+  { label: 'Last month', value: 'lastMonth', shortLabel: 'Prev.' },
 ];
 
 const presetLabels: Record<string, string> = {
   today: 'Today',
   yesterday: 'Yesterday',
-  last3: 'Last 28 Days',
+  last3: 'Last 3 Days',
   last7: 'Last 7 Days',
   last7today: '7D + Today',
   last14: 'Last 14 Days',
+  last28: 'Last 28 Days',
   last30: 'Last 30 Days',
   thisMonth: 'This Month',
   lastMonth: 'Last Month',
 };
 
-const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+const DAY_LABELS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+
+function getDaysInMonth(year: number, month: number): number {
+  // Use UTC to avoid timezone edge cases
+  return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+}
+
+/** Monday-first day index (0=Mon, 6=Sun). Uses UTC to avoid timezone shifts. */
+function getFirstDayOfWeek(year: number, month: number): number {
+  const d = new Date(Date.UTC(year, month, 1)).getUTCDay();
+  return d === 0 ? 6 : d - 1;
+}
 
 function formatTriggerLabel(start: Date, end: Date, preset?: DateRangePreset, tz?: string): string {
   if (preset && preset !== 'custom' && presetLabels[preset]) return presetLabels[preset];
@@ -47,164 +72,109 @@ function formatTriggerLabel(start: Date, end: Date, preset?: DateRangePreset, tz
   if (startStr === endStr) return formatInTimezone(start, 'MMM d, yyyy', timezone);
   const startYear = toZonedTime(start, timezone).getFullYear();
   const endYear = toZonedTime(end, timezone).getFullYear();
-  if (startYear === endYear) return `${formatInTimezone(start, 'MMM d', timezone)} – ${formatInTimezone(end, 'MMM d, yyyy', timezone)}`;
+  if (startYear === endYear)
+    return `${formatInTimezone(start, 'MMM d', timezone)} – ${formatInTimezone(end, 'MMM d', timezone)}`;
   return `${formatInTimezone(start, 'MMM d, yyyy', timezone)} – ${formatInTimezone(end, 'MMM d, yyyy', timezone)}`;
 }
 
-/**
- * Format a Date for footer display using the store timezone (NOT the browser/local TZ).
- */
-function formatFooterDate(date: Date, tz: string): string {
-  const zoned = toZonedTime(date, tz);
-  const day = zoned.getDate();
-  const month = MONTH_NAMES[zoned.getMonth()].slice(0, 3);
-  const year = zoned.getFullYear();
-  return `${day} ${month} ${year}`;
+function formatCompact(date: Date, tz: string): string {
+  return formatInTimezone(date, 'MMM d, yyyy', tz);
 }
 
-function getDaysInMonth(year: number, month: number): number {
-  return new Date(year, month + 1, 0).getDate();
-}
+// ── Calendar Grid ───────────────────────────────────────────────────────────
 
-function getFirstDayOfMonth(year: number, month: number): number {
-  return new Date(year, month, 1).getDay();
-}
-
-/**
- * Compare two dates as calendar days in the store timezone.
- * Uses formatDateInTimezone so the comparison is always TZ-aware.
- */
-function isSameDay(d1: Date, d2: Date, tz: string): boolean {
-  return formatDateInTimezone(d1, tz) === formatDateInTimezone(d2, tz);
-}
-
-/**
- * Check if a date string (YYYY-MM-DD) falls within a range of date strings.
- * All comparisons are lexicographic on YYYY-MM-DD strings — no TZ ambiguity.
- */
-function isDateInRange(dateStr: string, startStr: string | null, endStr: string | null): boolean {
-  if (!startStr || !endStr) return false;
-  return dateStr >= startStr && dateStr <= endStr;
-}
-
-/**
- * Check if a date string (YYYY-MM-DD) is today in the store timezone.
- */
-function isDateToday(dateStr: string, todayStr: string): boolean {
-  return dateStr === todayStr;
-}
-
-/**
- * Check if a date string (YYYY-MM-DD) is in the future relative to today in the store timezone.
- */
-function isDateFuture(dateStr: string, todayStr: string): boolean {
-  return dateStr > todayStr;
-}
-
-interface CalendarMonthProps {
+interface CalendarGridProps {
   year: number;
   month: number;
   timezone: string;
-  selectedStart: Date | null;
-  selectedEnd: Date | null;
-  hoverDate: Date | null;
-  onDateClick: (date: Date) => void;
-  onDateHover: (date: Date | null) => void;
-  onMonthChange: (delta: number) => void;
-  showNavigation: 'left' | 'right' | 'none';
+  selectedStart: string | null; // YYYY-MM-DD
+  selectedEnd: string | null;   // YYYY-MM-DD
+  hoverDate: string | null;     // YYYY-MM-DD
+  onDateClick: (dateStr: string) => void;
+  onDateHover: (dateStr: string | null) => void;
 }
 
-function CalendarMonth({
-  year, month, timezone, selectedStart, selectedEnd, hoverDate,
-  onDateClick, onDateHover, onMonthChange, showNavigation,
-}: CalendarMonthProps) {
+function CalendarGrid({
+  year, month, timezone,
+  selectedStart, selectedEnd, hoverDate,
+  onDateClick, onDateHover,
+}: CalendarGridProps) {
   const daysInMonth = getDaysInMonth(year, month);
-  const firstDay = getFirstDayOfMonth(year, month);
-  const days: (number | null)[] = [];
-
-  for (let i = 0; i < firstDay; i++) days.push(null);
-  for (let i = 1; i <= daysInMonth; i++) days.push(i);
-
-  // Pre-compute all date strings in store timezone for fast comparison
+  const firstDay = getFirstDayOfWeek(year, month);
   const todayStr = formatDateInTimezone(new Date(), timezone);
-  const selectedStartStr = selectedStart ? formatDateInTimezone(selectedStart, timezone) : null;
-  const selectedEndStr = selectedEnd ? formatDateInTimezone(selectedEnd, timezone) : null;
-  const hoverDateStr = hoverDate ? formatDateInTimezone(hoverDate, timezone) : null;
 
-  const effectiveEndStr = selectedEndStr || hoverDateStr;
-
-  let rangeStartStr = selectedStartStr;
-  let rangeEndStr = effectiveEndStr;
-  if (rangeStartStr && rangeEndStr && rangeStartStr > rangeEndStr) {
-    [rangeStartStr, rangeEndStr] = [rangeEndStr, rangeStartStr];
+  // Compute effective range for highlight
+  const effectiveEnd = selectedEnd || hoverDate;
+  let rangeStart = selectedStart;
+  let rangeEnd = effectiveEnd;
+  if (rangeStart && rangeEnd && rangeStart > rangeEnd) {
+    [rangeStart, rangeEnd] = [rangeEnd, rangeStart];
   }
 
-  return (
-    <div className="w-[280px]">
-      <div className="flex items-center justify-between px-2 mb-3">
-        {showNavigation === 'left' ? (
-          <button onClick={() => onMonthChange(-1)} className="p-1 rounded hover:bg-surface-hover transition-colors">
-            <ChevronLeft className="h-4 w-4 text-text-secondary" />
-          </button>
-        ) : <div className="w-6" />}
-        <span className="text-sm font-semibold text-text-primary">
-          {MONTH_NAMES[month]} {year}
-        </span>
-        {showNavigation === 'right' ? (
-          <button onClick={() => onMonthChange(1)} className="p-1 rounded hover:bg-surface-hover transition-colors">
-            <ChevronRight className="h-4 w-4 text-text-secondary" />
-          </button>
-        ) : <div className="w-6" />}
-      </div>
+  const cells: (number | null)[] = [];
+  for (let i = 0; i < firstDay; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
 
+  return (
+    <div>
+      {/* Day headers */}
       <div className="grid grid-cols-7 mb-1">
-        {DAY_NAMES.map((day) => (
-          <div key={day} className="text-center text-[11px] font-medium text-text-muted py-1">{day}</div>
+        {DAY_LABELS.map((d) => (
+          <div key={d} className="h-7 flex items-center justify-center text-[10px] font-semibold text-text-muted uppercase tracking-wider">
+            {d}
+          </div>
         ))}
       </div>
 
+      {/* Day cells */}
       <div className="grid grid-cols-7">
-        {days.map((day, idx) => {
-          if (day === null) return <div key={`empty-${idx}`} className="h-8" />;
+        {cells.map((day, idx) => {
+          if (day === null) return <div key={`e-${idx}`} className="h-8" />;
 
-          // Build a YYYY-MM-DD date string for this calendar cell
           const m = String(month + 1).padStart(2, '0');
           const d = String(day).padStart(2, '0');
           const dateStr = `${year}-${m}-${d}`;
 
-          // Create a Date anchored to NOON in the store timezone so it is always
-          // within this calendar day regardless of DST or UTC offset.
-          const date = fromZonedTime(`${dateStr}T12:00:00`, timezone);
-
-          const isStart = selectedStartStr === dateStr;
-          const isEnd = selectedEndStr === dateStr;
-          const inRange = isDateInRange(dateStr, rangeStartStr, rangeEndStr);
-          const isCurrentDay = isDateToday(dateStr, todayStr);
-          const disabled = isDateFuture(dateStr, todayStr);
-          const isSingleDay = isStart && isEnd;
-          const hasRange = rangeStartStr && rangeEndStr && rangeStartStr !== rangeEndStr;
+          const isToday = dateStr === todayStr;
+          const isFuture = dateStr > todayStr;
+          const isStart = dateStr === rangeStart;
+          const isEnd = dateStr === rangeEnd;
+          const inRange = rangeStart && rangeEnd && dateStr > rangeStart && dateStr < rangeEnd;
+          const isSingle = isStart && isEnd;
+          const hasRange = rangeStart && rangeEnd && rangeStart !== rangeEnd;
 
           return (
-            <button
+            <div
               key={day}
-              disabled={disabled}
-              onClick={() => !disabled && onDateClick(date)}
-              onMouseEnter={() => !disabled && onDateHover(date)}
-              onMouseLeave={() => onDateHover(null)}
               className={cn(
-                'h-8 w-full text-sm font-medium transition-colors relative',
-                disabled && 'text-text-dimmed cursor-not-allowed',
-                !disabled && !isStart && !isEnd && !inRange && 'hover:bg-surface-hover text-text-primary',
-                inRange && !isStart && !isEnd && 'bg-blue-100 dark:bg-blue-950/40',
-                isStart && hasRange && !isSingleDay && 'bg-blue-500 text-white rounded-l-full z-10',
-                isEnd && hasRange && !isSingleDay && 'bg-blue-500 text-white rounded-r-full z-10',
-                isSingleDay && 'bg-blue-500 text-white rounded-full z-10',
-                isStart && !selectedEnd && !isSingleDay && 'bg-blue-500 text-white rounded-full z-10',
-                isCurrentDay && !isStart && !isEnd && 'font-bold text-blue-500',
+                'relative h-8 flex items-center justify-center',
+                // Range background band
+                inRange && 'bg-blue-50 dark:bg-blue-950/30',
+                isStart && hasRange && !isSingle && 'bg-gradient-to-r from-transparent via-blue-50 to-blue-50 dark:from-transparent dark:via-blue-950/30 dark:to-blue-950/30',
+                isEnd && hasRange && !isSingle && 'bg-gradient-to-l from-transparent via-blue-50 to-blue-50 dark:from-transparent dark:via-blue-950/30 dark:to-blue-950/30',
               )}
             >
-              {day}
-            </button>
+              <button
+                disabled={isFuture}
+                onClick={() => !isFuture && onDateClick(dateStr)}
+                onMouseEnter={() => !isFuture && onDateHover(dateStr)}
+                onMouseLeave={() => onDateHover(null)}
+                className={cn(
+                  'relative z-10 h-7 w-7 rounded-full text-[13px] font-medium transition-all duration-150',
+                  isFuture && 'text-text-dimmed/40 cursor-not-allowed',
+                  // Default
+                  !isFuture && !isStart && !isEnd && !inRange && 'text-text-primary hover:bg-surface-hover',
+                  // In range
+                  inRange && !isStart && !isEnd && 'text-blue-700 dark:text-blue-300',
+                  // Endpoints
+                  (isStart || isEnd) && 'bg-blue-500 text-white font-semibold shadow-sm shadow-blue-500/30',
+                  // Today ring
+                  isToday && !isStart && !isEnd && 'ring-1 ring-blue-400/50 font-semibold text-blue-600 dark:text-blue-400',
+                )}
+              >
+                {day}
+              </button>
+            </div>
           );
         })}
       </div>
@@ -212,217 +182,257 @@ function CalendarMonth({
   );
 }
 
+// ── Main Component ──────────────────────────────────────────────────────────
+
 export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerProps) {
   const [open, setOpen] = useState(false);
-  const [selectedPreset, setSelectedPreset] = useState<DateRangePreset | null>(dateRange.preset || null);
-
-  // Always derive timezone from the active ad account, never the browser's local TZ
   const tz = getStoreTimezone();
-
-  const [leftMonth, setLeftMonth] = useState(() => {
-    // Use the store timezone to determine which month/year the start date falls in
-    const zoned = toZonedTime(dateRange.start, getStoreTimezone());
-    return { year: zoned.getFullYear(), month: zoned.getMonth() };
-  });
-
-  const [selectionStart, setSelectionStart] = useState<Date | null>(dateRange.start);
-  const [selectionEnd, setSelectionEnd] = useState<Date | null>(dateRange.end);
-  const [hoverDate, setHoverDate] = useState<Date | null>(null);
-  const [isSelectingEnd, setIsSelectingEnd] = useState(false);
-
   const ref = useRef<HTMLDivElement>(null);
 
-  const rightMonth = useMemo(() => {
-    let m = leftMonth.month + 1;
-    let y = leftMonth.year;
-    if (m > 11) { m = 0; y++; }
-    return { year: y, month: m };
-  }, [leftMonth]);
+  // Calendar navigation — always derive from dateRange when not open
+  const [viewMonth, setViewMonth] = useState(() => {
+    const startStr = formatDateInTimezone(dateRange.start, tz);
+    const [y, m] = startStr.split('-').map(Number);
+    return { year: y, month: m - 1 };
+  });
 
+  // Custom selection state (only used when user clicks calendar dates)
+  const [selStart, setSelStart] = useState<string | null>(null);
+  const [selEnd, setSelEnd] = useState<string | null>(null);
+  const [hoverDate, setHoverDate] = useState<string | null>(null);
+  const [isSelectingEnd, setIsSelectingEnd] = useState(false);
+
+  // The active preset (highlighted in sidebar)
+  const activePreset = dateRange.preset;
+
+  // Close on outside click
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
-    if (open) document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
+  // Reset selection state when opening — use YYYY-MM-DD parsing to avoid timezone bugs
   useEffect(() => {
     if (open) {
-      setSelectionStart(dateRange.start);
-      setSelectionEnd(dateRange.end);
+      const startStr = formatDateInTimezone(dateRange.start, tz);
+      const endStr = formatDateInTimezone(dateRange.end, tz);
+      setSelStart(startStr);
+      setSelEnd(endStr);
       setIsSelectingEnd(false);
-      setSelectedPreset(dateRange.preset || null);
-      // Determine month/year using store timezone
-      const zoned = toZonedTime(dateRange.start, tz);
-      setLeftMonth({
-        year: zoned.getFullYear(),
-        month: zoned.getMonth(),
-      });
+      setHoverDate(null);
+      // Navigate calendar to the END date's month (most relevant for ranges)
+      const [ey, em] = endStr.split('-').map(Number);
+      setViewMonth({ year: ey, month: em - 1 });
     }
   }, [open, dateRange, tz]);
 
-  const handlePresetClick = (preset: DateRangePreset) => {
+  // ── Preset click → immediate apply ──
+  const handlePresetClick = useCallback((preset: DateRangePreset) => {
     const range = getDateRange(preset);
-    setSelectionStart(range.start);
-    setSelectionEnd(range.end);
-    setSelectedPreset(preset);
-    setIsSelectingEnd(false);
-    // Scroll calendar to the start month of the preset, using store timezone
-    const zoned = toZonedTime(range.start, tz);
-    setLeftMonth({
-      year: zoned.getFullYear(),
-      month: zoned.getMonth(),
+    const startStr = formatDateInTimezone(range.start, tz);
+    const endStr = formatDateInTimezone(range.end, tz);
+    onRangeChange({
+      start: fromZonedTime(`${startStr}T00:00:00`, tz),
+      end: fromZonedTime(`${endStr}T23:59:59`, tz),
+      preset,
     });
-  };
+    setOpen(false);
+  }, [tz, onRangeChange]);
 
-  const handleDateClick = (date: Date) => {
-    if (!isSelectingEnd) {
-      setSelectionStart(date);
-      setSelectionEnd(null);
+  // ── Calendar date click ──
+  const handleDateClick = useCallback((dateStr: string) => {
+    if (!isSelectingEnd || !selStart) {
+      // First click — set start
+      setSelStart(dateStr);
+      setSelEnd(null);
       setIsSelectingEnd(true);
-      setSelectedPreset(null);
     } else {
-      if (selectionStart && date.getTime() < selectionStart.getTime()) {
-        setSelectionStart(date);
-        setSelectionEnd(null);
+      // Second click — set end (swap if before start)
+      if (dateStr < selStart) {
+        setSelStart(dateStr);
+        setSelEnd(selStart);
       } else {
-        setSelectionEnd(date);
-        setIsSelectingEnd(false);
-        setSelectedPreset(null);
+        setSelEnd(dateStr);
       }
+      setIsSelectingEnd(false);
     }
-  };
+  }, [isSelectingEnd, selStart]);
 
-  const handleMonthChange = (delta: number) => {
-    setLeftMonth((prev) => {
+  // ── Apply custom range ──
+  const handleApply = useCallback(() => {
+    if (!selStart) return;
+    const endStr = selEnd || selStart;
+    onRangeChange({
+      start: fromZonedTime(`${selStart}T00:00:00`, tz),
+      end: fromZonedTime(`${endStr}T23:59:59`, tz),
+      preset: 'custom',
+    });
+    setOpen(false);
+  }, [selStart, selEnd, tz, onRangeChange]);
+
+  // ── Month navigation (clamp: don't go past current month) ──
+  const navigateMonth = useCallback((delta: number) => {
+    setViewMonth((prev) => {
       let m = prev.month + delta;
       let y = prev.year;
       if (m < 0) { m = 11; y--; }
       else if (m > 11) { m = 0; y++; }
+      // Don't allow navigating past current month
+      const nowStr = formatDateInTimezone(new Date(), tz);
+      const [ny, nm] = nowStr.split('-').map(Number);
+      if (y > ny || (y === ny && m > nm - 1)) {
+        return prev; // block forward navigation past current month
+      }
       return { year: y, month: m };
     });
-  };
+  }, [tz]);
 
-  const handleCancel = () => setOpen(false);
+  // ── Footer date display ──
+  const footerLabel = useMemo(() => {
+    if (!selStart) return '';
+    const s = fromZonedTime(`${selStart}T12:00:00`, tz);
+    if (!selEnd || selStart === selEnd) return formatCompact(s, tz);
+    const e = fromZonedTime(`${selEnd}T12:00:00`, tz);
+    return `${formatCompact(s, tz)}  →  ${formatCompact(e, tz)}`;
+  }, [selStart, selEnd, tz]);
 
-  const handleUpdate = () => {
-    if (selectionStart) {
-      // Extract YYYY-MM-DD in the store timezone — never use .getFullYear()/.getMonth()/.getDate()
-      // which would read the local/UTC components instead of the store-tz components.
-      const startStr = formatDateInTimezone(selectionStart, tz);
-      const endDate = selectionEnd || selectionStart;
-      const endStr = formatDateInTimezone(endDate, tz);
-
-      // Re-construct proper start-of-day / end-of-day Date objects in store timezone
-      const start = fromZonedTime(`${startStr}T00:00:00`, tz);
-      const end = fromZonedTime(`${endStr}T23:59:59`, tz);
-      onRangeChange({ start, end, preset: selectedPreset || 'custom' });
-    }
-    setOpen(false);
-  };
-
-  const footerDateRange = useMemo(() => {
-    if (!selectionStart) return '';
-    const startStr = formatFooterDate(selectionStart, tz);
-    if (!selectionEnd || isSameDay(selectionStart, selectionEnd, tz)) return startStr;
-    return `${startStr} - ${formatFooterDate(selectionEnd, tz)}`;
-  }, [selectionStart, selectionEnd, tz]);
+  const hasCustomSelection = selStart && (isSelectingEnd || (selEnd && selEnd !== selStart));
 
   return (
     <div className="relative inline-flex items-center" ref={ref}>
+      {/* ── Trigger Button ── */}
       <button
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={() => setOpen((p) => !p)}
         className={cn(
-          'inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors',
+          'inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-all duration-200',
           open
-            ? 'border-blue-500 bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-400'
-            : 'border-border bg-surface-elevated text-text-primary hover:bg-surface-hover'
+            ? 'border-blue-500 bg-blue-50 text-blue-600 shadow-sm shadow-blue-500/10 dark:bg-blue-950/30 dark:text-blue-400'
+            : 'border-border bg-surface-elevated text-text-primary hover:bg-surface-hover hover:border-text-muted/30',
         )}
       >
-        <Calendar className="h-4 w-4" />
-        <span>{formatTriggerLabel(dateRange.start, dateRange.end, dateRange.preset, tz)}</span>
-        <ChevronRight className={cn('h-4 w-4 transition-transform', open && 'rotate-90')} />
+        <Calendar className="h-4 w-4 opacity-60" />
+        <span className="tracking-tight">{formatTriggerLabel(dateRange.start, dateRange.end, dateRange.preset, tz)}</span>
+        <ChevronRight className={cn('h-3.5 w-3.5 opacity-40 transition-transform duration-200', open && 'rotate-90')} />
       </button>
 
+      {/* ── Dropdown Panel ── */}
       {open && (
-        <div className="absolute right-0 top-full z-[100] mt-1 rounded-xl border border-border bg-surface-elevated shadow-xl overflow-hidden">
+        <div
+          className={cn(
+            'absolute right-0 top-full z-[100] mt-2',
+            'w-auto rounded-2xl border border-border bg-surface-elevated',
+            'shadow-2xl shadow-black/12 dark:shadow-black/40',
+            'animate-in fade-in-0 zoom-in-95 duration-150',
+          )}
+        >
           <div className="flex">
-            {/* Left column: Presets */}
-            <div className="w-44 border-r border-border py-3 max-h-[420px] overflow-y-auto">
-              {presets.map((preset) => (
-                <button
-                  key={preset.value}
-                  onClick={() => handlePresetClick(preset.value)}
-                  className={cn(
-                    'flex w-full items-center gap-2 px-4 py-2 text-sm transition-colors text-left',
-                    selectedPreset === preset.value
-                      ? 'text-blue-500 font-medium'
-                      : 'text-text-secondary hover:bg-surface-hover'
-                  )}
-                >
-                  <div className={cn(
-                    'w-4 h-4 rounded-full border-2 flex items-center justify-center',
-                    selectedPreset === preset.value ? 'border-blue-500' : 'border-text-muted'
-                  )}>
-                    {selectedPreset === preset.value && (
-                      <div className="w-2 h-2 rounded-full bg-blue-500" />
-                    )}
-                  </div>
-                  {preset.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Right column: Dual calendars */}
-            <div className="p-4">
-              <div className="flex gap-6">
-                <CalendarMonth
-                  year={leftMonth.year}
-                  month={leftMonth.month}
-                  timezone={tz}
-                  selectedStart={selectionStart}
-                  selectedEnd={selectionEnd}
-                  hoverDate={isSelectingEnd ? hoverDate : null}
-                  onDateClick={handleDateClick}
-                  onDateHover={setHoverDate}
-                  onMonthChange={handleMonthChange}
-                  showNavigation="left"
-                />
-                <CalendarMonth
-                  year={rightMonth.year}
-                  month={rightMonth.month}
-                  timezone={tz}
-                  selectedStart={selectionStart}
-                  selectedEnd={selectionEnd}
-                  hoverDate={isSelectingEnd ? hoverDate : null}
-                  onDateClick={handleDateClick}
-                  onDateHover={setHoverDate}
-                  onMonthChange={handleMonthChange}
-                  showNavigation="right"
-                />
+            {/* ── Left: Presets ── */}
+            <div className="w-[160px] border-r border-border py-2 flex flex-col">
+              <div className="px-3 py-1.5 mb-1">
+                <span className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Date Range</span>
               </div>
 
-              {/* Footer */}
-              <div className="flex items-center justify-between mt-4 pt-4 border-t border-border">
-                <div className="text-sm text-text-secondary">
-                  <span className="font-medium text-text-primary">{footerDateRange}</span>
-                  <br />
-                  <span className="text-xs text-text-muted">Dates are shown in store timezone</span>
+              <div className="flex-1 overflow-y-auto px-1.5 space-y-0.5">
+                {presets.map((p) => {
+                  const isActive = activePreset === p.value && !hasCustomSelection;
+                  return (
+                    <button
+                      key={p.value}
+                      onClick={() => handlePresetClick(p.value)}
+                      className={cn(
+                        'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] font-medium transition-all duration-150 text-left group',
+                        isActive
+                          ? 'bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-400'
+                          : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary',
+                      )}
+                    >
+                      <div className={cn(
+                        'flex h-4 w-4 items-center justify-center rounded-full border-[1.5px] transition-colors shrink-0',
+                        isActive
+                          ? 'border-blue-500 bg-blue-500'
+                          : 'border-text-muted/40 group-hover:border-text-muted/60',
+                      )}>
+                        {isActive && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />}
+                      </div>
+                      {p.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Custom range indicator */}
+              {activePreset === 'custom' && !hasCustomSelection && (
+                <div className="px-3 pt-2 mt-auto border-t border-border">
+                  <span className="text-[10px] text-blue-500 font-semibold">Custom range active</span>
                 </div>
-                <div className="flex gap-2">
+              )}
+            </div>
+
+            {/* ── Right: Calendar ── */}
+            <div className="p-4 w-[296px]">
+              {/* Month header + nav */}
+              <div className="flex items-center justify-between mb-3">
+                <button
+                  onClick={() => navigateMonth(-1)}
+                  className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-surface-hover transition-colors"
+                >
+                  <ChevronLeft className="h-4 w-4 text-text-secondary" />
+                </button>
+                <span className="text-sm font-bold text-text-primary tracking-tight">
+                  {MONTH_NAMES[viewMonth.month]} {viewMonth.year}
+                </span>
+                <button
+                  onClick={() => navigateMonth(1)}
+                  className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-surface-hover transition-colors"
+                >
+                  <ChevronRight className="h-4 w-4 text-text-secondary" />
+                </button>
+              </div>
+
+              {/* Calendar grid */}
+              <CalendarGrid
+                year={viewMonth.year}
+                month={viewMonth.month}
+                timezone={tz}
+                selectedStart={selStart}
+                selectedEnd={isSelectingEnd ? null : selEnd}
+                hoverDate={isSelectingEnd ? hoverDate : null}
+                onDateClick={handleDateClick}
+                onDateHover={setHoverDate}
+              />
+
+              {/* Footer */}
+              <div className="flex items-center justify-between mt-4 pt-3 border-t border-border">
+                <div className="min-w-0 flex-1 mr-3">
+                  <p className="text-[12px] font-semibold text-text-primary truncate tabular-nums">
+                    {footerLabel || 'Select dates'}
+                  </p>
+                  {isSelectingEnd && (
+                    <p className="text-[10px] text-blue-500 font-medium mt-0.5">Click end date</p>
+                  )}
+                </div>
+                <div className="flex gap-1.5 shrink-0">
                   <button
-                    onClick={handleCancel}
-                    className="px-4 py-2 text-sm font-medium text-text-secondary border border-border rounded-lg hover:bg-surface-hover transition-colors"
+                    onClick={() => setOpen(false)}
+                    className="px-3 py-1.5 text-xs font-medium text-text-secondary rounded-lg border border-border hover:bg-surface-hover transition-colors"
                   >
                     Cancel
                   </button>
                   <button
-                    onClick={handleUpdate}
-                    disabled={!selectionStart}
-                    className="px-4 py-2 text-sm font-medium text-white bg-blue-500 rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    onClick={handleApply}
+                    disabled={!selStart || isSelectingEnd}
+                    className={cn(
+                      'px-3 py-1.5 text-xs font-semibold rounded-lg transition-all duration-150',
+                      selStart && !isSelectingEnd
+                        ? 'bg-blue-500 text-white hover:bg-blue-600 shadow-sm shadow-blue-500/25'
+                        : 'bg-surface-hover text-text-dimmed cursor-not-allowed',
+                    )}
                   >
-                    Update
+                    Apply
                   </button>
                 </div>
               </div>

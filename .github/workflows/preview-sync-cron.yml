@@ -1,0 +1,123 @@
+name: Preview Sync Cron
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: "Branch whose Vercel preview should be targeted (e.g. staging, dev/anay)"
+        required: false
+        default: "staging"
+
+permissions: {}
+
+concurrency:
+  group: preview-sync-cron
+  cancel-in-progress: false
+
+jobs:
+  warm-preview-last-30d:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      TARGET_BRANCH: ${{ inputs.target_branch || vars.CRON_TARGET_BRANCH || 'staging' }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      VERCEL_BYPASS_TOKEN_1: ${{ secrets.VERCEL_BYPASS_TOKEN_1 }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - name: Validate required secrets
+        run: |
+          set -euo pipefail
+          if [ -z "${TARGET_BRANCH}" ]; then
+            echo "Missing required value: TARGET_BRANCH"
+            exit 1
+          fi
+          if [ -z "${SUPABASE_URL}" ]; then
+            echo "Missing required secret: SUPABASE_URL"
+            exit 1
+          fi
+          if [ -z "${SUPABASE_SERVICE_ROLE_KEY}" ]; then
+            echo "Missing required secret: SUPABASE_SERVICE_ROLE_KEY"
+            exit 1
+          fi
+          if [ -z "${CRON_SECRET}" ]; then
+            echo "Missing required secret: CRON_SECRET"
+            exit 1
+          fi
+
+      - name: Prewarm rolling 30-day campaigns cache for each store
+        run: |
+          set -euo pipefail
+          BRANCH_SLUG="$(echo "${TARGET_BRANCH}" | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr -cd 'a-z0-9-')"
+          BASE="https://one-scale-git-${BRANCH_SLUG}-meow-likers-projects.vercel.app"
+
+          STORE_IDS="$(
+            curl -sS --retry 2 --retry-delay 2 --max-time 30 \
+              -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+              -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+              "${SUPABASE_URL%/}/rest/v1/store_ad_accounts?select=store_id&platform=eq.meta&is_active=eq.true&order=store_id.asc" \
+              | jq -r '.[].store_id' \
+              | awk 'NF' \
+              | sort -u \
+              | paste -sd, -
+          )"
+
+          if [ -z "${STORE_IDS}" ]; then
+            echo "No active Meta stores discovered from Supabase. Nothing to prewarm."
+            exit 0
+          fi
+
+          TODAY="$(date -u +'%Y-%m-%d')"
+          SINCE="$(date -u -d '29 days ago' +'%Y-%m-%d')"
+          echo "Warming 30-day cache for range ${SINCE} -> ${TODAY} at $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          echo "Target branch: ${TARGET_BRANCH} (${BASE})"
+
+          IFS=',' read -r -a STORES <<< "${STORE_IDS}"
+          if [ "${#STORES[@]}" -eq 0 ]; then
+            echo "No store IDs discovered from Supabase"
+            exit 1
+          fi
+
+          FAILED=0
+          for RAW in "${STORES[@]}"; do
+            STORE_ID="$(echo "${RAW}" | xargs)"
+            if [ -z "${STORE_ID}" ]; then
+              continue
+            fi
+            URL="${BASE}/api/sync/prewarm-campaigns?storeId=${STORE_ID}&since=${SINCE}&until=${TODAY}"
+            echo "Calling ${URL}"
+            RESP_FILE="$(mktemp)"
+
+            if [ -n "${VERCEL_BYPASS_TOKEN_1:-}" ]; then
+              HTTP_CODE="$(curl -sS -L --retry 2 --retry-delay 2 --max-time 120 \
+                -o "${RESP_FILE}" -w '%{http_code}' \
+                -H "Authorization: Bearer ${CRON_SECRET}" \
+                -H "x-vercel-protection-bypass: ${VERCEL_BYPASS_TOKEN_1}" \
+                "${URL}")"
+            else
+              HTTP_CODE="$(curl -sS -L --retry 2 --retry-delay 2 --max-time 120 \
+                -o "${RESP_FILE}" -w '%{http_code}' \
+                -H "Authorization: Bearer ${CRON_SECRET}" \
+                "${URL}")"
+            fi
+
+            if [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]; then
+              echo "Warmed store ${STORE_ID} (HTTP ${HTTP_CODE})"
+              cat "${RESP_FILE}"
+            else
+              echo "Failed store ${STORE_ID} (HTTP ${HTTP_CODE})"
+              cat "${RESP_FILE}"
+              FAILED=$((FAILED + 1))
+            fi
+            rm -f "${RESP_FILE}"
+          done
+
+          if [ "${FAILED}" -gt 0 ]; then
+            echo "30-day prewarm completed with ${FAILED} failed store(s)"
+            exit 1
+          fi
+
+          echo "30-day prewarm completed successfully"

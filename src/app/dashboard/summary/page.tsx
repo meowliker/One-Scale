@@ -52,6 +52,10 @@ function computeShopifyMetricsFromPnL(dailyPnL: PnLEntry[], preset: DateRangePre
   const shopifyNetProfit = Math.round(
     filteredDays.reduce((sum, day) => sum + (day.netProfit || 0), 0) * 100
   ) / 100;
+  // Ad spend from same P&L snapshots — matches P&L page exactly
+  const shopifyAdSpend = Math.round(
+    filteredDays.reduce((sum, day) => sum + (day.adSpend || 0), 0) * 100
+  ) / 100;
 
   return {
     shopifyRevenue,
@@ -62,6 +66,7 @@ function computeShopifyMetricsFromPnL(dailyPnL: PnLEntry[], preset: DateRangePre
     fullRefundAmount,
     partialRefundAmount,
     shopifyNetProfit,
+    shopifyAdSpend,
   };
 }
 
@@ -75,6 +80,7 @@ interface SummaryPayload {
     fullRefundAmount: number;
     partialRefundAmount: number;
     shopifyNetProfit: number;
+    shopifyAdSpend: number;
   };
   timeSeries: TimeSeriesDataPoint[];
   topCampaigns: Campaign[];
@@ -125,6 +131,7 @@ async function fetchSummaryData(preset: DateRangePreset) {
       fullRefundAmount: shopifyMetrics.fullRefundAmount,
       partialRefundAmount: shopifyMetrics.partialRefundAmount,
       shopifyNetProfit: shopifyMetrics.shopifyNetProfit,
+      shopifyAdSpend: shopifyMetrics.shopifyAdSpend,
     },
     timeSeries: series,
     topCampaigns: campaigns,

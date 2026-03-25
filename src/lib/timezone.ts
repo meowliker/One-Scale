@@ -170,6 +170,10 @@ export function getDateRangeInTimezone(
       const startStr = daysAgoInTimezone(14, timezone);
       return { start: startOfDayInTz(startStr, timezone), end: endOfDayInTz(yesterdayStr, timezone), preset };
     }
+    case 'last28': {
+      const startStr = daysAgoInTimezone(28, timezone);
+      return { start: startOfDayInTz(startStr, timezone), end: endOfDayInTz(yesterdayStr, timezone), preset };
+    }
     case 'last30': {
       const startStr = daysAgoInTimezone(30, timezone);
       return { start: startOfDayInTz(startStr, timezone), end: endOfDayInTz(yesterdayStr, timezone), preset };

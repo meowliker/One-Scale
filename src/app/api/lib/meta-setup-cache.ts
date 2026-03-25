@@ -33,7 +33,16 @@ interface MetaPixelOption {
 }
 
 export interface MetaSetupCachePayload {
-  accounts: Array<{ id: string; name: string; accountId: string; businessId?: string; businessName?: string }>;
+  accounts: Array<{
+    id: string;
+    name: string;
+    accountId: string;
+    account_status?: number;
+    currency?: string;
+    businessId?: string;
+    businessName?: string;
+    business?: { id?: string; name?: string };
+  }>;
   pages: MetaPageOption[];
   instagram: MetaInstagramOption[];
   pixels: MetaPixelOption[];
@@ -41,6 +50,18 @@ export interface MetaSetupCachePayload {
 
 function normalizeAccountId(value: string): string {
   return value.replace(/^act_/, '');
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim().length > 0) return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return undefined;
+}
+
+function asInteger(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
+  if (typeof value === 'string' && /^\d+$/.test(value)) return parseInt(value, 10);
+  return undefined;
 }
 
 function uniqueById<T extends { id: string }>(rows: T[]): T[] {
@@ -115,14 +136,17 @@ export async function refreshMetaSetupSnapshots(params: {
         id: account.ad_account_id,
         name: account.ad_account_name || account.ad_account_id,
         accountId: normalizeAccountId(account.ad_account_id),
+        account_status: undefined as number | undefined,
+        currency: undefined as string | undefined,
         businessId: undefined as string | undefined,
         businessName: undefined as string | undefined,
+        business: undefined as { id?: string; name?: string } | undefined,
       };
       try {
         const details = await fetchFromMeta<Record<string, unknown>>(
           accessToken,
           `/${account.ad_account_id}`,
-          { fields: 'id,name,account_id,business{id,name},owner_business{id,name}' },
+          { fields: 'id,name,account_id,account_status,currency,business{id,name},owner_business{id,name}' },
           8000,
           1
         );
@@ -133,13 +157,21 @@ export async function refreshMetaSetupSnapshots(params: {
           ? (details.owner_business as Record<string, unknown>)
           : null;
         accountRow.businessId =
-          (business && typeof business.id === 'string' ? business.id : '')
-          || (ownerBusiness && typeof ownerBusiness.id === 'string' ? ownerBusiness.id : '')
+          asNonEmptyString(business?.id)
+          || asNonEmptyString(ownerBusiness?.id)
           || undefined;
         accountRow.businessName =
-          (business && typeof business.name === 'string' ? business.name : '')
-          || (ownerBusiness && typeof ownerBusiness.name === 'string' ? ownerBusiness.name : '')
+          asNonEmptyString(business?.name)
+          || asNonEmptyString(ownerBusiness?.name)
           || undefined;
+        accountRow.business = (accountRow.businessId || accountRow.businessName)
+          ? {
+              id: accountRow.businessId,
+              name: accountRow.businessName,
+            }
+          : undefined;
+        accountRow.account_status = asInteger(details.account_status);
+        accountRow.currency = asNonEmptyString(details.currency);
       } catch {
         // Keep fallback row from store cache
       }
@@ -242,6 +274,47 @@ export async function refreshMetaSetupSnapshots(params: {
       }
 
       try {
+        const promotedPagesResponse = await fetchFromMeta<{ data?: Array<Record<string, unknown>> }>(
+          accessToken,
+          `/${accountNode}/promote_pages`,
+          { fields: 'id,name,instagram_business_account{id,username}', limit: '200' },
+          10000,
+          1
+        );
+        for (const row of promotedPagesResponse.data || []) {
+          const id = asNonEmptyString(row.id);
+          if (!id) continue;
+          const name = asNonEmptyString(row.name) || pageNameById.get(id) || id;
+          if (name) pageNameById.set(id, name);
+          const ig = (row.instagram_business_account && typeof row.instagram_business_account === 'object')
+            ? row.instagram_business_account as Record<string, unknown>
+            : null;
+          const instagramId = asNonEmptyString(ig?.id);
+          const instagramUsername = asNonEmptyString(ig?.username);
+
+          accountPages.push({
+            id,
+            name,
+            instagramId,
+            instagramUsername,
+            adAccountIds: [account.id],
+          });
+
+          if (instagramId) {
+            accountInstagram.push({
+              id: instagramId,
+              name: instagramUsername || instagramId,
+              username: instagramUsername || instagramId,
+              linkedPageId: id,
+              adAccountIds: [account.id],
+            });
+          }
+        }
+      } catch {
+        // Best effort.
+      }
+
+      try {
         const pageIds = new Set<string>();
         let after: string | undefined;
         let pageFetches = 0;
@@ -281,21 +354,7 @@ export async function refreshMetaSetupSnapshots(params: {
         }
 
         for (const pageId of pageIds) {
-          let pageName = pageNameById.get(pageId) || '';
-          if (!pageName) {
-            try {
-              const pageDetails = await fetchFromMeta<Record<string, unknown>>(
-                accessToken,
-                `/${pageId}`,
-                { fields: 'id,name' },
-                8000,
-                1
-              );
-              pageName = typeof pageDetails.name === 'string' ? pageDetails.name : '';
-            } catch {
-              // Best effort, keep fallback id-only name.
-            }
-          }
+          const pageName = pageNameById.get(pageId) || '';
           accountPages.push({
             id: pageId,
             name: pageName || pageId,

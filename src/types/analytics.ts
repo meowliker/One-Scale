@@ -23,6 +23,7 @@ export type DateRangePreset =
   | 'last7'
   | 'last7today'
   | 'last14'
+  | 'last28'
   | 'last30'
   | 'thisMonth'
   | 'lastMonth'

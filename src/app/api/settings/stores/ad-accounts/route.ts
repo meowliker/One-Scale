@@ -10,6 +10,7 @@ import {
   deletePersistentStoreAdAccount,
   isSupabasePersistenceEnabled,
   listPersistentStoreAdAccounts,
+  prunePersistentStoreMetaDataToActiveAccounts,
   togglePersistentStoreAdAccount,
   upsertPersistentStoreAdAccount,
 } from '@/app/api/lib/supabase-persistence';
@@ -87,6 +88,10 @@ export async function POST(request: NextRequest) {
         currency,
         timezone,
       });
+      const activeAfter = (await listPersistentStoreAdAccounts(storeId))
+        .filter((a) => Number(a.is_active) === 1)
+        .map((a) => a.ad_account_id);
+      await prunePersistentStoreMetaDataToActiveAccounts(storeId, activeAfter);
     }
 
     return NextResponse.json({
@@ -124,6 +129,10 @@ export async function DELETE(request: NextRequest) {
     removeStoreAdAccount(storeId, adAccountId);
     if (isSupabasePersistenceEnabled()) {
       await deletePersistentStoreAdAccount(storeId, adAccountId);
+      const activeAfter = (await listPersistentStoreAdAccounts(storeId))
+        .filter((a) => Number(a.is_active) === 1)
+        .map((a) => a.ad_account_id);
+      await prunePersistentStoreMetaDataToActiveAccounts(storeId, activeAfter);
     }
     return NextResponse.json({ success: true });
   } catch (err) {
@@ -151,6 +160,10 @@ export async function PATCH(request: NextRequest) {
     toggleStoreAdAccount(storeId, adAccountId, isActive);
     if (isSupabasePersistenceEnabled()) {
       await togglePersistentStoreAdAccount(storeId, adAccountId, isActive);
+      const activeAfter = (await listPersistentStoreAdAccounts(storeId))
+        .filter((a) => Number(a.is_active) === 1)
+        .map((a) => a.ad_account_id);
+      await prunePersistentStoreMetaDataToActiveAccounts(storeId, activeAfter);
     }
     return NextResponse.json({ success: true });
   } catch (err) {

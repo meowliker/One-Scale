@@ -94,7 +94,14 @@ import {
 
 interface InsightDay {
   date: string;
-  metrics: Record<string, number>;
+  metrics: PerformanceMetrics;
+}
+
+interface WarehouseSpendDay {
+  date: string;
+  spend: number;
+  revenue: number;
+  roas: number;
 }
 
 interface InsightBreakdownRow {
@@ -104,6 +111,15 @@ interface InsightBreakdownRow {
   gender?: string;
   region?: string;
   metrics: PerformanceMetrics;
+}
+
+interface WarehouseAuditPayload {
+  campaigns: Campaign[];
+  creatives: Creative[];
+  dailySpendByDay?: WarehouseSpendDay[];
+  sourceSyncedAt?: string | null;
+  sourceWindowStart?: string | null;
+  sourceWindowEnd?: string | null;
 }
 
 export type AuditFilterPreset = 'all' | 'active' | 'spending';
@@ -397,7 +413,73 @@ function normalizeCampaignTree(campaigns: unknown, includeAds: boolean): Campaig
 // Shared data fetchers (memoised per call to avoid duplicate requests)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+const warehouseAuditCache = new Map<string, Promise<WarehouseAuditPayload | null>>();
+
+function getWarehouseAuditKey(query: MetaAuditQuery | undefined, includeAds: boolean): string {
+  const since = query?.dateRange ? formatDateInTimezone(query.dateRange.start) : '';
+  const until = query?.dateRange ? formatDateInTimezone(query.dateRange.end) : '';
+  return `includeAds:${includeAds ? '1' : '0'}|since:${since}|until:${until}`;
+}
+
+async function fetchWarehouseAuditData(
+  query?: MetaAuditQuery,
+  includeAds: boolean = true
+): Promise<WarehouseAuditPayload | null> {
+  const cacheKey = getWarehouseAuditKey(query, includeAds);
+  const cached = warehouseAuditCache.get(cacheKey);
+  if (cached) return cached;
+
+  const promise = (async () => {
+    try {
+      const params: Record<string, string> = {
+        includeAds: includeAds ? '1' : '0',
+        preferCache: '1',
+      };
+      if (query?.dateRange) {
+        params.since = formatDateInTimezone(query.dateRange.start);
+        params.until = formatDateInTimezone(query.dateRange.end);
+      }
+
+      const res = await apiClient<{ data?: WarehouseAuditPayload }>(
+        '/api/meta/audit-warehouse',
+        {
+          params,
+          timeoutMs: 20_000,
+          maxRetries: 1,
+        }
+      );
+      const payload = res?.data;
+      if (!payload || typeof payload !== 'object') return null;
+      return {
+        campaigns: normalizeCampaignTree(payload.campaigns || [], includeAds),
+        creatives: safeArray<Creative>(payload.creatives),
+        dailySpendByDay: safeArray(payload.dailySpendByDay)
+          .map((row) => ({
+            date: safeString((row as Record<string, unknown>).date),
+            spend: safeNumber((row as Record<string, unknown>).spend, 0),
+            revenue: safeNumber((row as Record<string, unknown>).revenue, 0),
+            roas: safeNumber((row as Record<string, unknown>).roas, 0),
+          }))
+          .filter((row) => row.date),
+        sourceSyncedAt: payload.sourceSyncedAt || null,
+        sourceWindowStart: payload.sourceWindowStart || null,
+        sourceWindowEnd: payload.sourceWindowEnd || null,
+      };
+    } catch {
+      return null;
+    }
+  })();
+
+  warehouseAuditCache.set(cacheKey, promise);
+  return promise;
+}
+
 async function fetchCampaigns(query?: MetaAuditQuery): Promise<Campaign[]> {
+  const warehouse = await fetchWarehouseAuditData(query, false);
+  if (warehouse?.campaigns && warehouse.campaigns.length > 0) {
+    return normalizeCampaignTree(warehouse.campaigns, false);
+  }
+
   const params: Record<string, string> = {
     preferCache: '1',
   };
@@ -455,6 +537,11 @@ async function fetchCampaignHierarchy(query?: MetaAuditQuery, includeAds = false
   if (cached) return cached;
 
   const promise = (async () => {
+    const warehouse = await fetchWarehouseAuditData(query, includeAds);
+    if (warehouse?.campaigns && warehouse.campaigns.length > 0) {
+      return normalizeCampaignTree(warehouse.campaigns, includeAds);
+    }
+
     try {
       const campaigns = await fetchCampaigns(query);
       if (campaigns.length === 0) return campaigns;
@@ -561,6 +648,18 @@ export async function primeMetaAuditSnapshotCache(): Promise<void> {
 }
 
 async function fetchInsights(query?: MetaAuditQuery): Promise<InsightDay[]> {
+  const warehouse = await fetchWarehouseAuditData(query, false);
+  if (warehouse?.dailySpendByDay && warehouse.dailySpendByDay.length > 0) {
+    return warehouse.dailySpendByDay.map((day) => ({
+      date: day.date,
+      metrics: normalizeMetrics({
+        spend: day.spend,
+        revenue: day.revenue,
+        roas: day.roas,
+      }),
+    }));
+  }
+
   const res = await apiClient<{ data: InsightDay[] }>('/api/meta/insights', {
     params: {
       datePreset: toMetaDatePreset(query?.dateRange),
@@ -612,6 +711,11 @@ async function fetchCreatives(
   query?: MetaAuditQuery,
   options?: { timeoutMs?: number }
 ): Promise<Creative[]> {
+  const warehouse = await fetchWarehouseAuditData(query, true);
+  if (warehouse?.creatives && warehouse.creatives.length > 0) {
+    return safeArray<Creative>(warehouse.creatives);
+  }
+
   const res = await apiClient<{ data: Creative[] }>('/api/meta/creatives', {
     params: {
       datePreset: toMetaDatePreset(query?.dateRange),

@@ -21,6 +21,7 @@ const presetLabels: Record<DateRangePreset, string> = {
   last7: 'Last 7 Days',
   last7today: 'Last 7 Days (incl. Today)',
   last14: 'Last 14 Days',
+  last28: 'Last 28 Days',
   last30: 'Last 30 Days',
   thisMonth: 'This Month',
   lastMonth: 'Last Month',
