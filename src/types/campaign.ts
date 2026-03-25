@@ -112,6 +112,13 @@ export interface Ad {
   adSetId: string;
   name: string;
   status: EntityStatus;
+  campaign_id?: string;
+  adset_id?: string;
+  ad_account_id?: string;
+  campaign_name?: string | null;
+  campaign_buying_type?: string | null;
+  campaign_daily_budget?: number | null;
+  campaign_bid_strategy?: string | null;
   page_id?: string | null;
   page_name?: string | null;
   instagram_user_id?: string | null;
@@ -135,6 +142,12 @@ export interface AdSet {
   campaignId: string;
   name: string;
   status: EntityStatus;
+  campaign_id?: string;
+  ad_account_id?: string;
+  campaign_name?: string | null;
+  campaign_buying_type?: string | null;
+  campaign_daily_budget?: number | null;
+  campaign_bid_strategy?: string | null;
   policyInfo?: MetaPolicyInfo;
   dailyBudget: number;
   bidAmount: number | null;
@@ -151,6 +164,7 @@ export interface Campaign {
   name: string;
   objective: CampaignObjective;
   status: EntityStatus;
+  ad_account_id?: string;
   buying_type?: string | null;
   policyInfo?: MetaPolicyInfo;
   dailyBudget: number;

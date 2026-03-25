@@ -57,6 +57,28 @@ function asString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value : null;
 }
 
+type CampaignContext = {
+  campaign_name: string | null;
+  campaign_buying_type: string | null;
+  campaign_daily_budget: number | null;
+  campaign_bid_strategy: string | null;
+};
+
+function buildCampaignContextById(campaigns: Campaign[]): Map<string, CampaignContext> {
+  const out = new Map<string, CampaignContext>();
+  for (const campaign of campaigns) {
+    out.set(campaign.id, {
+      campaign_name: campaign.name || null,
+      campaign_buying_type: asString(campaign.buying_type),
+      campaign_daily_budget: typeof campaign.dailyBudget === 'number' && campaign.dailyBudget > 0
+        ? campaign.dailyBudget
+        : null,
+      campaign_bid_strategy: asString(campaign.bidStrategy),
+    });
+  }
+  return out;
+}
+
 function buildPageNameById(setupCache: MetaSetupCachePayload): Map<string, string> {
   const out = new Map<string, string>();
   for (const page of setupCache.pages || []) {
@@ -120,11 +142,21 @@ async function enrichAdsWithIdentity(params: {
   adSetId: string;
   campaignId: string;
   adAccountId: string;
+  campaignContextById: Map<string, CampaignContext>;
   pageNameById: Map<string, string>;
   resolveInstagramUsername: (instagramUserId: string | null) => Promise<string | null>;
 }): Promise<Ad[]> {
-  const { ads, adSetId, campaignId, adAccountId, pageNameById, resolveInstagramUsername } = params;
+  const {
+    ads,
+    adSetId,
+    campaignId,
+    adAccountId,
+    campaignContextById,
+    pageNameById,
+    resolveInstagramUsername,
+  } = params;
   const out: Ad[] = [];
+  const campaignContext = campaignContextById.get(campaignId);
   for (const ad of ads) {
     const raw = ad as unknown as Record<string, unknown>;
     const pageId = asString(raw.page_id);
@@ -136,6 +168,10 @@ async function enrichAdsWithIdentity(params: {
       adset_id: adSetId,
       campaign_id: campaignId,
       ad_account_id: adAccountId,
+      campaign_name: campaignContext?.campaign_name || null,
+      campaign_buying_type: campaignContext?.campaign_buying_type || null,
+      campaign_daily_budget: campaignContext?.campaign_daily_budget ?? null,
+      campaign_bid_strategy: campaignContext?.campaign_bid_strategy || null,
       page_id: pageId,
       page_name: pageId ? (pageNameById.get(pageId) || null) : null,
       instagram_user_id: instagramUserId,
@@ -167,6 +203,34 @@ async function persistCampaignSnapshot(
   upsertMetaEndpointSnapshot(storeId, 'campaigns', scopeId, 'latest', campaigns);
   if (hasSignal(campaigns)) {
     upsertMetaEndpointSnapshot(storeId, 'campaigns', scopeId, 'latest_nonzero', campaigns);
+  }
+}
+
+async function persistCampaignSnapshotsPerAccount(
+  useSupabase: boolean,
+  storeId: string,
+  exactVariant: string,
+  campaignsByAccount: Array<{ accountId: string; campaigns: Campaign[] }>
+) {
+  if (useSupabase) {
+    await Promise.all(
+      campaignsByAccount.map((group) => Promise.all([
+        upsertPersistentMetaEndpointSnapshot(storeId, 'campaigns', group.accountId, exactVariant, group.campaigns),
+        upsertPersistentMetaEndpointSnapshot(storeId, 'campaigns', group.accountId, 'latest', group.campaigns),
+        hasSignal(group.campaigns)
+          ? upsertPersistentMetaEndpointSnapshot(storeId, 'campaigns', group.accountId, 'latest_nonzero', group.campaigns)
+          : Promise.resolve(),
+      ]))
+    );
+    return;
+  }
+
+  for (const group of campaignsByAccount) {
+    upsertMetaEndpointSnapshot(storeId, 'campaigns', group.accountId, exactVariant, group.campaigns);
+    upsertMetaEndpointSnapshot(storeId, 'campaigns', group.accountId, 'latest', group.campaigns);
+    if (hasSignal(group.campaigns)) {
+      upsertMetaEndpointSnapshot(storeId, 'campaigns', group.accountId, 'latest_nonzero', group.campaigns);
+    }
   }
 }
 
@@ -406,11 +470,15 @@ export async function POST(request: NextRequest) {
           const allCampaigns = await Promise.all(
             activeAccounts.map(async (account) => ({
               accountId: account.ad_account_id,
-              campaigns: await fetchMetaCampaigns(token.accessToken, account.ad_account_id, dateRange, {
+              campaigns: (await fetchMetaCampaigns(token.accessToken, account.ad_account_id, dateRange, {
                 disableDateFallback: true,
-              }).catch(() => []),
+              }).catch(() => [])).map((campaign) => ({
+                ...campaign,
+                ad_account_id: account.ad_account_id,
+              })),
             }))
           );
+          await persistCampaignSnapshotsPerAccount(useSupabase, storeId, exactVariant, allCampaigns);
 
           const campaignMap = new Map<string, Campaign>();
           for (const group of allCampaigns) {
@@ -425,6 +493,7 @@ export async function POST(request: NextRequest) {
           }
 
           const campaigns = Array.from(campaignMap.values());
+          const campaignContextById = buildCampaignContextById(campaigns);
           await persistCampaignSnapshot(useSupabase, storeId, scopeId, exactVariant, campaigns);
 
           if (!includeHierarchy) return;
@@ -443,6 +512,10 @@ export async function POST(request: NextRequest) {
               ...adSet,
               campaign_id: campaign.id,
               ad_account_id: campaignAccountId,
+              campaign_name: campaignContextById.get(campaign.id)?.campaign_name || null,
+              campaign_buying_type: campaignContextById.get(campaign.id)?.campaign_buying_type || null,
+              campaign_daily_budget: campaignContextById.get(campaign.id)?.campaign_daily_budget ?? null,
+              campaign_bid_strategy: campaignContextById.get(campaign.id)?.campaign_bid_strategy || null,
             })) as AdSet[];
 
             const adSetVariant = `mode:fast|since:${today}|until:${today}|strict:1`;
@@ -459,6 +532,7 @@ export async function POST(request: NextRequest) {
                 adSetId: adSet.id,
                 campaignId: campaign.id,
                 adAccountId: campaignAccountId,
+                campaignContextById,
                 pageNameById,
                 resolveInstagramUsername,
               });
@@ -527,11 +601,15 @@ export async function POST(request: NextRequest) {
     const allCampaigns = await Promise.all(
       activeAccounts.map(async (account) => ({
         accountId: account.ad_account_id,
-        campaigns: await fetchMetaCampaigns(token.accessToken, account.ad_account_id, dateRange, {
+        campaigns: (await fetchMetaCampaigns(token.accessToken, account.ad_account_id, dateRange, {
           disableDateFallback: true,
-        }).catch(() => []),
+        }).catch(() => [])).map((campaign) => ({
+          ...campaign,
+          ad_account_id: account.ad_account_id,
+        })),
       }))
     );
+    await persistCampaignSnapshotsPerAccount(useSupabase, storeId, exactVariant, allCampaigns);
 
     const campaignMap = new Map<string, Campaign>();
     for (const group of allCampaigns) {

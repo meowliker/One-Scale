@@ -52,6 +52,18 @@ function normalizeAccountId(value: string): string {
   return value.replace(/^act_/, '');
 }
 
+function asNonEmptyString(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim().length > 0) return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return undefined;
+}
+
+function asInteger(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
+  if (typeof value === 'string' && /^\d+$/.test(value)) return parseInt(value, 10);
+  return undefined;
+}
+
 function uniqueById<T extends { id: string }>(rows: T[]): T[] {
   const out = new Map<string, T>();
   for (const row of rows) {
@@ -145,12 +157,12 @@ export async function refreshMetaSetupSnapshots(params: {
           ? (details.owner_business as Record<string, unknown>)
           : null;
         accountRow.businessId =
-          (business && typeof business.id === 'string' ? business.id : '')
-          || (ownerBusiness && typeof ownerBusiness.id === 'string' ? ownerBusiness.id : '')
+          asNonEmptyString(business?.id)
+          || asNonEmptyString(ownerBusiness?.id)
           || undefined;
         accountRow.businessName =
-          (business && typeof business.name === 'string' ? business.name : '')
-          || (ownerBusiness && typeof ownerBusiness.name === 'string' ? ownerBusiness.name : '')
+          asNonEmptyString(business?.name)
+          || asNonEmptyString(ownerBusiness?.name)
           || undefined;
         accountRow.business = (accountRow.businessId || accountRow.businessName)
           ? {
@@ -158,12 +170,8 @@ export async function refreshMetaSetupSnapshots(params: {
               name: accountRow.businessName,
             }
           : undefined;
-        accountRow.account_status = typeof details.account_status === 'number'
-          ? details.account_status
-          : undefined;
-        accountRow.currency = typeof details.currency === 'string'
-          ? details.currency
-          : undefined;
+        accountRow.account_status = asInteger(details.account_status);
+        accountRow.currency = asNonEmptyString(details.currency);
       } catch {
         // Keep fallback row from store cache
       }
@@ -260,6 +268,47 @@ export async function refreshMetaSetupSnapshots(params: {
             username: username || id,
             adAccountIds: [account.id],
           });
+        }
+      } catch {
+        // Best effort.
+      }
+
+      try {
+        const promotedPagesResponse = await fetchFromMeta<{ data?: Array<Record<string, unknown>> }>(
+          accessToken,
+          `/${accountNode}/promote_pages`,
+          { fields: 'id,name,instagram_business_account{id,username}', limit: '200' },
+          10000,
+          1
+        );
+        for (const row of promotedPagesResponse.data || []) {
+          const id = asNonEmptyString(row.id);
+          if (!id) continue;
+          const name = asNonEmptyString(row.name) || pageNameById.get(id) || id;
+          if (name) pageNameById.set(id, name);
+          const ig = (row.instagram_business_account && typeof row.instagram_business_account === 'object')
+            ? row.instagram_business_account as Record<string, unknown>
+            : null;
+          const instagramId = asNonEmptyString(ig?.id);
+          const instagramUsername = asNonEmptyString(ig?.username);
+
+          accountPages.push({
+            id,
+            name,
+            instagramId,
+            instagramUsername,
+            adAccountIds: [account.id],
+          });
+
+          if (instagramId) {
+            accountInstagram.push({
+              id: instagramId,
+              name: instagramUsername || instagramId,
+              username: instagramUsername || instagramId,
+              linkedPageId: id,
+              adAccountIds: [account.id],
+            });
+          }
         }
       } catch {
         // Best effort.

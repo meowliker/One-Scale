@@ -58,6 +58,13 @@ type ActiveAccount = {
   timezone?: string | null;
 };
 
+type CampaignContext = {
+  campaign_name: string | null;
+  campaign_buying_type: string | null;
+  campaign_daily_budget: number | null;
+  campaign_bid_strategy: string | null;
+};
+
 type EntityEnrichment = {
   adAccountId: string | null;
   adAccountName: string | null;
@@ -222,6 +229,21 @@ function asNumber(value: unknown): number | null {
 function asDateKey(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+}
+
+function buildCampaignContextById(campaigns: Campaign[]): Map<string, CampaignContext> {
+  const out = new Map<string, CampaignContext>();
+  for (const campaign of campaigns) {
+    out.set(campaign.id, {
+      campaign_name: campaign.name || null,
+      campaign_buying_type: asString(campaign.buying_type),
+      campaign_daily_budget: typeof campaign.dailyBudget === 'number' && campaign.dailyBudget > 0
+        ? campaign.dailyBudget
+        : null,
+      campaign_bid_strategy: asString(campaign.bidStrategy),
+    });
+  }
+  return out;
 }
 
 function pickArray(value: unknown): unknown[] {
@@ -492,10 +514,20 @@ export async function syncWarehouseSnapshotsForStore(params: {
   const allCampaigns = await Promise.all(
     activeAccounts.map(async (account) => ({
       accountId: account.ad_account_id,
-      campaigns: await fetchMetaCampaigns(token.accessToken, account.ad_account_id, dateRange, {
+      campaigns: (await fetchMetaCampaigns(token.accessToken, account.ad_account_id, dateRange, {
         disableDateFallback: true,
-      }).catch(() => []),
+      }).catch(() => [])).map((campaign) => ({
+        ...campaign,
+        ad_account_id: account.ad_account_id,
+      })),
     }))
+  );
+
+  await Promise.all(
+    allCampaigns.map((group) => Promise.all([
+      upsertPersistentMetaEndpointSnapshot(storeId, 'campaigns', group.accountId, variantKey, group.campaigns),
+      upsertPersistentMetaEndpointSnapshot(storeId, 'campaigns', group.accountId, WAREHOUSE_LATEST_VARIANT, group.campaigns),
+    ]))
   );
 
   const campaignMap = new Map<string, CampaignWithContext>();
@@ -510,6 +542,7 @@ export async function syncWarehouseSnapshotsForStore(params: {
     }
   }
   const campaigns = [...campaignMap.values()];
+  const campaignContextById = buildCampaignContextById(campaigns);
   const campaignScopeId = buildCampaignScopeId(activeAccounts.map((a) => a.ad_account_id));
   await Promise.all([
     upsertPersistentMetaEndpointSnapshot(storeId, 'campaigns', campaignScopeId, variantKey, campaigns),
@@ -537,10 +570,16 @@ export async function syncWarehouseSnapshotsForStore(params: {
       for (const adset of adsets) {
         if (!adset.id) continue;
         if (adsetMap.has(adset.id)) continue;
+        const campaignId = adset.campaignId || adset.campaign_id || undefined;
+        const campaignContext = campaignId ? campaignContextById.get(campaignId) : undefined;
         adsetMap.set(adset.id, {
           ...adset,
-          campaign_id: adset.campaignId || undefined,
+          campaign_id: campaignId,
           ad_account_id: accountId,
+          campaign_name: campaignContext?.campaign_name || null,
+          campaign_buying_type: campaignContext?.campaign_buying_type || null,
+          campaign_daily_budget: campaignContext?.campaign_daily_budget ?? null,
+          campaign_bid_strategy: campaignContext?.campaign_bid_strategy || null,
         });
       }
     } catch (err) {
@@ -560,6 +599,8 @@ export async function syncWarehouseSnapshotsForStore(params: {
         if (adsMap.has(ad.id)) continue;
         const raw = ad as unknown as Record<string, unknown>;
         const adsetId = asString(raw.adset_id) || ad.adSetId || undefined;
+        const campaignId = asString(raw.campaign_id) || ad.campaign_id || undefined;
+        const campaignContext = campaignId ? campaignContextById.get(campaignId) : undefined;
         const pageId = asString(raw.page_id);
         const instagramUserId = asString(raw.instagram_user_id);
         const instagramUsername = await resolveInstagramUsername(instagramUserId);
@@ -569,8 +610,12 @@ export async function syncWarehouseSnapshotsForStore(params: {
         adsMap.set(ad.id, {
           ...(ad as Ad),
           adset_id: adsetId,
-          campaign_id: asString(raw.campaign_id) || undefined,
+          campaign_id: campaignId,
           ad_account_id: accountId,
+          campaign_name: campaignContext?.campaign_name || null,
+          campaign_buying_type: campaignContext?.campaign_buying_type || null,
+          campaign_daily_budget: campaignContext?.campaign_daily_budget ?? null,
+          campaign_bid_strategy: campaignContext?.campaign_bid_strategy || null,
           page_id: pageId,
           page_name: pageId ? (pageNameById.get(pageId) || null) : null,
           instagram_user_id: instagramUserId,

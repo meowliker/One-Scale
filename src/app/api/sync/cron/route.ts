@@ -23,6 +23,28 @@ function asString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value : null;
 }
 
+type CampaignContext = {
+  campaign_name: string | null;
+  campaign_buying_type: string | null;
+  campaign_daily_budget: number | null;
+  campaign_bid_strategy: string | null;
+};
+
+function buildCampaignContextById(campaigns: Campaign[]): Map<string, CampaignContext> {
+  const out = new Map<string, CampaignContext>();
+  for (const campaign of campaigns) {
+    out.set(campaign.id, {
+      campaign_name: campaign.name || null,
+      campaign_buying_type: asString(campaign.buying_type),
+      campaign_daily_budget: typeof campaign.dailyBudget === 'number' && campaign.dailyBudget > 0
+        ? campaign.dailyBudget
+        : null,
+      campaign_bid_strategy: asString(campaign.bidStrategy),
+    });
+  }
+  return out;
+}
+
 function buildPageNameById(setupCache: MetaSetupCachePayload): Map<string, string> {
   const out = new Map<string, string>();
   for (const page of setupCache.pages || []) {
@@ -88,11 +110,21 @@ async function enrichAdsWithIdentity(params: {
   adSetId: string;
   campaignId: string;
   adAccountId: string;
+  campaignContextById: Map<string, CampaignContext>;
   pageNameById: Map<string, string>;
   resolveInstagramUsername: (instagramUserId: string | null) => Promise<string | null>;
 }): Promise<Ad[]> {
-  const { ads, adSetId, campaignId, adAccountId, pageNameById, resolveInstagramUsername } = params;
+  const {
+    ads,
+    adSetId,
+    campaignId,
+    adAccountId,
+    campaignContextById,
+    pageNameById,
+    resolveInstagramUsername,
+  } = params;
   const out: Ad[] = [];
+  const campaignContext = campaignContextById.get(campaignId);
 
   for (const ad of ads) {
     const raw = ad as unknown as Record<string, unknown>;
@@ -105,6 +137,10 @@ async function enrichAdsWithIdentity(params: {
       adset_id: adSetId,
       campaign_id: campaignId,
       ad_account_id: adAccountId,
+      campaign_name: campaignContext?.campaign_name || null,
+      campaign_buying_type: campaignContext?.campaign_buying_type || null,
+      campaign_daily_budget: campaignContext?.campaign_daily_budget ?? null,
+      campaign_bid_strategy: campaignContext?.campaign_bid_strategy || null,
       page_id: pageId,
       page_name: pageId ? (pageNameById.get(pageId) || null) : null,
       instagram_user_id: instagramUserId,
@@ -184,13 +220,23 @@ export async function GET(request: NextRequest) {
           const allCampaigns = await Promise.all(
             activeAccounts.map(async (account) => ({
               accountId: account.ad_account_id,
-              campaigns: await fetchMetaCampaigns(
+              campaigns: (await fetchMetaCampaigns(
                 token.accessToken,
                 account.ad_account_id,
                 dateRange,
                 { disableDateFallback: true }
-              ).catch(() => []),
+              ).catch(() => [])).map((campaign) => ({
+                ...campaign,
+                ad_account_id: account.ad_account_id,
+              })),
             }))
+          );
+
+          await Promise.all(
+            allCampaigns.map((group) => Promise.all([
+              upsertPersistentMetaEndpointSnapshot(store.id, 'campaigns', group.accountId, exactVariant, group.campaigns),
+              upsertPersistentMetaEndpointSnapshot(store.id, 'campaigns', group.accountId, 'latest', group.campaigns),
+            ]))
           );
 
           const campaignMap = new Map<string, Campaign>();
@@ -204,6 +250,7 @@ export async function GET(request: NextRequest) {
           }
 
           const mergedCampaigns = Array.from(campaignMap.values());
+          const campaignContextById = buildCampaignContextById(mergedCampaigns);
           const scopeId = `accounts:${activeAccounts.map((a) => a.ad_account_id).sort().join(',')}`;
 
           await Promise.all([
@@ -239,6 +286,10 @@ export async function GET(request: NextRequest) {
                 ...adSet,
                 campaign_id: campaign.id,
                 ad_account_id: campaignAccountId,
+                campaign_name: campaignContextById.get(campaign.id)?.campaign_name || null,
+                campaign_buying_type: campaignContextById.get(campaign.id)?.campaign_buying_type || null,
+                campaign_daily_budget: campaignContextById.get(campaign.id)?.campaign_daily_budget ?? null,
+                campaign_bid_strategy: campaignContextById.get(campaign.id)?.campaign_bid_strategy || null,
               })) as AdSet[];
 
               if (adSetsWithContext.length > 0) {
@@ -267,6 +318,7 @@ export async function GET(request: NextRequest) {
                     adSetId: adSet.id,
                     campaignId: campaign.id,
                     adAccountId: campaignAccountId,
+                    campaignContextById,
                     pageNameById,
                     resolveInstagramUsername,
                   });
@@ -348,14 +400,22 @@ export async function GET(request: NextRequest) {
         const allCampaigns = await Promise.all(
           accounts.map(async (account) => ({
             accountId: account.ad_account_id,
-            campaigns: await fetchMetaCampaigns(
+            campaigns: (await fetchMetaCampaigns(
               token.accessToken,
               account.ad_account_id,
               dateRange,
               { disableDateFallback: true }
-            ).catch(() => []),
+            ).catch(() => [])).map((campaign) => ({
+              ...campaign,
+              ad_account_id: account.ad_account_id,
+            })),
           }))
         );
+
+        for (const group of allCampaigns) {
+          upsertMetaEndpointSnapshot(store.id, 'campaigns', group.accountId, exactVariant, group.campaigns);
+          upsertMetaEndpointSnapshot(store.id, 'campaigns', group.accountId, 'latest', group.campaigns);
+        }
 
         const campaignMap = new Map<string, Campaign>();
         for (const group of allCampaigns) {
@@ -367,6 +427,7 @@ export async function GET(request: NextRequest) {
           }
         }
         const mergedCampaigns = Array.from(campaignMap.values());
+        const campaignContextById = buildCampaignContextById(mergedCampaigns);
         const scopeId = `accounts:${accounts.map((a) => a.ad_account_id).sort().join(',')}`;
 
         upsertMetaEndpointSnapshot(store.id, 'campaigns', scopeId, exactVariant, mergedCampaigns);
@@ -396,6 +457,10 @@ export async function GET(request: NextRequest) {
               ...adSet,
               campaign_id: campaign.id,
               ad_account_id: campaignAccountId,
+              campaign_name: campaignContextById.get(campaign.id)?.campaign_name || null,
+              campaign_buying_type: campaignContextById.get(campaign.id)?.campaign_buying_type || null,
+              campaign_daily_budget: campaignContextById.get(campaign.id)?.campaign_daily_budget ?? null,
+              campaign_bid_strategy: campaignContextById.get(campaign.id)?.campaign_bid_strategy || null,
             })) as AdSet[];
 
             if (adSetsWithContext.length > 0) {
@@ -420,6 +485,7 @@ export async function GET(request: NextRequest) {
                   adSetId: adSet.id,
                   campaignId: campaign.id,
                   adAccountId: campaignAccountId,
+                  campaignContextById,
                   pageNameById,
                   resolveInstagramUsername,
                 });
