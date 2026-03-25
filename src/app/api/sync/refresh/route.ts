@@ -28,6 +28,7 @@ interface RefreshRequestBody {
   includeHierarchy?: boolean;
   force?: boolean;
   warehouseMode?: boolean;
+  syncNow?: boolean;
 }
 
 export const maxDuration = 300;
@@ -317,17 +318,7 @@ export async function POST(request: NextRequest) {
     : getStoreAdAccounts(storeId);
 
   const activeAccounts = adAccounts.filter((a) => a.is_active);
-
-  if (useSupabase) {
-    await prunePersistentStoreMetaDataToActiveAccounts(
-      storeId,
-      activeAccounts.map((a) => a.ad_account_id)
-    );
-    await prunePersistentAdsSnapshotsToActiveAccounts(
-      storeId,
-      activeAccounts.map((a) => a.ad_account_id)
-    ).catch(() => {});
-  }
+  const activeAccountIds = activeAccounts.map((a) => a.ad_account_id);
 
   const warehouseMode = body.warehouseMode === true;
 
@@ -354,6 +345,11 @@ export async function POST(request: NextRequest) {
     }
 
     try {
+      if (useSupabase) {
+        await prunePersistentStoreMetaDataToActiveAccounts(storeId, activeAccountIds);
+        await prunePersistentAdsSnapshotsToActiveAccounts(storeId, activeAccountIds).catch(() => {});
+      }
+
       const accountTz = activeAccounts.find((a) => a.timezone)?.timezone || 'America/New_York';
       const { since, until } = buildWarehouseDateRange(accountTz);
       const variantKey = buildWarehouseVariantKey(since, until);
@@ -438,7 +434,8 @@ export async function POST(request: NextRequest) {
   const snapshotData = snapshot?.data || [];
   const snapshotAgeMs = snapshot?.updatedAt ? Date.now() - Date.parse(snapshot.updatedAt) : Number.POSITIVE_INFINITY;
 
-  const shouldQueue = force || includeHierarchy || snapshotAgeMs > 120_000;
+  const syncNow = body.syncNow === true || force === true;
+  const shouldQueue = !syncNow && (includeHierarchy || snapshotAgeMs > 120_000);
   const taskKey = `sync:store:${storeId}:${includeHierarchy ? 'hierarchy' : 'campaigns'}`;
 
   const queued = shouldQueue
@@ -449,6 +446,11 @@ export async function POST(request: NextRequest) {
         if (!token) return;
 
         try {
+          if (useSupabase) {
+            await prunePersistentStoreMetaDataToActiveAccounts(storeId, activeAccountIds);
+            await prunePersistentAdsSnapshotsToActiveAccounts(storeId, activeAccountIds).catch(() => {});
+          }
+
           const setupCache = await refreshMetaSetupSnapshots({
             accessToken: token.accessToken,
             adAccounts: activeAccounts,
@@ -547,7 +549,7 @@ export async function POST(request: NextRequest) {
           if (useSupabase) {
             await prunePersistentAdsSnapshotsToActiveAccounts(
               storeId,
-              activeAccounts.map((a) => a.ad_account_id)
+              activeAccountIds
             ).catch(() => {});
           }
         } catch (err) {
@@ -558,7 +560,7 @@ export async function POST(request: NextRequest) {
       })
     : false;
 
-  if (snapshotData.length > 0) {
+  if (!syncNow && snapshotData.length > 0) {
     return NextResponse.json({
       data: mapCampaignMetrics(snapshotData),
       lastSyncedAt: snapshot?.updatedAt || new Date().toISOString(),
@@ -586,7 +588,12 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    await refreshMetaSetupSnapshots({
+    if (useSupabase) {
+      await prunePersistentStoreMetaDataToActiveAccounts(storeId, activeAccountIds);
+      await prunePersistentAdsSnapshotsToActiveAccounts(storeId, activeAccountIds).catch(() => {});
+    }
+
+    const setupCache = await refreshMetaSetupSnapshots({
       accessToken: token.accessToken,
       adAccounts: activeAccounts,
       writeSnapshot: async (endpoint, cachedScopeId, variantKey, payload) => {
@@ -597,6 +604,12 @@ export async function POST(request: NextRequest) {
         }
       },
     });
+    const pageNameById = buildPageNameById(setupCache);
+    const instagramUsernameById = buildInstagramUsernameById(setupCache);
+    const resolveInstagramUsername = buildInstagramUsernameResolver(
+      token.accessToken,
+      instagramUsernameById
+    );
 
     const allCampaigns = await Promise.all(
       activeAccounts.map(async (account) => ({
@@ -624,11 +637,62 @@ export async function POST(request: NextRequest) {
     }
 
     const campaigns = Array.from(campaignMap.values());
+    const campaignContextById = buildCampaignContextById(campaigns);
     await persistCampaignSnapshot(useSupabase, storeId, scopeId, exactVariant, campaigns);
+
+    if (includeHierarchy) {
+      const activeCampaigns = campaigns.filter(shouldSyncHierarchyCampaign);
+      for (const campaign of activeCampaigns) {
+        const campaignWithAccount = campaign as Campaign & { ad_account_id?: string };
+        const campaignAccountId = campaignWithAccount.ad_account_id || '';
+        if (!campaignAccountId) continue;
+
+        const adSets = await fetchMetaAdSets(token.accessToken, campaign.id, dateRange, {
+          disableDateFallback: true,
+          preferLightweight: true,
+          basicOnly: false,
+        });
+        const adSetsWithContext = adSets.map((adSet) => ({
+          ...adSet,
+          campaign_id: campaign.id,
+          ad_account_id: campaignAccountId,
+          campaign_name: campaignContextById.get(campaign.id)?.campaign_name || null,
+          campaign_buying_type: campaignContextById.get(campaign.id)?.campaign_buying_type || null,
+          campaign_daily_budget: campaignContextById.get(campaign.id)?.campaign_daily_budget ?? null,
+          campaign_bid_strategy: campaignContextById.get(campaign.id)?.campaign_bid_strategy || null,
+        })) as AdSet[];
+
+        const adSetVariant = `mode:fast|since:${today}|until:${today}|strict:1`;
+        await persistAdSetSnapshot(useSupabase, storeId, campaign.id, adSetVariant, adSetsWithContext);
+
+        for (const adSet of adSetsWithContext) {
+          const ads = await fetchMetaAds(token.accessToken, adSet.id, dateRange, {
+            disableDateFallback: true,
+            preferLightweight: true,
+            basicOnly: false,
+          });
+          const adsWithContext = await enrichAdsWithIdentity({
+            ads,
+            adSetId: adSet.id,
+            campaignId: campaign.id,
+            adAccountId: campaignAccountId,
+            campaignContextById,
+            pageNameById,
+            resolveInstagramUsername,
+          });
+          const adsVariant = `mode:fast|since:${today}|until:${today}|strict:1`;
+          await persistAdSnapshot(useSupabase, storeId, adSet.id, adsVariant, adsWithContext);
+          await new Promise((resolve) => setTimeout(resolve, 120));
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 180));
+      }
+    }
+
     if (useSupabase) {
       await prunePersistentAdsSnapshotsToActiveAccounts(
         storeId,
-        activeAccounts.map((a) => a.ad_account_id)
+        activeAccountIds
       ).catch(() => {});
     }
 

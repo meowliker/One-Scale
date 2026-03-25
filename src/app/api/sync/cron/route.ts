@@ -173,6 +173,7 @@ export async function GET(request: NextRequest) {
   if (authHeader !== `Bearer ${CRON_SECRET}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+  const requestedStoreId = (request.nextUrl.searchParams.get('storeId') || '').trim();
 
   const today = new Date().toISOString().slice(0, 10);
   const dateRange = { since: today, until: today };
@@ -189,7 +190,10 @@ export async function GET(request: NextRequest) {
     const useSupabase = isSupabasePersistenceEnabled();
 
     if (useSupabase) {
-      const stores = await listPersistentStores();
+      const allStores = await listPersistentStores();
+      const stores = requestedStoreId
+        ? allStores.filter((s) => s.id === requestedStoreId)
+        : allStores;
 
       for (const store of stores) {
         try {
@@ -367,6 +371,7 @@ export async function GET(request: NextRequest) {
         synced, 
         errors, 
         storeCount: stores.length, 
+        requestedStoreId: requestedStoreId || null,
         adSetsSynced,
         adsSynced,
         prunedAds,
@@ -374,7 +379,10 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const stores = getAllStores();
+    const allStores = getAllStores();
+    const stores = requestedStoreId
+      ? allStores.filter((s) => s.id === requestedStoreId)
+      : allStores;
     for (const store of stores) {
       try {
         const token = await getMetaToken(store.id);
@@ -522,6 +530,7 @@ export async function GET(request: NextRequest) {
       synced, 
       errors, 
       storeCount: stores.length, 
+      requestedStoreId: requestedStoreId || null,
       adSetsSynced,
       adsSynced,
       mode: 'sqlite' 
