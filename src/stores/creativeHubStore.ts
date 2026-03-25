@@ -88,6 +88,7 @@ interface CreativeHubState {
 
   // Launch wizard actions
   openLaunchWizard: () => void;
+  openLaunchWizardForProduct: (productProfileId: string, creativeIds?: string[]) => void;
   closeLaunchWizard: () => void;
   setLaunchStep: (step: LaunchWizardStep) => void;
   updateLaunchConfig: (partial: Partial<LaunchConfig>) => void;
@@ -383,6 +384,33 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
       launchStep: 1,
       launchConfig: {
         selectedCreativeIds: Array.from(selectedCreativeIds),
+      },
+    });
+  },
+
+  openLaunchWizardForProduct: (productProfileId: string, creativeIds?: string[]) => {
+    const { profiles, selectedCreativeIds } = get();
+    const profile = profiles.find((p) => p.id === productProfileId);
+    const ids = creativeIds ?? Array.from(selectedCreativeIds);
+
+    set({
+      launchWizardOpen: true,
+      launchStep: 1,
+      launchConfig: {
+        selectedCreativeIds: ids,
+        productProfileId,
+        adAccountId: profile?.adAccountId,
+        pageId: profile?.pageId,
+        instagramActorId: profile?.instagramActorId,
+        pixelId: profile?.pixelId,
+        conversionEvent: profile?.conversionEvent,
+        destinationUrl: profile?.destinationUrl,
+        dailyBudget: profile?.defaultBudget,
+        testDuration: profile?.defaultDuration,
+        bidStrategy: profile?.defaultBidStrategy,
+        structure: profile?.defaultStructure,
+        launchStatus: profile?.defaultLaunchStatus,
+        utmTemplate: profile?.utmTemplate,
       },
     });
   },

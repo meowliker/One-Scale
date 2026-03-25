@@ -14,6 +14,8 @@ import {
   getProductProfiles,
   upsertProductProfile,
   upsertProductCampaignLink,
+  deleteAllCampaignLinksForProfile,
+  deleteProductProfile,
 } from '@/app/api/lib/creative-hub-db';
 import type { DbStoreAdAccount } from '@/app/api/lib/db';
 import type { ProductCampaignLink } from '@/types/creativeHub';
@@ -129,15 +131,36 @@ export async function POST(request: NextRequest) {
 
     const accountLookup = new Map(adAccounts.map((a) => [a.ad_account_id, a]));
 
-    // ━━━ Step 2: Get active campaigns from Supabase snapshots ━━━
+    // ━━━ Step 2: Get active campaigns from per-store Supabase snapshot table ━━━
+    // Get the per-store snapshot table name via RPC
+    const activeAdAccountIds = new Set(adAccounts.map((a) => a.ad_account_id));
+    let snapshotTable = '';
+    try {
+      const tableNameResult = await rest<string>(
+        '/rpc/ensure_meta_snapshot_store_table',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
+          body: JSON.stringify({ p_store_id: storeId }),
+        },
+      );
+      snapshotTable = typeof tableNameResult === 'string' ? tableNameResult : '';
+    } catch (e) {
+      console.warn('[auto-discover] Could not get per-store table, falling back to legacy:', e);
+    }
+
     interface CampaignSnapshotRow {
       scope_id: string;
       payload_json: string;
     }
 
-    const campaignSnapshots = await rest<CampaignSnapshotRow[]>(
-      `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId!)}&endpoint=eq.campaigns&variant_key=eq.latest&select=scope_id,payload_json`,
-    );
+    // Use per-store table if available, otherwise fall back to legacy table
+    const snapshotQuery = snapshotTable
+      ? `/${snapshotTable}?endpoint=eq.campaigns&variant_key=eq.latest&select=scope_id,payload_json&order=updated_at.desc`
+      : `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId!)}&endpoint=eq.campaigns&variant_key=eq.latest&select=scope_id,payload_json`;
+
+    console.log(`[auto-discover] Using snapshot table: ${snapshotTable || 'meta_endpoint_snapshots (legacy)'}`);
+    const campaignSnapshots = await rest<CampaignSnapshotRow[]>(snapshotQuery);
 
     interface RawCampaign {
       id: string;
@@ -168,27 +191,87 @@ export async function POST(request: NextRequest) {
           // Filter: only ACTIVE campaigns (skip PAUSED/DELETED/ARCHIVED)
           const status = c.status || c.effective_status || '';
           if (!allowedStatuses.has(status)) continue;
-          seenCampaignIds.add(c.id);
 
           const adAccountId =
             c.ad_account_id || c.adAccountId || c.account_id || scopeAdAccount;
+
+          // ★ Only include campaigns from the store's CURRENT active ad accounts
+          if (!activeAdAccountIds.has(adAccountId)) continue;
+
+          seenCampaignIds.add(c.id);
           allCampaigns.push({ id: c.id, name: c.name, adAccountId });
         }
       } catch { /* skip malformed */ }
     }
 
-    console.log(`[auto-discover] Found ${allCampaigns.length} ACTIVE campaigns from Supabase snapshots`);
+    console.log(`[auto-discover] Found ${allCampaigns.length} ACTIVE campaigns from store's ad accounts (filtered from ${seenCampaignIds.size} total)`);
 
-    // ━━━ Step 3: For each campaign, get 1 ad → creative_id → object_story_spec ━━━
+    // ━━━ Step 2b: Extract destination URLs from ads snapshots (skip Meta API when possible) ━━━
+    // The per-store table has ads with creative.destinationUrl already embedded
+    const campaignUrlMap = new Map<string, string>(); // campaignId → destinationUrl
+    if (snapshotTable) {
+      try {
+        const adsSnapshots = await rest<CampaignSnapshotRow[]>(
+          `/${snapshotTable}?endpoint=eq.ads&variant_key=eq.latest&select=scope_id,payload_json&order=updated_at.desc`,
+        );
+        interface RawAd {
+          id: string;
+          campaignId?: string;
+          campaign_id?: string;
+          adSetId?: string;
+          creative?: {
+            destinationUrl?: string;
+            type?: string;
+          };
+        }
+        for (const snap of adsSnapshots) {
+          try {
+            const ads: RawAd[] = JSON.parse(snap.payload_json);
+            for (const ad of ads) {
+              const campId = ad.campaignId || ad.campaign_id;
+              if (!campId || campaignUrlMap.has(campId)) continue;
+              const url = ad.creative?.destinationUrl;
+              if (url) {
+                campaignUrlMap.set(campId, url);
+              }
+            }
+          } catch { /* skip malformed */ }
+        }
+        console.log(`[auto-discover] Extracted ${campaignUrlMap.size} destination URLs from ads snapshots (skipping Meta API for these)`);
+      } catch (e) {
+        console.warn('[auto-discover] Could not read ads snapshots:', e);
+      }
+    }
+
+    // ━━━ Step 3: For each campaign, get destination URL ━━━
+    // First populate from snapshot data (no API calls needed)
+    const campaignMetaMap = new Map<string, CampaignMeta>();
+    const campaignsNeedingApi: typeof allCampaigns = [];
+
+    for (const campaign of allCampaigns) {
+      const snapshotUrl = campaignUrlMap.get(campaign.id);
+      if (snapshotUrl) {
+        campaignMetaMap.set(campaign.id, {
+          campaignId: campaign.id,
+          campaignName: campaign.name,
+          adAccountId: campaign.adAccountId,
+          destinationUrl: snapshotUrl,
+        });
+      } else {
+        campaignsNeedingApi.push(campaign);
+      }
+    }
+
+    console.log(`[auto-discover] ${campaignMetaMap.size} campaigns resolved from snapshots, ${campaignsNeedingApi.length} need Meta API`);
+
     const metaTokenObj = await getMetaToken(storeId!);
     if (!metaTokenObj) {
       return NextResponse.json({ error: 'No Meta token found for this store' }, { status: 400 });
     }
     const metaToken = metaTokenObj.accessToken;
 
-    const campaignMetaMap = new Map<string, CampaignMeta>();
-
-    await batchProcess(allCampaigns, 15, async (campaign) => {
+    // Only call Meta API for campaigns not covered by snapshot data
+    await batchProcess(campaignsNeedingApi, 15, async (campaign) => {
       try {
         // Step 3a: Get 1 ad from the campaign with creative.id and promoted_object
         const adsResult = await fetchFromMeta<{
@@ -514,14 +597,116 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // ━━━ Step 5b: Fallback — fetch URL from Meta API for unmapped campaigns ━━━
+    // For campaigns where snapshot had no destinationUrl, try ONE Meta API call per campaign
+    if (unmappedCampaigns.length > 0 && metaToken) {
+      console.log(`[auto-discover] ${unmappedCampaigns.length} unmapped campaigns — trying Meta API fallback for URLs`);
+      const stillUnmapped: UnmappedCampaign[] = [];
+
+      for (const unmapped of unmappedCampaigns) {
+        if (mappedCampaignIds.has(unmapped.campaignId)) continue;
+
+        try {
+          // Fetch 1 ad from the campaign to get the destination URL
+          // Try multiple ads (not just 1) since some may lack URLs
+          const adsResponse = await fetchFromMeta<{
+            data: Array<{
+              id: string;
+              creative?: {
+                object_story_spec?: {
+                  link_data?: { link?: string; call_to_action?: { value?: { link?: string } } };
+                  video_data?: { call_to_action?: { value?: { link?: string } } };
+                };
+                // Also check asset_feed_spec for dynamic creatives
+                asset_feed_spec?: {
+                  link_urls?: Array<{ website_url?: string }>;
+                };
+              };
+            }>;
+          }>(
+            metaToken,
+            `${unmapped.campaignId}/ads`,
+            {
+              fields: 'id,creative{object_story_spec{link_data{link,call_to_action{value{link}}},video_data{call_to_action{value{link}}}},asset_feed_spec{link_urls}}',
+              limit: '5',
+            },
+            8000,
+            0,
+          );
+
+          let url = '';
+          for (const ad of adsResponse?.data ?? []) {
+            const spec = ad?.creative?.object_story_spec;
+            const feed = ad?.creative?.asset_feed_spec;
+            url =
+              spec?.link_data?.link ||
+              spec?.link_data?.call_to_action?.value?.link ||
+              spec?.video_data?.call_to_action?.value?.link ||
+              feed?.link_urls?.[0]?.website_url ||
+              '';
+            if (url) break;
+          }
+
+          if (!url) {
+            console.log(`[auto-discover] Meta API fallback: no URL found for "${unmapped.campaignName}" after checking ${adsResponse?.data?.length ?? 0} ads`);
+          }
+
+          if (url) {
+            const handle = extractProductHandle(url);
+            if (handle && handleMap.has(handle)) {
+              // Matched! Add to product
+              const meta: CampaignMeta = {
+                campaignId: unmapped.campaignId,
+                campaignName: unmapped.campaignName,
+                adAccountId: unmapped.adAccountId,
+                destinationUrl: url,
+              };
+              const existing = matchesByHandle.get(handle);
+              if (existing) {
+                existing.campaigns.push(meta);
+              } else {
+                matchesByHandle.set(handle, {
+                  shopifyProduct: handleMap.get(handle)!,
+                  campaigns: [meta],
+                });
+              }
+              mappedCampaignIds.add(unmapped.campaignId);
+              console.log(`[auto-discover] Meta API fallback matched "${unmapped.campaignName}" → ${handle} via ${url}`);
+              continue;
+            }
+          }
+        } catch (err) {
+          console.warn(`[auto-discover] Meta API fallback failed for campaign ${unmapped.campaignId}:`, err);
+        }
+
+        stillUnmapped.push(unmapped);
+      }
+
+      unmappedCampaigns.length = 0;
+      unmappedCampaigns.push(...stillUnmapped);
+      console.log(`[auto-discover] After Meta API fallback: ${unmappedCampaigns.length} still unmapped`);
+    }
+
     // ━━━ Step 6: Save to Supabase ━━━
     const existingProfiles = await getProductProfiles(storeId!);
+
+    // Clean up stale profiles from ad accounts no longer mapped to this store
+    for (const profile of existingProfiles) {
+      if (profile.adAccountId && !activeAdAccountIds.has(profile.adAccountId)) {
+        console.log(`[auto-discover] Removing stale profile "${profile.productName}" (ad account ${profile.adAccountId} no longer in store)`);
+        await deleteAllCampaignLinksForProfile(profile.id);
+        await deleteProductProfile(profile.id);
+      }
+    }
+
+    // Re-fetch after cleanup
+    const cleanProfiles = await getProductProfiles(storeId!);
     const existingByShopifyId = new Map(
-      existingProfiles.filter((p) => p.shopifyProductId).map((p) => [p.shopifyProductId!, p]),
+      cleanProfiles.filter((p) => p.shopifyProductId).map((p) => [p.shopifyProductId!, p]),
     );
     // Also dedup by product name as safety net
     const existingByName = new Map(
-      existingProfiles.map((p) => [p.productName.toLowerCase().trim(), p]),
+      cleanProfiles.map((p) => [p.productName.toLowerCase().trim(), p]),
     );
 
     const savedProfiles: Array<
@@ -584,6 +769,9 @@ export async function POST(request: NextRequest) {
           instagramUsername: profileIgUsername,
         });
       }
+
+      // Clear existing campaign links before re-creating (clean resync)
+      await deleteAllCampaignLinksForProfile(profileId);
 
       // Save campaign links
       const campaignLinks: ProductCampaignLink[] = [];

@@ -27,6 +27,7 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
   const unmappedCampaigns = useCreativeHubStore((s) => s.unmappedCampaigns);
   const autoDiscoverProfiles = useCreativeHubStore((s) => s.autoDiscoverProfiles);
   const setActiveTab = useCreativeHubStore((s) => s.setActiveTab);
+  const openLaunchWizardForProduct = useCreativeHubStore((s) => s.openLaunchWizardForProduct);
   const inboxCreatives = useCreativeHubStore((s) => s.inboxCreatives);
   const activeTests = useCreativeHubStore((s) => s.activeTests);
   const completedTests = useCreativeHubStore((s) => s.completedTests);
@@ -88,12 +89,16 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
   }, [completedTests]);
 
   // Split profiles into active (testing) and not testing
+  // Use effectiveStatus from Meta (not DB isActive flag) to determine truly active campaigns
   const { activeProfiles, notTestingProfiles } = useMemo(() => {
     const active: ProductProfile[] = [];
     const notTesting: ProductProfile[] = [];
     for (const p of profiles) {
-      const isActive = (p.activeCampaignCount ?? 0) > 0 || (p.campaignLinks ?? []).some((l) => l.isActive);
-      if (isActive) {
+      const hasActiveCampaigns = (p.activeCampaignCount ?? 0) > 0 ||
+        (p.campaignLinks ?? []).some((l) =>
+          l.effectiveStatus === 'ACTIVE' || (!l.effectiveStatus && l.isActive)
+        );
+      if (hasActiveCampaigns) {
         active.push(p);
       } else {
         notTesting.push(p);
@@ -121,6 +126,14 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
 
   const handleViewCopyLibrary = (profileId: string) => {
     setActiveTab('copy-library');
+  };
+
+  const handleLaunch = (profile: ProductProfile) => {
+    // Select ready creatives for this product
+    const readyCreativeIds = inboxCreatives
+      .filter((c) => c.productProfileId === profile.id && c.driveUrl)
+      .map((c) => c.id);
+    openLaunchWizardForProduct(profile.id, readyCreativeIds);
   };
 
   const handleMapToProfile = (campaignId: string, profileId: string) => {
@@ -203,6 +216,7 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
                     launchedCount={launchedCountMap.get(profile.id) ?? 0}
                     winnersCount={winnersCountMap.get(profile.id) ?? 0}
                     onEdit={handleEdit}
+                    onLaunch={handleLaunch}
                     onViewCopyLibrary={handleViewCopyLibrary}
                   />
                 ))}

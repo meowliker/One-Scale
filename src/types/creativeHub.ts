@@ -103,6 +103,14 @@ export interface ProductCampaignLink {
   bmName?: string;
   isActive: boolean;
   linkedAt: string;
+  /** Real Meta effective_status (e.g. 'ACTIVE', 'PAUSED', 'CAMPAIGN_PAUSED') */
+  effectiveStatus?: string;
+  /** Campaign-level daily budget in dollars (> 0 means CBO) */
+  campaignDailyBudget?: number;
+  /** Campaign-level lifetime budget in dollars (> 0 means CBO) */
+  campaignLifetimeBudget?: number | null;
+  /** Campaign-level bid strategy */
+  campaignBidStrategy?: string;
 }
 
 // ── Creative Inbox ──

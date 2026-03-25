@@ -36,6 +36,7 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
   const selectAllCreatives = useCreativeHubStore((s) => s.selectAllCreatives);
   const deselectAllCreatives = useCreativeHubStore((s) => s.deselectAllCreatives);
   const openLaunchWizard = useCreativeHubStore((s) => s.openLaunchWizard);
+  const openLaunchWizardForProduct = useCreativeHubStore((s) => s.openLaunchWizardForProduct);
 
   // Local UI state
   const [syncing, setSyncing] = useState(false);
@@ -449,7 +450,17 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
 
           {/* Right: launch button */}
           <button
-            onClick={openLaunchWizard}
+            onClick={() => {
+              // Detect product from selected creatives — skip product selection if all belong to one product
+              const selectedCreativesList = inboxCreatives.filter((c) => selectedCreativeIds.has(c.id) && c.driveUrl);
+              const productIds = new Set(selectedCreativesList.map((c) => c.productProfileId).filter(Boolean));
+              if (productIds.size === 1) {
+                const productProfileId = [...productIds][0]!;
+                openLaunchWizardForProduct(productProfileId, selectedCreativesList.map((c) => c.id));
+              } else {
+                openLaunchWizard();
+              }
+            }}
             disabled={readySelectedCount === 0}
             className={cn(
               'inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold transition-all',

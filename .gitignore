@@ -53,3 +53,4 @@ seed.sql
 
 # project audit (generated)
 PROJECT-AUDIT.md
+.env*.local

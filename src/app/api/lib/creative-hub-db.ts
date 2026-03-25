@@ -930,6 +930,18 @@ export async function getProductCampaignLinks(profileId: string): Promise<Produc
   return getProductCampaignLinksLocal(profileId);
 }
 
+export async function deleteAllCampaignLinksForProfile(profileId: string): Promise<void> {
+  if (isSupabasePersistenceEnabled()) {
+    await supaRest<unknown>(
+      `/product_campaign_links?product_profile_id=eq.${encodeURIComponent(profileId)}`,
+      { method: 'DELETE' },
+    );
+    return;
+  }
+  const db = getDb();
+  db.prepare('DELETE FROM product_campaign_links WHERE product_profile_id = ?').run(profileId);
+}
+
 export async function upsertProductCampaignLink(
   link: Partial<ProductCampaignLink> & { id: string; productProfileId: string; campaignId: string; campaignType: string; adAccountId: string },
 ): Promise<void> {

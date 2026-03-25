@@ -309,17 +309,24 @@ export function ProductProfileCard({
             ) : (
               <ChevronDown className="h-3.5 w-3.5" />
             )}
-            {linkedCampaigns.length} linked campaign{linkedCampaigns.length !== 1 ? 's' : ''}
+            {activeCampaignCount + inactiveCampaignCount} linked campaign{(activeCampaignCount + inactiveCampaignCount) !== 1 ? 's' : ''}
+            {activeCampaignCount > 0 && inactiveCampaignCount > 0 && (
+              <span className="text-text-dimmed ml-1">({activeCampaignCount} active)</span>
+            )}
           </button>
 
           {campaignsExpanded && (
             <div className="mt-2.5 space-y-2">
               {linkedCampaigns.map((link) => {
                 const badge = campaignTypeBadge[link.campaignType];
+                const isLinkActive = link.effectiveStatus === 'ACTIVE' || (!link.effectiveStatus && link.isActive);
                 return (
                   <div
                     key={link.id}
-                    className="flex items-center gap-2 text-sm rounded-lg bg-surface-hover/50 px-3 py-2"
+                    className={cn(
+                      'flex items-center gap-2 text-sm rounded-lg px-3 py-2',
+                      isLinkActive ? 'bg-surface-hover/50' : 'bg-surface-hover/30 opacity-60'
+                    )}
                   >
                     <span
                       className={cn(
@@ -331,7 +338,12 @@ export function ProductProfileCard({
                       {badge.label}
                     </span>
                     <span className="text-text-primary truncate flex-1">{link.campaignName}</span>
-                    {!link.isActive && (
+                    {isLinkActive ? (
+                      <span className="inline-flex items-center gap-1 text-xs text-emerald-600">
+                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                        Active
+                      </span>
+                    ) : (
                       <span className="text-xs text-text-dimmed">Paused</span>
                     )}
                   </div>

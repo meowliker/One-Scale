@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Package,
   FolderOpen,
@@ -9,6 +9,7 @@ import {
   ChevronUp,
   Image as ImageIcon,
   Loader2,
+  Info,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
@@ -72,6 +73,8 @@ export function LaunchStep1Campaign() {
   // Real adset data fetched from the API when an existing campaign is selected
   const [campaignAdsets, setCampaignAdsets] = useState<FetchedAdset[]>([]);
   const [adsetsLoading, setAdsetsLoading] = useState(false);
+  const [campaignDropdownOpen, setCampaignDropdownOpen] = useState(false);
+  const adsetModeRef = useRef<HTMLDivElement>(null);
 
   const selectedProfile = profiles.find((p) => p.id === launchConfig.productProfileId);
   const campaignMode = launchConfig.campaignMode || 'existing';
@@ -83,10 +86,18 @@ export function LaunchStep1Campaign() {
 
   const selectedCreatives = inboxCreatives.filter((c) => selectedCreativeIds.has(c.id));
 
-  // Get the campaign links from the selected product profile — only show ACTIVE campaigns
+  // Get the campaign links from the selected product profile — only show campaigns with ACTIVE effective status
   const linkedCampaigns: ProductCampaignLink[] = (selectedProfile?.campaignLinks ?? []).filter(
-    (link) => link.isActive
+    (link) => link.effectiveStatus === 'ACTIVE' || (!link.effectiveStatus && link.isActive)
   );
+
+  // Detect CBO vs ABO for selected existing campaign
+  const selectedCampaignLink = linkedCampaigns.find((c) => c.campaignId === selectedCampaignId);
+  const isCBO = useMemo(() => {
+    if (!selectedCampaignLink) return false;
+    return (selectedCampaignLink.campaignDailyBudget ?? 0) > 0 ||
+           (selectedCampaignLink.campaignLifetimeBudget ?? 0) > 0;
+  }, [selectedCampaignLink]);
 
   // Fetch adsets when an existing campaign is selected
   const fetchAdsets = useCallback(async (campaignId: string) => {
@@ -124,105 +135,125 @@ export function LaunchStep1Campaign() {
     }
   }, [campaignMode, selectedCampaignId, fetchAdsets]);
 
+  // Was the product pre-selected (e.g. launched from Creative Inbox or Product Profile card)?
+  const isProductPreSelected = Boolean(launchConfig.productProfileId && selectedProfile);
+
   // ── Product Selector ──
 
   return (
     <div className="space-y-8">
-      {/* Section 1: Product Selector */}
-      <section className="space-y-3">
-        <div>
-          <h2 className="text-lg font-semibold text-slate-900">Select Product</h2>
-          <p className="mt-1 text-sm text-slate-600">
-            Choose the product profile for this creative test launch.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {profiles.map((profile) => {
-            const isSelected = launchConfig.productProfileId === profile.id;
-            const profileLinks = profile.campaignLinks ?? [];
-
-            return (
-              <button
-                key={profile.id}
-                onClick={() => {
-                  updateLaunchConfig({
-                    productProfileId: profile.id,
-                    adAccountId: profile.adAccountId,
-                    pageId: profile.pageId,
-                    instagramActorId: profile.instagramActorId,
-                    pixelId: profile.pixelId,
-                    conversionEvent: profile.conversionEvent,
-                    destinationUrl: profile.destinationUrl,
-                    dailyBudget: profile.defaultBudget,
-                    testDuration: profile.defaultDuration,
-                    bidStrategy: profile.defaultBidStrategy,
-                    structure: profile.defaultStructure,
-                    launchStatus: profile.defaultLaunchStatus,
-                    // Pre-fill UTM template from profile
-                    utmTemplate: profile.utmTemplate,
-                    // Pre-fill AI rule defaults from profile
-                    aiMinSpend: profile.aiMinSpend,
-                    aiMinImpressions: profile.aiMinImpressions,
-                    aiMinHours: profile.aiMinHours,
-                    aiEvalFrequency: profile.aiEvalFrequency,
-                    // Reset campaign selection when switching products
-                    existingCampaignId: undefined,
-                    existingAdsetAssignments: undefined,
-                  });
-                  // Clear adsets when switching product
-                  setCampaignAdsets([]);
-                }}
-                className={cn(
-                  'group relative flex items-start gap-3 rounded-2xl border-2 p-4 text-left transition-all',
-                  isSelected
-                    ? 'border-blue-500 bg-blue-50/30 shadow-lg shadow-blue-100/60'
-                    : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-md'
-                )}
-              >
-                <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center overflow-hidden rounded-xl bg-slate-100">
-                  {profile.productImage ? (
-                    <img
-                      src={profile.productImage}
-                      alt={profile.productName}
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <Package className="h-5 w-5 text-slate-400" />
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <h3
-                    className={cn(
-                      'truncate text-sm font-semibold',
-                      isSelected ? 'text-blue-900' : 'text-slate-900'
-                    )}
-                  >
-                    {profile.productName}
-                  </h3>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    {profile.adAccountId} &middot; {profile.adAccountCurrency}
-                  </p>
-                  <p className="mt-1 text-xs text-slate-400">
-                    {profileLinks.length} linked campaign{profileLinks.length !== 1 ? 's' : ''}
-                  </p>
-                </div>
-                {isSelected && (
-                  <div className="absolute right-3 top-3 h-2.5 w-2.5 rounded-full bg-blue-500" />
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        {profiles.length === 0 && (
-          <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center">
-            <Package className="mx-auto h-8 w-8 text-slate-400" />
-            <p className="mt-2 text-sm text-slate-600">No product profiles found.</p>
-            <p className="text-xs text-slate-400">Create a product profile first in the Profiles tab.</p>
+      {/* Section 1: Product Selector — collapsed if pre-selected */}
+      {isProductPreSelected ? (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-slate-900">Product</h2>
+            <button
+              onClick={() => updateLaunchConfig({ productProfileId: undefined, existingCampaignId: undefined })}
+              className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+            >
+              Change
+            </button>
           </div>
-        )}
-      </section>
+          <div className="flex items-center gap-3 rounded-2xl border-2 border-blue-500 bg-blue-50/30 p-4">
+            <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center overflow-hidden rounded-xl bg-slate-100">
+              {selectedProfile!.productImage ? (
+                <img src={selectedProfile!.productImage} alt={selectedProfile!.productName} className="h-full w-full object-cover" />
+              ) : (
+                <Package className="h-5 w-5 text-slate-400" />
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="truncate text-sm font-semibold text-blue-900">{selectedProfile!.productName}</h3>
+              <p className="mt-0.5 text-xs text-slate-500">
+                {selectedProfile!.adAccountId} &middot; {selectedProfile!.adAccountCurrency}
+              </p>
+            </div>
+            <div className="h-2.5 w-2.5 rounded-full bg-blue-500 flex-shrink-0" />
+          </div>
+        </section>
+      ) : (
+        <section className="space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Select Product</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Choose the product profile for this creative test launch.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {profiles.map((profile) => {
+              const isSelected = launchConfig.productProfileId === profile.id;
+              const profileLinks = profile.campaignLinks ?? [];
+
+              return (
+                <button
+                  key={profile.id}
+                  onClick={() => {
+                    updateLaunchConfig({
+                      productProfileId: profile.id,
+                      adAccountId: profile.adAccountId,
+                      pageId: profile.pageId,
+                      instagramActorId: profile.instagramActorId,
+                      pixelId: profile.pixelId,
+                      conversionEvent: profile.conversionEvent,
+                      destinationUrl: profile.destinationUrl,
+                      dailyBudget: profile.defaultBudget,
+                      testDuration: profile.defaultDuration,
+                      bidStrategy: profile.defaultBidStrategy,
+                      structure: profile.defaultStructure,
+                      launchStatus: profile.defaultLaunchStatus,
+                      utmTemplate: profile.utmTemplate,
+                      aiMinSpend: profile.aiMinSpend,
+                      aiMinImpressions: profile.aiMinImpressions,
+                      aiMinHours: profile.aiMinHours,
+                      aiEvalFrequency: profile.aiEvalFrequency,
+                      existingCampaignId: undefined,
+                      existingAdsetAssignments: undefined,
+                    });
+                    setCampaignAdsets([]);
+                  }}
+                  className={cn(
+                    'group relative flex items-start gap-3 rounded-2xl border-2 p-4 text-left transition-all',
+                    isSelected
+                      ? 'border-blue-500 bg-blue-50/30 shadow-lg shadow-blue-100/60'
+                      : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-md'
+                  )}
+                >
+                  <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center overflow-hidden rounded-xl bg-slate-100">
+                    {profile.productImage ? (
+                      <img src={profile.productImage} alt={profile.productName} className="h-full w-full object-cover" />
+                    ) : (
+                      <Package className="h-5 w-5 text-slate-400" />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h3 className={cn('truncate text-sm font-semibold', isSelected ? 'text-blue-900' : 'text-slate-900')}>
+                      {profile.productName}
+                    </h3>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {profile.adAccountId} &middot; {profile.adAccountCurrency}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-400">
+                      {profileLinks.length} linked campaign{profileLinks.length !== 1 ? 's' : ''}
+                    </p>
+                  </div>
+                  {isSelected && (
+                    <div className="absolute right-3 top-3 h-2.5 w-2.5 rounded-full bg-blue-500" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {profiles.length === 0 && (
+            <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center">
+              <Package className="mx-auto h-8 w-8 text-slate-400" />
+              <p className="mt-2 text-sm text-slate-600">No product profiles found.</p>
+              <p className="text-xs text-slate-400">Create a product profile first in the Profiles tab.</p>
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Section 2: Campaign Mode */}
       {selectedProfile && (
@@ -253,7 +284,7 @@ export function LaunchStep1Campaign() {
         </section>
       )}
 
-      {/* Section 3A: Existing Campaign Selection */}
+      {/* Section 3A: Existing Campaign Selection — Dropdown */}
       {selectedProfile && campaignMode === 'existing' && (
         <section className="space-y-3">
           <div>
@@ -263,58 +294,101 @@ export function LaunchStep1Campaign() {
             </p>
           </div>
 
-          <div className="space-y-2">
-            {linkedCampaigns.length > 0 ? (
-              linkedCampaigns.map((campaign) => {
-                const isSelected = selectedCampaignId === campaign.campaignId;
-                return (
-                  <label
-                    key={campaign.id}
-                    className={cn(
-                      'flex cursor-pointer items-center gap-3 rounded-xl border-2 p-4 transition-all',
-                      isSelected
-                        ? 'border-blue-500 bg-blue-50/30'
-                        : 'border-slate-200 bg-white hover:border-slate-300'
-                    )}
-                  >
-                    <input
-                      type="radio"
-                      name="existingCampaign"
-                      checked={isSelected}
-                      onChange={() =>
-                        updateLaunchConfig({ existingCampaignId: campaign.campaignId })
-                      }
-                      className="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500"
-                    />
-                    <div className="flex-1">
-                      <p className="text-sm font-medium text-slate-900">{campaign.campaignName}</p>
-                      <p className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-500">
-                        {campaign.campaignType.charAt(0).toUpperCase() + campaign.campaignType.slice(1)} &middot;{' '}
-                        <span className="inline-flex items-center gap-1">
-                          <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
-                          Active
-                        </span>
-                      </p>
-                    </div>
-                  </label>
-                );
-              })
-            ) : (
-              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-6 py-6 text-center">
-                <FolderOpen className="mx-auto h-6 w-6 text-slate-400" />
-                <p className="mt-2 text-sm text-slate-600">No linked campaigns found for this product.</p>
-                <p className="text-xs text-slate-400">
-                  Link campaigns in the product profile, or choose &ldquo;Create New Campaign&rdquo; instead.
-                </p>
-              </div>
-            )}
-          </div>
+          {linkedCampaigns.length > 0 ? (
+            <div className="relative">
+              {/* Dropdown trigger */}
+              <button
+                onClick={() => setCampaignDropdownOpen(!campaignDropdownOpen)}
+                className={cn(
+                  'flex w-full items-center justify-between rounded-xl border-2 p-4 text-left transition-all',
+                  selectedCampaignId
+                    ? 'border-blue-500 bg-blue-50/30'
+                    : 'border-slate-200 bg-white hover:border-slate-300'
+                )}
+              >
+                {selectedCampaignLink ? (
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-900 truncate">{selectedCampaignLink.campaignName}</p>
+                    <p className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-500">
+                      {selectedCampaignLink.campaignType.charAt(0).toUpperCase() + selectedCampaignLink.campaignType.slice(1)} &middot;{' '}
+                      <span className="inline-flex items-center gap-1">
+                        <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+                        Active
+                      </span>
+                      {isCBO && (
+                        <span className="ml-1 inline-flex items-center rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">CBO</span>
+                      )}
+                      {!isCBO && selectedCampaignLink && (
+                        <span className="ml-1 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">ABO</span>
+                      )}
+                    </p>
+                  </div>
+                ) : (
+                  <span className="text-sm text-slate-400">Select a campaign...</span>
+                )}
+                <ChevronDown className={cn('h-4 w-4 text-slate-400 transition-transform', campaignDropdownOpen && 'rotate-180')} />
+              </button>
+
+              {/* Dropdown list */}
+              {campaignDropdownOpen && (
+                <div className="absolute z-20 mt-1 w-full rounded-xl border border-slate-200 bg-white shadow-lg max-h-[220px] overflow-y-auto">
+                  {linkedCampaigns.map((campaign) => {
+                    const isSelected = selectedCampaignId === campaign.campaignId;
+                    const campIsCBO = (campaign.campaignDailyBudget ?? 0) > 0 || (campaign.campaignLifetimeBudget ?? 0) > 0;
+                    return (
+                      <button
+                        key={campaign.id}
+                        onClick={() => {
+                          updateLaunchConfig({ existingCampaignId: campaign.campaignId });
+                          setCampaignDropdownOpen(false);
+                          // Auto-scroll to ad set mode section
+                          setTimeout(() => adsetModeRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 150);
+                        }}
+                        className={cn(
+                          'flex w-full items-center gap-3 px-4 py-3 text-left transition-colors',
+                          isSelected ? 'bg-blue-50' : 'hover:bg-slate-50',
+                          'border-b border-slate-100 last:border-b-0'
+                        )}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <p className={cn('text-sm font-medium truncate', isSelected ? 'text-blue-900' : 'text-slate-900')}>
+                            {campaign.campaignName}
+                          </p>
+                          <p className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-500">
+                            {campaign.campaignType.charAt(0).toUpperCase() + campaign.campaignType.slice(1)} &middot;{' '}
+                            <span className="inline-flex items-center gap-1">
+                              <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+                              Active
+                            </span>
+                            {campIsCBO ? (
+                              <span className="ml-1 inline-flex items-center rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">CBO</span>
+                            ) : (
+                              <span className="ml-1 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">ABO</span>
+                            )}
+                          </p>
+                        </div>
+                        {isSelected && <div className="h-2 w-2 rounded-full bg-blue-500 flex-shrink-0" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-6 py-6 text-center">
+              <FolderOpen className="mx-auto h-6 w-6 text-slate-400" />
+              <p className="mt-2 text-sm text-slate-600">No active campaigns found for this product.</p>
+              <p className="text-xs text-slate-400">
+                Link campaigns in the product profile, or choose &ldquo;Create New Campaign&rdquo; instead.
+              </p>
+            </div>
+          )}
         </section>
       )}
 
       {/* Section 3B: Adset Mode (for existing campaign) */}
       {selectedProfile && campaignMode === 'existing' && selectedCampaignId && (
-        <section className="space-y-3">
+        <section ref={adsetModeRef} className="space-y-3">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Ad Set Mode</h2>
             <p className="mt-1 text-sm text-slate-600">
@@ -341,17 +415,47 @@ export function LaunchStep1Campaign() {
         </section>
       )}
 
-      {/* Section 4A: New Adsets Budget/Duration/Bid */}
+      {/* Section 4A: New Adsets Budget/Duration/Bid — CBO vs ABO aware */}
       {selectedProfile && campaignMode === 'existing' && adsetMode === 'new_adsets' && selectedCampaignId && (
-        <NewAdsetBudgetSection
-          currency={selectedProfile.adAccountCurrency}
-          dailyBudget={launchConfig.dailyBudget ?? selectedProfile.defaultBudget}
-          testDuration={launchConfig.testDuration ?? selectedProfile.defaultDuration}
-          bidStrategy={bidStrategy}
-          bidAmount={launchConfig.bidAmount}
-          roasFloor={launchConfig.roasFloor}
-          onUpdate={updateLaunchConfig}
-        />
+        isCBO ? (
+          /* CBO campaign: budget is at campaign level, only show test duration + info */
+          <section className="space-y-4">
+            <h3 className="text-sm font-semibold text-slate-700">Ad Set Settings</h3>
+            <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3">
+              <Info className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
+              <div className="text-xs text-blue-800">
+                <p className="font-medium">This is a CBO campaign</p>
+                <p className="mt-0.5">Budget is managed at the campaign level. Ad set budget and bid strategy are controlled by Meta&apos;s campaign budget optimization.</p>
+              </div>
+            </div>
+            <FormField label="Test Duration" helper="Days to run before evaluation">
+              <div className="relative">
+                <input
+                  type="number"
+                  min={1}
+                  max={90}
+                  value={launchConfig.testDuration ?? selectedProfile.defaultDuration}
+                  onChange={(e) => updateLaunchConfig({ testDuration: parseInt(e.target.value) || 3 })}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2.5 pr-14 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-slate-400">
+                  days
+                </span>
+              </div>
+            </FormField>
+          </section>
+        ) : (
+          /* ABO campaign: full budget + bid strategy controls at ad set level */
+          <NewAdsetBudgetSection
+            currency={selectedProfile.adAccountCurrency}
+            dailyBudget={launchConfig.dailyBudget ?? selectedProfile.defaultBudget}
+            testDuration={launchConfig.testDuration ?? selectedProfile.defaultDuration}
+            bidStrategy={bidStrategy}
+            bidAmount={launchConfig.bidAmount}
+            roasFloor={launchConfig.roasFloor}
+            onUpdate={updateLaunchConfig}
+          />
+        )
       )}
 
       {/* Section 4B: Existing Adsets Selection + Creative Assignment */}
