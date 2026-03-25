@@ -92,6 +92,53 @@ interface SnapshotRow {
   updated_at: string;
 }
 
+const LEGACY_META_SNAPSHOT_TABLE = 'meta_endpoint_snapshots';
+const metaSnapshotTableByStore = new Map<string, string>();
+
+function parseRpcTextResult(payload: unknown, rpcName: string): string | null {
+  if (typeof payload === 'string') return payload;
+  if (Array.isArray(payload) && payload.length > 0) {
+    const first = payload[0];
+    if (typeof first === 'string') return first;
+    if (first && typeof first === 'object') {
+      const value = (first as Record<string, unknown>)[rpcName];
+      if (typeof value === 'string') return value;
+    }
+  }
+  if (payload && typeof payload === 'object') {
+    const value = (payload as Record<string, unknown>)[rpcName];
+    if (typeof value === 'string') return value;
+  }
+  return null;
+}
+
+function snapshotTablePath(tableName: string): string {
+  return `/${tableName}`;
+}
+
+async function resolveMetaSnapshotTable(storeId: string): Promise<string> {
+  const cached = metaSnapshotTableByStore.get(storeId);
+  if (cached) return cached;
+
+  try {
+    const rpcName = 'ensure_meta_snapshot_store_table';
+    const raw = await rest<unknown>(`/rpc/${rpcName}`, {
+      method: 'POST',
+      body: JSON.stringify({ p_store_id: storeId }),
+    });
+    const tableName = parseRpcTextResult(raw, rpcName);
+    if (!tableName) {
+      throw new Error(`RPC ${rpcName} returned invalid payload`);
+    }
+    metaSnapshotTableByStore.set(storeId, tableName);
+    return tableName;
+  } catch (err) {
+    console.warn('[supabase-tracking] Falling back to legacy meta snapshot table:', err);
+    metaSnapshotTableByStore.set(storeId, LEGACY_META_SNAPSHOT_TABLE);
+    return LEGACY_META_SNAPSHOT_TABLE;
+  }
+}
+
 // ---- Public API ----
 
 export async function upsertPersistentMetaEndpointSnapshot(
@@ -103,9 +150,10 @@ export async function upsertPersistentMetaEndpointSnapshot(
 ): Promise<void> {
   const payloadJson = JSON.stringify(payload);
   const rowCount = Array.isArray(payload) ? payload.length : 0;
+  const tableName = await resolveMetaSnapshotTable(storeId);
 
   await rest(
-    '/meta_endpoint_snapshots?on_conflict=store_id,endpoint,scope_id,variant_key',
+    `${snapshotTablePath(tableName)}?on_conflict=store_id,endpoint,scope_id,variant_key`,
     {
       method: 'POST',
       headers: headers({
@@ -130,10 +178,17 @@ export async function getPersistentMetaEndpointSnapshot<T>(
   scopeId: string,
   variantKey: string
 ): Promise<{ data: T; updatedAt: string; rowCount: number } | null> {
+  const tableName = await resolveMetaSnapshotTable(storeId);
   const rows = await rest<SnapshotRow[]>(
-    `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&scope_id=eq.${encodeURIComponent(scopeId)}&variant_key=eq.${encodeURIComponent(variantKey)}&select=payload_json,updated_at,row_count&limit=1`
+    `${snapshotTablePath(tableName)}?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&scope_id=eq.${encodeURIComponent(scopeId)}&variant_key=eq.${encodeURIComponent(variantKey)}&select=payload_json,updated_at,row_count&limit=1`
   );
-  const row = rows?.[0];
+  let row = rows?.[0];
+  if (!row && tableName !== LEGACY_META_SNAPSHOT_TABLE) {
+    const legacyRows = await rest<SnapshotRow[]>(
+      `${snapshotTablePath(LEGACY_META_SNAPSHOT_TABLE)}?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&scope_id=eq.${encodeURIComponent(scopeId)}&variant_key=eq.${encodeURIComponent(variantKey)}&select=payload_json,updated_at,row_count&limit=1`
+    );
+    row = legacyRows?.[0];
+  }
   if (!row) return null;
   try {
     return {
@@ -151,10 +206,17 @@ export async function getLatestPersistentMetaEndpointSnapshot<T>(
   endpoint: MetaSnapshotEndpoint,
   scopeId: string
 ): Promise<{ data: T; updatedAt: string; rowCount: number } | null> {
+  const tableName = await resolveMetaSnapshotTable(storeId);
   const rows = await rest<SnapshotRow[]>(
-    `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&scope_id=eq.${encodeURIComponent(scopeId)}&select=payload_json,updated_at,row_count&order=updated_at.desc&limit=1`
+    `${snapshotTablePath(tableName)}?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&scope_id=eq.${encodeURIComponent(scopeId)}&select=payload_json,updated_at,row_count&order=updated_at.desc&limit=1`
   );
-  const row = rows?.[0];
+  let row = rows?.[0];
+  if (!row && tableName !== LEGACY_META_SNAPSHOT_TABLE) {
+    const legacyRows = await rest<SnapshotRow[]>(
+      `${snapshotTablePath(LEGACY_META_SNAPSHOT_TABLE)}?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&scope_id=eq.${encodeURIComponent(scopeId)}&select=payload_json,updated_at,row_count&order=updated_at.desc&limit=1`
+    );
+    row = legacyRows?.[0];
+  }
   if (!row) return null;
   try {
     return {
@@ -172,11 +234,18 @@ export async function getBatchPersistentMetaEndpointSnapshots<T>(
   endpoint: MetaSnapshotEndpoint,
   variantKey: string
 ): Promise<Map<string, { data: T; updatedAt: string; rowCount: number }>> {
+  const tableName = await resolveMetaSnapshotTable(storeId);
   const rows = await rest<SnapshotRow[]>(
-    `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&variant_key=eq.${encodeURIComponent(variantKey)}&select=scope_id,payload_json,updated_at,row_count`
+    `${snapshotTablePath(tableName)}?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&variant_key=eq.${encodeURIComponent(variantKey)}&select=scope_id,payload_json,updated_at,row_count`
   );
+  const effectiveRows =
+    rows.length === 0 && tableName !== LEGACY_META_SNAPSHOT_TABLE
+      ? await rest<SnapshotRow[]>(
+          `${snapshotTablePath(LEGACY_META_SNAPSHOT_TABLE)}?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&variant_key=eq.${encodeURIComponent(variantKey)}&select=scope_id,payload_json,updated_at,row_count`
+        )
+      : rows;
   const map = new Map<string, { data: T; updatedAt: string; rowCount: number }>();
-  for (const row of rows || []) {
+  for (const row of effectiveRows || []) {
     try {
       map.set(row.scope_id, {
         data: JSON.parse(row.payload_json) as T,
@@ -196,12 +265,19 @@ export async function getRecentPersistentMetaEndpointSnapshots<T>(
   limit = 50
 ): Promise<Array<{ scopeId: string; variantKey: string; data: T; updatedAt: string; rowCount: number }>> {
   const safeLimit = Math.max(1, limit);
+  const tableName = await resolveMetaSnapshotTable(storeId);
   const rows = await rest<SnapshotRow[]>(
-    `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&select=scope_id,variant_key,payload_json,updated_at,row_count&order=updated_at.desc&limit=${safeLimit}`
+    `${snapshotTablePath(tableName)}?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&select=scope_id,variant_key,payload_json,updated_at,row_count&order=updated_at.desc&limit=${safeLimit}`
   );
+  const effectiveRows =
+    rows.length === 0 && tableName !== LEGACY_META_SNAPSHOT_TABLE
+      ? await rest<SnapshotRow[]>(
+          `${snapshotTablePath(LEGACY_META_SNAPSHOT_TABLE)}?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&select=scope_id,variant_key,payload_json,updated_at,row_count&order=updated_at.desc&limit=${safeLimit}`
+        )
+      : rows;
 
   const parsed: Array<{ scopeId: string; variantKey: string; data: T; updatedAt: string; rowCount: number }> = [];
-  for (const row of rows || []) {
+  for (const row of effectiveRows || []) {
     try {
       parsed.push({
         scopeId: row.scope_id,

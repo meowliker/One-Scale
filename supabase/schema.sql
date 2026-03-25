@@ -112,6 +112,72 @@ create index if not exists idx_workspace_stores_workspace
 create index if not exists idx_meta_endpoint_snapshots_lookup
   on meta_endpoint_snapshots(store_id, endpoint, scope_id, updated_at desc);
 
+-- Per-store snapshot table helper (used by Supabase persistence mode)
+create or replace function ensure_meta_snapshot_store_table(p_store_id text)
+returns text
+language plpgsql
+security definer
+as $$
+declare
+  normalized_store text;
+  table_suffix text;
+  table_name text;
+  idx_lookup text;
+  idx_variant text;
+begin
+  if p_store_id is null or btrim(p_store_id) = '' then
+    raise exception 'store_id is required';
+  end if;
+
+  normalized_store := regexp_replace(lower(p_store_id), '[^a-z0-9]+', '_', 'g');
+  normalized_store := regexp_replace(normalized_store, '^_+|_+$', '', 'g');
+  if normalized_store = '' then
+    normalized_store := 'store';
+  end if;
+
+  table_suffix := substr(md5(p_store_id), 1, 8);
+  table_name := format('meta_snapshots_store_%s_%s', left(normalized_store, 24), table_suffix);
+
+  execute format(
+    'create table if not exists %I (
+      id bigserial primary key,
+      store_id text not null references stores(id) on delete cascade,
+      endpoint text not null check (endpoint in (''creatives'', ''adsets'', ''ads'', ''campaigns'', ''insights'', ''pages'', ''pixels'', ''instagram'', ''accounts'')),
+      scope_id text not null default '''',
+      variant_key text not null default '''',
+      row_count integer not null default 0,
+      payload_json text not null,
+      updated_at timestamptz not null default now(),
+      unique (store_id, endpoint, scope_id, variant_key),
+      check (store_id = %L)
+    )',
+    table_name,
+    p_store_id
+  );
+
+  idx_lookup := format('idx_meta_snap_ep_scope_%s', table_suffix);
+  idx_variant := format('idx_meta_snap_variant_%s', table_suffix);
+
+  execute format(
+    'create index if not exists %I on %I(endpoint, scope_id, updated_at desc)',
+    idx_lookup,
+    table_name
+  );
+  execute format(
+    'create index if not exists %I on %I(variant_key, endpoint, updated_at desc)',
+    idx_variant,
+    table_name
+  );
+
+  execute format('grant select, insert, update, delete on table %I to service_role', table_name);
+  execute format('grant usage, select on sequence %I to service_role', table_name || '_id_seq');
+
+  return table_name;
+end;
+$$;
+
+grant execute on function ensure_meta_snapshot_store_table(text) to service_role;
+
 -- Daily command-center tables (phase A baseline)
 create table if not exists decision_rulesets (
   id bigserial primary key,
