@@ -67,13 +67,13 @@ jobs:
             RESP_FILE="$(mktemp)"
 
             if [ -n "${VERCEL_BYPASS_TOKEN_1:-}" ]; then
-              HTTP_CODE="$(curl -sS --retry 2 --retry-delay 2 --max-time 120 \
+              HTTP_CODE="$(curl -sS -L --retry 2 --retry-delay 2 --max-time 120 \
                 -o "${RESP_FILE}" -w '%{http_code}' \
                 -H "Authorization: Bearer ${CRON_SECRET}" \
                 -H "x-vercel-protection-bypass: ${VERCEL_BYPASS_TOKEN_1}" \
                 "${URL}")"
             else
-              HTTP_CODE="$(curl -sS --retry 2 --retry-delay 2 --max-time 120 \
+              HTTP_CODE="$(curl -sS -L --retry 2 --retry-delay 2 --max-time 120 \
                 -o "${RESP_FILE}" -w '%{http_code}' \
                 -H "Authorization: Bearer ${CRON_SECRET}" \
                 "${URL}")"
