@@ -69,9 +69,15 @@ GRANT EXECUTE ON FUNCTION ensure_meta_snapshot_store_table(TEXT) TO service_role
 
 DO $$
 DECLARE
+  legacy_exists BOOLEAN;
   row_store RECORD;
   target_table TEXT;
 BEGIN
+  SELECT to_regclass('public.meta_endpoint_snapshots') IS NOT NULL INTO legacy_exists;
+  IF NOT legacy_exists THEN
+    RETURN;
+  END IF;
+
   FOR row_store IN
     SELECT DISTINCT store_id
     FROM meta_endpoint_snapshots

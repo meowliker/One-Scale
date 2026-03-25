@@ -88,18 +88,6 @@ create table if not exists workspace_stores (
   unique (store_id)
 );
 
-create table if not exists meta_endpoint_snapshots (
-  id bigserial primary key,
-  store_id text not null references stores(id) on delete cascade,
-  endpoint text not null check (endpoint in ('creatives', 'adsets', 'ads', 'campaigns', 'insights', 'pages', 'pixels', 'instagram', 'accounts')),
-  scope_id text not null default '',
-  variant_key text not null default '',
-  row_count integer not null default 0,
-  payload_json text not null,
-  updated_at timestamptz not null default now(),
-  unique (store_id, endpoint, scope_id, variant_key)
-);
-
 create index if not exists idx_store_ad_accounts_store
   on store_ad_accounts(store_id);
 
@@ -108,9 +96,6 @@ create index if not exists idx_workspace_members_user
 
 create index if not exists idx_workspace_stores_workspace
   on workspace_stores(workspace_id);
-
-create index if not exists idx_meta_endpoint_snapshots_lookup
-  on meta_endpoint_snapshots(store_id, endpoint, scope_id, updated_at desc);
 
 -- Per-store snapshot table helper (used by Supabase persistence mode)
 create or replace function ensure_meta_snapshot_store_table(p_store_id text)
