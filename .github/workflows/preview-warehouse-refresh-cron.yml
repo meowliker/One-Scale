@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "0 */12 * * *"
   workflow_dispatch:
+    inputs:
+      target_branch:
+        description: "Branch whose Vercel preview should be targeted (e.g. staging, dev/anay)"
+        required: false
+        default: "staging"
 
 permissions: {}
 
@@ -15,21 +20,27 @@ jobs:
   refresh-warehouse-per-store:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      TARGET_BRANCH: ${{ inputs.target_branch || vars.CRON_TARGET_BRANCH || 'staging' }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      VERCEL_BYPASS_TOKEN_1: ${{ secrets.VERCEL_BYPASS_TOKEN_1 }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
     steps:
       - name: Validate required secrets
-        env:
-          PREVIEW_URL_1: ${{ secrets.PREVIEW_URL_1 }}
-          STORE_IDS_1: ${{ secrets.STORE_IDS_1 }}
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           set -euo pipefail
-          if [ -z "${PREVIEW_URL_1}" ]; then
-            echo "Missing required secret: PREVIEW_URL_1"
+          if [ -z "${TARGET_BRANCH}" ]; then
+            echo "Missing required value: TARGET_BRANCH"
             exit 1
           fi
-          if [ -z "${STORE_IDS_1}" ]; then
-            echo "Missing required secret: STORE_IDS_1"
+          if [ -z "${SUPABASE_URL}" ]; then
+            echo "Missing required secret: SUPABASE_URL"
+            exit 1
+          fi
+          if [ -z "${SUPABASE_SERVICE_ROLE_KEY}" ]; then
+            echo "Missing required secret: SUPABASE_SERVICE_ROLE_KEY"
             exit 1
           fi
           if [ -z "${CRON_SECRET}" ]; then
@@ -38,19 +49,33 @@ jobs:
           fi
 
       - name: Refresh warehouse snapshots + materialize via /api/sync/refresh (store-by-store)
-        env:
-          PREVIEW_URL_1: ${{ secrets.PREVIEW_URL_1 }}
-          STORE_IDS_1: ${{ secrets.STORE_IDS_1 }}
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          VERCEL_BYPASS_TOKEN_1: ${{ secrets.VERCEL_BYPASS_TOKEN_1 }}
         run: |
           set -euo pipefail
-          BASE="${PREVIEW_URL_1%/}"
-          echo "Starting preview warehouse refresh at $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          BRANCH_SLUG="$(echo "${TARGET_BRANCH}" | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr -cd 'a-z0-9-')"
+          BASE="https://one-scale-git-${BRANCH_SLUG}-meow-likers-projects.vercel.app"
 
-          IFS=',' read -r -a STORES <<< "${STORE_IDS_1}"
+          STORE_IDS="$(
+            curl -sS --retry 2 --retry-delay 2 --max-time 30 \
+              -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+              -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+              "${SUPABASE_URL%/}/rest/v1/store_ad_accounts?select=store_id&platform=eq.meta&is_active=eq.true&order=store_id.asc" \
+              | jq -r '.[].store_id' \
+              | awk 'NF' \
+              | sort -u \
+              | paste -sd, -
+          )"
+
+          if [ -z "${STORE_IDS}" ]; then
+            echo "No active Meta stores discovered from Supabase. Nothing to refresh."
+            exit 0
+          fi
+
+          echo "Starting preview warehouse refresh at $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          echo "Target branch: ${TARGET_BRANCH} (${BASE})"
+
+          IFS=',' read -r -a STORES <<< "${STORE_IDS}"
           if [ "${#STORES[@]}" -eq 0 ]; then
-            echo "No store IDs found in STORE_IDS_1"
+            echo "No store IDs discovered from Supabase"
             exit 1
           fi
 
