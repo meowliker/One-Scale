@@ -146,10 +146,10 @@ export async function GET(req: NextRequest) {
         );
 
         // Upsert into shopify_orders_cache (idempotent: store_id + shopify_order_id is unique)
-        await rest('/shopify_orders_cache', {
+        await rest('/shopify_orders_cache?on_conflict=store_id,shopify_order_id', {
           method: 'POST',
           headers: {
-            Prefer: 'resolution=merge-duplicates',
+            Prefer: 'resolution=merge-duplicates,return=minimal',
           },
           body: JSON.stringify({
             store_id: store.id,

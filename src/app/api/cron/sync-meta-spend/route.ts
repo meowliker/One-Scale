@@ -142,10 +142,10 @@ export async function GET(req: NextRequest) {
             const purchaseValue1dView = extractPurchases(row.action_values_1d_view);
 
             // Upsert into meta_spend_cache (idempotent: store_id + ad_account_id + ad_id + date is unique)
-            await rest('/meta_spend_cache', {
+            await rest('/meta_spend_cache?on_conflict=store_id,ad_id,date', {
               method: 'POST',
               headers: {
-                Prefer: 'resolution=merge-duplicates',
+                Prefer: 'resolution=merge-duplicates,return=minimal',
               },
               body: JSON.stringify({
                 store_id: store.id,
