@@ -436,6 +436,93 @@ export function mapInsightsToMetrics(
   };
 }
 
+type MetaPagedResponse = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  data: Record<string, any>[];
+  paging?: { cursors?: { after?: string }; next?: string };
+};
+
+async function fetchMetaPagedRows(
+  token: string,
+  endpoint: string,
+  params: Record<string, string>,
+  timeoutMs: number = 15000,
+  maxRetriesOverride?: number
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<Record<string, any>[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rows: Record<string, any>[] = [];
+  let after: string | undefined;
+  let page = 0;
+
+  while (page < 250) {
+    const response = await fetchFromMeta<MetaPagedResponse>(
+      token,
+      endpoint,
+      after ? { ...params, after } : params,
+      timeoutMs,
+      maxRetriesOverride
+    );
+    rows.push(...(response.data || []));
+
+    const nextAfter = response.paging?.cursors?.after;
+    if (!nextAfter || !response.paging?.next) break;
+    after = nextAfter;
+    page += 1;
+  }
+
+  return rows;
+}
+
+function extractDestinationUrlFromCreative(creative: Record<string, unknown>): string {
+  const story = (creative.object_story_spec && typeof creative.object_story_spec === 'object')
+    ? creative.object_story_spec as Record<string, unknown>
+    : null;
+  if (!story) return '';
+
+  const linkData = (story.link_data && typeof story.link_data === 'object')
+    ? story.link_data as Record<string, unknown>
+    : null;
+  const videoData = (story.video_data && typeof story.video_data === 'object')
+    ? story.video_data as Record<string, unknown>
+    : null;
+  const link = typeof linkData?.link === 'string'
+    ? linkData.link
+    : (
+      (videoData?.call_to_action && typeof videoData.call_to_action === 'object')
+        ? ((videoData.call_to_action as Record<string, unknown>).value as Record<string, unknown> | undefined)
+        : undefined
+    )?.link;
+  return typeof link === 'string' ? link : '';
+}
+
+function extractStoryIdentifiersFromCreative(creative: Record<string, unknown>): {
+  pageId: string | null;
+  instagramUserId: string | null;
+} {
+  const story = (creative.object_story_spec && typeof creative.object_story_spec === 'object')
+    ? creative.object_story_spec as Record<string, unknown>
+    : null;
+  if (!story) {
+    return { pageId: null, instagramUserId: null };
+  }
+
+  const pageId = typeof story.page_id === 'string' && story.page_id.trim().length > 0
+    ? story.page_id
+    : null;
+
+  // Meta can return either instagram_user_id or instagram_actor_id depending on placement/objective.
+  const instagramUserId = typeof story.instagram_user_id === 'string' && story.instagram_user_id.trim().length > 0
+    ? story.instagram_user_id
+    : (
+      typeof story.instagram_actor_id === 'string' && story.instagram_actor_id.trim().length > 0
+        ? story.instagram_actor_id
+        : null
+    );
+
+  return { pageId, instagramUserId };
+}
+
 // ------ Fetchers ------
 
 export async function fetchMetaAdAccounts(
@@ -470,7 +557,7 @@ export async function fetchMetaCampaigns(
 ): Promise<Campaign[]> {
   const fields = [
     'id', 'name', 'objective', 'status', 'daily_budget', 'lifetime_budget',
-    'bid_strategy', 'start_time', 'stop_time', 'updated_time',
+    'bid_strategy', 'buying_type', 'start_time', 'stop_time', 'updated_time',
     'effective_status', 'configured_status', 'issues_info', 'ad_review_feedback',
   ].join(',');
 
@@ -485,11 +572,14 @@ export async function fetchMetaCampaigns(
   // --- OPTIMIZED: Single account-level insights call with level=campaign ---
   // Instead of N individual calls (one per campaign), make ONE call that returns
   // insights for ALL campaigns at once. This is the key fix for rate limiting.
+  // IMPORTANT: action_attribution_windows is required to get accurate conversion data.
+  // Using 7d_click,1d_view matches Meta Ads Manager default and Triple Whale methodology.
   const insightsFields = 'campaign_id,campaign_name,spend,impressions,reach,clicks,actions,action_values,ctr,cpc,cpm,unique_clicks,unique_ctr,quality_ranking,engagement_rate_ranking,conversion_rate_ranking';
   const insightsParams: Record<string, string> = {
     fields: insightsFields,
     level: 'campaign',
     limit: '500',
+    action_attribution_windows: JSON.stringify(['7d_click', '1d_view']),
     ...(options?.datePreset
       ? { date_preset: options.datePreset }
       : dateRange
@@ -549,6 +639,7 @@ export async function fetchMetaCampaigns(
       fields: insightsFields,
       level: 'campaign',
       limit: '500',
+      action_attribution_windows: JSON.stringify(['7d_click', '1d_view']),
       date_preset: 'last_30d',
     };
     try {
@@ -581,6 +672,7 @@ export async function fetchMetaCampaigns(
       name: raw.name,
       objective: mapObjective(raw.objective || ''),
       status: mapStatus(raw.status || ''),
+      buying_type: typeof raw.buying_type === 'string' ? raw.buying_type : null,
       policyInfo: {
         effectiveStatus: raw.effective_status || undefined,
         configuredStatus: raw.configured_status || undefined,
@@ -599,6 +691,339 @@ export async function fetchMetaCampaigns(
   });
 
   return campaigns;
+}
+
+/**
+ * Fetch all ad sets for an account (bulk) using one list pagination stream
+ * plus one account-level insights stream with level=adset.
+ */
+export async function fetchMetaAdSetsByAccount(
+  token: string,
+  accountId: string,
+  dateRange?: { since: string; until: string },
+  options?: { disableDateFallback?: boolean; preferLightweight?: boolean; basicOnly?: boolean; datePreset?: string }
+): Promise<AdSet[]> {
+  const fields = options?.basicOnly
+    ? [
+      'id', 'name', 'campaign_id', 'status', 'daily_budget', 'bid_amount', 'updated_time',
+      'effective_status', 'configured_status', 'issues_info', 'ad_review_feedback',
+    ].join(',')
+    : [
+      'id', 'name', 'campaign_id', 'status', 'daily_budget', 'bid_amount', 'updated_time',
+      'targeting', 'start_time', 'end_time', 'effective_status', 'configured_status', 'issues_info', 'ad_review_feedback',
+    ].join(',');
+
+  const listTimeoutMs = options?.preferLightweight ? 15000 : 25000;
+  const listRetries = options?.preferLightweight ? 1 : undefined;
+  const listRows = await fetchMetaPagedRows(
+    token,
+    `/${accountId}/adsets`,
+    { fields, limit: '100' },
+    listTimeoutMs,
+    listRetries
+  );
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const insightsMap = new Map<string, Record<string, any>>();
+  if (!options?.basicOnly) {
+    const insightsFields = 'adset_id,adset_name,spend,impressions,reach,clicks,actions,action_values,ctr,cpc,cpm,unique_clicks,unique_ctr,quality_ranking,engagement_rate_ranking,conversion_rate_ranking';
+    const insightsParams: Record<string, string> = {
+      fields: insightsFields,
+      level: 'adset',
+      limit: '500',
+      action_attribution_windows: JSON.stringify(['7d_click', '1d_view']),
+      ...(options?.datePreset
+        ? { date_preset: options.datePreset }
+        : dateRange
+          ? { time_range: JSON.stringify(dateRange) }
+          : { date_preset: 'last_30d' }),
+    };
+
+    try {
+      const insightRows = await fetchMetaPagedRows(token, `/${accountId}/insights`, insightsParams);
+      for (const row of insightRows) {
+        if (row.adset_id) {
+          insightsMap.set(row.adset_id, row);
+        }
+      }
+      console.log(`[Meta] Account-level adset insights: ${insightsMap.size}/${listRows.length} adsets have data (bulk)`);
+    } catch (err) {
+      console.error('[Meta] Account-level adset insights failed:', err instanceof Error ? err.message : err);
+    }
+
+    if (dateRange && !options?.datePreset && !options?.disableDateFallback && insightsMap.size === 0 && listRows.length > 0) {
+      console.log('[Meta] Account-level adset insights empty with time_range, retrying with date_preset: last_30d');
+      try {
+        const fallbackRows = await fetchMetaPagedRows(token, `/${accountId}/insights`, {
+          fields: insightsFields,
+          level: 'adset',
+          limit: '500',
+          action_attribution_windows: JSON.stringify(['7d_click', '1d_view']),
+          date_preset: 'last_30d',
+        });
+        for (const row of fallbackRows) {
+          if (row.adset_id) {
+            insightsMap.set(row.adset_id, row);
+          }
+        }
+        console.log(`[Meta] Account-level adset fallback insights: ${insightsMap.size}/${listRows.length} adsets have data`);
+      } catch (err) {
+        console.error('[Meta] Account-level adset fallback insights failed:', err instanceof Error ? err.message : err);
+      }
+    }
+  }
+
+  return listRows.map((raw) => {
+    const insightsRow = insightsMap.get(raw.id);
+    const metrics = insightsRow
+      ? mapInsightsToMetrics(insightsRow)
+      : getEmptyMetrics();
+
+    const targeting = raw.targeting || {};
+    return {
+      id: raw.id,
+      campaignId: raw.campaign_id || '',
+      name: raw.name,
+      status: mapStatus(raw.status || ''),
+      policyInfo: {
+        effectiveStatus: raw.effective_status || undefined,
+        configuredStatus: raw.configured_status || undefined,
+        reviewFeedback: mapReviewFeedback(raw.ad_review_feedback),
+        issuesInfo: mapIssuesInfo(raw.issues_info),
+      },
+      dailyBudget: raw.daily_budget ? parseInt(raw.daily_budget, 10) / 100 : 0,
+      bidAmount: raw.bid_amount ? parseInt(raw.bid_amount, 10) / 100 : null,
+      targeting: {
+        ageMin: targeting.age_min || 18,
+        ageMax: targeting.age_max || 65,
+        genders: targeting.genders?.map((g: number) =>
+          g === 1 ? 'male' : g === 2 ? 'female' : 'all'
+        ) || ['all'],
+        locations: targeting.geo_locations?.countries || [],
+        interests: targeting.flexible_spec?.[0]?.interests?.map(
+          (i: { name: string }) => i.name
+        ) || [],
+        customAudiences: targeting.custom_audiences?.map(
+          (a: { id: string }) => a.id
+        ) || [],
+      },
+      startDate: raw.start_time || new Date().toISOString(),
+      endDate: raw.end_time || null,
+      updatedTime: raw.updated_time || undefined,
+      ads: [],
+      metrics,
+    };
+  });
+}
+
+/**
+ * Fetch all ads for an account (bulk) using one list pagination stream
+ * plus one account-level insights stream with level=ad.
+ */
+export async function fetchMetaAdsByAccount(
+  token: string,
+  accountId: string,
+  dateRange?: { since: string; until: string },
+  options?: { disableDateFallback?: boolean; preferLightweight?: boolean; basicOnly?: boolean; datePreset?: string }
+): Promise<Array<Ad & { campaign_id?: string; adset_id?: string }>> {
+  const fields = options?.basicOnly
+    ? [
+      'id', 'name', 'campaign_id', 'adset_id', 'status', 'effective_status', 'configured_status', 'ad_review_feedback', 'issues_info',
+      'creative{id,title,call_to_action_type,image_url,thumbnail_url,video_id,object_story_spec,url_tags}',
+    ].join(',')
+    : [
+      'id', 'name', 'campaign_id', 'adset_id', 'status', 'effective_status', 'configured_status', 'ad_review_feedback', 'issues_info',
+      'creative{id,title,body,call_to_action_type,image_url,thumbnail_url,video_id,object_story_spec,url_tags}',
+    ].join(',');
+
+  const listTimeoutMs = options?.preferLightweight ? 15000 : 30000;
+  const listRetries = options?.preferLightweight ? 1 : undefined;
+  const listRows = await fetchMetaPagedRows(
+    token,
+    `/${accountId}/ads`,
+    { fields, limit: '100' },
+    listTimeoutMs,
+    listRetries
+  );
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const insightsMap = new Map<string, Record<string, any>>();
+  if (!options?.basicOnly) {
+    const insightsFields = 'ad_id,ad_name,spend,impressions,reach,clicks,actions,action_values,ctr,cpc,cpm,unique_clicks,unique_ctr,quality_ranking,engagement_rate_ranking,conversion_rate_ranking';
+    const insightsParams: Record<string, string> = {
+      fields: insightsFields,
+      level: 'ad',
+      limit: '500',
+      action_attribution_windows: JSON.stringify(['7d_click', '1d_view']),
+      ...(options?.datePreset
+        ? { date_preset: options.datePreset }
+        : dateRange
+          ? { time_range: JSON.stringify(dateRange) }
+          : { date_preset: 'last_30d' }),
+    };
+
+    try {
+      const insightRows = await fetchMetaPagedRows(token, `/${accountId}/insights`, insightsParams);
+      for (const row of insightRows) {
+        const key = row.ad_id || row.id;
+        if (key) {
+          insightsMap.set(key, row);
+        }
+      }
+      console.log(`[Meta] Account-level ad insights: ${insightsMap.size}/${listRows.length} ads have data (bulk)`);
+    } catch (err) {
+      console.error('[Meta] Account-level ad insights failed:', err instanceof Error ? err.message : err);
+    }
+
+    if (dateRange && !options?.datePreset && !options?.disableDateFallback && insightsMap.size === 0 && listRows.length > 0) {
+      console.log('[Meta] Account-level ad insights empty with time_range, retrying with date_preset: last_30d');
+      try {
+        const fallbackRows = await fetchMetaPagedRows(token, `/${accountId}/insights`, {
+          fields: insightsFields,
+          level: 'ad',
+          limit: '500',
+          action_attribution_windows: JSON.stringify(['7d_click', '1d_view']),
+          date_preset: 'last_30d',
+        });
+        for (const row of fallbackRows) {
+          const key = row.ad_id || row.id;
+          if (key) {
+            insightsMap.set(key, row);
+          }
+        }
+        console.log(`[Meta] Account-level ad fallback insights: ${insightsMap.size}/${listRows.length} ads have data`);
+      } catch (err) {
+        console.error('[Meta] Account-level ad fallback insights failed:', err instanceof Error ? err.message : err);
+      }
+    }
+  }
+
+  return listRows.map((raw) => {
+    const insightsRow = insightsMap.get(raw.id);
+    const metrics = insightsRow
+      ? mapInsightsToMetrics(insightsRow)
+      : getEmptyMetrics();
+
+    const creative = raw.creative || {};
+    const storyIds = extractStoryIdentifiersFromCreative(creative);
+    const isVideo = !!creative.video_id;
+    return {
+      id: raw.id,
+      adSetId: raw.adset_id || '',
+      campaign_id: raw.campaign_id || '',
+      adset_id: raw.adset_id || '',
+      name: raw.name,
+      status: mapStatus(raw.status || ''),
+      page_id: storyIds.pageId,
+      instagram_user_id: storyIds.instagramUserId,
+      policyInfo: {
+        effectiveStatus: raw.effective_status || undefined,
+        configuredStatus: raw.configured_status || undefined,
+        reviewFeedback: mapReviewFeedback(raw.ad_review_feedback),
+        issuesInfo: mapIssuesInfo(raw.issues_info),
+      },
+      creative: {
+        id: creative.id || raw.id,
+        type: isVideo ? 'video' : 'image',
+        headline: creative.title || '',
+        body: creative.body || '',
+        ctaType: mapCtaType(creative.call_to_action_type || ''),
+        mediaUrl: isVideo ? '' : (creative.image_url || ''),
+        thumbnailUrl: creative.thumbnail_url || creative.image_url || '',
+        videoId: isVideo ? creative.video_id : undefined,
+        destinationUrl: extractDestinationUrlFromCreative(creative),
+        urlTags: typeof creative.url_tags === 'string' ? creative.url_tags : undefined,
+      },
+      metrics,
+    };
+  });
+}
+
+export type MetaDailyEntityMetricRow = {
+  level: 'campaign' | 'adset' | 'ad';
+  entityId: string;
+  metricDate: string;
+  campaignId: string | null;
+  adsetId: string | null;
+  adId: string | null;
+  metrics: PerformanceMetrics;
+};
+
+export async function fetchMetaDailyEntityMetricsByAccount(
+  token: string,
+  accountId: string,
+  level: 'campaign' | 'adset' | 'ad',
+  dateRange?: { since: string; until: string },
+  options?: { disableDateFallback?: boolean; datePreset?: string }
+): Promise<MetaDailyEntityMetricRow[]> {
+  const insightsFields = level === 'campaign'
+    ? 'campaign_id,date_start,spend,impressions,reach,clicks,actions,action_values,ctr,cpc,cpm,unique_clicks,unique_ctr,quality_ranking,engagement_rate_ranking,conversion_rate_ranking'
+    : level === 'adset'
+      ? 'campaign_id,adset_id,date_start,spend,impressions,reach,clicks,actions,action_values,ctr,cpc,cpm,unique_clicks,unique_ctr,quality_ranking,engagement_rate_ranking,conversion_rate_ranking'
+      : 'campaign_id,adset_id,ad_id,date_start,spend,impressions,reach,clicks,actions,action_values,ctr,cpc,cpm,unique_clicks,unique_ctr,quality_ranking,engagement_rate_ranking,conversion_rate_ranking';
+
+  const baseParams: Record<string, string> = {
+    fields: insightsFields,
+    level,
+    time_increment: '1',
+    limit: '500',
+    action_attribution_windows: JSON.stringify(['7d_click', '1d_view']),
+    ...(options?.datePreset
+      ? { date_preset: options.datePreset }
+      : dateRange
+        ? { time_range: JSON.stringify(dateRange) }
+        : { date_preset: 'last_30d' }),
+  };
+
+  let insightRows = await fetchMetaPagedRows(
+    token,
+    `/${accountId}/insights`,
+    baseParams
+  ).catch(() => [] as Record<string, unknown>[]);
+
+  if (
+    dateRange &&
+    !options?.datePreset &&
+    !options?.disableDateFallback &&
+    insightRows.length === 0
+  ) {
+    insightRows = await fetchMetaPagedRows(
+      token,
+      `/${accountId}/insights`,
+      {
+        ...baseParams,
+        date_preset: 'last_30d',
+      }
+    ).catch(() => [] as Record<string, unknown>[]);
+  }
+
+  const rows: MetaDailyEntityMetricRow[] = [];
+  for (const row of insightRows) {
+    const metricDate = typeof row.date_start === 'string' ? row.date_start : '';
+    if (!metricDate) continue;
+
+    const campaignId = typeof row.campaign_id === 'string' ? row.campaign_id : null;
+    const adsetId = typeof row.adset_id === 'string' ? row.adset_id : null;
+    const adId = typeof row.ad_id === 'string' ? row.ad_id : null;
+
+    const entityId = level === 'campaign'
+      ? (campaignId || '')
+      : level === 'adset'
+        ? (adsetId || '')
+        : (adId || '');
+    if (!entityId) continue;
+
+    rows.push({
+      level,
+      entityId,
+      metricDate,
+      campaignId,
+      adsetId,
+      adId,
+      metrics: mapInsightsToMetrics(row),
+    });
+  }
+  return rows;
 }
 
 /**
@@ -636,11 +1061,13 @@ export async function fetchMetaAdSets(
   const insightsMap = new Map<string, Record<string, any>>();
   if (!options?.basicOnly) {
     // --- OPTIMIZED: Single campaign-level insights call with level=adset ---
+    // IMPORTANT: action_attribution_windows is required to get accurate conversion data.
     const insightsFields = 'adset_id,adset_name,spend,impressions,reach,clicks,actions,action_values,ctr,cpc,cpm,unique_clicks,unique_ctr,quality_ranking,engagement_rate_ranking,conversion_rate_ranking';
     const insightsParams: Record<string, string> = {
       fields: insightsFields,
       level: 'adset',
       limit: '500',
+      action_attribution_windows: JSON.stringify(['7d_click', '1d_view']),
       ...(options?.datePreset
         ? { date_preset: options.datePreset }
         : dateRange
@@ -677,6 +1104,7 @@ export async function fetchMetaAdSets(
           fields: insightsFields,
           level: 'adset',
           limit: '500',
+          action_attribution_windows: JSON.stringify(['7d_click', '1d_view']),
           date_preset: 'last_30d',
         });
         if (fallbackResponse.data) {
@@ -749,28 +1177,6 @@ export async function fetchMetaAds(
   dateRange?: { since: string; until: string },
   options?: { disableDateFallback?: boolean; preferLightweight?: boolean; basicOnly?: boolean; datePreset?: string }
 ): Promise<Ad[]> {
-  function extractDestinationUrl(creative: Record<string, unknown>): string {
-    const story = (creative.object_story_spec && typeof creative.object_story_spec === 'object')
-      ? creative.object_story_spec as Record<string, unknown>
-      : null;
-    if (!story) return '';
-
-    const linkData = (story.link_data && typeof story.link_data === 'object')
-      ? story.link_data as Record<string, unknown>
-      : null;
-    const videoData = (story.video_data && typeof story.video_data === 'object')
-      ? story.video_data as Record<string, unknown>
-      : null;
-    const link = typeof linkData?.link === 'string'
-      ? linkData.link
-      : (
-        (videoData?.call_to_action && typeof videoData.call_to_action === 'object')
-          ? ((videoData.call_to_action as Record<string, unknown>).value as Record<string, unknown> | undefined)
-          : undefined
-      )?.link;
-    return typeof link === 'string' ? link : '';
-  }
-
   const fields = options?.basicOnly
     ? [
         'id', 'name', 'status', 'effective_status', 'configured_status', 'ad_review_feedback', 'issues_info',
@@ -795,12 +1201,15 @@ export async function fetchMetaAds(
   if (options?.basicOnly) {
     return data.data.map((raw) => {
       const creative = raw.creative || {};
+      const storyIds = extractStoryIdentifiersFromCreative(creative);
       const isVideo = !!creative.video_id;
       return {
         id: raw.id,
         adSetId,
         name: raw.name,
         status: mapStatus(raw.status || ''),
+        page_id: storyIds.pageId,
+        instagram_user_id: storyIds.instagramUserId,
         policyInfo: {
           effectiveStatus: raw.effective_status || undefined,
           configuredStatus: raw.configured_status || undefined,
@@ -816,7 +1225,7 @@ export async function fetchMetaAds(
           mediaUrl: isVideo ? '' : (creative.image_url || ''),
           thumbnailUrl: creative.thumbnail_url || creative.image_url || '',
           videoId: isVideo ? creative.video_id : undefined,
-          destinationUrl: extractDestinationUrl(creative),
+          destinationUrl: extractDestinationUrlFromCreative(creative),
           urlTags: typeof creative.url_tags === 'string' ? creative.url_tags : undefined,
         },
         metrics: getEmptyMetrics(),
@@ -825,11 +1234,13 @@ export async function fetchMetaAds(
   }
 
   // --- OPTIMIZED: Single adset-level insights call with level=ad ---
+  // IMPORTANT: action_attribution_windows is required to get accurate conversion data.
   const insightsFields = 'ad_id,ad_name,spend,impressions,reach,clicks,actions,action_values,ctr,cpc,cpm,unique_clicks,unique_ctr,quality_ranking,engagement_rate_ranking,conversion_rate_ranking';
   const insightsParams: Record<string, string> = {
     fields: insightsFields,
     level: 'ad',
     limit: '500',
+    action_attribution_windows: JSON.stringify(['7d_click', '1d_view']),
     ...(options?.datePreset
       ? { date_preset: options.datePreset }
       : dateRange
@@ -894,6 +1305,7 @@ export async function fetchMetaAds(
         fields: insightsFields,
         level: 'ad',
         limit: '500',
+        action_attribution_windows: JSON.stringify(['7d_click', '1d_view']),
         date_preset: fallbackPreset,
       });
       if (fallbackResponse.data) {
@@ -917,6 +1329,7 @@ export async function fetchMetaAds(
       : getEmptyMetrics();
 
     const creative = raw.creative || {};
+    const storyIds = extractStoryIdentifiersFromCreative(creative);
     const isVideo = !!creative.video_id;
     let videoThumbnailUrl = creative.thumbnail_url || '';
 
@@ -931,6 +1344,8 @@ export async function fetchMetaAds(
       adSetId,
       name: raw.name,
       status: mapStatus(raw.status || ''),
+      page_id: storyIds.pageId,
+      instagram_user_id: storyIds.instagramUserId,
       policyInfo: {
         effectiveStatus: raw.effective_status || undefined,
         configuredStatus: raw.configured_status || undefined,
@@ -948,7 +1363,7 @@ export async function fetchMetaAds(
           ? (videoThumbnailUrl || creative.image_url || '')
           : (creative.thumbnail_url || creative.image_url || ''),
         videoId: isVideo ? creative.video_id : undefined,
-        destinationUrl: extractDestinationUrl(creative),
+        destinationUrl: extractDestinationUrlFromCreative(creative),
         urlTags: typeof creative.url_tags === 'string' ? creative.url_tags : undefined,
       },
       metrics,

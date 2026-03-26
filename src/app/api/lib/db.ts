@@ -2252,7 +2252,16 @@ export interface DbMetaEndpointSnapshot {
   updated_at: string;
 }
 
-export type MetaSnapshotEndpoint = 'creatives' | 'adsets' | 'ads' | 'campaigns' | 'insights';
+export type MetaSnapshotEndpoint =
+  | 'creatives'
+  | 'adsets'
+  | 'ads'
+  | 'campaigns'
+  | 'insights'
+  | 'pages'
+  | 'pixels'
+  | 'instagram'
+  | 'accounts';
 
 export function upsertMetaEndpointSnapshot(
   storeId: string,
