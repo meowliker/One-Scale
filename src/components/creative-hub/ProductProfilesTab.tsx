@@ -35,7 +35,7 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<ProductProfile | null>(null);
   const [unmappedExpanded, setUnmappedExpanded] = useState(true);
-  const [notTestingExpanded, setNotTestingExpanded] = useState(true);
+  const [notTestingExpanded, setNotTestingExpanded] = useState(false);
 
   // Count creatives per product profile
   const creativeCountMap = useMemo(() => {
@@ -88,23 +88,29 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
     return map;
   }, [completedTests]);
 
-  // Split profiles into active (testing) and not testing
-  // Use effectiveStatus from Meta (not DB isActive flag) to determine truly active campaigns
+  // Split profiles into active and inactive
+  // Only show products that have campaigns. Products with 0 campaigns don't appear at all.
+  // Active = at least one campaign is ACTIVE. Inactive = has campaigns but all are paused/inactive.
   const { activeProfiles, notTestingProfiles } = useMemo(() => {
     const active: ProductProfile[] = [];
-    const notTesting: ProductProfile[] = [];
+    const inactive: ProductProfile[] = [];
     for (const p of profiles) {
+      const campaignCount = (p.campaignLinks ?? []).length + (p.activeCampaignCount ?? 0);
+      // Skip products with zero campaigns entirely
+      if (campaignCount === 0 && !(p.campaignLinks ?? []).length) continue;
+
       const hasActiveCampaigns = (p.activeCampaignCount ?? 0) > 0 ||
         (p.campaignLinks ?? []).some((l) =>
           l.effectiveStatus === 'ACTIVE' || (!l.effectiveStatus && l.isActive)
         );
       if (hasActiveCampaigns) {
         active.push(p);
-      } else {
-        notTesting.push(p);
+      } else if ((p.campaignLinks ?? []).length > 0) {
+        // Only show in inactive if it has campaigns (all inactive)
+        inactive.push(p);
       }
     }
-    return { activeProfiles: active, notTestingProfiles: notTesting };
+    return { activeProfiles: active, notTestingProfiles: inactive };
   }, [profiles]);
 
   const mappedCount = profiles.length;
@@ -136,12 +142,48 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
     openLaunchWizardForProduct(profile.id, readyCreativeIds);
   };
 
-  const handleMapToProfile = (campaignId: string, profileId: string) => {
-    // Will be wired to store action in Task 16
+  const handleMapToProfile = async (campaignId: string, profileId: string) => {
+    // Find the unmapped campaign details
+    const campaign = unmappedCampaigns.find((c) => c.campaignId === campaignId);
+    if (!campaign) return;
+
+    try {
+      const res = await fetch('/api/creative-hub/product-profiles/campaign-links', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productProfileId: profileId,
+          campaignId: campaign.campaignId,
+          campaignName: campaign.campaignName,
+          adAccountId: campaign.adAccountId,
+        }),
+      });
+
+      if (res.ok) {
+        // Remove from unmapped list locally and refresh profiles (don't re-run auto-discover)
+        const store = useCreativeHubStore.getState();
+        const updatedUnmapped = (store.unmappedCampaigns ?? []).filter((c) => c.campaignId !== campaignId);
+        useCreativeHubStore.setState({ unmappedCampaigns: updatedUnmapped });
+
+        // Refresh profiles to show the new link
+        const storeId = profiles[0]?.storeId;
+        if (storeId) {
+          await store.fetchProfiles(storeId);
+        }
+      } else {
+        const data = await res.json();
+        console.error('[Map] Failed to link campaign:', data.error);
+      }
+    } catch (err) {
+      console.error('[Map] Error linking campaign:', err);
+    }
   };
 
   const handleIgnoreCampaign = (campaignId: string) => {
-    // Will be wired to store action in Task 16
+    // Remove from unmapped list locally (doesn't persist — will reappear on next auto-discover)
+    const store = useCreativeHubStore.getState();
+    const updated = (store.unmappedCampaigns ?? []).filter((c) => c.campaignId !== campaignId);
+    useCreativeHubStore.setState({ unmappedCampaigns: updated });
   };
 
   const handleCreateNewProfileFromCampaign = (campaign: UnmappedCampaign) => {
@@ -224,25 +266,31 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
             </div>
           )}
 
-          {/* Not Testing section (collapsible) */}
+          {/* Inactive Products section (collapsed by default) */}
           {notTestingProfiles.length > 0 && (
-            <div className="space-y-4">
+            <div className="mt-6 space-y-4">
               <button
                 onClick={() => setNotTestingExpanded(!notTestingExpanded)}
-                className="flex items-center gap-3 w-full group"
+                className="flex items-center gap-3 w-full group px-4 py-2.5 rounded-lg bg-surface-secondary/50 hover:bg-surface-secondary transition-colors"
               >
-                <span className="text-sm font-semibold text-text-secondary">
-                  Not Testing ({notTestingProfiles.length})
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-text-dimmed/40" />
+                  <span className="text-sm font-medium text-text-secondary">
+                    Inactive Products ({notTestingProfiles.length})
+                  </span>
+                </div>
+                <span className="text-xs text-text-dimmed">
+                  {notTestingExpanded ? 'Hide' : 'Show'}
                 </span>
                 {notTestingExpanded ? (
                   <ChevronUp className="h-4 w-4 text-text-dimmed group-hover:text-text-secondary transition-colors" />
                 ) : (
                   <ChevronDown className="h-4 w-4 text-text-dimmed group-hover:text-text-secondary transition-colors" />
                 )}
-                <span className="flex-1 border-t border-border" />
+                <span className="flex-1 border-t border-border/50" />
               </button>
               {notTestingExpanded && (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 opacity-75">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 opacity-60">
                   {notTestingProfiles.map((profile) => (
                     <ProductProfileCard
                       key={profile.id}

@@ -418,16 +418,25 @@ export function LaunchStep1Campaign() {
       {/* Section 4A: New Adsets Budget/Duration/Bid — CBO vs ABO aware */}
       {selectedProfile && campaignMode === 'existing' && adsetMode === 'new_adsets' && selectedCampaignId && (
         isCBO ? (
-          /* CBO campaign: budget is at campaign level, only show test duration + info */
+          /* CBO campaign: budget at campaign level, but bid amount/cost cap may be at ad set level */
           <section className="space-y-4">
             <h3 className="text-sm font-semibold text-slate-700">Ad Set Settings</h3>
             <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3">
               <Info className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
               <div className="text-xs text-blue-800">
-                <p className="font-medium">This is a CBO campaign</p>
-                <p className="mt-0.5">Budget is managed at the campaign level. Ad set budget and bid strategy are controlled by Meta&apos;s campaign budget optimization.</p>
+                <p className="font-medium">CBO Campaign — Advantage+ Campaign Budget</p>
+                <p className="mt-0.5">
+                  Budget: <span className="font-semibold">${selectedCampaignLink?.campaignDailyBudget ?? '—'}/day</span> at campaign level.
+                  {' '}Bid Strategy: <span className="font-semibold">{
+                    (selectedCampaignLink?.campaignBidStrategy === 'BID_CAP' || selectedCampaignLink?.campaignBidStrategy === 'LOWEST_COST_WITH_BID_CAP') ? 'Bid Cap' :
+                    selectedCampaignLink?.campaignBidStrategy === 'COST_CAP' ? 'Cost Cap' :
+                    (selectedCampaignLink?.campaignBidStrategy === 'MINIMUM_ROAS' || selectedCampaignLink?.campaignBidStrategy === 'LOWEST_COST_WITH_MIN_ROAS') ? 'ROAS Goal' :
+                    'Lowest Cost'
+                  }</span>
+                </p>
               </div>
             </div>
+
             <FormField label="Test Duration" helper="Days to run before evaluation">
               <div className="relative">
                 <input
@@ -443,6 +452,68 @@ export function LaunchStep1Campaign() {
                 </span>
               </div>
             </FormField>
+
+            {/* CBO + Bid Cap: bid amount is set at ad set level */}
+            {(selectedCampaignLink?.campaignBidStrategy === 'BID_CAP' || selectedCampaignLink?.campaignBidStrategy === 'LOWEST_COST_WITH_BID_CAP') && (
+              <FormField label="Bid Cap Amount" helper="Maximum bid per auction (set per ad set)">
+                <div className="relative">
+                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-medium text-slate-500">$</span>
+                  <input
+                    type="number"
+                    min={0.01}
+                    step={0.01}
+                    value={launchConfig.bidAmount ?? ''}
+                    onChange={(e) => updateLaunchConfig({ bidAmount: parseFloat(e.target.value) || undefined })}
+                    placeholder="e.g. 5.00"
+                    className="w-full rounded-lg border border-slate-200 py-2.5 pl-7 pr-14 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-slate-400">
+                    {selectedProfile.adAccountCurrency || 'USD'}
+                  </span>
+                </div>
+              </FormField>
+            )}
+
+            {/* CBO + Cost Cap: cost goal is set at ad set level */}
+            {(selectedCampaignLink?.campaignBidStrategy === 'COST_CAP') && (
+              <FormField label="Cost Per Result Goal" helper="Target cost per conversion (set per ad set)">
+                <div className="relative">
+                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-medium text-slate-500">$</span>
+                  <input
+                    type="number"
+                    min={0.01}
+                    step={0.01}
+                    value={launchConfig.bidAmount ?? ''}
+                    onChange={(e) => updateLaunchConfig({ bidAmount: parseFloat(e.target.value) || undefined })}
+                    placeholder="e.g. 15.00"
+                    className="w-full rounded-lg border border-slate-200 py-2.5 pl-7 pr-14 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-slate-400">
+                    {selectedProfile.adAccountCurrency || 'USD'}
+                  </span>
+                </div>
+              </FormField>
+            )}
+
+            {/* CBO + ROAS Goal: ROAS floor set at ad set level */}
+            {(selectedCampaignLink?.campaignBidStrategy === 'MINIMUM_ROAS' || selectedCampaignLink?.campaignBidStrategy === 'LOWEST_COST_WITH_MIN_ROAS') && (
+              <FormField label="ROAS Goal" helper="Minimum return on ad spend target">
+                <div className="relative">
+                  <input
+                    type="number"
+                    min={0.01}
+                    step={0.01}
+                    value={launchConfig.roasFloor ?? ''}
+                    onChange={(e) => updateLaunchConfig({ roasFloor: parseFloat(e.target.value) || undefined })}
+                    placeholder="e.g. 2.5"
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2.5 pr-8 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-slate-400">
+                    x
+                  </span>
+                </div>
+              </FormField>
+            )}
           </section>
         ) : (
           /* ABO campaign: full budget + bid strategy controls at ad set level */
@@ -635,16 +706,144 @@ export function LaunchStep1Campaign() {
               </p>
             </FormField>
 
-            {/* Budget & Bid */}
-            <NewAdsetBudgetSection
-              currency={selectedProfile.adAccountCurrency}
-              dailyBudget={launchConfig.dailyBudget ?? selectedProfile.defaultBudget}
-              testDuration={launchConfig.testDuration ?? selectedProfile.defaultDuration}
-              bidStrategy={bidStrategy}
-              bidAmount={launchConfig.bidAmount}
-              roasFloor={launchConfig.roasFloor}
-              onUpdate={updateLaunchConfig}
-            />
+            {/* Budget & Bid — different layout for CBO vs ABO */}
+            {structure === 'CBO' ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <FormField label="Campaign Daily Budget" helper="Total daily budget for all ad sets">
+                    <div className="relative">
+                      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-medium text-slate-500">$</span>
+                      <input
+                        type="number"
+                        min={1}
+                        value={launchConfig.dailyBudget ?? selectedProfile.defaultBudget}
+                        onChange={(e) => updateLaunchConfig({ dailyBudget: parseInt(e.target.value) || 20 })}
+                        className="w-full rounded-lg border border-slate-200 py-2.5 pl-7 pr-14 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-slate-400">
+                        {selectedProfile.adAccountCurrency || 'USD'}
+                      </span>
+                    </div>
+                  </FormField>
+                  <FormField label="Test Duration" helper="Days to run before evaluation">
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min={1}
+                        max={90}
+                        value={launchConfig.testDuration ?? selectedProfile.defaultDuration}
+                        onChange={(e) => updateLaunchConfig({ testDuration: parseInt(e.target.value) || 3 })}
+                        className="w-full rounded-lg border border-slate-200 px-3 py-2.5 pr-14 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-slate-400">days</span>
+                    </div>
+                  </FormField>
+                </div>
+
+                <FormField label="Campaign Bid Strategy">
+                  <div className="space-y-2">
+                    {[
+                      { value: 'LOWEST_COST_WITHOUT_CAP' as const, label: 'Lowest Cost', desc: 'Maximize results for your budget' },
+                      { value: 'COST_CAP' as const, label: 'Cost Cap', desc: 'Keep cost per result around your target' },
+                      { value: 'LOWEST_COST_WITH_BID_CAP' as const, label: 'Bid Cap', desc: 'Control your bid in each auction' },
+                      { value: 'LOWEST_COST_WITH_MIN_ROAS' as const, label: 'ROAS Goal', desc: 'Hit a minimum return on ad spend' },
+                    ].map((opt) => (
+                      <label
+                        key={opt.value}
+                        className={cn(
+                          'flex cursor-pointer items-center gap-3 rounded-lg border-2 px-4 py-3 transition-colors',
+                          bidStrategy === opt.value ? 'border-blue-500 bg-blue-50/30' : 'border-slate-200 bg-white hover:border-slate-300'
+                        )}
+                      >
+                        <input
+                          type="radio"
+                          name="cbo-bid-strategy"
+                          value={opt.value}
+                          checked={bidStrategy === opt.value}
+                          onChange={() => updateLaunchConfig({ bidStrategy: opt.value })}
+                          className="h-4 w-4 border-slate-300 text-blue-600"
+                        />
+                        <div>
+                          <p className="text-sm font-medium text-slate-900">{opt.label}</p>
+                          <p className="text-xs text-slate-500">{opt.desc}</p>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </FormField>
+
+                {/* Bid Cap amount — at ad set level even for CBO */}
+                {(bidStrategy === 'LOWEST_COST_WITH_BID_CAP' || bidStrategy === 'BID_CAP') && (
+                  <FormField label="Bid Cap Amount" helper="Maximum bid per auction (applied per ad set)">
+                    <div className="relative">
+                      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-medium text-slate-500">$</span>
+                      <input
+                        type="number"
+                        min={0.01}
+                        step={0.01}
+                        value={launchConfig.bidAmount ?? ''}
+                        onChange={(e) => updateLaunchConfig({ bidAmount: parseFloat(e.target.value) || undefined })}
+                        placeholder="e.g. 5.00"
+                        className="w-full rounded-lg border border-slate-200 py-2.5 pl-7 pr-14 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-slate-400">
+                        {selectedProfile.adAccountCurrency || 'USD'}
+                      </span>
+                    </div>
+                  </FormField>
+                )}
+
+                {/* Cost Cap target — at ad set level */}
+                {(bidStrategy === 'COST_CAP') && (
+                  <FormField label="Cost Per Result Goal" helper="Target cost per conversion (applied per ad set)">
+                    <div className="relative">
+                      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-medium text-slate-500">$</span>
+                      <input
+                        type="number"
+                        min={0.01}
+                        step={0.01}
+                        value={launchConfig.bidAmount ?? ''}
+                        onChange={(e) => updateLaunchConfig({ bidAmount: parseFloat(e.target.value) || undefined })}
+                        placeholder="e.g. 15.00"
+                        className="w-full rounded-lg border border-slate-200 py-2.5 pl-7 pr-14 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-slate-400">
+                        {selectedProfile.adAccountCurrency || 'USD'}
+                      </span>
+                    </div>
+                  </FormField>
+                )}
+
+                {/* ROAS floor — at ad set level */}
+                {(bidStrategy === 'LOWEST_COST_WITH_MIN_ROAS' || bidStrategy === 'MINIMUM_ROAS') && (
+                  <FormField label="ROAS Goal" helper="Minimum return on ad spend target">
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min={0.01}
+                        step={0.01}
+                        value={launchConfig.roasFloor ?? ''}
+                        onChange={(e) => updateLaunchConfig({ roasFloor: parseFloat(e.target.value) || undefined })}
+                        placeholder="e.g. 2.5"
+                        className="w-full rounded-lg border border-slate-200 px-3 py-2.5 pr-8 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-slate-400">x</span>
+                    </div>
+                  </FormField>
+                )}
+              </div>
+            ) : (
+              /* ABO: full budget + bid at ad set level */
+              <NewAdsetBudgetSection
+                currency={selectedProfile.adAccountCurrency}
+                dailyBudget={launchConfig.dailyBudget ?? selectedProfile.defaultBudget}
+                testDuration={launchConfig.testDuration ?? selectedProfile.defaultDuration}
+                bidStrategy={bidStrategy}
+                bidAmount={launchConfig.bidAmount}
+                roasFloor={launchConfig.roasFloor}
+                onUpdate={updateLaunchConfig}
+              />
+            )}
 
             {/* Account & Page Settings */}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

@@ -233,7 +233,9 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
         } else {
           set({
             profiles: profiles.map((p) =>
-              p.id === data.profile.id ? data.profile : p
+              p.id === data.profile.id
+                ? { ...p, ...data.profile, campaignLinks: p.campaignLinks, activeCampaignCount: p.activeCampaignCount }
+                : p
             ),
           });
         }

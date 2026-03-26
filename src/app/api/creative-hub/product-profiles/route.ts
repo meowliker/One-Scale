@@ -46,6 +46,42 @@ async function buildCampaignStatusMap(storeId: string): Promise<Map<string, stri
 }
 
 /**
+ * Build a map of campaignId -> budget/bid info from the latest campaign snapshots.
+ * Used to detect CBO (dailyBudget > 0 at campaign level) and bid strategy.
+ */
+async function buildCampaignBudgetMap(storeId: string): Promise<Map<string, { dailyBudget?: number; bidStrategy?: string }>> {
+  const budgetMap = new Map<string, { dailyBudget?: number; bidStrategy?: string }>();
+
+  if (!isSupabasePersistenceEnabled()) return budgetMap;
+
+  try {
+    const snapshots = await getRecentPersistentMetaEndpointSnapshots<Campaign[]>(
+      storeId,
+      'campaigns',
+      20
+    );
+
+    for (const snapshot of snapshots) {
+      if (!Array.isArray(snapshot.data)) continue;
+      for (const campaign of snapshot.data) {
+        if (campaign.id && !budgetMap.has(campaign.id)) {
+          const raw = campaign as unknown as Record<string, unknown>;
+          const dailyBudgetRaw = raw.dailyBudget as number | undefined;
+          // Convert from cents to dollars (Meta stores in cents)
+          const dailyBudget = dailyBudgetRaw ? dailyBudgetRaw / 100 : undefined;
+          const bidStrategy = (raw.bidStrategy || raw.bid_strategy) as string | undefined;
+          budgetMap.set(campaign.id, { dailyBudget, bidStrategy });
+        }
+      }
+    }
+  } catch {
+    // Fallback: no budget info available
+  }
+
+  return budgetMap;
+}
+
+/**
  * Count active vs inactive campaigns for a profile's linked campaigns using Meta status data.
  * A campaign is "active" only if Meta reports status === 'ACTIVE'.
  * If we have no snapshot data for a campaign, we fall back to the DB isActive flag.
@@ -91,13 +127,28 @@ export async function GET(request: NextRequest) {
   try {
     const profiles = await getProductProfiles(storeId);
 
-    // Fetch campaign status map once (shared across all profiles)
-    const statusMap = await buildCampaignStatusMap(storeId);
+    // Fetch campaign status + budget maps once (shared across all profiles)
+    const [statusMap, budgetMap] = await Promise.all([
+      buildCampaignStatusMap(storeId),
+      buildCampaignBudgetMap(storeId),
+    ]);
 
     // Attach campaign links + active/inactive counts to each profile
+    // Enrich links with CBO/ABO budget and bid strategy data
     const profilesWithLinks = await Promise.all(
       profiles.map(async (profile) => {
-        const campaignLinks = await getProductCampaignLinks(profile.id);
+        const rawLinks = await getProductCampaignLinks(profile.id);
+        // Enrich each link with campaign-level budget/bid data for CBO/ABO detection
+        const campaignLinks = rawLinks.map((link) => {
+          const budget = budgetMap.get(link.campaignId);
+          const metaStatus = statusMap.get(link.campaignId);
+          return {
+            ...link,
+            campaignDailyBudget: budget?.dailyBudget,
+            campaignBidStrategy: budget?.bidStrategy,
+            effectiveStatus: metaStatus || link.effectiveStatus,
+          };
+        });
         const { activeCampaignCount, inactiveCampaignCount } = countCampaignStatuses(campaignLinks, statusMap);
         return {
           ...profile,

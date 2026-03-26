@@ -80,9 +80,12 @@ export interface TargetingSpec {
 
 export type BidStrategy =
   | 'LOWEST_COST_WITHOUT_CAP'
+  | 'LOWEST_COST'
   | 'COST_CAP'
   | 'LOWEST_COST_WITH_BID_CAP'
-  | 'LOWEST_COST_WITH_MIN_ROAS';
+  | 'BID_CAP'
+  | 'LOWEST_COST_WITH_MIN_ROAS'
+  | 'MINIMUM_ROAS';
 
 export type CampaignLinkType = 'testing' | 'scaling' | 'retargeting';
 

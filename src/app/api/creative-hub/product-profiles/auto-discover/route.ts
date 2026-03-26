@@ -17,7 +17,6 @@ import {
   deleteAllCampaignLinksForProfile,
   deleteProductProfile,
 } from '@/app/api/lib/creative-hub-db';
-import type { DbStoreAdAccount } from '@/app/api/lib/db';
 import type { ProductCampaignLink } from '@/types/creativeHub';
 
 // ─── Types ───────────────────────────────────────────────────────────
@@ -30,14 +29,16 @@ interface ShopifyProduct {
   images?: Array<{ src: string }>;
 }
 
-/** Per-campaign metadata extracted from the creative + promoted_object */
 interface CampaignMeta {
   campaignId: string;
   campaignName: string;
   adAccountId: string;
   pageId?: string;
+  pageName?: string;
   pixelId?: string;
+  pixelName?: string;
   instagramActorId?: string;
+  instagramUsername?: string;
   destinationUrl?: string;
 }
 
@@ -52,17 +53,6 @@ const DEFAULT_UTM_TEMPLATE =
   'utm_source=FbAds&utm_medium={{adset.name}}&utm_campaign={{campaign.name}}&utm_content={{ad.name}}&campaign_id={{campaign.id}}&adset_id={{adset.id}}&ad_id={{ad.id}}';
 
 // ─── Helpers ─────────────────────────────────────────────────────────
-
-function extractProductHandle(url: string): string | null {
-  try {
-    const parsed = new URL(url);
-    const match = parsed.pathname.match(/\/products\/([^/?#]+)/);
-    return match ? match[1].toLowerCase() : null;
-  } catch {
-    const match = url.match(/\/products\/([^/?#]+)/);
-    return match ? match[1].toLowerCase() : null;
-  }
-}
 
 /** Process items in sequential batches of `size`, parallel within each batch */
 async function batchProcess<T, R>(
@@ -79,7 +69,17 @@ async function batchProcess<T, R>(
   return results;
 }
 
-/** Find the most common value in an array, ignoring undefined */
+function extractProductHandle(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const match = parsed.pathname.match(/\/products\/([^/?#]+)/);
+    return match ? match[1].toLowerCase() : null;
+  } catch {
+    const match = url.match(/\/products\/([^/?#]+)/);
+    return match ? match[1].toLowerCase() : null;
+  }
+}
+
 function mostCommon<T>(values: (T | undefined)[]): T | undefined {
   const counts = new Map<T, number>();
   for (const v of values) {
@@ -106,7 +106,9 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // ━━━ Step 1: Get all ad accounts from Supabase ━━━
+    const startTime = Date.now();
+
+    // ━━━ Step 1: Get store + ad accounts ━━━
     if (!isSupabasePersistenceEnabled()) {
       return NextResponse.json({ error: 'Supabase persistence is not enabled' }, { status: 500 });
     }
@@ -124,16 +126,15 @@ export async function POST(request: NextRequest) {
     );
     if (adAccounts.length === 0) {
       return NextResponse.json(
-        { error: `No active Meta ad accounts found. Found ${store.adAccounts.length} total.` },
+        { error: `No active Meta ad accounts found.` },
         { status: 400 },
       );
     }
 
+    const activeAdAccountIds = new Set(adAccounts.map((a) => a.ad_account_id));
     const accountLookup = new Map(adAccounts.map((a) => [a.ad_account_id, a]));
 
-    // ━━━ Step 2: Get active campaigns from per-store Supabase snapshot table ━━━
-    // Get the per-store snapshot table name via RPC
-    const activeAdAccountIds = new Set(adAccounts.map((a) => a.ad_account_id));
+    // ━━━ Step 2: Get per-store snapshot table ━━━
     let snapshotTable = '';
     try {
       const tableNameResult = await rest<string>(
@@ -146,57 +147,70 @@ export async function POST(request: NextRequest) {
       );
       snapshotTable = typeof tableNameResult === 'string' ? tableNameResult : '';
     } catch (e) {
-      console.warn('[auto-discover] Could not get per-store table, falling back to legacy:', e);
+      console.warn('[auto-discover] Could not get per-store table:', e);
     }
 
-    interface CampaignSnapshotRow {
-      scope_id: string;
-      payload_json: string;
+    if (!snapshotTable) {
+      return NextResponse.json({ error: 'Per-store snapshot table not found' }, { status: 500 });
     }
 
-    // Use per-store table if available, otherwise fall back to legacy table
-    const snapshotQuery = snapshotTable
-      ? `/${snapshotTable}?endpoint=eq.campaigns&variant_key=eq.latest&select=scope_id,payload_json&order=updated_at.desc`
-      : `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId!)}&endpoint=eq.campaigns&variant_key=eq.latest&select=scope_id,payload_json`;
+    console.log(`[auto-discover] Using snapshot table: ${snapshotTable}`);
 
-    console.log(`[auto-discover] Using snapshot table: ${snapshotTable || 'meta_endpoint_snapshots (legacy)'}`);
-    const campaignSnapshots = await rest<CampaignSnapshotRow[]>(snapshotQuery);
+    interface SnapshotRow { scope_id: string; payload_json: string; }
+
+    // ━━━ Step 3: Read ALL data from snapshot (ZERO Meta API calls) ━━━
+
+    // 3a: Read campaigns → get campaign names + status
+    const campaignSnapshots = await rest<SnapshotRow[]>(
+      `/${snapshotTable}?endpoint=eq.campaigns&variant_key=eq.latest&select=scope_id,payload_json&order=updated_at.desc`,
+    );
 
     interface RawCampaign {
       id: string;
       name: string;
       status?: string;
+      policyInfo?: { effectiveStatus?: string; configuredStatus?: string };
       effective_status?: string;
       ad_account_id?: string;
       adAccountId?: string;
-      account_id?: string;
+      dailyBudget?: number;
+      bidStrategy?: string;
+      buying_type?: string;
     }
 
     const allCampaigns: Array<{ id: string; name: string; adAccountId: string }> = [];
     const seenCampaignIds = new Set<string>();
-    // Only process ACTIVE campaigns for auto-discover (PAUSED/others can be added via Edit)
-    const allowedStatuses = new Set(['ACTIVE', 'active']);
+    const campaignNameMap = new Map<string, string>(); // campaignId → name
+    const campaignMetaInfoMap = new Map<string, { dailyBudget?: number; lifetimeBudget?: number | null; bidStrategy?: string; buyingType?: string }>(); // campaignId → budget/bid info
 
     for (const snap of campaignSnapshots) {
       try {
         const campaigns: RawCampaign[] = JSON.parse(snap.payload_json);
-        const scopeAdAccount =
-          snap.scope_id.match(/accounts:(.+)/)?.[1]?.split(',')[0] ||
-          adAccounts[0]?.ad_account_id ||
-          '';
+        // Extract ad account from scope_id if campaigns don't have it individually
+        // scope_id format: "accounts:act_123,act_456" or just "act_123"
+        const scopeAccounts = snap.scope_id?.startsWith('accounts:')
+          ? snap.scope_id.replace('accounts:', '').split(',').map((a: string) => a.trim())
+          : snap.scope_id ? [snap.scope_id] : [];
+        const defaultAdAccountId = scopeAccounts.find((a: string) => activeAdAccountIds.has(a)) || scopeAccounts[0] || '';
 
         for (const c of campaigns) {
           if (!c.id || !c.name) continue;
+          const adAccountId = c.ad_account_id || c.adAccountId || defaultAdAccountId;
+          // If we know the store's accounts and this campaign's account isn't in them, skip
+          if (adAccountId && activeAdAccountIds.size > 0 && !activeAdAccountIds.has(adAccountId)) continue;
+
+          campaignNameMap.set(c.id, c.name);
+          // Store campaign budget/bid metadata for CBO/ABO detection
+          campaignMetaInfoMap.set(c.id, {
+            dailyBudget: c.dailyBudget,
+            bidStrategy: c.bidStrategy,
+            buyingType: c.buying_type,
+          });
+
           if (seenCampaignIds.has(c.id)) continue;
-          // Filter: only ACTIVE campaigns (skip PAUSED/DELETED/ARCHIVED)
-          const status = c.status || c.effective_status || '';
-          if (!allowedStatuses.has(status)) continue;
-
-          const adAccountId =
-            c.ad_account_id || c.adAccountId || c.account_id || scopeAdAccount;
-
-          // ★ Only include campaigns from the store's CURRENT active ad accounts
-          if (!activeAdAccountIds.has(adAccountId)) continue;
+          // Only ACTIVE campaigns
+          const effectiveStatus = c.policyInfo?.effectiveStatus || c.effective_status || c.status || '';
+          if (effectiveStatus !== 'ACTIVE') continue;
 
           seenCampaignIds.add(c.id);
           allCampaigns.push({ id: c.id, name: c.name, adAccountId });
@@ -204,183 +218,93 @@ export async function POST(request: NextRequest) {
       } catch { /* skip malformed */ }
     }
 
-    console.log(`[auto-discover] Found ${allCampaigns.length} ACTIVE campaigns from store's ad accounts (filtered from ${seenCampaignIds.size} total)`);
+    console.log(`[auto-discover] Found ${allCampaigns.length} ACTIVE campaigns`);
 
-    // ━━━ Step 2b: Extract destination URLs from ads snapshots (skip Meta API when possible) ━━━
-    // The per-store table has ads with creative.destinationUrl already embedded
-    const campaignUrlMap = new Map<string, string>(); // campaignId → destinationUrl
-    if (snapshotTable) {
-      try {
-        const adsSnapshots = await rest<CampaignSnapshotRow[]>(
-          `/${snapshotTable}?endpoint=eq.ads&variant_key=eq.latest&select=scope_id,payload_json&order=updated_at.desc`,
-        );
-        interface RawAd {
-          id: string;
-          campaignId?: string;
-          campaign_id?: string;
-          adSetId?: string;
-          creative?: {
-            destinationUrl?: string;
-            type?: string;
-          };
-        }
-        for (const snap of adsSnapshots) {
-          try {
-            const ads: RawAd[] = JSON.parse(snap.payload_json);
-            for (const ad of ads) {
-              const campId = ad.campaignId || ad.campaign_id;
-              if (!campId || campaignUrlMap.has(campId)) continue;
-              const url = ad.creative?.destinationUrl;
-              if (url) {
-                campaignUrlMap.set(campId, url);
-              }
-            }
-          } catch { /* skip malformed */ }
-        }
-        console.log(`[auto-discover] Extracted ${campaignUrlMap.size} destination URLs from ads snapshots (skipping Meta API for these)`);
-      } catch (e) {
-        console.warn('[auto-discover] Could not read ads snapshots:', e);
-      }
-    }
-
-    // ━━━ Step 3: For each campaign, get destination URL ━━━
-    // First populate from snapshot data (no API calls needed)
-    const campaignMetaMap = new Map<string, CampaignMeta>();
-    const campaignsNeedingApi: typeof allCampaigns = [];
-
-    for (const campaign of allCampaigns) {
-      const snapshotUrl = campaignUrlMap.get(campaign.id);
-      if (snapshotUrl) {
-        campaignMetaMap.set(campaign.id, {
-          campaignId: campaign.id,
-          campaignName: campaign.name,
-          adAccountId: campaign.adAccountId,
-          destinationUrl: snapshotUrl,
-        });
-      } else {
-        campaignsNeedingApi.push(campaign);
-      }
-    }
-
-    console.log(`[auto-discover] ${campaignMetaMap.size} campaigns resolved from snapshots, ${campaignsNeedingApi.length} need Meta API`);
-
-    const metaTokenObj = await getMetaToken(storeId!);
-    if (!metaTokenObj) {
-      return NextResponse.json({ error: 'No Meta token found for this store' }, { status: 400 });
-    }
-    const metaToken = metaTokenObj.accessToken;
-
-    // Only call Meta API for campaigns not covered by snapshot data
-    await batchProcess(campaignsNeedingApi, 15, async (campaign) => {
-      try {
-        // Step 3a: Get 1 ad from the campaign with creative.id and promoted_object
-        const adsResult = await fetchFromMeta<{
-          data: Array<{
-            id: string;
-            adset_id?: string;
-            creative?: { id?: string };
-            promoted_object?: { pixel_id?: string };
-          }>;
-        }>(metaToken, `${campaign.id}/ads`, {
-          fields: 'id,adset_id,creative{id},promoted_object',
-          limit: '1',
-        }, 8000, 0);
-
-        const ad = adsResult.data?.[0];
-        if (!ad) return;
-
-        const creativeId = ad.creative?.id;
-        let pixelId = ad.promoted_object?.pixel_id;
-
-        // pixel_id is on the adset's promoted_object, not the ad
-        // If not found on ad, fetch from adset
-        if (!pixelId && ad.adset_id) {
-          try {
-            const adsetResult = await fetchFromMeta<{
-              promoted_object?: { pixel_id?: string };
-            }>(metaToken, ad.adset_id, {
-              fields: 'promoted_object',
-            }, 5000, 0);
-            pixelId = adsetResult.promoted_object?.pixel_id;
-          } catch { /* skip */ }
-        }
-
-        const meta: CampaignMeta = {
-          campaignId: campaign.id,
-          campaignName: campaign.name,
-          adAccountId: campaign.adAccountId,
-          pixelId: pixelId ? String(pixelId) : undefined,
-        };
-
-        if (!creativeId) {
-          // No creative, but we might still have pixel info
-          if (meta.pixelId) campaignMetaMap.set(campaign.id, meta);
-          return;
-        }
-
-        // Step 3b: Fetch creative details separately (MUST NOT use field expansion on ads endpoint)
-        const creativeResult = await fetchFromMeta<{
-          id: string;
-          object_story_spec?: {
-            page_id?: string;
-            instagram_actor_id?: string;
-            instagram_user_id?: string;
-            link_data?: { link?: string };
-            video_data?: { call_to_action?: { value?: { link?: string } } };
-          };
-          asset_feed_spec?: { link_urls?: Array<{ website_url?: string }> };
-        }>(metaToken, creativeId, {
-          fields: 'id,object_story_spec',
-        }, 8000, 0);
-
-        const oss = creativeResult.object_story_spec;
-        if (oss) {
-          if (oss.page_id) meta.pageId = String(oss.page_id);
-          const igId = oss.instagram_actor_id || oss.instagram_user_id;
-          if (igId) meta.instagramActorId = String(igId);
-
-          // Extract landing URL
-          if (oss.link_data?.link) {
-            meta.destinationUrl = oss.link_data.link;
-          } else if (oss.video_data?.call_to_action?.value?.link) {
-            meta.destinationUrl = oss.video_data.call_to_action.value.link;
-          }
-        }
-
-        // Fallback for asset_feed_spec link URLs
-        if (!meta.destinationUrl && creativeResult.asset_feed_spec?.link_urls?.[0]?.website_url) {
-          meta.destinationUrl = creativeResult.asset_feed_spec.link_urls[0].website_url;
-        }
-
-        campaignMetaMap.set(campaign.id, meta);
-      } catch (err) {
-        console.warn(`[auto-discover] Failed to fetch creative for campaign ${campaign.id}:`, err);
-      }
-    });
-
-    console.log(
-      `[auto-discover] Creative fetch complete: ${campaignMetaMap.size}/${allCampaigns.length} campaigns resolved`,
+    // 3b: Read ads → get destination URLs + page_id + pixel + IG per campaign
+    const adsSnapshots = await rest<SnapshotRow[]>(
+      `/${snapshotTable}?endpoint=eq.ads&variant_key=eq.latest&select=payload_json`,
     );
 
-    // ━━━ Step 4: Batch resolve names for all unique IDs ━━━
-    const uniquePageIds = new Set<string>();
-    const uniqueIgIds = new Set<string>();
-    const uniquePixelIds = new Set<string>();
-    const uniqueAdAccountIds = new Set<string>();
-
-    for (const [, meta] of campaignMetaMap) {
-      if (meta.pageId) uniquePageIds.add(meta.pageId);
-      if (meta.instagramActorId) uniqueIgIds.add(meta.instagramActorId);
-      if (meta.pixelId) uniquePixelIds.add(meta.pixelId);
-      if (meta.adAccountId) uniqueAdAccountIds.add(meta.adAccountId);
+    interface RawAd {
+      id: string;
+      campaign_id?: string;
+      campaignId?: string;
+      ad_account_id?: string;
+      page_id?: string;
+      page_name?: string;
+      instagram_user_id?: string;
+      instagram_username?: string;
+      creative?: {
+        destinationUrl?: string;
+        link_url?: string;
+      };
+      policyInfo?: { effectiveStatus?: string };
     }
 
+    const campaignMetaMap = new Map<string, CampaignMeta>();
     const pageNameMap = new Map<string, string>();
-    const igUsernameMap = new Map<string, string>();
     const pixelNameMap = new Map<string, string>();
-    const accountBmMap = new Map<string, { bmId: string; bmName: string }>();
+    const igUsernameMap = new Map<string, string>();
 
-    // Pre-populate names from campaign-setup/options API (most reliable source)
+    for (const snap of adsSnapshots) {
+      try {
+        const ads: RawAd[] = JSON.parse(snap.payload_json);
+        // Extract default ad account from scope_id (same approach as campaigns)
+        const adsScopeAccounts = snap.scope_id?.startsWith('accounts:')
+          ? snap.scope_id.replace('accounts:', '').split(',').map((a: string) => a.trim())
+          : snap.scope_id?.startsWith('act_') ? [snap.scope_id] : [];
+        const adsDefaultAccount = adsScopeAccounts.find((a: string) => activeAdAccountIds.has(a)) || adsScopeAccounts[0] || '';
+
+        for (const ad of ads) {
+          const campId = ad.campaign_id || ad.campaignId;
+          const adAccountId = ad.ad_account_id || adsDefaultAccount;
+          if (!campId) continue;
+          // Skip if we know the account and it's not in the store's active accounts
+          if (adAccountId && activeAdAccountIds.size > 0 && !activeAdAccountIds.has(adAccountId)) continue;
+
+          // Collect page/IG names from ads
+          if (ad.page_id && ad.page_name) pageNameMap.set(ad.page_id, ad.page_name);
+          if (ad.instagram_user_id && ad.instagram_username) igUsernameMap.set(ad.instagram_user_id, ad.instagram_username);
+
+          // Get URL — skip if we already have one for this campaign
+          if (campaignMetaMap.has(campId)) continue;
+
+          const url = ad.creative?.destinationUrl || ad.creative?.link_url || '';
+          const campName = campaignNameMap.get(campId) || '';
+
+          campaignMetaMap.set(campId, {
+            campaignId: campId,
+            campaignName: campName,
+            adAccountId,
+            destinationUrl: url || undefined,
+            pageId: ad.page_id,
+            pageName: ad.page_name,
+            instagramActorId: ad.instagram_user_id,
+            instagramUsername: ad.instagram_username,
+          });
+        }
+      } catch { /* skip malformed */ }
+    }
+
+    // 3c: Read accounts → get BM info
+    const accountBmMap = new Map<string, { bmId: string; bmName: string }>();
+    try {
+      const accountSnapshots = await rest<SnapshotRow[]>(
+        `/${snapshotTable}?endpoint=eq.accounts&select=payload_json&limit=1`,
+      );
+      for (const snap of accountSnapshots) {
+        const accounts = JSON.parse(snap.payload_json) as Array<{
+          id: string; name: string; business?: { id: string; name: string }; account_status?: number;
+        }>;
+        for (const acct of accounts) {
+          if (acct.business) {
+            accountBmMap.set(acct.id, { bmId: acct.business.id, bmName: acct.business.name });
+          }
+        }
+      }
+    } catch { /* skip */ }
+
+    // 3d: Pre-populate names from campaign-setup/options API (fast, cached)
     try {
       const baseUrl = new URL(request.url).origin;
       const cookie = request.headers.get('cookie') ?? '';
@@ -408,303 +332,389 @@ export async function POST(request: NextRequest) {
           if (ig.id && ig.username) igUsernameMap.set(ig.id, ig.username);
         }
         for (const acct of options.accounts ?? []) {
-          if (acct.businessId) {
+          if (acct.businessId && !accountBmMap.has(acct.id)) {
             accountBmMap.set(acct.id, { bmId: acct.businessId, bmName: acct.businessName || acct.businessId });
           }
         }
-        console.log(`[auto-discover] Pre-populated from options: ${pageNameMap.size} pages, ${igUsernameMap.size} IG, ${pixelNameMap.size} pixels, ${accountBmMap.size} BM`);
-      }
-    } catch (err) {
-      console.warn('[auto-discover] Options API pre-populate failed:', err);
-    }
-
-    // 4a: Resolve page names
-    // First try: fetch ALL pages the user manages via me/accounts (catches cross-BM pages)
-    try {
-      const allPages = await fetchFromMeta<{ data: Array<{ id: string; name: string }> }>(
-        metaToken, 'me/accounts', { fields: 'id,name', limit: '200' }, 8000, 0,
-      );
-      for (const p of allPages.data || []) {
-        if (p.id && p.name) pageNameMap.set(p.id, p.name);
       }
     } catch { /* skip */ }
 
-    // Second try: for any still-unresolved page IDs, try direct lookup + promote_pages
-    const unresolvedPageIds = Array.from(uniquePageIds).filter(id => !pageNameMap.has(id));
-    if (unresolvedPageIds.length > 0) {
-      console.log(`[auto-discover] Attempting direct lookup for ${unresolvedPageIds.length} unresolved page IDs: ${unresolvedPageIds.join(', ')}`);
+    console.log(`[auto-discover] Snapshot data: ${campaignMetaMap.size} campaigns with ad data, ${pageNameMap.size} pages, ${pixelNameMap.size} pixels, ${accountBmMap.size} BMs (${Date.now() - startTime}ms)`);
+
+    // Get Meta token for API resolution
+    const metaTokenObj = await getMetaToken(storeId!);
+    const metaToken = metaTokenObj?.accessToken;
+
+    // ━━━ Step 3e: Meta API resolution for page/pixel/IG/BM names ━━━
+    // Collect unique IDs that need resolution
+    const uniquePageIds = new Set<string>();
+    const uniqueIgIds = new Set<string>();
+    const uniquePixelIds = new Set<string>();
+    const uniqueAdAccountIds = new Set<string>();
+    for (const [, meta] of campaignMetaMap) {
+      if (meta.pageId) uniquePageIds.add(meta.pageId);
+      if (meta.instagramActorId) uniqueIgIds.add(meta.instagramActorId);
+      if (meta.pixelId) uniquePixelIds.add(meta.pixelId);
+      if (meta.adAccountId) uniqueAdAccountIds.add(meta.adAccountId);
     }
-    await batchProcess(unresolvedPageIds, 10, async (pageId) => {
-      try {
-        const page = await fetchFromMeta<{ id: string; name: string }>(
-          metaToken, pageId, { fields: 'id,name' }, 5000, 0,
-        );
-        if (page.name) {
-          pageNameMap.set(pageId, page.name);
-          console.log(`[auto-discover] Resolved cross-BM page ${pageId} → "${page.name}" via direct lookup`);
-        }
-      } catch (directErr) {
-        console.warn(`[auto-discover] Direct page lookup failed for ${pageId}:`, directErr);
-        // Try promote_pages fallback across all ad accounts
-        for (const acct of adAccounts) {
-          try {
-            const promotedPages = await fetchFromMeta<{ data: Array<{ id: string; name: string }> }>(
-              metaToken, `${acct.ad_account_id}/promote_pages`, { fields: 'id,name', limit: '100' }, 5000, 0,
-            );
-            for (const p of promotedPages.data || []) {
-              if (p.id === pageId && p.name) {
-                pageNameMap.set(pageId, p.name);
-                console.log(`[auto-discover] Resolved page ${pageId} → "${p.name}" via promote_pages on ${acct.ad_account_id}`);
-                return;
-              }
-            }
-          } catch { /* skip */ }
-        }
-      }
-    });
 
-    // 4b: Resolve instagram usernames (skip already-resolved)
-    const unresolvedIgIds = Array.from(uniqueIgIds).filter(id => !igUsernameMap.has(id));
-    await batchProcess(unresolvedIgIds, 10, async (igId) => {
+    if (metaToken) {
+      // Resolve page names: me/accounts → direct lookup → promote_pages
       try {
-        const ig = await fetchFromMeta<{ id: string; username: string }>(
-          metaToken, igId, { fields: 'id,username' }, 5000, 0,
+        const allPages = await fetchFromMeta<{ data: Array<{ id: string; name: string }> }>(
+          metaToken, 'me/accounts', { fields: 'id,name', limit: '200' }, 8000, 0,
         );
-        if (ig.username) igUsernameMap.set(igId, ig.username);
-      } catch (err) {
-        console.warn(`[auto-discover] Failed to resolve IG username for ${igId}:`, err);
-      }
-    });
-
-    // 4c: Resolve pixel names + BM info per ad account (skip already-resolved BMs)
-    await batchProcess(Array.from(uniqueAdAccountIds), 10, async (acctId) => {
-      try {
-        // Fetch pixels for this ad account
-        const pixelRes = await fetchFromMeta<{ data: Array<{ id: string; name: string }> }>(
-          metaToken, `${acctId}/adspixels`, { fields: 'id,name' }, 8000, 0,
-        );
-        for (const px of pixelRes.data || []) {
-          pixelNameMap.set(px.id, px.name);
+        for (const p of allPages.data || []) {
+          if (p.id && p.name) pageNameMap.set(p.id, p.name);
         }
       } catch { /* skip */ }
 
-      // Only fetch BM info if not already resolved from options API
-      if (!accountBmMap.has(acctId)) {
+      const unresolvedPageIds = Array.from(uniquePageIds).filter(id => !pageNameMap.has(id));
+      if (unresolvedPageIds.length > 0) {
+        console.log(`[auto-discover] Attempting direct lookup for ${unresolvedPageIds.length} unresolved page IDs: ${unresolvedPageIds.join(', ')}`);
+      }
+      await batchProcess(unresolvedPageIds, 10, async (pageId) => {
         try {
-          const acctRes = await fetchFromMeta<{ business?: { id: string; name: string } }>(
-            metaToken, acctId, { fields: 'business{id,name}' }, 8000, 0,
+          const page = await fetchFromMeta<{ id: string; name: string }>(
+            metaToken, pageId, { fields: 'id,name' }, 5000, 0,
           );
-          if (acctRes.business) {
-            accountBmMap.set(acctId, { bmId: acctRes.business.id, bmName: acctRes.business.name });
+          if (page.name) pageNameMap.set(pageId, page.name);
+        } catch {
+          // Try promote_pages fallback
+          for (const acct of adAccounts) {
+            try {
+              const promoted = await fetchFromMeta<{ data: Array<{ id: string; name: string }> }>(
+                metaToken, `${acct.ad_account_id}/promote_pages`, { fields: 'id,name', limit: '100' }, 5000, 0,
+              );
+              for (const p of promoted.data || []) {
+                if (p.id === pageId && p.name) { pageNameMap.set(pageId, p.name); return; }
+              }
+            } catch { /* skip */ }
           }
-        } catch { /* skip */ }
-      }
-    });
+        }
+      });
 
-    // For any pixel IDs still not resolved, try direct lookup
-    for (const pixelId of uniquePixelIds) {
-      if (!pixelNameMap.has(pixelId)) {
+      // Resolve IG usernames
+      const unresolvedIgIds = Array.from(uniqueIgIds).filter(id => !igUsernameMap.has(id));
+      await batchProcess(unresolvedIgIds, 10, async (igId) => {
         try {
-          const px = await fetchFromMeta<{ id: string; name: string }>(
-            metaToken, pixelId, { fields: 'id,name' }, 5000, 0,
-          );
-          if (px.name) pixelNameMap.set(pixelId, px.name);
+          const ig = await fetchFromMeta<{ id: string; username: string }>(metaToken, igId, { fields: 'id,username' }, 5000, 0);
+          if (ig.username) igUsernameMap.set(igId, ig.username);
         } catch { /* skip */ }
+      });
+
+      // Resolve pixel names + BM info per ad account
+      await batchProcess(Array.from(uniqueAdAccountIds), 10, async (acctId) => {
+        try {
+          const pixelRes = await fetchFromMeta<{ data: Array<{ id: string; name: string }> }>(
+            metaToken, `${acctId}/adspixels`, { fields: 'id,name' }, 8000, 0,
+          );
+          for (const px of pixelRes.data || []) { pixelNameMap.set(px.id, px.name); }
+        } catch { /* skip */ }
+        if (!accountBmMap.has(acctId)) {
+          try {
+            const acctRes = await fetchFromMeta<{ business?: { id: string; name: string } }>(
+              metaToken, acctId, { fields: 'business{id,name}' }, 8000, 0,
+            );
+            if (acctRes.business) accountBmMap.set(acctId, { bmId: acctRes.business.id, bmName: acctRes.business.name });
+          } catch { /* skip */ }
+        }
+      });
+
+      // Direct pixel ID lookup for any still unresolved
+      for (const pixelId of uniquePixelIds) {
+        if (!pixelNameMap.has(pixelId)) {
+          try {
+            const px = await fetchFromMeta<{ id: string; name: string }>(metaToken, pixelId, { fields: 'id,name' }, 5000, 0);
+            if (px.name) pixelNameMap.set(pixelId, px.name);
+          } catch { /* skip */ }
+        }
       }
+
+      // Log unresolved
+      const stillUnresolvedPages = Array.from(uniquePageIds).filter(id => !pageNameMap.has(id));
+      const stillUnresolvedIgs = Array.from(uniqueIgIds).filter(id => !igUsernameMap.has(id));
+      if (stillUnresolvedPages.length > 0) console.warn(`[auto-discover] Unresolved page IDs: ${stillUnresolvedPages.join(', ')}`);
+      if (stillUnresolvedIgs.length > 0) console.warn(`[auto-discover] Unresolved IG IDs: ${stillUnresolvedIgs.join(', ')}`);
     }
 
-    // Log unresolved IDs for debugging cross-BM issues
-    const stillUnresolvedPages = Array.from(uniquePageIds).filter(id => !pageNameMap.has(id));
-    const stillUnresolvedIgs = Array.from(uniqueIgIds).filter(id => !igUsernameMap.has(id));
-    const stillUnresolvedBms = Array.from(uniqueAdAccountIds).filter(id => !accountBmMap.has(id));
-    if (stillUnresolvedPages.length > 0) {
-      console.warn(`[auto-discover] Unresolved page IDs (will show as raw IDs): ${stillUnresolvedPages.join(', ')}`);
-    }
-    if (stillUnresolvedIgs.length > 0) {
-      console.warn(`[auto-discover] Unresolved IG IDs (will show as raw IDs): ${stillUnresolvedIgs.join(', ')}`);
-    }
-    if (stillUnresolvedBms.length > 0) {
-      console.warn(`[auto-discover] Unresolved BM for ad accounts: ${stillUnresolvedBms.join(', ')}`);
-    }
+    console.log(`[auto-discover] Name resolution: ${pageNameMap.size}/${uniquePageIds.size} pages, ${igUsernameMap.size}/${uniqueIgIds.size} IG, ${pixelNameMap.size}/${uniquePixelIds.size} pixels, ${accountBmMap.size}/${uniqueAdAccountIds.size} BM`);
 
-    console.log(
-      `[auto-discover] Name resolution: ${pageNameMap.size}/${uniquePageIds.size} pages, ` +
-      `${igUsernameMap.size}/${uniqueIgIds.size} IG, ` +
-      `${pixelNameMap.size}/${uniquePixelIds.size} pixels, ` +
-      `${accountBmMap.size}/${uniqueAdAccountIds.size} BM`,
-    );
-
-    // ━━━ Step 5: Match URLs to Shopify products ━━━
+    // ━━━ Step 4: Match URLs to Shopify products ━━━
     const shopifyProducts = await getShopifyProducts(storeId!, request);
     const handleMap = new Map<string, ShopifyProduct>();
     for (const product of shopifyProducts) {
       if (product.handle) handleMap.set(product.handle.toLowerCase(), product);
     }
 
-    // Group campaigns by matched product handle
-    const matchesByHandle = new Map<
-      string,
-      {
-        shopifyProduct: ShopifyProduct;
-        campaigns: CampaignMeta[];
-      }
-    >();
+    const matchesByHandle = new Map<string, { shopifyProduct: ShopifyProduct; campaigns: CampaignMeta[] }>();
     const unmappedCampaigns: UnmappedCampaign[] = [];
     const mappedCampaignIds = new Set<string>();
 
-    for (const [, meta] of campaignMetaMap) {
-      if (!meta.destinationUrl) {
-        unmappedCampaigns.push({
-          campaignId: meta.campaignId,
-          campaignName: meta.campaignName,
-          adAccountId: meta.adAccountId,
-          destinationUrls: [],
-        });
-        continue;
-      }
-
-      const handle = extractProductHandle(meta.destinationUrl);
-      if (handle && handleMap.has(handle)) {
-        const existing = matchesByHandle.get(handle);
-        if (existing) {
-          existing.campaigns.push(meta);
-        } else {
-          matchesByHandle.set(handle, {
-            shopifyProduct: handleMap.get(handle)!,
-            campaigns: [meta],
-          });
-        }
-        mappedCampaignIds.add(meta.campaignId);
-      } else {
-        unmappedCampaigns.push({
-          campaignId: meta.campaignId,
-          campaignName: meta.campaignName,
-          adAccountId: meta.adAccountId,
-          destinationUrls: [meta.destinationUrl],
-        });
-      }
-    }
-
-    // Also track campaigns that had no creative data at all
     for (const campaign of allCampaigns) {
-      if (!campaignMetaMap.has(campaign.id) && !mappedCampaignIds.has(campaign.id)) {
-        unmappedCampaigns.push({
-          campaignId: campaign.id,
-          campaignName: campaign.name,
-          adAccountId: campaign.adAccountId,
-          destinationUrls: [],
-        });
+      const meta = campaignMetaMap.get(campaign.id);
+      const url = meta?.destinationUrl || '';
+
+      if (url) {
+        const handle = extractProductHandle(url);
+        if (handle && handleMap.has(handle)) {
+          const fullMeta: CampaignMeta = {
+            campaignId: campaign.id,
+            campaignName: campaign.name,
+            adAccountId: campaign.adAccountId,
+            destinationUrl: url,
+            pageId: meta?.pageId,
+            pageName: meta?.pageName,
+            pixelId: meta?.pixelId,
+            pixelName: meta?.pixelName,
+            instagramActorId: meta?.instagramActorId,
+            instagramUsername: meta?.instagramUsername,
+          };
+          const existing = matchesByHandle.get(handle);
+          if (existing) {
+            existing.campaigns.push(fullMeta);
+          } else {
+            matchesByHandle.set(handle, { shopifyProduct: handleMap.get(handle)!, campaigns: [fullMeta] });
+          }
+          mappedCampaignIds.add(campaign.id);
+          continue;
+        }
+      }
+
+      // No URL or URL didn't match any product
+      unmappedCampaigns.push({
+        campaignId: campaign.id,
+        campaignName: campaign.name,
+        adAccountId: campaign.adAccountId,
+        destinationUrls: url ? [url] : [],
+      });
+    }
+
+    console.log(`[auto-discover] URL matching: ${mappedCampaignIds.size} mapped, ${unmappedCampaigns.length} unmapped (${Date.now() - startTime}ms)`);
+
+    // ━━━ Step 4b: Meta API fallback for unmapped campaigns (only if needed) ━━━
+    if (unmappedCampaigns.length > 0 && metaToken) {
+      {
+        console.log(`[auto-discover] Trying Meta API fallback for ${unmappedCampaigns.length} unmapped campaigns`);
+        const stillUnmapped: UnmappedCampaign[] = [];
+
+        for (const unmapped of unmappedCampaigns) {
+          try {
+            const adsResponse = await fetchFromMeta<{
+              data: Array<{
+                id: string;
+                creative?: { id?: string; effective_object_story_id?: string };
+              }>;
+            }>(
+              metaToken,
+              `${unmapped.campaignId}/ads`,
+              { fields: 'id,creative{id,effective_object_story_id}', limit: '1' },
+              8000, 0,
+            );
+
+            let url = '';
+            for (const ad of adsResponse?.data ?? []) {
+              if (!ad.creative?.id) continue;
+              try {
+                const creative = await fetchFromMeta<{
+                  object_story_spec?: {
+                    link_data?: { link?: string };
+                    video_data?: { call_to_action?: { value?: { link?: string } } };
+                  };
+                  asset_feed_spec?: { link_urls?: Array<{ website_url?: string }> };
+                }>(metaToken, ad.creative.id, { fields: 'object_story_spec,asset_feed_spec' }, 8000, 0);
+
+                url =
+                  creative?.object_story_spec?.link_data?.link ||
+                  creative?.object_story_spec?.video_data?.call_to_action?.value?.link ||
+                  creative?.asset_feed_spec?.link_urls?.[0]?.website_url || '';
+
+                if (url) break;
+
+                // Try existing post
+                if (!url && ad.creative.effective_object_story_id) {
+                  try {
+                    const post = await fetchFromMeta<{ link?: string }>(
+                      metaToken, ad.creative.effective_object_story_id,
+                      { fields: 'link' }, 5000, 0,
+                    );
+                    url = post?.link || '';
+                    if (url) break;
+                  } catch { /* pages_read_engagement permission may be missing */ }
+                }
+              } catch { /* skip */ }
+            }
+
+            if (url) {
+              const handle = extractProductHandle(url);
+              if (handle && handleMap.has(handle)) {
+                const meta: CampaignMeta = {
+                  campaignId: unmapped.campaignId,
+                  campaignName: unmapped.campaignName,
+                  adAccountId: unmapped.adAccountId,
+                  destinationUrl: url,
+                };
+                const existing = matchesByHandle.get(handle);
+                if (existing) existing.campaigns.push(meta);
+                else matchesByHandle.set(handle, { shopifyProduct: handleMap.get(handle)!, campaigns: [meta] });
+                mappedCampaignIds.add(unmapped.campaignId);
+                console.log(`[auto-discover] Meta API matched "${unmapped.campaignName}" → ${handle}`);
+                continue;
+              }
+            }
+          } catch { /* skip */ }
+
+          stillUnmapped.push(unmapped);
+        }
+
+        unmappedCampaigns.length = 0;
+        unmappedCampaigns.push(...stillUnmapped);
+        console.log(`[auto-discover] After Meta API fallback: ${unmappedCampaigns.length} still unmapped`);
       }
     }
 
-    // ━━━ Step 5b: Fallback — fetch URL from Meta API for unmapped campaigns ━━━
-    // For campaigns where snapshot had no destinationUrl, try ONE Meta API call per campaign
-    if (unmappedCampaigns.length > 0 && metaToken) {
-      console.log(`[auto-discover] ${unmappedCampaigns.length} unmapped campaigns — trying Meta API fallback for URLs`);
-      const stillUnmapped: UnmappedCampaign[] = [];
+    // ━━━ Step 4c: Name-based matching for remaining unmapped (60% confidence threshold) ━━━
+    if (unmappedCampaigns.length > 0) {
+      const nameStillUnmapped: UnmappedCampaign[] = [];
 
       for (const unmapped of unmappedCampaigns) {
         if (mappedCampaignIds.has(unmapped.campaignId)) continue;
 
-        try {
-          // Fetch 1 ad from the campaign to get the destination URL
-          // Try multiple ads (not just 1) since some may lack URLs
-          const adsResponse = await fetchFromMeta<{
-            data: Array<{
-              id: string;
-              creative?: {
-                object_story_spec?: {
-                  link_data?: { link?: string; call_to_action?: { value?: { link?: string } } };
-                  video_data?: { call_to_action?: { value?: { link?: string } } };
-                };
-                // Also check asset_feed_spec for dynamic creatives
-                asset_feed_spec?: {
-                  link_urls?: Array<{ website_url?: string }>;
-                };
-              };
-            }>;
-          }>(
-            metaToken,
-            `${unmapped.campaignId}/ads`,
-            {
-              fields: 'id,creative{object_story_spec{link_data{link,call_to_action{value{link}}},video_data{call_to_action{value{link}}}},asset_feed_spec{link_urls}}',
-              limit: '5',
-            },
-            8000,
-            0,
-          );
+        const campNameNorm = unmapped.campaignName.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+        const campWords = new Set(campNameNorm.split(' ').filter((w) => w.length >= 3));
 
-          let url = '';
-          for (const ad of adsResponse?.data ?? []) {
-            const spec = ad?.creative?.object_story_spec;
-            const feed = ad?.creative?.asset_feed_spec;
-            url =
-              spec?.link_data?.link ||
-              spec?.link_data?.call_to_action?.value?.link ||
-              spec?.video_data?.call_to_action?.value?.link ||
-              feed?.link_urls?.[0]?.website_url ||
-              '';
-            if (url) break;
-          }
+        let bestHandle: string | null = null;
+        let bestRatio = 0;
+        let bestMatchedWords = 0;
 
-          if (!url) {
-            console.log(`[auto-discover] Meta API fallback: no URL found for "${unmapped.campaignName}" after checking ${adsResponse?.data?.length ?? 0} ads`);
-          }
+        for (const product of shopifyProducts) {
+          if (!product.handle) continue;
+          const handle = product.handle.toLowerCase();
+          const handleWords = handle.replace(/-/g, ' ').split(' ').filter((w) => w.length >= 3);
+          if (handleWords.length === 0) continue;
 
-          if (url) {
-            const handle = extractProductHandle(url);
-            if (handle && handleMap.has(handle)) {
-              // Matched! Add to product
-              const meta: CampaignMeta = {
-                campaignId: unmapped.campaignId,
-                campaignName: unmapped.campaignName,
-                adAccountId: unmapped.adAccountId,
-                destinationUrl: url,
-              };
-              const existing = matchesByHandle.get(handle);
-              if (existing) {
-                existing.campaigns.push(meta);
-              } else {
-                matchesByHandle.set(handle, {
-                  shopifyProduct: handleMap.get(handle)!,
-                  campaigns: [meta],
-                });
-              }
-              mappedCampaignIds.add(unmapped.campaignId);
-              console.log(`[auto-discover] Meta API fallback matched "${unmapped.campaignName}" → ${handle} via ${url}`);
-              continue;
-            }
+          // Count how many handle words appear in the campaign name
+          let matched = 0;
+          for (const hw of handleWords) {
+            if (campWords.has(hw)) matched++;
           }
-        } catch (err) {
-          console.warn(`[auto-discover] Meta API fallback failed for campaign ${unmapped.campaignId}:`, err);
+          if (matched === 0) continue;
+
+          // Confidence = matched handle words / total handle words
+          const ratio = matched / handleWords.length;
+
+          // Pick best match by ratio, then by absolute matches
+          if (ratio > bestRatio || (ratio === bestRatio && matched > bestMatchedWords)) {
+            bestRatio = ratio;
+            bestMatchedWords = matched;
+            bestHandle = handle;
+          }
         }
 
-        stillUnmapped.push(unmapped);
+        // 60% threshold: at least 60% of handle words must match
+        if (bestHandle && bestRatio >= 0.6 && handleMap.has(bestHandle)) {
+          const meta: CampaignMeta = {
+            campaignId: unmapped.campaignId,
+            campaignName: unmapped.campaignName,
+            adAccountId: unmapped.adAccountId,
+          };
+          const existing = matchesByHandle.get(bestHandle);
+          if (existing) existing.campaigns.push(meta);
+          else matchesByHandle.set(bestHandle, { shopifyProduct: handleMap.get(bestHandle)!, campaigns: [meta] });
+          mappedCampaignIds.add(unmapped.campaignId);
+          console.log(`[auto-discover] Name match: "${unmapped.campaignName}" → ${bestHandle} (${(bestRatio * 100).toFixed(0)}% confidence, ${bestMatchedWords} words)`);
+        } else {
+          if (bestHandle) {
+            console.log(`[auto-discover] Below threshold: "${unmapped.campaignName}" → ${bestHandle} (${(bestRatio * 100).toFixed(0)}% < 60%) → unmapped`);
+          }
+          nameStillUnmapped.push(unmapped);
+        }
       }
 
       unmappedCampaigns.length = 0;
-      unmappedCampaigns.push(...stillUnmapped);
-      console.log(`[auto-discover] After Meta API fallback: ${unmappedCampaigns.length} still unmapped`);
+      unmappedCampaigns.push(...nameStillUnmapped);
+      console.log(`[auto-discover] After name matching: ${unmappedCampaigns.length} still unmapped`);
     }
 
-    // ━━━ Step 6: Save to Supabase ━━━
+    // ━━━ Step 4d: Account-based fallback — if other campaigns from same account are mapped, map this one too ━━━
+    if (unmappedCampaigns.length > 0) {
+      // Build map: adAccountId → product handle (from already-matched campaigns)
+      const accountToHandle = new Map<string, string>();
+      for (const [handle, match] of matchesByHandle) {
+        for (const camp of match.campaigns) {
+          // Only set if all campaigns from this account go to the same product
+          const existing = accountToHandle.get(camp.adAccountId);
+          if (!existing) {
+            accountToHandle.set(camp.adAccountId, handle);
+          } else if (existing !== handle) {
+            // This account maps to multiple products — can't use as fallback
+            accountToHandle.set(camp.adAccountId, '__mixed__');
+          }
+        }
+      }
+
+      const accountStillUnmapped: UnmappedCampaign[] = [];
+      for (const unmapped of unmappedCampaigns) {
+        const handle = accountToHandle.get(unmapped.adAccountId);
+        if (handle && handle !== '__mixed__' && handleMap.has(handle)) {
+          // Check campaign name has at least 1 word overlap with the product
+          const campWords = new Set(unmapped.campaignName.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length >= 3));
+          const handleWords = handle.replace(/-/g, ' ').split(' ').filter(w => w.length >= 3);
+          const hasOverlap = handleWords.some(hw => campWords.has(hw));
+
+          if (hasOverlap) {
+            const meta: CampaignMeta = {
+              campaignId: unmapped.campaignId,
+              campaignName: unmapped.campaignName,
+              adAccountId: unmapped.adAccountId,
+            };
+            const existing = matchesByHandle.get(handle);
+            if (existing) existing.campaigns.push(meta);
+            mappedCampaignIds.add(unmapped.campaignId);
+            console.log(`[auto-discover] Account-based match: "${unmapped.campaignName}" → ${handle} (same account + keyword overlap)`);
+            continue;
+          }
+        }
+        accountStillUnmapped.push(unmapped);
+      }
+
+      unmappedCampaigns.length = 0;
+      unmappedCampaigns.push(...accountStillUnmapped);
+      if (accountStillUnmapped.length < unmappedCampaigns.length) {
+        console.log(`[auto-discover] After account-based matching: ${unmappedCampaigns.length} still unmapped`);
+      }
+    }
+
+    // ━━━ Step 5: Save to Supabase ━━━
     const existingProfiles = await getProductProfiles(storeId!);
 
-    // Clean up stale profiles from ad accounts no longer mapped to this store
+    // Build set of Shopify IDs that were matched in THIS run
+    const matchedShopifyIds = new Set(
+      Array.from(matchesByHandle.values()).map(m => String(m.shopifyProduct.id))
+    );
+    const matchedProductNames = new Set(
+      Array.from(matchesByHandle.values()).map(m => m.shopifyProduct.title.toLowerCase().trim())
+    );
+
+    // Clean up profiles not matched in this run:
+    // If a profile has zero matched campaigns, delete it entirely.
+    // Only profiles with campaigns should exist in the system.
     for (const profile of existingProfiles) {
-      if (profile.adAccountId && !activeAdAccountIds.has(profile.adAccountId)) {
-        console.log(`[auto-discover] Removing stale profile "${profile.productName}" (ad account ${profile.adAccountId} no longer in store)`);
+      const isMatched =
+        (profile.shopifyProductId && matchedShopifyIds.has(profile.shopifyProductId)) ||
+        matchedProductNames.has(profile.productName.toLowerCase().trim());
+
+      if (!isMatched) {
+        console.log(`[auto-discover] Removing unmatched profile "${profile.productName}" (no campaigns found)`);
         await deleteAllCampaignLinksForProfile(profile.id);
         await deleteProductProfile(profile.id);
       }
     }
 
-    // Re-fetch after cleanup
     const cleanProfiles = await getProductProfiles(storeId!);
     const existingByShopifyId = new Map(
       cleanProfiles.filter((p) => p.shopifyProductId).map((p) => [p.shopifyProductId!, p]),
     );
-    // Also dedup by product name as safety net
     const existingByName = new Map(
       cleanProfiles.map((p) => [p.productName.toLowerCase().trim(), p]),
     );
@@ -718,7 +728,6 @@ export async function POST(request: NextRequest) {
       const existingProfile = existingByShopifyId.get(shopifyId)
         || existingByName.get(match.shopifyProduct.title.toLowerCase().trim());
 
-      // Determine profile-level metadata from MOST COMMON across campaigns
       const profilePageId = mostCommon(match.campaigns.map((c) => c.pageId));
       const profilePixelId = mostCommon(match.campaigns.map((c) => c.pixelId));
       const profileIgId = mostCommon(match.campaigns.map((c) => c.instagramActorId));
@@ -726,9 +735,9 @@ export async function POST(request: NextRequest) {
       const account = accountLookup.get(profileAdAccountId);
       const bm = accountBmMap.get(profileAdAccountId);
 
-      const profilePageName = profilePageId ? pageNameMap.get(profilePageId) : undefined;
-      const profilePixelName = profilePixelId ? pixelNameMap.get(profilePixelId) : undefined;
-      const profileIgUsername = profileIgId ? igUsernameMap.get(profileIgId) : undefined;
+      const profilePageName = profilePageId ? (pageNameMap.get(profilePageId) || match.campaigns.find(c => c.pageName)?.pageName) : undefined;
+      const profilePixelName = profilePixelId ? (pixelNameMap.get(profilePixelId) || match.campaigns.find(c => c.pixelName)?.pixelName) : undefined;
+      const profileIgUsername = profileIgId ? (igUsernameMap.get(profileIgId) || match.campaigns.find(c => c.instagramUsername)?.instagramUsername) : undefined;
 
       let profileId: string;
 
@@ -737,7 +746,9 @@ export async function POST(request: NextRequest) {
         await upsertProductProfile({
           id: profileId,
           storeId: storeId!,
+          shopifyProductId: shopifyId,
           productName: existingProfile.productName,
+          productImage: match.shopifyProduct.image?.src ?? match.shopifyProduct.images?.[0]?.src ?? existingProfile.productImage,
           adAccountId: profileAdAccountId,
           destinationUrl: match.campaigns[0]?.destinationUrl || existingProfile.destinationUrl,
           pageId: profilePageId || existingProfile.pageId,
@@ -749,8 +760,7 @@ export async function POST(request: NextRequest) {
         });
       } else {
         profileId = randomUUID();
-        const productImage =
-          match.shopifyProduct.image?.src ?? match.shopifyProduct.images?.[0]?.src;
+        const productImage = match.shopifyProduct.image?.src ?? match.shopifyProduct.images?.[0]?.src;
         await upsertProductProfile({
           id: profileId,
           storeId: storeId!,
@@ -770,14 +780,17 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      // Clear existing campaign links before re-creating (clean resync)
-      await deleteAllCampaignLinksForProfile(profileId);
+      // Clear auto-discovered links but preserve manually mapped ones
+      // Manual mappings have campaign_type = 'manual'
+      await deleteAllCampaignLinksForProfile(profileId, 'testing');
 
-      // Save campaign links
       const campaignLinks: ProductCampaignLink[] = [];
       for (const camp of match.campaigns) {
         const linkId = randomUUID();
         const linkBm = accountBmMap.get(camp.adAccountId);
+        const campMeta = campaignMetaInfoMap.get(camp.campaignId);
+        // dailyBudget from snapshot is in cents (e.g. 50000 = $500), convert to dollars
+        const dailyBudgetDollars = campMeta?.dailyBudget ? campMeta.dailyBudget / 100 : undefined;
 
         await upsertProductCampaignLink({
           id: linkId,
@@ -788,15 +801,15 @@ export async function POST(request: NextRequest) {
           adAccountId: camp.adAccountId,
           isActive: true,
           pageId: camp.pageId,
-          pageName: camp.pageId ? pageNameMap.get(camp.pageId) : undefined,
+          pageName: camp.pageName || (camp.pageId ? pageNameMap.get(camp.pageId) : undefined),
           pixelId: camp.pixelId,
-          pixelName: camp.pixelId ? pixelNameMap.get(camp.pixelId) : undefined,
+          pixelName: camp.pixelName || (camp.pixelId ? pixelNameMap.get(camp.pixelId) : undefined),
           instagramActorId: camp.instagramActorId,
-          instagramUsername: camp.instagramActorId
-            ? igUsernameMap.get(camp.instagramActorId)
-            : undefined,
+          instagramUsername: camp.instagramUsername || (camp.instagramActorId ? igUsernameMap.get(camp.instagramActorId) : undefined),
           bmId: linkBm?.bmId,
           bmName: linkBm?.bmName,
+          campaignDailyBudget: dailyBudgetDollars,
+          campaignBidStrategy: campMeta?.bidStrategy,
         });
 
         campaignLinks.push({
@@ -809,15 +822,15 @@ export async function POST(request: NextRequest) {
           isActive: true,
           linkedAt: new Date().toISOString(),
           pageId: camp.pageId,
-          pageName: camp.pageId ? pageNameMap.get(camp.pageId) : undefined,
+          pageName: camp.pageName || (camp.pageId ? pageNameMap.get(camp.pageId) : undefined),
           pixelId: camp.pixelId,
-          pixelName: camp.pixelId ? pixelNameMap.get(camp.pixelId) : undefined,
+          pixelName: camp.pixelName || (camp.pixelId ? pixelNameMap.get(camp.pixelId) : undefined),
           instagramActorId: camp.instagramActorId,
-          instagramUsername: camp.instagramActorId
-            ? igUsernameMap.get(camp.instagramActorId)
-            : undefined,
+          instagramUsername: camp.instagramUsername || (camp.instagramActorId ? igUsernameMap.get(camp.instagramActorId) : undefined),
           bmId: linkBm?.bmId,
           bmName: linkBm?.bmName,
+          campaignDailyBudget: dailyBudgetDollars,
+          campaignBidStrategy: campMeta?.bidStrategy,
         });
       }
 
@@ -826,8 +839,7 @@ export async function POST(request: NextRequest) {
         storeId: storeId!,
         shopifyProductId: shopifyId,
         productName: match.shopifyProduct.title,
-        productImage:
-          match.shopifyProduct.image?.src ?? match.shopifyProduct.images?.[0]?.src,
+        productImage: match.shopifyProduct.image?.src ?? match.shopifyProduct.images?.[0]?.src,
         adAccountId: profileAdAccountId,
         adAccountCurrency: account?.currency ?? 'USD',
         destinationUrl: match.campaigns[0]?.destinationUrl,
@@ -853,7 +865,16 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // ━━━ Step 7: Return response ━━━
+    // Create profiles for Shopify products that have PAUSED campaigns (inactive products)
+    // These are products that exist in Shopify and had campaigns before, but all campaigns are now paused
+    const allMatchedShopifyIds = new Set(savedProfiles.map(p => p.shopifyProductId));
+    const refreshedProfiles = await getProductProfiles(storeId!);
+    const existingShopifyIds = new Set(refreshedProfiles.filter(p => p.shopifyProductId).map(p => p.shopifyProductId!));
+
+    // Note: Only products with active campaigns are shown. No inactive profiles created.
+
+    console.log(`[auto-discover] Complete: ${savedProfiles.length} active products, ${unmappedCampaigns.length} unmapped, ${Date.now() - startTime}ms total`);
+
     return NextResponse.json({
       profiles: savedProfiles,
       unmappedCampaigns,

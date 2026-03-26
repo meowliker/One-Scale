@@ -930,16 +930,21 @@ export async function getProductCampaignLinks(profileId: string): Promise<Produc
   return getProductCampaignLinksLocal(profileId);
 }
 
-export async function deleteAllCampaignLinksForProfile(profileId: string): Promise<void> {
+export async function deleteAllCampaignLinksForProfile(profileId: string, campaignType?: string): Promise<void> {
   if (isSupabasePersistenceEnabled()) {
+    const typeFilter = campaignType ? `&campaign_type=eq.${encodeURIComponent(campaignType)}` : '';
     await supaRest<unknown>(
-      `/product_campaign_links?product_profile_id=eq.${encodeURIComponent(profileId)}`,
+      `/product_campaign_links?product_profile_id=eq.${encodeURIComponent(profileId)}${typeFilter}`,
       { method: 'DELETE' },
     );
     return;
   }
   const db = getDb();
-  db.prepare('DELETE FROM product_campaign_links WHERE product_profile_id = ?').run(profileId);
+  if (campaignType) {
+    db.prepare('DELETE FROM product_campaign_links WHERE product_profile_id = ? AND campaign_type = ?').run(profileId, campaignType);
+  } else {
+    db.prepare('DELETE FROM product_campaign_links WHERE product_profile_id = ?').run(profileId);
+  }
 }
 
 export async function upsertProductCampaignLink(
