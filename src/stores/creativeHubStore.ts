@@ -680,7 +680,7 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
     set({ launchStudioAiChat: { messages: updatedMessages, loading: true } });
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 90_000); // 90s client-side timeout
+    const timeout = setTimeout(() => controller.abort(), 120_000); // 120s client-side timeout (strategist uses tool loops)
 
     try {
       // Build context from available data for richer AI responses
@@ -695,7 +695,7 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
         context.creatives = productCreatives.slice(0, 15);
       }
 
-      const res = await fetch('/api/creative-hub/ai-chat', {
+      const res = await fetch('/api/creative-hub/ai-strategist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -703,7 +703,6 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
           productProfileId,
           message,
           history: updatedMessages.slice(-10).map(m => ({ role: m.role, content: m.content })),
-          context,
         }),
         signal: controller.signal,
       });
