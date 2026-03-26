@@ -38,6 +38,10 @@ import {
   Zap,
   ListChecks,
   AlertCircle,
+  ExternalLink,
+  Eye,
+  Pause,
+  FolderClosed,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
@@ -230,79 +234,210 @@ function CreativeCard({
   onToggle: () => void;
   onPreview: () => void;
 }) {
+  const [videoExpanded, setVideoExpanded] = useState(false);
+  const [imgError, setImgError] = useState(false);
   const FormatIcon = formatBadgeIcon(creative.creativeFormat);
   const status = testStatusBadge(creative);
-  const StatusIcon = status.icon;
+
+  // Test status dot colors
+  const statusDot =
+    status.label === 'Winner'
+      ? 'bg-emerald-400'
+      : status.label === 'Killed'
+        ? 'bg-red-400'
+        : 'bg-gray-600';
+
+  const hasThumbnail = creative.thumbnailUrl && !imgError;
+  const isVideo = creative.creativeFormat === 'video';
+
+  // Build a Google Drive embed URL from driveUrl if available
+  const driveEmbedUrl = useMemo(() => {
+    if (!creative.driveUrl) return null;
+    // Extract file ID from various Google Drive URL formats
+    const match = creative.driveUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+    if (match) {
+      return `https://drive.google.com/file/d/${match[1]}/preview`;
+    }
+    return null;
+  }, [creative.driveUrl]);
 
   return (
-    <motion.div
-      layout
-      whileHover={cardHover}
-      className={cn(
-        'group relative flex items-center gap-3 p-2.5 rounded-xl cursor-pointer transition-colors duration-200',
-        'bg-gray-900/60 hover:bg-gray-800/80 border',
-        isSelected
-          ? 'border-blue-500/60 ring-1 ring-blue-500/30'
-          : 'border-gray-800/40 hover:border-gray-700/60'
-      )}
-      onClick={onToggle}
-    >
-      {/* Thumbnail */}
-      <div className="relative w-12 h-12 rounded-lg overflow-hidden flex-shrink-0 bg-gray-800">
-        {creative.thumbnailUrl ? (
-          <img
-            src={creative.thumbnailUrl}
-            alt={creative.creativeName}
-            className="w-full h-full object-cover"
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center">
-            <FormatIcon className="w-5 h-5 text-gray-600" />
-          </div>
+    <motion.div layout className="flex flex-col">
+      <motion.div
+        layout="position"
+        whileHover={{ scale: 1.01, transition: { type: 'spring', stiffness: 500, damping: 30 } }}
+        className={cn(
+          'group relative flex items-center gap-3 p-2 rounded-xl cursor-pointer transition-all duration-200',
+          'bg-gray-900/40 hover:bg-gray-800/60 border',
+          isSelected
+            ? 'ring-2 ring-blue-500/50 bg-blue-950/20 border-blue-500/40'
+            : 'border-gray-800/30 hover:border-gray-700/50'
         )}
-        {creative.creativeFormat === 'video' && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onPreview();
-            }}
-            className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity"
-          >
-            <Play className="w-4 h-4 text-white fill-white" />
-          </button>
-        )}
-        {/* Selection badge */}
-        {isSelected && (
-          <div className="absolute -top-1 -right-1 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center ring-2 ring-gray-900">
-            <Check className="w-3 h-3 text-white" />
-          </div>
-        )}
-      </div>
-
-      {/* Info */}
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-gray-200 truncate">
-          {creative.creativeName}
-        </p>
-        <div className="flex items-center gap-2 mt-0.5">
-          <span
-            className={cn(
-              'inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border',
-              formatBadgeColor(creative.creativeFormat)
+        onClick={onToggle}
+      >
+        {/* Thumbnail — 64px */}
+        <div className="relative w-16 h-16 rounded-lg overflow-hidden flex-shrink-0 bg-gray-800/80">
+          {hasThumbnail ? (
+            <img
+              src={creative.thumbnailUrl!}
+              alt={creative.creativeName}
+              className="w-full h-full object-cover"
+              onError={() => setImgError(true)}
+            />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-800 to-gray-900">
+              <FormatIcon className="w-6 h-6 text-gray-600" />
+            </div>
+          )}
+          {/* Video play overlay */}
+          {isVideo && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (driveEmbedUrl || creative.driveUrl) {
+                  setVideoExpanded((p) => !p);
+                } else {
+                  onPreview();
+                }
+              }}
+              className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+            >
+              <div className="w-7 h-7 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center border border-white/20">
+                {videoExpanded ? (
+                  <Pause className="w-3 h-3 text-white" />
+                ) : (
+                  <Play className="w-3 h-3 text-white fill-white ml-0.5" />
+                )}
+              </div>
+            </button>
+          )}
+          {/* Image preview overlay */}
+          {!isVideo && hasThumbnail && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onPreview();
+              }}
+              className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+            >
+              <Eye className="w-4 h-4 text-white" />
+            </button>
+          )}
+          {/* Selection checkbox */}
+          <AnimatePresence>
+            {isSelected && (
+              <motion.div
+                initial={{ scale: 0, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0, opacity: 0 }}
+                transition={{ type: 'spring', stiffness: 500, damping: 25 }}
+                className="absolute -top-1 -right-1 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center ring-2 ring-gray-900 shadow-lg shadow-blue-500/30"
+              >
+                <Check className="w-3 h-3 text-white" />
+              </motion.div>
             )}
-          >
-            <FormatIcon className="w-2.5 h-2.5" />
-            {creative.creativeFormat}
-          </span>
-          <span className={cn('flex items-center gap-0.5 text-[10px]', status.color)}>
-            <StatusIcon className="w-2.5 h-2.5" />
-            {status.label}
-          </span>
+          </AnimatePresence>
         </div>
-        {creative.hook && (
-          <p className="text-[11px] text-gray-500 mt-0.5 truncate">{creative.hook}</p>
+
+        {/* Info */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            <p className="text-[13px] font-medium text-gray-200 truncate flex-1">
+              {creative.creativeName}
+            </p>
+            {/* Test status dot */}
+            <div
+              className={cn('w-2 h-2 rounded-full flex-shrink-0', statusDot)}
+              title={status.label}
+            />
+          </div>
+          <div className="flex items-center gap-1.5 mt-1">
+            <span
+              className={cn(
+                'inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md border font-medium',
+                formatBadgeColor(creative.creativeFormat)
+              )}
+            >
+              <FormatIcon className="w-2.5 h-2.5" />
+              {creative.creativeFormat === 'image'
+                ? 'Image'
+                : creative.creativeFormat === 'video'
+                  ? 'Video'
+                  : 'Carousel'}
+            </span>
+            {creative.angle && (
+              <span className="text-[10px] text-gray-500 truncate">
+                {creative.angle}
+              </span>
+            )}
+          </div>
+          {creative.hook && (
+            <p className="text-[11px] text-gray-500 mt-0.5 truncate leading-tight">
+              {creative.hook}
+            </p>
+          )}
+        </div>
+      </motion.div>
+
+      {/* Expanded video player */}
+      <AnimatePresence>
+        {videoExpanded && isVideo && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.25, ease: [0.25, 0.46, 0.45, 0.94] }}
+            className="overflow-hidden"
+          >
+            <div className="mt-1 rounded-xl overflow-hidden bg-black border border-gray-800/40 relative">
+              {driveEmbedUrl ? (
+                <iframe
+                  src={driveEmbedUrl}
+                  className="w-full aspect-video"
+                  allow="autoplay; encrypted-media"
+                  allowFullScreen
+                  title={creative.creativeName}
+                />
+              ) : creative.thumbnailUrl ? (
+                <div className="relative">
+                  <video
+                    src={creative.thumbnailUrl}
+                    controls
+                    autoPlay
+                    className="w-full aspect-video object-contain bg-black"
+                    poster={creative.thumbnailUrl}
+                  />
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-6 gap-2 text-gray-500">
+                  <Video className="w-6 h-6" />
+                  <p className="text-xs">No video preview available</p>
+                  {creative.driveUrl && (
+                    <a
+                      href={creative.driveUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      Open in Drive <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+              )}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setVideoExpanded(false);
+                }}
+                className="absolute top-2 right-2 w-6 h-6 rounded-full bg-black/60 backdrop-blur-sm flex items-center justify-center text-white/70 hover:text-white hover:bg-black/80 transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </motion.div>
         )}
-      </div>
+      </AnimatePresence>
     </motion.div>
   );
 }
@@ -324,37 +459,51 @@ function FolderSection({
   onToggleCollapse: () => void;
 }) {
   const selectedInGroup = group.creatives.filter(c => selectedIds.has(c.id)).length;
+  const allSelected = selectedInGroup === group.creatives.length && group.creatives.length > 0;
 
   return (
-    <div className="mb-2">
+    <div className="mb-1.5">
       <button
         onClick={onToggleCollapse}
-        className="flex items-center gap-2 w-full px-2 py-1.5 rounded-lg text-sm font-medium text-gray-300 hover:bg-gray-800/50 transition-colors"
-      >
-        {collapsed ? (
-          <ChevronRight className="w-3.5 h-3.5 text-gray-500" />
-        ) : (
-          <ChevronDown className="w-3.5 h-3.5 text-gray-500" />
+        className={cn(
+          'flex items-center gap-2 w-full px-3 py-2 rounded-xl text-sm transition-all duration-200',
+          'hover:bg-gray-800/40',
+          collapsed ? 'bg-transparent' : 'bg-gray-900/20'
         )}
-        <FolderOpen className="w-3.5 h-3.5 text-gray-500" />
-        <span className="truncate">{group.label}</span>
-        <span className="ml-auto text-xs text-gray-600">
+      >
+        <motion.div
+          animate={{ rotate: collapsed ? 0 : 90 }}
+          transition={{ duration: 0.2 }}
+        >
+          <ChevronRight className="w-3.5 h-3.5 text-gray-500" />
+        </motion.div>
+        {collapsed ? (
+          <FolderClosed className="w-3.5 h-3.5 text-gray-500" />
+        ) : (
+          <FolderOpen className="w-3.5 h-3.5 text-blue-400/60" />
+        )}
+        <span className="font-medium text-gray-300 truncate text-[13px]">{group.label}</span>
+        <div className="ml-auto flex items-center gap-1.5">
           {selectedInGroup > 0 && (
-            <span className="text-blue-400 mr-1">{selectedInGroup}/</span>
+            <span className="text-[10px] font-medium text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded-md">
+              {selectedInGroup}
+            </span>
           )}
-          {group.creatives.length}
-        </span>
+          <span className="text-[11px] text-gray-600 tabular-nums">
+            {group.creatives.length}
+          </span>
+        </div>
       </button>
-      <AnimatePresence>
+      <AnimatePresence initial={false}>
         {!collapsed && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2 }}
+            transition={{ duration: 0.25, ease: [0.25, 0.46, 0.45, 0.94] }}
             className="overflow-hidden"
           >
-            <div className="flex flex-col gap-1.5 mt-1 pl-1">
+            <div className="flex flex-col gap-1.5 mt-1 pl-2 pr-0.5">
               {group.creatives.map((c) => (
                 <CreativeCard
                   key={c.id}
@@ -567,7 +716,9 @@ function LeftPanel({
         c =>
           c.creativeName.toLowerCase().includes(q) ||
           c.hook?.toLowerCase().includes(q) ||
-          c.angle?.toLowerCase().includes(q)
+          c.angle?.toLowerCase().includes(q) ||
+          c.productName?.toLowerCase().includes(q) ||
+          c.creator?.toLowerCase().includes(q)
       );
     }
     if (filterFormat !== 'all') {
@@ -590,82 +741,155 @@ function LeftPanel({
     });
   };
 
+  const filterChips: { key: CreativeFormat | 'all'; label: string; icon?: typeof ImageIcon }[] = [
+    { key: 'all', label: 'All' },
+    { key: 'image', label: 'Images', icon: ImageIcon },
+    { key: 'video', label: 'Videos', icon: Video },
+    { key: 'carousel', label: 'Carousel', icon: LayoutGrid },
+  ];
+
   return (
     <motion.div
       variants={panelChild}
-      className="w-80 flex-shrink-0 flex flex-col bg-gray-900/50 border-r border-gray-800/50 overflow-hidden"
+      className="w-[340px] flex-shrink-0 flex flex-col bg-gray-950/60 border-r border-gray-800/40 overflow-hidden"
     >
       {/* Panel header */}
-      <div className="p-4 border-b border-gray-800/40">
-        <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-3">
-          Creative Browser
-        </h3>
-        {/* Search */}
-        <div className="relative mb-2">
+      <div className="p-4 pb-3 space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-[13px] font-semibold text-gray-300 uppercase tracking-wider">
+            Creative Browser
+          </h3>
+          <span className="text-[11px] text-gray-500 tabular-nums">
+            {filtered.length} creative{filtered.length !== 1 ? 's' : ''}
+          </span>
+        </div>
+
+        {/* Search — glass effect */}
+        <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
           <input
             type="text"
-            placeholder="Search creatives..."
+            placeholder="Search by name, hook, angle..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 bg-gray-800/60 border border-gray-700/40 rounded-lg text-sm text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20 transition-colors"
+            className={cn(
+              'w-full pl-9 pr-3 py-2.5 rounded-xl text-sm text-gray-200 placeholder:text-gray-600',
+              'bg-gray-900/60 border border-gray-800/40 backdrop-blur-sm',
+              'focus:outline-none focus:border-blue-500/40 focus:ring-1 focus:ring-blue-500/20',
+              'transition-all duration-200'
+            )}
           />
-        </div>
-        {/* Format filter */}
-        <div className="flex items-center gap-1">
-          {(['all', 'video', 'image', 'carousel'] as const).map(fmt => (
+          {searchQuery && (
             <button
-              key={fmt}
-              onClick={() => setFilterFormat(fmt)}
-              className={cn(
-                'px-2.5 py-1 rounded-md text-xs font-medium transition-colors',
-                filterFormat === fmt
-                  ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
-                  : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/50'
-              )}
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-gray-700/60 flex items-center justify-center text-gray-400 hover:text-gray-200 transition-colors"
             >
-              {fmt === 'all' ? 'All' : fmt.charAt(0).toUpperCase() + fmt.slice(1)}
+              <X className="w-3 h-3" />
             </button>
-          ))}
+          )}
+        </div>
+
+        {/* Filter chips */}
+        <div className="flex items-center gap-1.5">
+          {filterChips.map(chip => {
+            const isActive = filterFormat === chip.key;
+            const ChipIcon = chip.icon;
+            return (
+              <button
+                key={chip.key}
+                onClick={() => setFilterFormat(chip.key)}
+                className={cn(
+                  'inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 border',
+                  isActive
+                    ? 'bg-blue-600/20 text-blue-400 border-blue-500/30 shadow-sm shadow-blue-500/10'
+                    : 'bg-gray-800/40 text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800/60'
+                )}
+              >
+                {ChipIcon && <ChipIcon className="w-3 h-3" />}
+                {chip.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* Creative list */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-1">
-        {groups.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-32 text-gray-600">
-            <Package className="w-8 h-8 mb-2" />
-            <p className="text-sm">No creatives found</p>
-          </div>
-        ) : (
-          groups.map(group => (
-            <FolderSection
-              key={group.id}
-              group={group}
-              selectedIds={selectedIds}
-              onToggleCreative={onToggleCreative}
-              onPreviewCreative={onPreviewCreative}
-              collapsed={collapsedGroups.has(group.id)}
-              onToggleCollapse={() => toggleCollapse(group.id)}
-            />
-          ))
-        )}
+      {/* Divider */}
+      <div className="h-px bg-gradient-to-r from-transparent via-gray-800/60 to-transparent" />
+
+      {/* Creative list — scrollable */}
+      <div className="flex-1 overflow-y-auto p-3 space-y-0.5 scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent">
+        <AnimatePresence mode="popLayout">
+          {groups.length === 0 ? (
+            <motion.div
+              key="empty"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="flex flex-col items-center justify-center h-40 text-gray-600"
+            >
+              <Package className="w-10 h-10 mb-3 text-gray-700" />
+              <p className="text-sm font-medium text-gray-500">No creatives found</p>
+              <p className="text-xs text-gray-600 mt-1">
+                {searchQuery ? 'Try a different search term' : 'Sync creatives from ClickUp'}
+              </p>
+            </motion.div>
+          ) : (
+            groups.map(group => (
+              <FolderSection
+                key={group.id}
+                group={group}
+                selectedIds={selectedIds}
+                onToggleCreative={onToggleCreative}
+                onPreviewCreative={onPreviewCreative}
+                collapsed={collapsedGroups.has(group.id)}
+                onToggleCollapse={() => toggleCollapse(group.id)}
+              />
+            ))
+          )}
+        </AnimatePresence>
       </div>
 
-      {/* Footer actions */}
-      <div className="p-3 border-t border-gray-800/40 flex items-center gap-2">
-        <button
-          onClick={onSelectAll}
-          className="flex-1 px-3 py-2 rounded-lg text-xs font-medium bg-gray-800/60 text-gray-300 hover:bg-gray-700/60 transition-colors border border-gray-700/40"
-        >
-          Select All ({creatives.length})
-        </button>
-        <button
-          onClick={onDeselectAll}
-          className="flex-1 px-3 py-2 rounded-lg text-xs font-medium bg-gray-800/60 text-gray-400 hover:bg-gray-700/60 transition-colors border border-gray-700/40"
-        >
-          Clear
-        </button>
+      {/* Selection summary & actions */}
+      <div className="border-t border-gray-800/40 bg-gray-950/80 backdrop-blur-sm">
+        {/* Selection summary bar */}
+        <div className="px-4 py-2.5 flex items-center justify-between">
+          <span className="text-xs text-gray-400">
+            <span className="text-blue-400 font-semibold tabular-nums">{selectedIds.size}</span>
+            {' of '}
+            <span className="tabular-nums">{creatives.length}</span>
+            {' selected'}
+          </span>
+          {selectedIds.size > 0 && (
+            <span className="text-[10px] text-emerald-400/70 font-medium">
+              Ready to batch
+            </span>
+          )}
+        </div>
+        {/* Action buttons */}
+        <div className="px-3 pb-3 flex items-center gap-2">
+          <button
+            onClick={onSelectAll}
+            className={cn(
+              'flex-1 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-200 border',
+              'bg-gray-800/40 text-gray-300 border-gray-700/30',
+              'hover:bg-gray-700/50 hover:text-gray-200 hover:border-gray-600/40'
+            )}
+          >
+            Select All
+          </button>
+          <button
+            onClick={onDeselectAll}
+            disabled={selectedIds.size === 0}
+            className={cn(
+              'flex-1 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-200 border',
+              selectedIds.size > 0
+                ? 'bg-gray-800/40 text-gray-400 border-gray-700/30 hover:bg-gray-700/50 hover:text-gray-300'
+                : 'bg-gray-900/20 text-gray-700 border-gray-800/20 cursor-not-allowed'
+            )}
+          >
+            Clear
+          </button>
+        </div>
       </div>
     </motion.div>
   );

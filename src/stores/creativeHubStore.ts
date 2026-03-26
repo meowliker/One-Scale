@@ -657,7 +657,7 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
   },
 
   sendLaunchStudioAiChat: async (storeId: string, productProfileId: string, message: string) => {
-    const { launchStudioAiChat } = get();
+    const { launchStudioAiChat, inboxCreatives, winningAds } = get();
     const updatedMessages = [
       ...launchStudioAiChat.messages,
       { role: 'user' as const, content: message },
@@ -665,22 +665,35 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
     set({ launchStudioAiChat: { messages: updatedMessages, loading: true } });
 
     try {
-      const res = await fetch('/api/creative-hub/ai-insights', {
+      // Build context from available data for richer AI responses
+      const context: Record<string, unknown[]> = {};
+      if (winningAds?.winningAds) {
+        context.winningAds = winningAds.winningAds.slice(0, 10);
+      }
+      const productCreatives = inboxCreatives.filter(
+        c => c.productProfileId === productProfileId && (c.uploadStatus === 'ready' || c.driveUrl)
+      );
+      if (productCreatives.length > 0) {
+        context.creatives = productCreatives.slice(0, 15);
+      }
+
+      const res = await fetch('/api/creative-hub/ai-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           storeId,
           productProfileId,
-          chatMessage: message,
-          chatHistory: updatedMessages.slice(-10),
+          message,
+          history: updatedMessages.slice(-10).map(m => ({ role: m.role, content: m.content })),
+          context,
         }),
       });
       if (!res.ok) throw new Error('Chat request failed');
       const data = await res.json();
       const assistantMessage = {
         role: 'assistant' as const,
-        content: data.insights?.summary || 'I analyzed your creatives but could not generate a response.',
-        actionItems: data.insights?.actionItems,
+        content: data.response || 'I analyzed your creatives but could not generate a response.',
+        actionItems: data.actionItems,
       };
       set({
         launchStudioAiChat: {
