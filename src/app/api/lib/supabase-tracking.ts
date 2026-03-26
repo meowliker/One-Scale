@@ -1,5 +1,5 @@
 /**
- * Supabase-backed meta_endpoint_snapshots and tracking event persistence.
+ * Supabase-backed per-store Meta snapshot tables and tracking event persistence.
  *
  * Mirror of the SQLite functions in db.ts:
  *   upsertMetaEndpointSnapshot  -> upsertPersistentMetaEndpointSnapshot
@@ -37,7 +37,16 @@ import type {
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
-type MetaSnapshotEndpoint = 'creatives' | 'adsets' | 'ads' | 'campaigns' | 'insights';
+type MetaSnapshotEndpoint =
+  | 'creatives'
+  | 'adsets'
+  | 'ads'
+  | 'campaigns'
+  | 'insights'
+  | 'pages'
+  | 'pixels'
+  | 'instagram'
+  | 'accounts';
 
 function headers(extra?: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {
@@ -83,6 +92,51 @@ interface SnapshotRow {
   updated_at: string;
 }
 
+const metaSnapshotTableByStore = new Map<string, string>();
+
+function parseRpcTextResult(payload: unknown, rpcName: string): string | null {
+  if (typeof payload === 'string') return payload;
+  if (Array.isArray(payload) && payload.length > 0) {
+    const first = payload[0];
+    if (typeof first === 'string') return first;
+    if (first && typeof first === 'object') {
+      const value = (first as Record<string, unknown>)[rpcName];
+      if (typeof value === 'string') return value;
+    }
+  }
+  if (payload && typeof payload === 'object') {
+    const value = (payload as Record<string, unknown>)[rpcName];
+    if (typeof value === 'string') return value;
+  }
+  return null;
+}
+
+function snapshotTablePath(tableName: string): string {
+  return `/${tableName}`;
+}
+
+function normalizeMetaAccountId(value: string | null | undefined): string {
+  if (!value) return '';
+  return value.trim().toLowerCase().replace(/^act_/, '');
+}
+
+async function resolveMetaSnapshotTable(storeId: string): Promise<string> {
+  const cached = metaSnapshotTableByStore.get(storeId);
+  if (cached) return cached;
+
+  const rpcName = 'ensure_meta_snapshot_store_table';
+  const raw = await rest<unknown>(`/rpc/${rpcName}`, {
+    method: 'POST',
+    body: JSON.stringify({ p_store_id: storeId }),
+  });
+  const tableName = parseRpcTextResult(raw, rpcName);
+  if (!tableName) {
+    throw new Error(`RPC ${rpcName} returned invalid payload`);
+  }
+  metaSnapshotTableByStore.set(storeId, tableName);
+  return tableName;
+}
+
 // ---- Public API ----
 
 export async function upsertPersistentMetaEndpointSnapshot(
@@ -94,9 +148,10 @@ export async function upsertPersistentMetaEndpointSnapshot(
 ): Promise<void> {
   const payloadJson = JSON.stringify(payload);
   const rowCount = Array.isArray(payload) ? payload.length : 0;
+  const tableName = await resolveMetaSnapshotTable(storeId);
 
   await rest(
-    '/meta_endpoint_snapshots?on_conflict=store_id,endpoint,scope_id,variant_key',
+    `${snapshotTablePath(tableName)}?on_conflict=store_id,endpoint,scope_id,variant_key`,
     {
       method: 'POST',
       headers: headers({
@@ -121,8 +176,9 @@ export async function getPersistentMetaEndpointSnapshot<T>(
   scopeId: string,
   variantKey: string
 ): Promise<{ data: T; updatedAt: string; rowCount: number } | null> {
+  const tableName = await resolveMetaSnapshotTable(storeId);
   const rows = await rest<SnapshotRow[]>(
-    `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&scope_id=eq.${encodeURIComponent(scopeId)}&variant_key=eq.${encodeURIComponent(variantKey)}&select=payload_json,updated_at,row_count&limit=1`
+    `${snapshotTablePath(tableName)}?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&scope_id=eq.${encodeURIComponent(scopeId)}&variant_key=eq.${encodeURIComponent(variantKey)}&select=payload_json,updated_at,row_count&limit=1`
   );
   const row = rows?.[0];
   if (!row) return null;
@@ -142,8 +198,9 @@ export async function getLatestPersistentMetaEndpointSnapshot<T>(
   endpoint: MetaSnapshotEndpoint,
   scopeId: string
 ): Promise<{ data: T; updatedAt: string; rowCount: number } | null> {
+  const tableName = await resolveMetaSnapshotTable(storeId);
   const rows = await rest<SnapshotRow[]>(
-    `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&scope_id=eq.${encodeURIComponent(scopeId)}&select=payload_json,updated_at,row_count&order=updated_at.desc&limit=1`
+    `${snapshotTablePath(tableName)}?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&scope_id=eq.${encodeURIComponent(scopeId)}&select=payload_json,updated_at,row_count&order=updated_at.desc&limit=1`
   );
   const row = rows?.[0];
   if (!row) return null;
@@ -163,8 +220,9 @@ export async function getBatchPersistentMetaEndpointSnapshots<T>(
   endpoint: MetaSnapshotEndpoint,
   variantKey: string
 ): Promise<Map<string, { data: T; updatedAt: string; rowCount: number }>> {
+  const tableName = await resolveMetaSnapshotTable(storeId);
   const rows = await rest<SnapshotRow[]>(
-    `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&variant_key=eq.${encodeURIComponent(variantKey)}&select=scope_id,payload_json,updated_at,row_count`
+    `${snapshotTablePath(tableName)}?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&variant_key=eq.${encodeURIComponent(variantKey)}&select=scope_id,payload_json,updated_at,row_count`
   );
   const map = new Map<string, { data: T; updatedAt: string; rowCount: number }>();
   for (const row of rows || []) {
@@ -187,8 +245,9 @@ export async function getRecentPersistentMetaEndpointSnapshots<T>(
   limit = 50
 ): Promise<Array<{ scopeId: string; variantKey: string; data: T; updatedAt: string; rowCount: number }>> {
   const safeLimit = Math.max(1, limit);
+  const tableName = await resolveMetaSnapshotTable(storeId);
   const rows = await rest<SnapshotRow[]>(
-    `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&select=scope_id,variant_key,payload_json,updated_at,row_count&order=updated_at.desc&limit=${safeLimit}`
+    `${snapshotTablePath(tableName)}?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.${encodeURIComponent(endpoint)}&select=scope_id,variant_key,payload_json,updated_at,row_count&order=updated_at.desc&limit=${safeLimit}`
   );
 
   const parsed: Array<{ scopeId: string; variantKey: string; data: T; updatedAt: string; rowCount: number }> = [];
@@ -206,6 +265,95 @@ export async function getRecentPersistentMetaEndpointSnapshots<T>(
     }
   }
   return parsed;
+}
+
+export async function prunePersistentAdsSnapshotsToActiveAccounts(
+  storeId: string,
+  activeAccountIds: string[]
+): Promise<{
+  scannedRows: number;
+  updatedRows: number;
+  deletedRows: number;
+  removedAds: number;
+  removedMissingAccountAds: number;
+}> {
+  const tableName = await resolveMetaSnapshotTable(storeId);
+  const normalizedActiveIds = new Set(
+    activeAccountIds
+      .map((id) => normalizeMetaAccountId(id))
+      .filter((id) => id.length > 0)
+  );
+
+  const rows = await rest<Array<Pick<SnapshotRow, 'id' | 'payload_json'>>>(
+    `${snapshotTablePath(tableName)}?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.ads&select=id,payload_json`
+  );
+
+  let updatedRows = 0;
+  let deletedRows = 0;
+  let removedAds = 0;
+  let removedMissingAccountAds = 0;
+
+  for (const row of rows || []) {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(row.payload_json);
+    } catch {
+      payload = [];
+    }
+    const items = Array.isArray(payload) ? payload : [];
+
+    const filtered = items.filter((item) => {
+      const ad = item && typeof item === 'object' ? item as Record<string, unknown> : null;
+      if (!ad) return false;
+      const accountIdRaw = typeof ad.ad_account_id === 'string' ? ad.ad_account_id : '';
+      const normalized = normalizeMetaAccountId(accountIdRaw);
+      if (!normalized) {
+        removedMissingAccountAds += 1;
+        removedAds += 1;
+        return false;
+      }
+      if (!normalizedActiveIds.has(normalized)) {
+        removedAds += 1;
+        return false;
+      }
+      return true;
+    });
+
+    if (filtered.length === items.length) continue;
+
+    if (filtered.length === 0) {
+      await rest(
+        `${snapshotTablePath(tableName)}?id=eq.${row.id}`,
+        { method: 'DELETE' }
+      );
+      deletedRows += 1;
+      continue;
+    }
+
+    await rest(
+      `${snapshotTablePath(tableName)}?id=eq.${row.id}`,
+      {
+        method: 'PATCH',
+        headers: headers({
+          Prefer: 'return=minimal',
+        }),
+        body: JSON.stringify({
+          payload_json: JSON.stringify(filtered),
+          row_count: filtered.length,
+          updated_at: new Date().toISOString(),
+        }),
+      }
+    );
+    updatedRows += 1;
+  }
+
+  return {
+    scannedRows: rows.length,
+    updatedRows,
+    deletedRows,
+    removedAds,
+    removedMissingAccountAds,
+  };
 }
 
 // ------ Tracking Event Persistence (Supabase-backed) ------
@@ -597,23 +745,41 @@ export async function getPersistentTrackingEntityMetrics(
     source: string | null;
     occurred_at: string | null;
   }>>(
-    `/tracking_events?store_id=eq.${encodeURIComponent(storeId)}&occurred_at=gte.${encodeURIComponent(sinceIso)}&occurred_at=lte.${encodeURIComponent(untilIso)}&or=(campaign_id.not.is.null,adset_id.not.is.null,ad_id.not.is.null)&select=campaign_id,adset_id,ad_id,event_name,value,order_id,event_id,source,occurred_at`
+    `/tracking_events?store_id=eq.${encodeURIComponent(storeId)}&occurred_at=gte.${encodeURIComponent(sinceIso)}&occurred_at=lte.${encodeURIComponent(untilIso)}&event_name=neq.Refund&or=(campaign_id.not.is.null,adset_id.not.is.null,ad_id.not.is.null)&select=campaign_id,adset_id,ad_id,event_name,value,order_id,event_id,source,occurred_at`
   );
 
   // Deduplicate by order_id to prevent double-counting when both browser pixel
   // and Shopify webhook/backfill create Purchase events for the same order.
-  // Group by COALESCE(order_id, event_id), keep shopify-source preferred.
+  // Priority: Prefer events WITH entity mapping (campaign_id/adset_id/ad_id) over those without.
+  // If both have mapping, prefer browser > server > shopify (browser pixel is most accurate).
+  // If neither has mapping, prefer shopify (authoritative order value).
   const dedupMap = new Map<string, typeof rows[number]>();
-  const sourceRank = (s: string | null) => s === 'shopify' ? 0 : s === 'server' ? 1 : 2;
+  
+  const hasEntityMapping = (r: typeof rows[number]) => !!(r.campaign_id || r.adset_id || r.ad_id);
+  // Lower rank = higher priority. Browser pixel with mapping is most accurate.
+  const sourceRank = (r: typeof rows[number]) => {
+    const hasMapped = hasEntityMapping(r);
+    if (hasMapped) {
+      // Prefer browser pixel data when it has entity mapping (most accurate click attribution)
+      if (r.source === 'browser') return 0;
+      if (r.source === 'server') return 1;
+      return 2; // shopify with mapping
+    } else {
+      // Without mapping, prefer shopify (has authoritative order value)
+      if (r.source === 'shopify') return 3;
+      if (r.source === 'server') return 4;
+      return 5; // browser without mapping
+    }
+  };
+  
   for (const row of rows) {
     const dedupKey = row.order_id || row.event_id || '';
     const existing = dedupMap.get(dedupKey);
     if (!existing) {
       dedupMap.set(dedupKey, row);
     } else {
-      // Prefer shopify source, then more recent
-      const existingRank = sourceRank(existing.source);
-      const newRank = sourceRank(row.source);
+      const existingRank = sourceRank(existing);
+      const newRank = sourceRank(row);
       if (newRank < existingRank || (newRank === existingRank && (row.occurred_at || '') > (existing.occurred_at || ''))) {
         dedupMap.set(dedupKey, row);
       }
