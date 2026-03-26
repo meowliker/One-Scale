@@ -29,6 +29,7 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
   const setActiveTab = useCreativeHubStore((s) => s.setActiveTab);
   const openLaunchWizardForProduct = useCreativeHubStore((s) => s.openLaunchWizardForProduct);
   const openLaunchCenter = useCreativeHubStore((s) => s.openLaunchCenter);
+  const openLaunchStudio = useCreativeHubStore((s) => s.openLaunchStudio);
   const inboxCreatives = useCreativeHubStore((s) => s.inboxCreatives);
   const activeTests = useCreativeHubStore((s) => s.activeTests);
   const completedTests = useCreativeHubStore((s) => s.completedTests);
@@ -136,8 +137,7 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
   };
 
   const handleLaunch = (profile: ProductProfile) => {
-    // Open the new Launch Center for this product
-    openLaunchCenter(profile.id);
+    openLaunchStudio(profile.id);
   };
 
   const handleMapToProfile = async (campaignId: string, profileId: string) => {

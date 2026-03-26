@@ -15,6 +15,7 @@ import { CompletedTestsTab } from '@/components/creative-hub/CompletedTestsTab';
 import { CopyLibraryTab } from '@/components/creative-hub/CopyLibraryTab';
 import { LaunchWizard } from '@/components/creative-hub/LaunchWizard';
 import { LaunchCenter } from '@/components/creative-hub/launch-center/LaunchCenter';
+import { CreativeLaunchStudio } from '@/components/creative-hub/launch-center/CreativeLaunchStudio';
 
 const tabs: { id: CreativeHubTab; label: string }[] = [
   { id: 'profiles', label: 'Product Profiles' },
@@ -135,6 +136,9 @@ export default function CreativeHubClient() {
 
       {/* Launch Center overlay (new bulk launch) */}
       <LaunchCenter storeId={activeStoreId || ''} />
+
+      {/* New Launch Studio */}
+      <CreativeLaunchStudio storeId={activeStoreId || ''} />
     </div>
   );
 }

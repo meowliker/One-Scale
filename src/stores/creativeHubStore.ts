@@ -79,6 +79,15 @@ interface CreativeHubState {
   batchStrategy: BatchStrategy;
   creativesPerBatch: number;
 
+  // Launch Studio
+  launchStudioOpen: boolean;
+  launchStudioProductId: string | null;
+  launchStudioAiAnalysis: { loading: boolean; data: AIInsightsData | null; error: string | null };
+  launchStudioAiChat: {
+    messages: Array<{ role: 'user' | 'assistant'; content: string; actionItems?: string[] }>;
+    loading: boolean;
+  };
+
   // Actions
   setActiveTab: (tab: CreativeHubTab) => void;
 
@@ -119,6 +128,12 @@ interface CreativeHubState {
 
   // AI insights actions
   fetchAIInsights: (storeId: string, productProfileId: string) => Promise<void>;
+
+  // Launch Studio actions
+  openLaunchStudio: (productId: string) => void;
+  closeLaunchStudio: () => void;
+  fetchLaunchStudioAiAnalysis: (storeId: string, productProfileId: string) => Promise<void>;
+  sendLaunchStudioAiChat: (storeId: string, productProfileId: string, message: string) => Promise<void>;
 
   // Launch Center actions
   setLaunchCenterTab: (tab: LaunchCenterTab) => void;
@@ -184,6 +199,11 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
   batches: [],
   batchStrategy: 'sequential',
   creativesPerBatch: 3,
+
+  launchStudioOpen: false,
+  launchStudioProductId: null,
+  launchStudioAiAnalysis: { loading: false, data: null, error: null },
+  launchStudioAiChat: { messages: [], loading: false },
 
   // ── Tab navigation ──
 
@@ -587,6 +607,97 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
     } catch (err) {
       console.error('[CreativeHub] Failed to fetch AI insights:', err);
       set({ aiInsightsLoading: false });
+    }
+  },
+
+  // ── Launch Studio ──
+
+  openLaunchStudio: (productId: string) => {
+    const state = get();
+    const creativeIds = state.inboxCreatives
+      .filter(c => c.productProfileId === productId && (c.uploadStatus === 'ready' || c.driveUrl))
+      .map(c => c.id);
+    set({
+      launchStudioOpen: true,
+      launchStudioProductId: productId,
+      selectedCreativeIds: new Set(creativeIds),
+      launchStudioAiAnalysis: { loading: false, data: null, error: null },
+      launchStudioAiChat: { messages: [], loading: false },
+      batches: [],
+    });
+  },
+
+  closeLaunchStudio: () => set({
+    launchStudioOpen: false,
+    launchStudioProductId: null,
+    launchStudioAiAnalysis: { loading: false, data: null, error: null },
+    launchStudioAiChat: { messages: [], loading: false },
+  }),
+
+  fetchLaunchStudioAiAnalysis: async (storeId: string, productProfileId: string) => {
+    set({ launchStudioAiAnalysis: { loading: true, data: null, error: null } });
+    try {
+      const res = await fetch('/api/creative-hub/ai-insights', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storeId, productProfileId }),
+      });
+      if (!res.ok) throw new Error('Failed to fetch AI analysis');
+      const data = await res.json();
+      set({ launchStudioAiAnalysis: { loading: false, data, error: null } });
+    } catch (err) {
+      set({
+        launchStudioAiAnalysis: {
+          loading: false,
+          data: null,
+          error: err instanceof Error ? err.message : 'Analysis failed',
+        },
+      });
+    }
+  },
+
+  sendLaunchStudioAiChat: async (storeId: string, productProfileId: string, message: string) => {
+    const { launchStudioAiChat } = get();
+    const updatedMessages = [
+      ...launchStudioAiChat.messages,
+      { role: 'user' as const, content: message },
+    ];
+    set({ launchStudioAiChat: { messages: updatedMessages, loading: true } });
+
+    try {
+      const res = await fetch('/api/creative-hub/ai-insights', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storeId,
+          productProfileId,
+          chatMessage: message,
+          chatHistory: updatedMessages.slice(-10),
+        }),
+      });
+      if (!res.ok) throw new Error('Chat request failed');
+      const data = await res.json();
+      const assistantMessage = {
+        role: 'assistant' as const,
+        content: data.insights?.summary || 'I analyzed your creatives but could not generate a response.',
+        actionItems: data.insights?.actionItems,
+      };
+      set({
+        launchStudioAiChat: {
+          messages: [...updatedMessages, assistantMessage],
+          loading: false,
+        },
+      });
+    } catch {
+      set({
+        launchStudioAiChat: {
+          messages: [
+            ...updatedMessages,
+            { role: 'assistant' as const, content: 'Sorry, I encountered an error. Please try again.' },
+          ],
+          loading: false,
+        },
+      });
     }
   },
 
