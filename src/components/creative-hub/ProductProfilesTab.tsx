@@ -28,6 +28,7 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
   const autoDiscoverProfiles = useCreativeHubStore((s) => s.autoDiscoverProfiles);
   const setActiveTab = useCreativeHubStore((s) => s.setActiveTab);
   const openLaunchWizardForProduct = useCreativeHubStore((s) => s.openLaunchWizardForProduct);
+  const openLaunchCenter = useCreativeHubStore((s) => s.openLaunchCenter);
   const inboxCreatives = useCreativeHubStore((s) => s.inboxCreatives);
   const activeTests = useCreativeHubStore((s) => s.activeTests);
   const completedTests = useCreativeHubStore((s) => s.completedTests);
@@ -135,11 +136,8 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
   };
 
   const handleLaunch = (profile: ProductProfile) => {
-    // Select ready creatives for this product
-    const readyCreativeIds = inboxCreatives
-      .filter((c) => c.productProfileId === profile.id && c.driveUrl)
-      .map((c) => c.id);
-    openLaunchWizardForProduct(profile.id, readyCreativeIds);
+    // Open the new Launch Center for this product
+    openLaunchCenter(profile.id);
   };
 
   const handleMapToProfile = async (campaignId: string, profileId: string) => {

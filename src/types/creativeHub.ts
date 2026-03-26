@@ -215,6 +215,11 @@ export interface LaunchConfig {
   notifyOnKill?: boolean;
   // Health check result
   healthCheckReport?: Record<string, unknown>;
+  // Launch Center
+  batches?: CreativeBatch[];
+  batchStrategy?: BatchStrategy;
+  creativesPerBatch?: number;
+  launchMode?: LaunchCenterTab;
 }
 
 export interface CopyItem {
@@ -445,6 +450,29 @@ export interface AIInsightsData {
   analyzedAds: number;
   productName: string;
 }
+
+// ── Creative Launch Center Types ──
+
+export interface CreativeBatch {
+  id: string;
+  name: string;
+  creativeIds: string[];
+  dailyBudget?: number;
+  bidAmount?: number;
+  primaryTexts?: string[];
+  headlines?: string[];
+}
+
+export type BatchStrategy =
+  | 'sequential'
+  | 'by_format'
+  | 'by_folder'
+  | 'smart_mix'
+  | 'shuffle'
+  | 'one_per_adset'
+  | 'manual';
+
+export type LaunchCenterTab = 'quick' | 'grid' | 'matrix' | 'kanban' | 'chat' | 'import';
 
 // ── Store State ──
 

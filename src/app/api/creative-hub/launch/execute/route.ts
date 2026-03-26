@@ -416,9 +416,180 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Step 3: For each creative item, create adset + ad creative + ad
+    // Step 3: Create adsets + ad creatives + ads
     const createdAdsetIds: string[] = [];
     let hasFailure = false;
+
+    const batches = launchConfig.batches as Array<{ id: string; name: string; creativeIds: string[]; dailyBudget?: number; bidAmount?: number }> | undefined;
+
+    if (batches && batches.length > 0) {
+      // ── BATCH MODE ──
+      console.log(`[launch] Batch mode: ${batches.length} batches`);
+
+      for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+        const batch = batches[batchIdx];
+        const batchCreatives = selectedItems.filter(item => batch.creativeIds.includes(item.id));
+        if (batchCreatives.length === 0) continue;
+
+        try {
+          // Create one adset per batch
+          const targetingPayload = buildTargetingPayload(targeting);
+          const adsetName = batch.name;
+
+          const adsetBody: Record<string, string> = {
+            name: adsetName,
+            campaign_id: campaignId,
+            status: launchConfig.launchStatus || 'PAUSED',
+            billing_event: 'IMPRESSIONS',
+            optimization_goal: 'OFFSITE_CONVERSIONS',
+            targeting: JSON.stringify(targetingPayload),
+            start_time: launchConfig.scheduledDate
+              ? new Date(`${launchConfig.scheduledDate}T${launchConfig.scheduledTime || '00:00'}:00`).toISOString()
+              : new Date().toISOString(),
+          };
+
+          // Budget (ABO puts budget on adset, CBO on campaign)
+          if (launchConfig.structure === 'ABO') {
+            const budgetCents = Math.round((batch.dailyBudget ?? launchConfig.dailyBudget) * 100);
+            adsetBody.daily_budget = String(budgetCents);
+          }
+
+          // Bid strategy
+          adsetBody.bid_strategy = launchConfig.bidStrategy;
+          const bidAmt = batch.bidAmount ?? launchConfig.bidAmount;
+          if (bidAmt && launchConfig.bidStrategy !== 'LOWEST_COST_WITHOUT_CAP') {
+            adsetBody.bid_amount = String(Math.round(bidAmt * 100));
+          }
+
+          // End date
+          if (launchConfig.endDate) {
+            adsetBody.end_time = new Date(`${launchConfig.endDate}T23:59:59`).toISOString();
+          } else if (launchConfig.testDuration > 0) {
+            const endDate = new Date();
+            endDate.setDate(endDate.getDate() + launchConfig.testDuration);
+            adsetBody.end_time = endDate.toISOString();
+          }
+
+          // Promoted object for conversion campaigns
+          const pixelId = launchConfig.pixelId || profile.pixelId;
+          const conversionEvent = launchConfig.conversionEvent || profile.conversionEvent;
+          if (pixelId) {
+            adsetBody.promoted_object = JSON.stringify({
+              pixel_id: pixelId,
+              custom_event_type: conversionEvent || 'PURCHASE',
+            });
+          }
+
+          const adsetRes = await postToMeta(token.accessToken, `/${accountNode}/adsets`, adsetBody);
+          const adsetId = String(adsetRes.id || '');
+
+          if (!adsetId) {
+            throw new Error(`Meta adset creation for batch "${batch.name}" did not return an ID`);
+          }
+
+          createdAdsetIds.push(adsetId);
+
+          // Create an ad for each creative in the batch
+          for (const item of batchCreatives) {
+            try {
+              if (!item.meta_asset_id) {
+                throw new Error(
+                  item.drive_url
+                    ? `Creative "${item.creative_name}" failed to upload to Meta.`
+                    : `Creative "${item.creative_name}" has no Drive URL. Cannot upload.`
+                );
+              }
+
+              const creativeUrl = launchConfig.usePerCreativeUrls && launchConfig.perCreativeUrls
+                ? launchConfig.perCreativeUrls[item.id]
+                : undefined;
+
+              // Create ad creative
+              const isFlexibleAd = launchConfig.primaryTexts.length > 1 || launchConfig.headlines.length > 1;
+              const creativeBody: Record<string, string> = {
+                name: `${item.creative_name} Creative`,
+                url_tags: launchConfig.utmTemplate || profile.utmTemplate || DEFAULT_META_URL_TAGS,
+              };
+
+              if (isFlexibleAd) {
+                const assetFeedSpec = buildAssetFeedSpec(launchConfig, profile, creativeUrl);
+                if (item.meta_asset_type === 'VIDEO' || item.meta_asset_type === 'video') {
+                  (assetFeedSpec as Record<string, unknown>).videos = [{ video_id: item.meta_asset_id }];
+                } else {
+                  (assetFeedSpec as Record<string, unknown>).images = [{ hash: item.meta_asset_id }];
+                }
+                creativeBody.asset_feed_spec = JSON.stringify(assetFeedSpec);
+                creativeBody.object_type = 'SHARE';
+
+                if (launchConfig.advantageCreative) {
+                  creativeBody.degrees_of_freedom_spec = JSON.stringify({
+                    creative_features_spec: {
+                      standard_enhancements: { enroll_status: 'OPT_IN' },
+                    },
+                  });
+                }
+              } else {
+                const objectStorySpec = buildObjectStorySpec(
+                  launchConfig,
+                  profile,
+                  item.meta_asset_id!,
+                  item.meta_asset_type || 'IMAGE',
+                  creativeUrl
+                );
+                creativeBody.object_story_spec = JSON.stringify(objectStorySpec);
+              }
+
+              const creativeRes = await postToMeta(token.accessToken, `/${accountNode}/adcreatives`, creativeBody);
+              const metaCreativeId = String(creativeRes.id || '');
+
+              if (!metaCreativeId) {
+                throw new Error('Meta ad creative creation did not return an ID');
+              }
+
+              // Create ad
+              const adRes = await postToMeta(token.accessToken, `/${accountNode}/ads`, {
+                name: item.creative_name,
+                adset_id: adsetId,
+                status: launchConfig.launchStatus || 'PAUSED',
+                creative: JSON.stringify({ creative_id: metaCreativeId }),
+              });
+              const adId = String(adRes.id || '');
+
+              if (!adId) {
+                throw new Error('Meta ad creation did not return an ID');
+              }
+
+              await updateCreativeTestItem(item.id, {
+                metaAdsetId: adsetId,
+                metaAdId: adId,
+                metaCreativeId: metaCreativeId,
+                launchStatus: 'created',
+              });
+            } catch (err) {
+              hasFailure = true;
+              const message = err instanceof Error ? err.message : 'Unknown error';
+              console.error(`[Launch] Batch "${batch.name}" - Failed for "${item.creative_name}":`, message);
+              await updateCreativeTestItem(item.id, {
+                launchStatus: 'failed',
+                reviewFeedback: message,
+              });
+            }
+          }
+        } catch (err) {
+          hasFailure = true;
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          console.error(`[Launch] Failed to create adset for batch "${batch.name}":`, message);
+          // Mark all creatives in this batch as failed
+          for (const item of batchCreatives) {
+            await updateCreativeTestItem(item.id, {
+              launchStatus: 'failed',
+              reviewFeedback: `Batch adset creation failed: ${message}`,
+            });
+          }
+        }
+      }
+    } else {
+      // ── LEGACY MODE: existing 1:1 flow ──
 
     for (const item of selectedItems) {
       try {
@@ -570,6 +741,7 @@ export async function POST(request: NextRequest) {
         });
       }
     }
+    } // end legacy mode
 
     // If any items failed, pause all created adsets and set test status to partial
     if (hasFailure) {

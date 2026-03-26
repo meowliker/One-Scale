@@ -3,6 +3,9 @@ import type {
   CreativeHubTab,
   LaunchWizardStep,
   LaunchConfig,
+  LaunchCenterTab,
+  BatchStrategy,
+  CreativeBatch,
   ProductProfile,
   InboxCreative,
   CreativeTest,
@@ -69,6 +72,13 @@ interface CreativeHubState {
   aiInsights: AIInsightsData | null;
   aiInsightsLoading: boolean;
 
+  // Launch Center
+  launchCenterOpen: boolean;
+  launchCenterTab: LaunchCenterTab;
+  batches: CreativeBatch[];
+  batchStrategy: BatchStrategy;
+  creativesPerBatch: number;
+
   // Actions
   setActiveTab: (tab: CreativeHubTab) => void;
 
@@ -109,6 +119,19 @@ interface CreativeHubState {
 
   // AI insights actions
   fetchAIInsights: (storeId: string, productProfileId: string) => Promise<void>;
+
+  // Launch Center actions
+  setLaunchCenterTab: (tab: LaunchCenterTab) => void;
+  openLaunchCenter: (productId?: string) => void;
+  closeLaunchCenter: () => void;
+  autoBatch: (strategy: BatchStrategy, size: number) => void;
+  createBatch: (name: string, creativeIds: string[]) => void;
+  removeBatch: (batchId: string) => void;
+  addCreativeToBatch: (batchId: string, creativeId: string) => void;
+  removeCreativeFromBatch: (batchId: string, creativeId: string) => void;
+  moveCreativeBetweenBatches: (fromId: string, toId: string, creativeId: string) => void;
+  clearBatches: () => void;
+  shuffleBatches: () => void;
 
   // Copy library actions
   fetchCopyLibrary: (productProfileId: string) => Promise<void>;
@@ -155,6 +178,12 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
 
   aiInsights: null,
   aiInsightsLoading: false,
+
+  launchCenterOpen: false,
+  launchCenterTab: 'quick',
+  batches: [],
+  batchStrategy: 'sequential',
+  creativesPerBatch: 3,
 
   // ── Tab navigation ──
 
@@ -559,6 +588,122 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
       console.error('[CreativeHub] Failed to fetch AI insights:', err);
       set({ aiInsightsLoading: false });
     }
+  },
+
+  // ── Launch Center ──
+
+  setLaunchCenterTab: (tab: LaunchCenterTab) => set({ launchCenterTab: tab }),
+
+  openLaunchCenter: (productId?: string) => {
+    const state = get();
+    const profile = productId ? state.profiles.find(p => p.id === productId) : undefined;
+    const creativeIds = productId
+      ? state.inboxCreatives.filter(c => c.productProfileId === productId && (c.uploadStatus === 'ready' || c.driveUrl)).map(c => c.id)
+      : [...state.selectedCreativeIds];
+    set({
+      launchCenterOpen: true,
+      launchCenterTab: 'quick',
+      batches: [],
+      selectedCreativeIds: new Set(creativeIds),
+      ...(profile ? { launchConfig: { ...state.launchConfig, productProfileId: profile.id } } : {}),
+    });
+  },
+
+  closeLaunchCenter: () => set({ launchCenterOpen: false, batches: [] }),
+
+  autoBatch: (strategy: BatchStrategy, size: number) => {
+    const state = get();
+    const creativeIds = [...state.selectedCreativeIds];
+    const batches: CreativeBatch[] = [];
+
+    let ordered = [...creativeIds];
+    if (strategy === 'shuffle') {
+      for (let i = ordered.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [ordered[i], ordered[j]] = [ordered[j], ordered[i]];
+      }
+    } else if (strategy === 'by_format') {
+      const creatives = state.inboxCreatives;
+      const videos = ordered.filter(id => creatives.find(c => c.id === id)?.creativeFormat === 'video');
+      const images = ordered.filter(id => creatives.find(c => c.id === id)?.creativeFormat === 'image');
+      const carousels = ordered.filter(id => creatives.find(c => c.id === id)?.creativeFormat === 'carousel');
+      ordered = [...videos, ...images, ...carousels];
+    } else if (strategy === 'one_per_adset') {
+      // 1 creative per ad set (Marpipe-style fair test)
+      for (let i = 0; i < ordered.length; i++) {
+        batches.push({
+          id: `batch-${i + 1}`,
+          name: `Ad Set ${i + 1}`,
+          creativeIds: [ordered[i]],
+        });
+      }
+      set({ batches, batchStrategy: strategy, creativesPerBatch: 1 });
+      return;
+    }
+
+    // Group into batches of `size`
+    for (let i = 0; i < ordered.length; i += size) {
+      const chunk = ordered.slice(i, i + size);
+      const batchNum = Math.floor(i / size) + 1;
+      batches.push({
+        id: `batch-${batchNum}`,
+        name: `Batch ${batchNum}`,
+        creativeIds: chunk,
+      });
+    }
+    set({ batches, batchStrategy: strategy, creativesPerBatch: size });
+  },
+
+  createBatch: (name: string, creativeIds: string[]) => {
+    const state = get();
+    const newBatch: CreativeBatch = {
+      id: `batch-${Date.now()}`,
+      name,
+      creativeIds,
+    };
+    set({ batches: [...state.batches, newBatch] });
+  },
+
+  removeBatch: (batchId: string) => {
+    set({ batches: get().batches.filter(b => b.id !== batchId) });
+  },
+
+  addCreativeToBatch: (batchId: string, creativeId: string) => {
+    set({
+      batches: get().batches.map(b =>
+        b.id === batchId && !b.creativeIds.includes(creativeId)
+          ? { ...b, creativeIds: [...b.creativeIds, creativeId] }
+          : b
+      ),
+    });
+  },
+
+  removeCreativeFromBatch: (batchId: string, creativeId: string) => {
+    set({
+      batches: get().batches.map(b =>
+        b.id === batchId
+          ? { ...b, creativeIds: b.creativeIds.filter(id => id !== creativeId) }
+          : b
+      ),
+    });
+  },
+
+  moveCreativeBetweenBatches: (fromId: string, toId: string, creativeId: string) => {
+    set({
+      batches: get().batches.map(b => {
+        if (b.id === fromId) return { ...b, creativeIds: b.creativeIds.filter(id => id !== creativeId) };
+        if (b.id === toId && !b.creativeIds.includes(creativeId)) return { ...b, creativeIds: [...b.creativeIds, creativeId] };
+        return b;
+      }),
+    });
+  },
+
+  clearBatches: () => set({ batches: [] }),
+
+  shuffleBatches: () => {
+    const state = get();
+    const size = state.creativesPerBatch || 3;
+    state.autoBatch('shuffle', size);
   },
 
   // ── Copy Library ──
