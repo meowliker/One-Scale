@@ -636,23 +636,38 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
 
   fetchLaunchStudioAiAnalysis: async (storeId: string, productProfileId: string) => {
     set({ launchStudioAiAnalysis: { loading: true, data: null, error: null } });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120_000); // 120s client-side timeout
     try {
       const res = await fetch('/api/creative-hub/ai-insights', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ storeId, productProfileId }),
+        signal: controller.signal,
       });
-      if (!res.ok) throw new Error('Failed to fetch AI analysis');
+      if (!res.ok) {
+        const errorBody = await res.json().catch(() => ({ error: `Request failed (${res.status})` }));
+        throw new Error(errorBody.error || `AI analysis failed (${res.status})`);
+      }
       const data = await res.json();
+      // Validate expected shape — the response must contain `insights` with required fields
+      if (!data.insights || !data.insights.summary) {
+        throw new Error('Invalid response: missing insights data');
+      }
       set({ launchStudioAiAnalysis: { loading: false, data, error: null } });
     } catch (err) {
+      const message = err instanceof Error
+        ? (err.name === 'AbortError' ? 'Analysis timed out — please try again' : err.message)
+        : 'Analysis failed';
       set({
         launchStudioAiAnalysis: {
           loading: false,
           data: null,
-          error: err instanceof Error ? err.message : 'Analysis failed',
+          error: message,
         },
       });
+    } finally {
+      clearTimeout(timeout);
     }
   },
 
@@ -663,6 +678,9 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
       { role: 'user' as const, content: message },
     ];
     set({ launchStudioAiChat: { messages: updatedMessages, loading: true } });
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 90_000); // 90s client-side timeout
 
     try {
       // Build context from available data for richer AI responses
@@ -687,8 +705,12 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
           history: updatedMessages.slice(-10).map(m => ({ role: m.role, content: m.content })),
           context,
         }),
+        signal: controller.signal,
       });
-      if (!res.ok) throw new Error('Chat request failed');
+      if (!res.ok) {
+        const errorBody = await res.json().catch(() => ({ error: `Chat failed (${res.status})` }));
+        throw new Error(errorBody.error || `Chat request failed (${res.status})`);
+      }
       const data = await res.json();
       const assistantMessage = {
         role: 'assistant' as const,
@@ -701,16 +723,21 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
           loading: false,
         },
       });
-    } catch {
+    } catch (err) {
+      const errMsg = err instanceof Error && err.name === 'AbortError'
+        ? 'Request timed out. Please try again.'
+        : 'Sorry, I encountered an error. Please try again.';
       set({
         launchStudioAiChat: {
           messages: [
             ...updatedMessages,
-            { role: 'assistant' as const, content: 'Sorry, I encountered an error. Please try again.' },
+            { role: 'assistant' as const, content: errMsg },
           ],
           loading: false,
         },
       });
+    } finally {
+      clearTimeout(timeout);
     }
   },
 

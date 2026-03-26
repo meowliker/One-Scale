@@ -150,9 +150,36 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Supabase not configured' }, { status: 500 });
     }
 
-    const adsSnapshots = await supabaseRest<AdsSnapshotRow[]>(
-      `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.ads&variant_key=eq.latest&select=scope_id,payload_json`,
-    );
+    // Try per-store snapshot table first (new), fall back to legacy table
+    let adsSnapshots: AdsSnapshotRow[] = [];
+    try {
+      // Resolve per-store table name via RPC
+      const tableRes = await fetch(`${SUPABASE_URL}/rest/v1/rpc/ensure_meta_snapshot_store_table`, {
+        method: 'POST',
+        headers: { apikey: SUPABASE_KEY!, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ p_store_id: storeId }),
+      });
+      if (tableRes.ok) {
+        const tableName = await tableRes.json();
+        if (typeof tableName === 'string' && tableName) {
+          adsSnapshots = await supabaseRest<AdsSnapshotRow[]>(
+            `/${tableName}?endpoint=eq.ads&variant_key=eq.latest&select=scope_id,payload_json`,
+          );
+        }
+      }
+    } catch {
+      // Fall through to legacy table
+    }
+    // Fallback to legacy table if per-store table didn't work
+    if (adsSnapshots.length === 0) {
+      try {
+        adsSnapshots = await supabaseRest<AdsSnapshotRow[]>(
+          `/meta_endpoint_snapshots?store_id=eq.${encodeURIComponent(storeId)}&endpoint=eq.ads&variant_key=eq.latest&select=scope_id,payload_json`,
+        );
+      } catch {
+        // Legacy table may not exist, continue with empty
+      }
+    }
 
     if (adsSnapshots.length === 0) {
       return NextResponse.json({
