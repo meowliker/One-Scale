@@ -6,8 +6,21 @@ import { fetchMetaCampaigns, fetchMetaAdSets, fetchMetaAds, MetaRateLimitError }
 import { upsertPersistentMetaEndpointSnapshot } from '@/app/api/lib/supabase-tracking';
 import { isMetaCallBlocked, markMetaRateLimited } from '@/app/api/lib/meta-sync-queue';
 
+export const maxDuration = 300;
+
+const SLOT_MS = 10 * 60 * 1000; // 10 minutes
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function currentSlot(): number {
+  return Math.floor(Date.now() / SLOT_MS);
+}
+
+function pickRoundRobinStoreId(storeIds: string[]): string | null {
+  if (storeIds.length === 0) return null;
+  return storeIds[currentSlot() % storeIds.length] || null;
 }
 
 /**
@@ -33,6 +46,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  const params = request.nextUrl.searchParams;
+  const requestedStoreId = (params.get('storeId') || params.get('store_id') || '').trim();
+  const forceAll = params.get('full') === '1';
+  const explicitAuto = params.get('auto') === '1';
+  const isVercelCron = (request.headers.get('x-vercel-cron') || '').length > 0;
+  const autoMode = !forceAll && (explicitAuto || (isVercelCron && requestedStoreId.length === 0));
+
   const today = new Date().toISOString().slice(0, 10);
   const dateRange = { since: today, until: today };
   const exactVariant = `range:since:${today}|until:${today}|strict:1`;
@@ -48,8 +68,23 @@ export async function GET(request: NextRequest) {
 
     if (useSupabase) {
       const stores = await listPersistentStores();
+      const storesTotal = stores.length;
+      let targetStores = requestedStoreId
+        ? stores.filter((store) => store.id === requestedStoreId)
+        : stores;
 
-      for (const store of stores) {
+      if (autoMode) {
+        const eligible = targetStores
+          .filter((store) => (store.adAccounts || []).some((a) => Number(a.is_active) === 1))
+          .map((store) => store.id)
+          .sort();
+        const pickedStoreId = pickRoundRobinStoreId(eligible);
+        targetStores = pickedStoreId
+          ? targetStores.filter((store) => store.id === pickedStoreId)
+          : [];
+      }
+
+      for (const store of targetStores) {
         try {
           const token = await getMetaToken(store.id);
           if (!token) continue;
@@ -161,15 +196,33 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ 
         synced, 
         errors, 
-        storeCount: stores.length, 
+        storeCount: storesTotal,
+        storesTargeted: targetStores.length,
+        mode: autoMode ? 'single_store_auto' : requestedStoreId ? 'single_store_manual' : 'all_stores',
         adSetsSynced,
         adsSynced,
-        mode: 'supabase' 
+        storage: 'supabase',
       });
     }
 
     const stores = getAllStores();
-    for (const store of stores) {
+    const storesTotal = stores.length;
+    let targetStores = requestedStoreId
+      ? stores.filter((store) => store.id === requestedStoreId)
+      : stores;
+
+    if (autoMode) {
+      const eligible = targetStores
+        .filter((store) => getStoreAdAccounts(store.id).some((a) => a.is_active))
+        .map((store) => store.id)
+        .sort();
+      const pickedStoreId = pickRoundRobinStoreId(eligible);
+      targetStores = pickedStoreId
+        ? targetStores.filter((store) => store.id === pickedStoreId)
+        : [];
+    }
+
+    for (const store of targetStores) {
       try {
         const token = await getMetaToken(store.id);
         if (!token) continue;
@@ -264,10 +317,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ 
       synced, 
       errors, 
-      storeCount: stores.length, 
+      storeCount: storesTotal,
+      storesTargeted: targetStores.length,
+      mode: autoMode ? 'single_store_auto' : requestedStoreId ? 'single_store_manual' : 'all_stores',
       adSetsSynced,
       adsSynced,
-      mode: 'sqlite' 
+      storage: 'sqlite',
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Cron sync failed';

@@ -16,6 +16,7 @@ export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
 
 const CRON_NAME = 'materialize_meta_entities';
+const SLOT_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 async function logCron(
   storeId: string,
@@ -39,6 +40,15 @@ async function logCron(
   } catch {
     // Best effort logging only
   }
+}
+
+function currentSlot(): number {
+  return Math.floor(Date.now() / SLOT_MS);
+}
+
+function pickRoundRobinStoreId(storeIds: string[]): string | null {
+  if (storeIds.length === 0) return null;
+  return storeIds[currentSlot() % storeIds.length] || null;
 }
 
 async function runMaterializerForStores(storeIds?: Set<string>) {
@@ -152,7 +162,32 @@ export async function GET(request: NextRequest) {
   if (!isAuthorized(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  return runMaterializerForStores();
+  const params = request.nextUrl.searchParams;
+  const requestedStoreId = (params.get('storeId') || params.get('store_id') || '').trim();
+  const forceAll = params.get('full') === '1';
+  const explicitAuto = params.get('auto') === '1';
+  const isVercelCron = (request.headers.get('x-vercel-cron') || '').length > 0;
+  const autoMode = !forceAll && (explicitAuto || (isVercelCron && requestedStoreId.length === 0));
+
+  if (!requestedStoreId && !autoMode) {
+    return runMaterializerForStores();
+  }
+
+  const stores = await listPersistentStores();
+  let selected = requestedStoreId
+    ? stores.filter((s) => s.id === requestedStoreId).map((s) => s.id)
+    : stores.map((s) => s.id);
+
+  if (autoMode) {
+    const eligible = stores
+      .filter((store) => (store.adAccounts || []).some((a) => a.platform === 'meta' && Number(a.is_active) === 1))
+      .map((store) => store.id)
+      .sort();
+    const picked = pickRoundRobinStoreId(eligible);
+    selected = picked ? [picked] : [];
+  }
+
+  return runMaterializerForStores(new Set(selected));
 }
 
 export async function POST(request: NextRequest) {
