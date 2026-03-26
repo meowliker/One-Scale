@@ -203,6 +203,7 @@ type DailyMetricRow = {
 
 const UPSERT_CHUNK_SIZE = 250;
 export const WAREHOUSE_LATEST_VARIANT = 'warehouse:last_30d';
+const missingColumnsByTable = new Map<string, Set<string>>();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -428,13 +429,59 @@ async function upsertRows<T extends Record<string, unknown>>(
   rows: T[]
 ): Promise<void> {
   if (rows.length === 0) return;
-  for (let i = 0; i < rows.length; i += UPSERT_CHUNK_SIZE) {
-    const chunk = rows.slice(i, i + UPSERT_CHUNK_SIZE);
-    await rest(path, {
-      method: 'POST',
-      headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify(chunk),
+  const tableName = path.replace(/^\//, '').split('?')[0] || 'unknown_table';
+  const knownMissingColumns = missingColumnsByTable.get(tableName);
+
+  const dropColumns = (inputRows: T[], columns: Set<string>): T[] => {
+    if (columns.size === 0) return inputRows;
+    return inputRows.map((row) => {
+      const copy = { ...row } as T;
+      for (const column of columns) {
+        delete (copy as Record<string, unknown>)[column];
+      }
+      return copy;
     });
+  };
+
+  const parseMissingColumn = (errorMessage: string): string | null => {
+    const match = errorMessage.match(/Could not find the '([^']+)' column of '([^']+)'/);
+    if (!match) return null;
+    const [, columnName, errorTableName] = match;
+    if (errorTableName !== tableName) return null;
+    return columnName || null;
+  };
+
+  for (let i = 0; i < rows.length; i += UPSERT_CHUNK_SIZE) {
+    let chunk = rows.slice(i, i + UPSERT_CHUNK_SIZE);
+    if (knownMissingColumns && knownMissingColumns.size > 0) {
+      chunk = dropColumns(chunk, knownMissingColumns);
+    }
+
+    for (;;) {
+      try {
+        await rest(path, {
+          method: 'POST',
+          headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+          body: JSON.stringify(chunk),
+        });
+        break;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const missingColumn = parseMissingColumn(message);
+        if (!missingColumn) throw error;
+
+        let tableMissingColumns = missingColumnsByTable.get(tableName);
+        if (!tableMissingColumns) {
+          tableMissingColumns = new Set<string>();
+          missingColumnsByTable.set(tableName, tableMissingColumns);
+        }
+        if (tableMissingColumns.has(missingColumn)) throw error;
+
+        tableMissingColumns.add(missingColumn);
+        console.warn(`[Warehouse] ${tableName}.${missingColumn} missing in Supabase schema; retrying upsert without it`);
+        chunk = dropColumns(chunk, tableMissingColumns);
+      }
+    }
   }
 }
 
