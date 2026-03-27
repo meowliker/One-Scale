@@ -41,6 +41,15 @@ export async function GET(request: NextRequest) {
           updatedAt: creds.shopify.updated_at,
         }
       : { appId: '', appSecret: '', redirectUri: '', scopes: 'read_orders,read_products,read_customers', configured: false },
+    google_drive: creds.google_drive
+      ? {
+          appId: creds.google_drive.app_id,
+          appSecret: maskSecret(creds.google_drive.app_secret),
+          redirectUri: creds.google_drive.redirect_uri,
+          configured: true,
+          updatedAt: creds.google_drive.updated_at,
+        }
+      : { appId: '', appSecret: '', redirectUri: '', configured: false },
   });
 }
 
@@ -52,7 +61,7 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
     const { platform, appId, appSecret, redirectUri, scopes } = body as {
-      platform: 'meta' | 'shopify';
+      platform: 'meta' | 'shopify' | 'google_drive';
       appId: string;
       appSecret: string;
       redirectUri: string;
@@ -66,9 +75,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (platform !== 'meta' && platform !== 'shopify') {
+    if (platform !== 'meta' && platform !== 'shopify' && platform !== 'google_drive') {
       return NextResponse.json(
-        { error: 'platform must be "meta" or "shopify"' },
+        { error: 'platform must be "meta", "shopify", or "google_drive"' },
         { status: 400 }
       );
     }
@@ -97,11 +106,11 @@ export async function DELETE(request: NextRequest) {
     const workspaceId = session.workspaceId;
 
     const body = await request.json();
-    const { platform } = body as { platform: 'meta' | 'shopify' };
+    const { platform } = body as { platform: 'meta' | 'shopify' | 'google_drive' };
 
-    if (!platform || (platform !== 'meta' && platform !== 'shopify')) {
+    if (!platform || (platform !== 'meta' && platform !== 'shopify' && platform !== 'google_drive')) {
       return NextResponse.json(
-        { error: 'platform must be "meta" or "shopify"' },
+        { error: 'platform must be "meta", "shopify", or "google_drive"' },
         { status: 400 }
       );
     }

@@ -79,6 +79,10 @@ interface CreativeHubState {
   batchStrategy: BatchStrategy;
   creativesPerBatch: number;
 
+  // Google Drive
+  googleDriveConnected: boolean;
+  googleDriveEmail: string | null;
+
   // Launch Studio
   launchStudioOpen: boolean;
   launchStudioProductId: string | null;
@@ -128,6 +132,9 @@ interface CreativeHubState {
 
   // AI insights actions
   fetchAIInsights: (storeId: string, productProfileId: string) => Promise<void>;
+
+  // Google Drive actions
+  checkGoogleDriveConnection: (storeId: string) => Promise<void>;
 
   // Launch Studio actions
   openLaunchStudio: (productId: string) => void;
@@ -199,6 +206,9 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
   batches: [],
   batchStrategy: 'sequential',
   creativesPerBatch: 3,
+
+  googleDriveConnected: false,
+  googleDriveEmail: null,
 
   launchStudioOpen: false,
   launchStudioProductId: null,
@@ -607,6 +617,25 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
     } catch (err) {
       console.error('[CreativeHub] Failed to fetch AI insights:', err);
       set({ aiInsightsLoading: false });
+    }
+  },
+
+  // ── Google Drive ──
+
+  checkGoogleDriveConnection: async (storeId: string) => {
+    try {
+      const res = await fetch(`/api/google-drive/status?storeId=${encodeURIComponent(storeId)}`);
+      if (res.ok) {
+        const data = await res.json();
+        set({
+          googleDriveConnected: !!data.connected,
+          googleDriveEmail: data.email || null,
+        });
+      } else {
+        set({ googleDriveConnected: false, googleDriveEmail: null });
+      }
+    } catch {
+      set({ googleDriveConnected: false, googleDriveEmail: null });
     }
   },
 

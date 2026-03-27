@@ -11,6 +11,7 @@ import {
   upsertThirdPartyToken,
 } from '@/app/api/lib/db';
 import { decryptSecret, encryptSecret } from '@/app/api/lib/crypto';
+import type { OAuthPlatform } from '@/types/auth';
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -63,7 +64,7 @@ export async function listPersistentStores(): Promise<Array<DbStore & { adAccoun
   const [stores, accounts, connections] = await Promise.all([
     rest<DbStore[]>('/stores?select=*&order=created_at.desc'),
     rest<Array<DbStoreAdAccount & { is_active: boolean | number }>>('/store_ad_accounts?select=*'),
-    rest<Array<{ store_id: string; platform: 'meta' | 'shopify' }>>('/connections?select=store_id,platform'),
+    rest<Array<{ store_id: string; platform: OAuthPlatform }>>('/connections?select=store_id,platform'),
   ]);
 
   return stores.map((store) => ({
@@ -96,10 +97,17 @@ export async function getPersistentConnectionStatus(storeId: string): Promise<{
     shopName?: string;
     lastSynced?: string;
   };
+  google_drive: {
+    connected: boolean;
+    accountId?: string;
+    accountName?: string;
+    lastSynced?: string;
+  };
 }> {
-  const [metaConn, shopifyConn] = await Promise.all([
+  const [metaConn, shopifyConn, googleDriveConn] = await Promise.all([
     getPersistentConnection(storeId, 'meta'),
     getPersistentConnection(storeId, 'shopify'),
+    getPersistentConnection(storeId, 'google_drive'),
   ]);
 
   return {
@@ -114,6 +122,12 @@ export async function getPersistentConnectionStatus(storeId: string): Promise<{
       shopDomain: shopifyConn?.shop_domain ?? undefined,
       shopName: shopifyConn?.shop_name ?? undefined,
       lastSynced: shopifyConn?.last_synced ?? undefined,
+    },
+    google_drive: {
+      connected: !!googleDriveConn,
+      accountId: googleDriveConn?.account_id ?? undefined,
+      accountName: googleDriveConn?.account_name ?? undefined,
+      lastSynced: googleDriveConn?.last_synced ?? undefined,
     },
   };
 }
@@ -196,7 +210,7 @@ export async function deletePersistentStore(storeId: string): Promise<void> {
   await rest(`/stores?id=eq.${encodeURIComponent(storeId)}`, { method: 'DELETE' });
 }
 
-export async function getPersistentConnection(storeId: string, platform: 'meta' | 'shopify'): Promise<DbConnection | null> {
+export async function getPersistentConnection(storeId: string, platform: OAuthPlatform): Promise<DbConnection | null> {
   const rows = await rest<DbConnection[]>(
     `/connections?store_id=eq.${encodeURIComponent(storeId)}&platform=eq.${platform}&select=*&limit=1`
   );
@@ -211,7 +225,7 @@ export async function getPersistentConnection(storeId: string, platform: 'meta' 
 
 export async function upsertPersistentConnection(data: {
   storeId: string;
-  platform: 'meta' | 'shopify';
+  platform: OAuthPlatform;
   accessToken: string;
   refreshToken?: string;
   expiresAt?: number;
@@ -220,6 +234,7 @@ export async function upsertPersistentConnection(data: {
   shopDomain?: string;
   shopName?: string;
   scopes?: string;
+  metadata?: string;
 }): Promise<void> {
   await rest(
     '/connections?on_conflict=store_id,platform',
@@ -239,6 +254,7 @@ export async function upsertPersistentConnection(data: {
         shop_domain: data.shopDomain ?? null,
         shop_name: data.shopName ?? null,
         scopes: data.scopes ?? null,
+        metadata: data.metadata ?? null,
         last_synced: new Date().toISOString(),
       }]),
     }
@@ -247,7 +263,7 @@ export async function upsertPersistentConnection(data: {
 
 export async function updatePersistentConnectionAccount(
   storeId: string,
-  platform: 'meta' | 'shopify',
+  platform: OAuthPlatform,
   accountId: string,
   accountName: string
 ): Promise<void> {
@@ -267,7 +283,7 @@ export async function updatePersistentConnectionAccount(
   );
 }
 
-export async function deletePersistentConnection(storeId: string, platform: 'meta' | 'shopify'): Promise<void> {
+export async function deletePersistentConnection(storeId: string, platform: OAuthPlatform): Promise<void> {
   await rest(`/connections?store_id=eq.${encodeURIComponent(storeId)}&platform=eq.${platform}`, { method: 'DELETE' });
 }
 
@@ -436,7 +452,7 @@ export async function hydrateAllStoresFromSupabase(): Promise<void> {
 
 export interface PersistentAppCredentials {
   id: number;
-  platform: 'meta' | 'shopify';
+  platform: OAuthPlatform;
   workspace_id?: string;
   app_id: string;
   app_secret: string;
@@ -474,7 +490,7 @@ async function hasWorkspaceColumn(): Promise<boolean> {
 }
 
 export async function getPersistentAppCredentials(
-  platform: 'meta' | 'shopify',
+  platform: OAuthPlatform,
   workspaceId?: string
 ): Promise<PersistentAppCredentials | null> {
   const canUseWs = await hasWorkspaceColumn();
@@ -498,23 +514,29 @@ export async function getPersistentAppCredentials(
     const globalRows = await rest<PersistentAppCredentials[]>(
       `/app_credentials?platform=eq.${encodeURIComponent(platform)}&workspace_id=eq.__global__&select=*&limit=1`
     );
-    return globalRows[0] || null;
+    if (globalRows[0]) return globalRows[0];
   }
-  return null;
+  // Last resort: find any credential for this platform (handles legacy/no-workspace setups)
+  const anyRows = await rest<PersistentAppCredentials[]>(
+    `/app_credentials?platform=eq.${encodeURIComponent(platform)}&select=*&order=updated_at.desc&limit=1`
+  );
+  return anyRows[0] || null;
 }
 
 export async function getAllPersistentAppCredentials(workspaceId?: string): Promise<{
   meta: PersistentAppCredentials | null;
   shopify: PersistentAppCredentials | null;
+  google_drive: PersistentAppCredentials | null;
 }> {
   return {
     meta: await getPersistentAppCredentials('meta', workspaceId),
     shopify: await getPersistentAppCredentials('shopify', workspaceId),
+    google_drive: await getPersistentAppCredentials('google_drive', workspaceId),
   };
 }
 
 export async function upsertPersistentAppCredentials(data: {
-  platform: 'meta' | 'shopify';
+  platform: OAuthPlatform;
   appId: string;
   appSecret: string;
   redirectUri: string;
@@ -586,7 +608,7 @@ export async function upsertPersistentAppCredentials(data: {
 }
 
 export async function deletePersistentAppCredentials(
-  platform: 'meta' | 'shopify',
+  platform: OAuthPlatform,
   workspaceId?: string
 ): Promise<void> {
   const canUseWs = await hasWorkspaceColumn();
@@ -1112,7 +1134,7 @@ async function hasOAuthStatesWorkspaceColumn(): Promise<boolean> {
 
 export async function createPersistentOAuthState(data: {
   storeId: string;
-  platform: 'meta' | 'shopify';
+  platform: OAuthPlatform;
   shopDomain?: string;
   workspaceId?: string;
 }): Promise<string> {
@@ -1150,7 +1172,7 @@ export async function consumePersistentOAuthState(stateToken: string): Promise<O
     id: number;
     state_token: string;
     store_id: string;
-    platform: 'meta' | 'shopify';
+    platform: OAuthPlatform;
     shop_domain: string | null;
     workspace_id?: string | null;
     created_at: string;

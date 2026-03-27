@@ -17,6 +17,7 @@ interface PlatformCredentials {
 interface CredentialsState {
   meta: PlatformCredentials;
   shopify: PlatformCredentials;
+  google_drive: PlatformCredentials;
 }
 
 function getDefaultRedirect(path: string): string {
@@ -31,7 +32,7 @@ const DEFAULT_SHOPIFY_SCOPES = 'read_orders,read_products,read_customers';
 export function ApiCredentials() {
   const [credentials, setCredentials] = useState<CredentialsState | null>(null);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState<'meta' | 'shopify' | null>(null);
+  const [saving, setSaving] = useState<'meta' | 'shopify' | 'google_drive' | null>(null);
 
   // Form state — separate from saved state so we can track dirty fields
   const [metaForm, setMetaForm] = useState({
@@ -46,9 +47,16 @@ export function ApiCredentials() {
     scopes: DEFAULT_SHOPIFY_SCOPES,
   });
 
+  const [googleDriveForm, setGoogleDriveForm] = useState({
+    appId: '',
+    appSecret: '',
+    redirectUri: getDefaultRedirect('/api/auth/google-drive/callback'),
+  });
+
   // Visibility toggles
   const [showMetaSecret, setShowMetaSecret] = useState(false);
   const [showShopifySecret, setShowShopifySecret] = useState(false);
+  const [showGoogleDriveSecret, setShowGoogleDriveSecret] = useState(false);
 
   useEffect(() => {
     async function loadCredentials() {
@@ -69,6 +77,11 @@ export function ApiCredentials() {
           appSecret: '',
           redirectUri: data.shopify.redirectUri || getDefaultRedirect('/api/auth/shopify/callback'),
           scopes: data.shopify.scopes || DEFAULT_SHOPIFY_SCOPES,
+        });
+        setGoogleDriveForm({
+          appId: data.google_drive?.appId || '',
+          appSecret: '',
+          redirectUri: data.google_drive?.redirectUri || getDefaultRedirect('/api/auth/google-drive/callback'),
         });
       } catch {
         toast.error('Failed to load API credentials');
@@ -171,7 +184,51 @@ export function ApiCredentials() {
     }
   };
 
-  const handleDelete = async (platform: 'meta' | 'shopify') => {
+  const handleSaveGoogleDrive = async () => {
+    if (!googleDriveForm.appId || !googleDriveForm.appSecret) {
+      toast.error('Client ID and Client Secret are required');
+      return;
+    }
+
+    setSaving('google_drive');
+    try {
+      const response = await fetch('/api/settings/credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          platform: 'google_drive',
+          appId: googleDriveForm.appId,
+          appSecret: googleDriveForm.appSecret,
+          redirectUri: googleDriveForm.redirectUri,
+        }),
+      });
+
+      if (!response.ok) throw new Error('Failed to save');
+      toast.success('Google Drive credentials saved');
+
+      setCredentials((prev) =>
+        prev
+          ? {
+              ...prev,
+              google_drive: {
+                appId: googleDriveForm.appId,
+                appSecret: '••••••••',
+                redirectUri: googleDriveForm.redirectUri,
+                configured: true,
+                updatedAt: new Date().toISOString(),
+              },
+            }
+          : prev
+      );
+      setGoogleDriveForm((prev) => ({ ...prev, appSecret: '' }));
+    } catch {
+      toast.error('Failed to save Google Drive credentials');
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const handleDelete = async (platform: 'meta' | 'shopify' | 'google_drive') => {
     try {
       const response = await fetch('/api/settings/credentials', {
         method: 'DELETE',
@@ -180,7 +237,15 @@ export function ApiCredentials() {
       });
 
       if (!response.ok) throw new Error('Failed to delete');
-      toast.success(`${platform === 'meta' ? 'Meta' : 'Shopify'} credentials removed`);
+      const platformLabel = platform === 'meta' ? 'Meta' : platform === 'shopify' ? 'Shopify' : 'Google Drive';
+      toast.success(`${platformLabel} credentials removed`);
+
+      const defaultRedirect =
+        platform === 'meta'
+          ? getDefaultRedirect('/api/auth/meta/callback')
+          : platform === 'shopify'
+          ? getDefaultRedirect('/api/auth/shopify/callback')
+          : getDefaultRedirect('/api/auth/google-drive/callback');
 
       setCredentials((prev) =>
         prev
@@ -189,7 +254,7 @@ export function ApiCredentials() {
               [platform]: {
                 appId: '',
                 appSecret: '',
-                redirectUri: platform === 'meta' ? getDefaultRedirect('/api/auth/meta/callback') : getDefaultRedirect('/api/auth/shopify/callback'),
+                redirectUri: defaultRedirect,
                 configured: false,
               },
             }
@@ -198,13 +263,15 @@ export function ApiCredentials() {
 
       if (platform === 'meta') {
         setMetaForm({ appId: '', appSecret: '', redirectUri: getDefaultRedirect('/api/auth/meta/callback') });
-      } else {
+      } else if (platform === 'shopify') {
         setShopifyForm({
           appId: '',
           appSecret: '',
           redirectUri: getDefaultRedirect('/api/auth/shopify/callback'),
           scopes: DEFAULT_SHOPIFY_SCOPES,
         });
+      } else {
+        setGoogleDriveForm({ appId: '', appSecret: '', redirectUri: getDefaultRedirect('/api/auth/google-drive/callback') });
       }
     } catch {
       toast.error('Failed to remove credentials');
@@ -372,6 +439,90 @@ export function ApiCredentials() {
             {credentials?.shopify.configured && (
               <button
                 onClick={() => handleDelete('shopify')}
+                className="flex items-center gap-2 rounded-lg border border-red-200 px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
+              >
+                <Trash2 className="h-4 w-4" />
+                Remove
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Google Drive Credentials */}
+      <div className="rounded-lg border border-gray-200 bg-white">
+        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-red-50">
+              <svg className="h-5 w-5 text-red-500" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M4.433 22.396l3.236-5.601h13.664l-3.236 5.601H4.433zm-.787-1.229L.5 15.369l6.823-11.817 3.145 5.447L4.645 18.58l-.999 2.587zm14.051-5.601H6.361l-3.236-5.601H15.697l2.783 4.816.217.785zm.863-.502L22.5 9.616 18.177 2H11.53l4.32 7.482-3.29 5.701 6.01.881z"/>
+              </svg>
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-gray-900">Google Drive App</h3>
+              <p className="text-xs text-gray-500">console.cloud.google.com</p>
+            </div>
+          </div>
+          <StatusBadge configured={credentials?.google_drive.configured ?? false} />
+        </div>
+
+        <div className="space-y-4 p-5">
+          <p className="text-xs text-gray-500 bg-gray-50 rounded-lg p-3 border border-gray-100">
+            Create an OAuth 2.0 Client ID at{' '}
+            <a href="https://console.cloud.google.com/auth/clients" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">
+              console.cloud.google.com/auth/clients
+            </a>
+            . Set application type to <strong>Web application</strong> and add your redirect URI below as an authorized redirect URI.
+          </p>
+          <FormField
+            label="Client ID"
+            value={googleDriveForm.appId}
+            onChange={(v) => setGoogleDriveForm((p) => ({ ...p, appId: v }))}
+            placeholder="Enter your Google OAuth Client ID"
+          />
+          <FormField
+            label="Client Secret"
+            value={googleDriveForm.appSecret}
+            onChange={(v) => setGoogleDriveForm((p) => ({ ...p, appSecret: v }))}
+            placeholder={credentials?.google_drive.configured ? 'Enter new secret to update' : 'Enter your Google OAuth Client Secret'}
+            type={showGoogleDriveSecret ? 'text' : 'password'}
+            trailing={
+              <button
+                type="button"
+                onClick={() => setShowGoogleDriveSecret(!showGoogleDriveSecret)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                {showGoogleDriveSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            }
+          />
+          <FormField
+            label="Redirect URI"
+            value={googleDriveForm.redirectUri}
+            onChange={(v) => setGoogleDriveForm((p) => ({ ...p, redirectUri: v }))}
+            placeholder="Auto-detected from current URL"
+            hint="Add this exact URI to your Google Cloud OAuth client's Authorized redirect URIs"
+          />
+
+          <div className="flex items-center gap-3 pt-2">
+            <button
+              onClick={handleSaveGoogleDrive}
+              disabled={saving === 'google_drive'}
+              className={cn(
+                'flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white',
+                saving === 'google_drive' ? 'bg-gray-400 cursor-not-allowed' : 'bg-red-500 hover:bg-red-600'
+              )}
+            >
+              {saving === 'google_drive' ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="h-4 w-4" />
+              )}
+              Save Google Drive Credentials
+            </button>
+            {credentials?.google_drive.configured && (
+              <button
+                onClick={() => handleDelete('google_drive')}
                 className="flex items-center gap-2 rounded-lg border border-red-200 px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
               >
                 <Trash2 className="h-4 w-4" />

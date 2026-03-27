@@ -40,7 +40,7 @@ create table if not exists workspace_members (
 create table if not exists connections (
   id bigserial primary key,
   store_id text not null references stores(id) on delete cascade,
-  platform text not null check (platform in ('meta', 'shopify')),
+  platform text not null check (platform in ('meta', 'shopify', 'google_drive')),
   access_token text not null,
   refresh_token text,
   expires_at bigint,
@@ -49,6 +49,7 @@ create table if not exists connections (
   shop_domain text,
   shop_name text,
   scopes text,
+  metadata text,
   connected_at timestamptz not null default now(),
   last_synced timestamptz,
   unique (store_id, platform)
@@ -69,7 +70,7 @@ create table if not exists store_ad_accounts (
 
 create table if not exists app_credentials (
   id bigserial primary key,
-  platform text not null check (platform in ('meta', 'shopify')),
+  platform text not null check (platform in ('meta', 'shopify', 'google_drive')),
   workspace_id text not null default '__global__',
   app_id text not null,
   app_secret text not null,

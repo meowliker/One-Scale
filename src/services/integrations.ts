@@ -36,6 +36,14 @@ export async function getIntegrations(): Promise<Integration[]> {
           lastSynced: connectionStatus.shopify.lastSynced || intg.lastSynced,
         };
       }
+      // Google Drive defaults to disconnected — real status is fetched separately via /api/google-drive/status
+      if (intg.platform === 'google_drive') {
+        return {
+          ...intg,
+          status: 'disconnected' as const,
+          lastSynced: null,
+        };
+      }
       return intg;
     });
   }

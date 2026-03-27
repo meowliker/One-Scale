@@ -10,6 +10,7 @@ import {
 const PUBLIC_API_PREFIXES = [
   '/api/auth/meta',
   '/api/auth/shopify',
+  '/api/auth/google-drive',
   '/api/auth/status',
     '/api/auth/setup-status',
   '/api/auth/session',

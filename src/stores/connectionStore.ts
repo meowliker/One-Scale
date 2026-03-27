@@ -23,6 +23,7 @@ interface ConnectionState {
 const defaultStatus: ConnectionStatus = {
   meta: { connected: false },
   shopify: { connected: false },
+  google_drive: { connected: false },
 };
 
 const CONNECTION_CACHE_KEY = 'onescale:connection-cache';

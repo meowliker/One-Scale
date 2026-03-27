@@ -15,6 +15,7 @@ import { ShopifyConnectModal } from '@/components/integrations/ShopifyConnectMod
 import { MetaConnectionDetails } from '@/components/integrations/MetaConnectionDetails';
 import { ClickUpConnectModal } from '@/components/integrations/ClickUpConnectModal';
 import { ClickUpConnectionDetails } from '@/components/integrations/ClickUpConnectionDetails';
+import { GoogleDriveConnectModal } from '@/components/settings/GoogleDriveConnectModal';
 
 export function IntegrationsClient() {
   const [integrations, setIntegrations] = useState<Integration[]>([]);
@@ -32,6 +33,10 @@ export function IntegrationsClient() {
   // Modal states
   const [shopifyModalOpen, setShopifyModalOpen] = useState(false);
   const [clickupModalOpen, setClickupModalOpen] = useState(false);
+  const [googleDriveModalOpen, setGoogleDriveModalOpen] = useState(false);
+
+  // Google Drive connection info
+  const [googleDriveEmail, setGoogleDriveEmail] = useState<string | null>(null);
 
   const searchParams = useSearchParams();
   const refreshStatus = useConnectionStore((s) => s.refreshStatus);
@@ -78,6 +83,23 @@ export function IntegrationsClient() {
           );
         } else {
           toast.error(`Shopify connection failed: ${message || 'Unknown error'}`);
+        }
+      }
+
+      if (platform === 'google_drive') {
+        if (status === 'connected') {
+          toast.success('Google Drive connected successfully!');
+          setIntegrations((prev) =>
+            prev.map((intg) =>
+              intg.platform === 'google_drive'
+                ? { ...intg, status: 'connected' as const, lastSynced: new Date().toISOString() }
+                : intg
+            )
+          );
+          // Refresh Google Drive connection info
+          fetchGoogleDriveStatus();
+        } else {
+          toast.error(`Google Drive connection failed: ${message || 'Unknown error'}`);
         }
       }
     }
@@ -156,6 +178,43 @@ export function IntegrationsClient() {
     }
   };
 
+  // Fetch Google Drive connection status
+  const fetchGoogleDriveStatus = async () => {
+    if (!activeStoreId) return;
+    try {
+      const res = await fetch(`/api/google-drive/status?storeId=${encodeURIComponent(activeStoreId)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.connected) {
+          setGoogleDriveEmail(data.email || null);
+          setIntegrations((prev) =>
+            prev.map((intg) =>
+              intg.platform === 'google_drive'
+                ? { ...intg, status: 'connected' as const, lastSynced: data.lastSynced || intg.lastSynced }
+                : intg
+            )
+          );
+        }
+      }
+    } catch {
+      // Ignore status check errors
+    }
+  };
+
+  // Handler: Google Drive connected successfully
+  const handleGoogleDriveConnected = async () => {
+    setGoogleDriveModalOpen(false);
+    toast.success('Google Drive connected successfully!');
+    setIntegrations((prev) =>
+      prev.map((intg) =>
+        intg.platform === 'google_drive'
+          ? { ...intg, status: 'connected' as const, lastSynced: new Date().toISOString() }
+          : intg
+      )
+    );
+    fetchGoogleDriveStatus();
+  };
+
   // Handler: ClickUp connected successfully
   const handleClickUpConnected = async () => {
     setClickupModalOpen(false);
@@ -195,6 +254,34 @@ export function IntegrationsClient() {
             }
           } catch {
             // Ignore ClickUp status check errors
+          }
+
+          // Check real Google Drive connection status
+          try {
+            const driveRes = await fetch(`/api/google-drive/status?storeId=${encodeURIComponent(activeStoreId)}`);
+            if (driveRes.ok) {
+              const driveData = await driveRes.json() as { connected: boolean; email?: string; lastSynced?: string };
+              if (driveData.connected) {
+                setGoogleDriveEmail(driveData.email || null);
+                setIntegrations((prev) =>
+                  prev.map((intg) =>
+                    intg.platform === 'google_drive'
+                      ? { ...intg, status: 'connected' as const, lastSynced: driveData.lastSynced || intg.lastSynced }
+                      : intg
+                  )
+                );
+              } else {
+                setIntegrations((prev) =>
+                  prev.map((intg) =>
+                    intg.platform === 'google_drive'
+                      ? { ...intg, status: 'disconnected' as const, lastSynced: null }
+                      : intg
+                  )
+                );
+              }
+            }
+          } catch {
+            // Ignore Google Drive status check errors
           }
         }
       } catch {
@@ -296,6 +383,40 @@ export function IntegrationsClient() {
       }
       // Connect — open shop domain modal first
       setShopifyModalOpen(true);
+      return;
+    }
+
+    // Handle Google Drive connect/disconnect
+    if (integration.platform === 'google_drive') {
+      if (isConnected) {
+        // Disconnect
+        try {
+          const res = await fetch('/api/google-drive/disconnect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ storeId: activeStoreId }),
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: 'Failed' }));
+            throw new Error(err.error || 'Failed to disconnect');
+          }
+          toast.success('Google Drive disconnected');
+          setGoogleDriveEmail(null);
+          setIntegrations((prev) =>
+            prev.map((intg) =>
+              intg.id === id
+                ? { ...intg, status: 'disconnected' as const, lastSynced: null }
+                : intg
+            )
+          );
+          if (activeIntegration === id) setActiveIntegration(null);
+        } catch {
+          toast.error('Failed to disconnect Google Drive');
+        }
+        return;
+      }
+      // Connect — open credentials modal
+      setGoogleDriveModalOpen(true);
       return;
     }
 
@@ -427,6 +548,33 @@ export function IntegrationsClient() {
         />
       )}
 
+      {/* Google Drive Connection Details — shown when Google Drive is connected */}
+      {integrations.some((i) => i.platform === 'google_drive' && i.status === 'connected') && (
+        <div className="rounded-lg border border-border bg-surface-elevated overflow-hidden">
+          <div className="px-5 py-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#4285F4]/10">
+                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none">
+                  <path d="M12 2L2 19.5h20L12 2z" fill="#4285F4" opacity={0.4} />
+                  <path d="M2 19.5l5-8.5h14l-5 8.5H2z" fill="#0F9D58" opacity={0.4} />
+                  <path d="M7 11l5-9 5 9H7z" fill="#F4B400" opacity={0.4} />
+                </svg>
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-sm font-semibold text-text-primary">Google Drive Connected</h3>
+                {googleDriveEmail && (
+                  <p className="text-xs text-text-secondary truncate">{googleDriveEmail}</p>
+                )}
+              </div>
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 border border-emerald-200">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                Connected
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ClickUp Connection Details — shown when ClickUp is connected */}
       {integrations.some((i) => i.platform === 'clickup' && i.status === 'connected') && (
         <ClickUpConnectionDetails
@@ -468,6 +616,14 @@ export function IntegrationsClient() {
           storeId={activeStoreId}
           onSuccess={handleClickUpConnected}
           onClose={() => setClickupModalOpen(false)}
+        />
+      )}
+
+      {googleDriveModalOpen && (
+        <GoogleDriveConnectModal
+          storeId={activeStoreId}
+          onSuccess={handleGoogleDriveConnected}
+          onClose={() => setGoogleDriveModalOpen(false)}
         />
       )}
 

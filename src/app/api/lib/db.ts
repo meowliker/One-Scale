@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import { decryptSecret, encryptSecret } from '@/app/api/lib/crypto';
+import type { OAuthPlatform } from '@/types/auth';
 
 function resolveDbPath(): string {
   if (process.env.SQLITE_DB_PATH && process.env.SQLITE_DB_PATH.trim()) {
@@ -45,7 +46,7 @@ function initDb(): Database.Database {
     CREATE TABLE IF NOT EXISTS connections (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       store_id TEXT NOT NULL,
-      platform TEXT NOT NULL CHECK(platform IN ('meta', 'shopify')),
+      platform TEXT NOT NULL CHECK(platform IN ('meta', 'shopify', 'google_drive')),
       access_token TEXT NOT NULL,
       refresh_token TEXT,
       expires_at INTEGER,
@@ -54,6 +55,7 @@ function initDb(): Database.Database {
       shop_domain TEXT,
       shop_name TEXT,
       scopes TEXT,
+      metadata TEXT,
       connected_at TEXT NOT NULL DEFAULT (datetime('now')),
       last_synced TEXT,
       UNIQUE(store_id, platform)
@@ -61,7 +63,7 @@ function initDb(): Database.Database {
 
     CREATE TABLE IF NOT EXISTS app_credentials (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      platform TEXT NOT NULL CHECK(platform IN ('meta', 'shopify')),
+      platform TEXT NOT NULL CHECK(platform IN ('meta', 'shopify', 'google_drive')),
       workspace_id TEXT NOT NULL DEFAULT '__global__',
       app_id TEXT NOT NULL,
       app_secret TEXT NOT NULL,
@@ -75,7 +77,7 @@ function initDb(): Database.Database {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       state_token TEXT NOT NULL UNIQUE,
       store_id TEXT NOT NULL,
-      platform TEXT NOT NULL CHECK(platform IN ('meta', 'shopify')),
+      platform TEXT NOT NULL CHECK(platform IN ('meta', 'shopify', 'google_drive')),
       shop_domain TEXT,
       workspace_id TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -598,6 +600,9 @@ function initDb(): Database.Database {
   try { instance.exec('ALTER TABLE product_campaign_links ADD COLUMN bm_id TEXT'); } catch {}
   try { instance.exec('ALTER TABLE product_campaign_links ADD COLUMN bm_name TEXT'); } catch {}
 
+  // Migration: add metadata column to connections for Google Drive client credentials
+  try { instance.exec('ALTER TABLE connections ADD COLUMN metadata TEXT'); } catch {}
+
   ensureMetaSnapshotSchema(instance);
 
   return instance;
@@ -758,7 +763,7 @@ export function getDb(): Database.Database {
 export interface DbConnection {
   id: number;
   store_id: string;
-  platform: 'meta' | 'shopify';
+  platform: OAuthPlatform;
   access_token: string;
   refresh_token: string | null;
   expires_at: number | null;
@@ -767,11 +772,12 @@ export interface DbConnection {
   shop_domain: string | null;
   shop_name: string | null;
   scopes: string | null;
+  metadata: string | null;
   connected_at: string;
   last_synced: string | null;
 }
 
-export function getConnection(storeId: string, platform: 'meta' | 'shopify'): DbConnection | null {
+export function getConnection(storeId: string, platform: OAuthPlatform): DbConnection | null {
   const db = getDb();
   const row = db.prepare(
     'SELECT * FROM connections WHERE store_id = ? AND platform = ?'
@@ -786,7 +792,7 @@ export function getConnection(storeId: string, platform: 'meta' | 'shopify'): Db
 
 export function upsertConnection(data: {
   storeId: string;
-  platform: 'meta' | 'shopify';
+  platform: OAuthPlatform;
   accessToken: string;
   refreshToken?: string;
   expiresAt?: number;
@@ -795,13 +801,14 @@ export function upsertConnection(data: {
   shopDomain?: string;
   shopName?: string;
   scopes?: string;
+  metadata?: string;
 }): void {
   const db = getDb();
   const encryptedAccessToken = encryptSecret(data.accessToken);
   const encryptedRefreshToken = data.refreshToken ? encryptSecret(data.refreshToken) : null;
   db.prepare(`
-    INSERT INTO connections (store_id, platform, access_token, refresh_token, expires_at, account_id, account_name, shop_domain, shop_name, scopes, last_synced)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    INSERT INTO connections (store_id, platform, access_token, refresh_token, expires_at, account_id, account_name, shop_domain, shop_name, scopes, metadata, last_synced)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     ON CONFLICT(store_id, platform) DO UPDATE SET
       access_token = excluded.access_token,
       refresh_token = COALESCE(excluded.refresh_token, connections.refresh_token),
@@ -811,6 +818,7 @@ export function upsertConnection(data: {
       shop_domain = COALESCE(excluded.shop_domain, connections.shop_domain),
       shop_name = COALESCE(excluded.shop_name, connections.shop_name),
       scopes = COALESCE(excluded.scopes, connections.scopes),
+      metadata = COALESCE(excluded.metadata, connections.metadata),
       last_synced = datetime('now')
   `).run(
     data.storeId,
@@ -822,18 +830,19 @@ export function upsertConnection(data: {
     data.accountName ?? null,
     data.shopDomain ?? null,
     data.shopName ?? null,
-    data.scopes ?? null
+    data.scopes ?? null,
+    data.metadata ?? null
   );
 }
 
-export function updateConnectionAccount(storeId: string, platform: 'meta' | 'shopify', accountId: string, accountName: string): void {
+export function updateConnectionAccount(storeId: string, platform: OAuthPlatform, accountId: string, accountName: string): void {
   const db = getDb();
   db.prepare(
     'UPDATE connections SET account_id = ?, account_name = ? WHERE store_id = ? AND platform = ?'
   ).run(accountId, accountName, storeId, platform);
 }
 
-export function deleteConnection(storeId: string, platform: 'meta' | 'shopify'): void {
+export function deleteConnection(storeId: string, platform: OAuthPlatform): void {
   const db = getDb();
   db.prepare(
     'DELETE FROM connections WHERE store_id = ? AND platform = ?'
@@ -843,6 +852,7 @@ export function deleteConnection(storeId: string, platform: 'meta' | 'shopify'):
 export function getConnectionStatus(storeId: string) {
   const meta = getConnection(storeId, 'meta');
   const shopify = getConnection(storeId, 'shopify');
+  const googleDrive = getConnection(storeId, 'google_drive');
 
   return {
     meta: {
@@ -856,6 +866,12 @@ export function getConnectionStatus(storeId: string) {
       shopDomain: shopify?.shop_domain ?? undefined,
       shopName: shopify?.shop_name ?? undefined,
       lastSynced: shopify?.last_synced ?? undefined,
+    },
+    google_drive: {
+      connected: !!googleDrive,
+      accountId: googleDrive?.account_id ?? undefined,
+      accountName: googleDrive?.account_name ?? undefined,
+      lastSynced: googleDrive?.last_synced ?? undefined,
     },
   };
 }
@@ -925,7 +941,7 @@ export interface OAuthState {
   id: number;
   state_token: string;
   store_id: string;
-  platform: 'meta' | 'shopify';
+  platform: OAuthPlatform;
   shop_domain: string | null;
   workspace_id: string | null;
   created_at: string;
@@ -934,7 +950,7 @@ export interface OAuthState {
 
 export function createOAuthState(data: {
   storeId: string;
-  platform: 'meta' | 'shopify';
+  platform: OAuthPlatform;
   shopDomain?: string;
   workspaceId?: string;
 }): string {
@@ -971,7 +987,7 @@ export function consumeOAuthState(stateToken: string): OAuthState | null {
 
 export interface AppCredentials {
   id: number;
-  platform: 'meta' | 'shopify';
+  platform: OAuthPlatform;
   workspace_id: string;
   app_id: string;
   app_secret: string;
@@ -980,7 +996,7 @@ export interface AppCredentials {
   updated_at: string;
 }
 
-export function getAppCredentials(platform: 'meta' | 'shopify', workspaceId?: string): AppCredentials | null {
+export function getAppCredentials(platform: OAuthPlatform, workspaceId?: string): AppCredentials | null {
   const db = getDb();
   const wsId = workspaceId || '__global__';
   // Try workspace-specific credentials first, fall back to global
@@ -997,15 +1013,16 @@ export function getAppCredentials(platform: 'meta' | 'shopify', workspaceId?: st
   return null;
 }
 
-export function getAllAppCredentials(workspaceId?: string): { meta: AppCredentials | null; shopify: AppCredentials | null } {
+export function getAllAppCredentials(workspaceId?: string): { meta: AppCredentials | null; shopify: AppCredentials | null; google_drive: AppCredentials | null } {
   return {
     meta: getAppCredentials('meta', workspaceId),
     shopify: getAppCredentials('shopify', workspaceId),
+    google_drive: getAppCredentials('google_drive', workspaceId),
   };
 }
 
 export function upsertAppCredentials(data: {
-  platform: 'meta' | 'shopify';
+  platform: OAuthPlatform;
   appId: string;
   appSecret: string;
   redirectUri: string;
@@ -1033,7 +1050,7 @@ export function upsertAppCredentials(data: {
   );
 }
 
-export function deleteAppCredentials(platform: 'meta' | 'shopify', workspaceId?: string): void {
+export function deleteAppCredentials(platform: OAuthPlatform, workspaceId?: string): void {
   const db = getDb();
   const wsId = workspaceId || '__global__';
   db.prepare('DELETE FROM app_credentials WHERE platform = ? AND workspace_id = ?').run(platform, wsId);

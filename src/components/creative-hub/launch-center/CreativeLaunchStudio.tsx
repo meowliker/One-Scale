@@ -42,6 +42,18 @@ const isFolderUrl = (url: string): boolean =>
 const truncate = (s: string, n: number) =>
   s.length > n ? s.slice(0, n) + '\u2026' : s;
 
+/** Extract Google Drive file ID from a Drive URL */
+const extractDriveFileId = (url: string): string | null => {
+  const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/) || url.match(/id=([a-zA-Z0-9_-]+)/);
+  return match ? match[1] : null;
+};
+
+/** Extract Google Drive folder ID from a Drive URL */
+const extractDriveFolderId = (url: string): string | null => {
+  const match = url.match(/\/folders\/([a-zA-Z0-9_-]+)/) || url.match(/id=([a-zA-Z0-9_-]+)/);
+  return match ? match[1] : null;
+};
+
 const formatBadgeColor = (fmt: string): string => {
   switch (fmt) {
     case 'video': return 'bg-purple-50 text-purple-700 border-purple-200';
@@ -92,13 +104,52 @@ function CreativeCard({
   selected,
   onToggle,
   onPreview,
+  driveConnected = false,
+  storeId,
 }: {
   creative: InboxCreative;
   selected: boolean;
   onToggle: () => void;
   onPreview: () => void;
+  driveConnected?: boolean;
+  storeId?: string;
 }) {
   const isVideo = creative.creativeFormat === 'video';
+  const [driveThumbnail, setDriveThumbnail] = useState<string | null>(null);
+  const [driveThumbLoading, setDriveThumbLoading] = useState(false);
+  const [driveVideoPreview, setDriveVideoPreview] = useState(false);
+
+  // Resolve Drive thumbnail
+  useEffect(() => {
+    if (creative.thumbnailUrl || !creative.driveUrl) return;
+    const fileId = extractDriveFileId(creative.driveUrl);
+    if (!fileId) return;
+
+    if (driveConnected && storeId) {
+      // Fetch real thumbnail via API
+      setDriveThumbLoading(true);
+      fetch(`/api/google-drive/files?storeId=${encodeURIComponent(storeId)}&fileId=${encodeURIComponent(fileId)}`)
+        .then(res => res.ok ? res.json() : null)
+        .then(data => {
+          if (data?.thumbnailUrl) {
+            setDriveThumbnail(data.thumbnailUrl);
+          } else {
+            // Fallback to public embed thumbnail
+            setDriveThumbnail(`https://drive.google.com/thumbnail?id=${fileId}&sz=w200`);
+          }
+        })
+        .catch(() => {
+          setDriveThumbnail(`https://drive.google.com/thumbnail?id=${fileId}&sz=w200`);
+        })
+        .finally(() => setDriveThumbLoading(false));
+    } else {
+      // Not connected — use public embed URL as fallback
+      setDriveThumbnail(`https://drive.google.com/thumbnail?id=${fileId}&sz=w200`);
+    }
+  }, [creative.thumbnailUrl, creative.driveUrl, driveConnected, storeId]);
+
+  const resolvedThumbnail = creative.thumbnailUrl || driveThumbnail;
+  const driveFileId = creative.driveUrl ? extractDriveFileId(creative.driveUrl) : null;
 
   return (
     <motion.div
@@ -126,11 +177,26 @@ function CreativeCard({
 
       {/* Thumbnail */}
       <div className="relative w-12 h-12 rounded-lg bg-gray-100 flex-shrink-0 overflow-hidden">
-        {creative.thumbnailUrl ? (
+        {driveVideoPreview && driveFileId ? (
+          <iframe
+            src={`https://drive.google.com/file/d/${driveFileId}/preview`}
+            className="w-full h-full border-0"
+            allow="autoplay"
+            title={creative.creativeName}
+          />
+        ) : driveThumbLoading ? (
+          <div className="w-full h-full flex items-center justify-center">
+            <Loader2 className="w-4 h-4 text-gray-400 animate-spin" />
+          </div>
+        ) : resolvedThumbnail ? (
           <img
-            src={creative.thumbnailUrl}
+            src={resolvedThumbnail}
             alt={creative.creativeName}
             className="w-full h-full object-cover"
+            onError={(e) => {
+              // If thumbnail fails, show icon fallback
+              (e.target as HTMLImageElement).style.display = 'none';
+            }}
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
@@ -141,8 +207,14 @@ function CreativeCard({
             )}
           </div>
         )}
-        {isVideo && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity">
+        {isVideo && !driveVideoPreview && (
+          <div
+            className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (driveFileId) setDriveVideoPreview(true);
+            }}
+          >
             <Play className="w-4 h-4 text-white" fill="white" />
           </div>
         )}
@@ -168,6 +240,12 @@ function CreativeCard({
             </span>
           )}
         </div>
+        {/* Drive hint when not connected but has Drive URL */}
+        {creative.driveUrl && !driveConnected && !creative.thumbnailUrl && (
+          <p className="text-[9px] text-amber-500 mt-0.5 truncate">
+            Connect Google Drive for better previews
+          </p>
+        )}
       </div>
 
       {/* Preview button */}
@@ -185,6 +263,14 @@ function CreativeCard({
 // Sub-component: Left Panel — Creative Browser
 // ────────────────────────────────────────────────────────────────────────────
 
+/** Drive folder file item */
+interface DriveFolderFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  thumbnailUrl?: string;
+}
+
 function CreativeBrowser({
   creatives,
   selectedIds,
@@ -192,6 +278,8 @@ function CreativeBrowser({
   onSelectAll,
   onDeselectAll,
   onPreview,
+  driveConnected = false,
+  storeId,
 }: {
   creatives: InboxCreative[];
   selectedIds: Set<string>;
@@ -199,10 +287,42 @@ function CreativeBrowser({
   onSelectAll: () => void;
   onDeselectAll: () => void;
   onPreview: (c: InboxCreative) => void;
+  driveConnected?: boolean;
+  storeId?: string;
 }) {
   const [search, setSearch] = useState('');
   const [formatFilter, setFormatFilter] = useState<FormatFilter>('all');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [folderFiles, setFolderFiles] = useState<Map<string, DriveFolderFile[]>>(new Map());
+  const [folderFilesLoading, setFolderFilesLoading] = useState<Set<string>>(new Set());
+
+  // Fetch folder contents when a Drive folder group is expanded
+  const fetchFolderFiles = useCallback(async (groupId: string, driveUrl: string) => {
+    if (!driveConnected || !storeId) return;
+    if (folderFiles.has(groupId)) return; // already fetched
+
+    const folderId = extractDriveFolderId(driveUrl);
+    if (!folderId) return;
+
+    setFolderFilesLoading(prev => { const next = new Set(prev); next.add(groupId); return next; });
+    try {
+      const res = await fetch(
+        `/api/google-drive/files?storeId=${encodeURIComponent(storeId)}&folderId=${encodeURIComponent(folderId)}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setFolderFiles(prev => {
+          const next = new Map(prev);
+          next.set(groupId, data.files || []);
+          return next;
+        });
+      }
+    } catch {
+      // Silent failure
+    } finally {
+      setFolderFilesLoading(prev => { const next = new Set(prev); next.delete(groupId); return next; });
+    }
+  }, [driveConnected, storeId, folderFiles]);
 
   // Group creatives by ClickUp task / Drive folder
   const groups = useMemo<CreativeGroup[]>(() => {
@@ -244,11 +364,19 @@ function CreativeBrowser({
   const toggleCollapse = useCallback((id: string) => {
     setCollapsed(prev => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
-  }, []);
+    // If expanding a folder group with a Drive URL, fetch folder contents
+    const group = groups.find(g => g.id === id);
+    if (group?.isFolder && group.driveUrl && !collapsed.has(id)) {
+      fetchFolderFiles(id, group.driveUrl);
+    }
+  }, [groups, collapsed, fetchFolderFiles]);
 
   const toggleGroupSelect = useCallback((group: CreativeGroup) => {
     const allSelected = group.creatives.every(c => selectedIds.has(c.id));
@@ -361,6 +489,8 @@ function CreativeBrowser({
                   selected={selectedIds.has(group.creatives[0].id)}
                   onToggle={() => onToggle(group.creatives[0].id)}
                   onPreview={() => onPreview(group.creatives[0])}
+                  driveConnected={driveConnected}
+                  storeId={storeId}
                 />
               );
             }
@@ -449,8 +579,42 @@ function CreativeBrowser({
                             selected={selectedIds.has(c.id)}
                             onToggle={() => onToggle(c.id)}
                             onPreview={() => onPreview(c)}
+                            driveConnected={driveConnected}
+                            storeId={storeId}
                           />
                         ))}
+                        {/* Drive folder files when connected */}
+                        {group.isFolder && driveConnected && folderFilesLoading.has(group.id) && (
+                          <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-400">
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            Loading folder contents...
+                          </div>
+                        )}
+                        {group.isFolder && driveConnected && folderFiles.has(group.id) && (
+                          <div className="mt-1 space-y-0.5">
+                            {(folderFiles.get(group.id) || []).map(file => (
+                              <div
+                                key={file.id}
+                                className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-gray-50/50 text-xs"
+                              >
+                                <div className="w-8 h-8 rounded bg-gray-100 overflow-hidden flex-shrink-0">
+                                  {file.thumbnailUrl ? (
+                                    <img src={file.thumbnailUrl} alt={file.name} className="w-full h-full object-cover" />
+                                  ) : (
+                                    <div className="w-full h-full flex items-center justify-center">
+                                      {file.mimeType.startsWith('video/') ? (
+                                        <Video className="w-3.5 h-3.5 text-gray-400" />
+                                      ) : (
+                                        <ImageIcon className="w-3.5 h-3.5 text-gray-400" />
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                                <span className="flex-1 truncate text-gray-600">{file.name}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </motion.div>
                     </motion.div>
                   )}
@@ -1274,6 +1438,8 @@ export function CreativeLaunchStudio({ storeId }: CreativeLaunchStudioProps) {
   const fetchAiAnalysis = useCreativeHubStore(s => s.fetchLaunchStudioAiAnalysis);
   const sendAiChat = useCreativeHubStore(s => s.sendLaunchStudioAiChat);
   const openLaunchWizardForProduct = useCreativeHubStore(s => s.openLaunchWizardForProduct);
+  const googleDriveConnected = useCreativeHubStore(s => s.googleDriveConnected);
+  const checkGoogleDriveConnection = useCreativeHubStore(s => s.checkGoogleDriveConnection);
 
   const [previewCreative, setPreviewCreative] = useState<InboxCreative | null>(null);
 
@@ -1327,6 +1493,13 @@ export function CreativeLaunchStudio({ storeId }: CreativeLaunchStudioProps) {
   }, [productId, batches, openLaunchWizardForProduct]);
 
   const resolvedStoreId = storeId || '';
+
+  // Check Google Drive connection status on mount
+  useEffect(() => {
+    if (isOpen && resolvedStoreId) {
+      checkGoogleDriveConnection(resolvedStoreId);
+    }
+  }, [isOpen, resolvedStoreId, checkGoogleDriveConnection]);
 
   if (!isOpen) return null;
 
@@ -1386,6 +1559,8 @@ export function CreativeLaunchStudio({ storeId }: CreativeLaunchStudioProps) {
                   onSelectAll={selectAll}
                   onDeselectAll={deselectAll}
                   onPreview={setPreviewCreative}
+                  driveConnected={googleDriveConnected}
+                  storeId={resolvedStoreId}
                 />
               </div>
 

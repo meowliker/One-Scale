@@ -1,8 +1,11 @@
+/** All supported OAuth platforms. Extend this union to add new integrations. */
+export type OAuthPlatform = 'meta' | 'shopify' | 'google_drive';
+
 export interface OAuthTokens {
   accessToken: string;
   refreshToken?: string;
   expiresAt?: number;
-  platform: 'meta' | 'shopify';
+  platform: OAuthPlatform;
   storeId: string;
   accountId?: string;
   shopDomain?: string;
@@ -19,6 +22,14 @@ export interface ShopifyTokenPayload {
   scope: string;
 }
 
+export interface GoogleDriveTokenPayload {
+  access_token: string;
+  refresh_token?: string;
+  expires_in: number;
+  token_type: string;
+  scope: string;
+}
+
 export interface ConnectionStatus {
   meta: {
     connected: boolean;
@@ -30,6 +41,12 @@ export interface ConnectionStatus {
     connected: boolean;
     shopDomain?: string;
     shopName?: string;
+    lastSynced?: string;
+  };
+  google_drive: {
+    connected: boolean;
+    accountId?: string;
+    accountName?: string;
     lastSynced?: string;
   };
 }

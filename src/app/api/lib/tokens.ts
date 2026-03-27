@@ -1,14 +1,16 @@
-import { getConnection, upsertConnection, deleteConnection, updateConnectionAccount, getStore } from './db';
+import { getConnection, upsertConnection, deleteConnection, updateConnectionAccount, getStore, getAppCredentials } from './db';
 import { getShopifyAccessToken } from './shopify-client';
-import type { OAuthTokens } from '@/types/auth';
+import type { OAuthTokens, OAuthPlatform } from '@/types/auth';
 import {
   deletePersistentConnection,
   getPersistentConnection,
+  getPersistentAppCredentials,
   hydrateStoreFromSupabase,
   isSupabasePersistenceEnabled,
   updatePersistentConnectionAccount,
   upsertPersistentConnection,
 } from './supabase-persistence';
+import { encryptSecret } from './crypto';
 
 // ------ Get Tokens ------
 
@@ -150,6 +152,165 @@ export async function getShopifyToken(storeId: string): Promise<OAuthTokens | nu
   };
 }
 
+// ------ Google Drive Token (with auto-refresh) ------
+
+/**
+ * Refresh a Google Drive access token using the stored refresh_token and
+ * app-level client credentials from the app_credentials table.
+ */
+async function refreshGoogleDriveAccessToken(
+  refreshToken: string,
+  clientId: string,
+  clientSecret: string,
+): Promise<{ access_token: string; expires_in: number } | null> {
+  try {
+    const res = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+        grant_type: 'refresh_token',
+      }),
+    });
+    if (!res.ok) return null;
+    return await res.json() as { access_token: string; expires_in: number };
+  } catch {
+    return null;
+  }
+}
+
+/** Load Google Drive app credentials (Client ID + Secret) from app_credentials table. */
+async function loadGoogleDriveAppCredentials(): Promise<{ client_id: string; client_secret: string } | null> {
+  try {
+    if (isSupabasePersistenceEnabled()) {
+      const creds = await getPersistentAppCredentials('google_drive');
+      if (creds?.app_id && creds?.app_secret) {
+        return { client_id: creds.app_id, client_secret: creds.app_secret };
+      }
+    } else {
+      const creds = getAppCredentials('google_drive');
+      if (creds?.app_id && creds?.app_secret) {
+        return { client_id: creds.app_id, client_secret: creds.app_secret };
+      }
+    }
+  } catch {
+    // Non-critical
+  }
+  return null;
+}
+
+export async function getGoogleDriveToken(storeId: string): Promise<OAuthTokens | null> {
+  // Helper to handle auto-refresh for a connection row
+  const resolveToken = async (
+    conn: {
+      access_token: string;
+      refresh_token: string | null;
+      expires_at: number | null;
+      store_id: string;
+      account_id: string | null;
+      metadata: string | null;
+    },
+    source: 'supabase' | 'local',
+  ): Promise<OAuthTokens | null> => {
+    const expired = conn.expires_at != null && conn.expires_at < Date.now();
+
+    if (expired && conn.refresh_token) {
+      const appCreds = await loadGoogleDriveAppCredentials();
+      if (appCreds?.client_id && appCreds?.client_secret) {
+        const refreshed = await refreshGoogleDriveAccessToken(
+          conn.refresh_token,
+          appCreds.client_id,
+          appCreds.client_secret,
+        );
+        if (refreshed) {
+          const newExpiresAt = Date.now() + refreshed.expires_in * 1000;
+          // Persist refreshed token (both layers)
+          upsertConnection({
+            storeId,
+            platform: 'google_drive',
+            accessToken: refreshed.access_token,
+            expiresAt: newExpiresAt,
+          });
+          if (isSupabasePersistenceEnabled()) {
+            await upsertPersistentConnection({
+              storeId,
+              platform: 'google_drive',
+              accessToken: refreshed.access_token,
+              expiresAt: newExpiresAt,
+            });
+          }
+          return {
+            accessToken: refreshed.access_token,
+            refreshToken: conn.refresh_token,
+            platform: 'google_drive',
+            storeId,
+            accountId: conn.account_id ?? undefined,
+            expiresAt: newExpiresAt,
+          };
+        }
+      }
+      // Refresh failed
+      return null;
+    }
+
+    if (expired) return null;
+
+    // Suppress unused-variable lint — `source` is kept for future logging.
+    void source;
+
+    return {
+      accessToken: conn.access_token,
+      refreshToken: conn.refresh_token ?? undefined,
+      platform: 'google_drive',
+      storeId,
+      accountId: conn.account_id ?? undefined,
+      expiresAt: conn.expires_at ?? undefined,
+    };
+  };
+
+  // Try Supabase first
+  if (isSupabasePersistenceEnabled()) {
+    await hydrateStoreFromSupabase(storeId);
+    const persistentConn = await getPersistentConnection(storeId, 'google_drive');
+    if (persistentConn) {
+      return resolveToken(persistentConn, 'supabase');
+    }
+  }
+
+  // Fallback to local SQLite
+  const conn = getConnection(storeId, 'google_drive');
+  if (!conn) return null;
+  return resolveToken(conn, 'local');
+}
+
+export async function setGoogleDriveToken(
+  storeId: string,
+  payload: OAuthTokens & { metadata?: string },
+): Promise<void> {
+  upsertConnection({
+    storeId,
+    platform: 'google_drive',
+    accessToken: payload.accessToken,
+    refreshToken: payload.refreshToken,
+    expiresAt: payload.expiresAt,
+    accountId: payload.accountId,
+    metadata: payload.metadata ? encryptSecret(payload.metadata) : undefined,
+  });
+  if (isSupabasePersistenceEnabled()) {
+    await upsertPersistentConnection({
+      storeId,
+      platform: 'google_drive',
+      accessToken: payload.accessToken,
+      refreshToken: payload.refreshToken,
+      expiresAt: payload.expiresAt,
+      accountId: payload.accountId,
+      metadata: payload.metadata ? encryptSecret(payload.metadata) : undefined,
+    });
+  }
+}
+
 // ------ Set Tokens ------
 
 export async function setMetaToken(storeId: string, payload: OAuthTokens): Promise<void> {
@@ -192,7 +353,7 @@ export async function setShopifyToken(storeId: string, payload: OAuthTokens): Pr
 
 // ------ Clear Token ------
 
-export async function clearToken(platform: 'meta' | 'shopify', storeId: string): Promise<void> {
+export async function clearToken(platform: OAuthPlatform, storeId: string): Promise<void> {
   deleteConnection(storeId, platform);
   if (isSupabasePersistenceEnabled()) {
     await deletePersistentConnection(storeId, platform);
