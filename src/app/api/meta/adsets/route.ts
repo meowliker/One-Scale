@@ -169,6 +169,7 @@ export async function GET(request: NextRequest) {
   const mode = searchParams.get('mode') || 'fast';
   const preferCache = searchParams.get('preferCache') !== '0';
   const forceLive = searchParams.get('forceLive') === '1';
+  const presetParam = searchParams.get('preset') || undefined;
 
   if (!storeId) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });

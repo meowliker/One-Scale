@@ -11,9 +11,9 @@ export const mockIntegrations: Integration[] = [
     id: 'int-1',
     name: 'ClickUp',
     platform: 'clickup',
-    status: 'connected',
+    status: 'disconnected',
     description: 'Sync creative tasks and project timelines from ClickUp workspaces.',
-    lastSynced: '2026-02-12T09:15:00Z',
+    lastSynced: null,
     iconColor: '#7B68EE',
   },
   {

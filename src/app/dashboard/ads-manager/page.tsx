@@ -106,10 +106,10 @@ export default function AdsManagerPage() {
     isFetching,
     error,
   } = useQuery<Campaign[], Error>({
-    queryKey: ['campaigns', activeStoreId, dateRange?.since, dateRange?.until],
+    queryKey: ['campaigns', activeStoreId, dateRange?.since, dateRange?.until, dateRange?.preset],
     queryFn: async () => {
       if (!dateRange) return [];
-      const { since, until } = dateRange;
+      const { since, until, preset } = dateRange;
 
       // Cache-first fetch. Live refresh is handled by background sync endpoints.
       try {
@@ -126,7 +126,7 @@ export default function AdsManagerPage() {
       }
 
       // Direct live fetch
-      const data = await getCampaigns({ since, until });
+      const data = await getCampaigns({ since, until, preset });
       if (cacheKey) writeLocalCache(cacheKey, data);
       return data;
     },
@@ -144,8 +144,8 @@ export default function AdsManagerPage() {
   };
 
   const clientDateRange = useMemo(
-    () => dateRange ? { since: dateRange.since, until: dateRange.until } : undefined,
-    [dateRange?.since, dateRange?.until]
+    () => dateRange ? { since: dateRange.since, until: dateRange.until, preset: dateRange.preset } : undefined,
+    [dateRange?.since, dateRange?.until, dateRange?.preset]
   );
 
   // Determine empty reason from error

@@ -254,6 +254,99 @@ function initDb(): Database.Database {
 
     CREATE INDEX IF NOT EXISTS idx_meta_endpoint_snapshots_lookup
       ON meta_endpoint_snapshots(store_id, endpoint, scope_id, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS third_party_tokens (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      store_id TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      access_token TEXT NOT NULL,
+      metadata TEXT,
+      connected_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(store_id, platform)
+    );
+
+    -- ── AI Agents ──────────────────────────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS agent_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      store_id TEXT NOT NULL,
+      agent_type TEXT NOT NULL DEFAULT 'media_buyer',
+      status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running', 'completed', 'failed')),
+      summary TEXT,
+      decisions_count INTEGER NOT NULL DEFAULT 0,
+      tokens_used INTEGER,
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_actions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      store_id TEXT NOT NULL,
+      run_id INTEGER REFERENCES agent_runs(id),
+      agent_type TEXT NOT NULL DEFAULT 'media_buyer',
+      action_type TEXT NOT NULL,
+      entity_type TEXT,
+      entity_id TEXT,
+      entity_name TEXT,
+      old_value TEXT,
+      new_value TEXT,
+      reasoning TEXT NOT NULL,
+      predicted_impact TEXT,
+      actual_impact TEXT,
+      confidence INTEGER NOT NULL DEFAULT 70,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'executed', 'rejected', 'auto_executed')),
+      requires_approval INTEGER NOT NULL DEFAULT 1,
+      approved_by TEXT,
+      executed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_agent_actions_store_status
+      ON agent_actions(store_id, status, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS agent_account_memory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      store_id TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      pattern_key TEXT NOT NULL,
+      pattern_value TEXT NOT NULL,
+      confidence INTEGER NOT NULL DEFAULT 50,
+      evidence_count INTEGER NOT NULL DEFAULT 1,
+      last_tested TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(store_id, account_id, pattern_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_experiments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      store_id TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      agent_type TEXT NOT NULL DEFAULT 'media_buyer',
+      hypothesis TEXT NOT NULL,
+      test_type TEXT NOT NULL,
+      control_entity_id TEXT,
+      control_entity_name TEXT,
+      test_entity_id TEXT,
+      test_entity_name TEXT,
+      metric TEXT NOT NULL DEFAULT 'roas',
+      predicted_outcome TEXT,
+      actual_outcome TEXT,
+      learning TEXT,
+      status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running', 'completed', 'inconclusive')),
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_knowledge_updates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source TEXT NOT NULL DEFAULT 'web_search',
+      topic TEXT NOT NULL,
+      content TEXT NOT NULL,
+      key_learnings TEXT,
+      applies_to TEXT DEFAULT 'all',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   // Migration: back-fill stores table from existing connections
@@ -1693,6 +1786,8 @@ export function getTrackingEntityMetrics(
   // ROW_NUMBER partitions by COALESCE(order_id, event_id) so events without
   // order_id fall back to event_id (always unique). Shopify source is preferred
   // over browser/server because it has the authoritative order value.
+  // Priority: Prefer events WITH entity mapping. If both have mapping, prefer browser > server > shopify.
+  // Browser pixel with mapping is most accurate for click attribution.
   return db.prepare(`
     WITH deduped AS (
       SELECT
@@ -1704,13 +1799,19 @@ export function getTrackingEntityMetrics(
         ROW_NUMBER() OVER (
           PARTITION BY COALESCE(order_id, event_id)
           ORDER BY
-            CASE WHEN source = 'shopify' THEN 0 WHEN source = 'server' THEN 1 ELSE 2 END,
+            CASE 
+              WHEN (campaign_id IS NOT NULL OR adset_id IS NOT NULL OR ad_id IS NOT NULL) THEN
+                CASE WHEN source = 'browser' THEN 0 WHEN source = 'server' THEN 1 ELSE 2 END
+              ELSE
+                CASE WHEN source = 'shopify' THEN 3 WHEN source = 'server' THEN 4 ELSE 5 END
+            END,
             datetime(occurred_at) DESC
         ) AS rn
       FROM tracking_events
       WHERE store_id = ?
         AND datetime(occurred_at) >= datetime(?)
         AND datetime(occurred_at) <= datetime(?)
+        AND event_name != 'Refund'
         AND (campaign_id IS NOT NULL OR adset_id IS NOT NULL OR ad_id IS NOT NULL)
     )
     SELECT
@@ -2372,4 +2473,49 @@ export function getRecentMetaEndpointSnapshots<T>(
     }
   }
   return parsed;
+}
+
+// ------ Third-Party Token CRUD (ClickUp, etc.) ------
+
+export interface DbThirdPartyToken {
+  id: number;
+  store_id: string;
+  platform: string;
+  access_token: string;
+  metadata: string | null;
+  connected_at: string;
+  updated_at: string;
+}
+
+export function getThirdPartyToken(storeId: string, platform: string): DbThirdPartyToken | null {
+  const db = getDb();
+  const row = db.prepare(
+    'SELECT * FROM third_party_tokens WHERE store_id = ? AND platform = ?'
+  ).get(storeId, platform) as DbThirdPartyToken | undefined;
+  if (!row) return null;
+  return { ...row, access_token: decryptSecret(row.access_token) };
+}
+
+export function upsertThirdPartyToken(data: {
+  storeId: string;
+  platform: string;
+  accessToken: string;
+  metadata?: Record<string, unknown>;
+}): void {
+  const db = getDb();
+  const encrypted = encryptSecret(data.accessToken);
+  const metaJson = data.metadata ? JSON.stringify(data.metadata) : null;
+  db.prepare(`
+    INSERT INTO third_party_tokens (store_id, platform, access_token, metadata, updated_at)
+    VALUES (?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(store_id, platform) DO UPDATE SET
+      access_token = excluded.access_token,
+      metadata = COALESCE(excluded.metadata, third_party_tokens.metadata),
+      updated_at = datetime('now')
+  `).run(data.storeId, data.platform, encrypted, metaJson);
+}
+
+export function deleteThirdPartyToken(storeId: string, platform: string): void {
+  const db = getDb();
+  db.prepare('DELETE FROM third_party_tokens WHERE store_id = ? AND platform = ?').run(storeId, platform);
 }

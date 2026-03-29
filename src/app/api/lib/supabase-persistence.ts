@@ -8,6 +8,7 @@ import {
   getStore,
   toggleStoreAdAccount,
   upsertConnection,
+  upsertThirdPartyToken,
 } from '@/app/api/lib/db';
 import { decryptSecret, encryptSecret } from '@/app/api/lib/crypto';
 
@@ -344,10 +345,11 @@ export async function hydrateStoreFromSupabase(storeId: string): Promise<void> {
   const last = hydrateCache.get(storeId) || 0;
   if (now - last < HYDRATE_TTL_MS) return;
 
-  const [stores, connections, adAccounts] = await Promise.all([
+  const [stores, connections, adAccounts, thirdPartyTokens] = await Promise.all([
     rest<DbStore[]>(`/stores?id=eq.${encodeURIComponent(storeId)}&select=*&limit=1`),
     rest<Array<DbConnection & { id: number }>>(`/connections?store_id=eq.${encodeURIComponent(storeId)}&select=*`),
     rest<Array<DbStoreAdAccount & { is_active: boolean | number }>>(`/store_ad_accounts?store_id=eq.${encodeURIComponent(storeId)}&select=*`),
+    rest<Array<{ store_id: string; platform: string; access_token: string; metadata: string | null }>>(`/third_party_tokens?store_id=eq.${encodeURIComponent(storeId)}&select=*`).catch(() => [] as Array<{ store_id: string; platform: string; access_token: string; metadata: string | null }>),
   ]);
 
   const store = stores[0];
@@ -405,6 +407,20 @@ export async function hydrateStoreFromSupabase(storeId: string): Promise<void> {
       timezone: account.timezone ?? undefined,
     });
     toggleStoreAdAccount(account.store_id, account.ad_account_id, !!account.is_active);
+  }
+
+  // Hydrate third-party tokens (ClickUp, etc.) from Supabase → SQLite
+  for (const tpt of thirdPartyTokens) {
+    try {
+      upsertThirdPartyToken({
+        storeId: tpt.store_id,
+        platform: tpt.platform,
+        accessToken: decryptSecret(tpt.access_token),
+        metadata: tpt.metadata ? JSON.parse(tpt.metadata) as Record<string, unknown> : undefined,
+      });
+    } catch {
+      // ignore malformed rows
+    }
   }
 
   hydrateCache.set(storeId, now);
