@@ -30,6 +30,10 @@ export function CreativeGrid({ creatives, selectedIds, onToggle, onSelectAll, on
       return true;
     });
   }, [creatives, formatFilter, search]);
+  const selectedVisibleCount = useMemo(
+    () => creatives.filter((creative) => selectedIds.has(creative.id)).length,
+    [creatives, selectedIds],
+  );
 
   return (
     <div className="flex flex-col gap-3">
@@ -73,7 +77,7 @@ export function CreativeGrid({ creatives, selectedIds, onToggle, onSelectAll, on
 
       {/* Counter */}
       <div className="text-sm text-gray-500 dark:text-gray-400">
-        {selectedIds.size} of {creatives.length} selected
+        {selectedVisibleCount} of {creatives.length} selected
       </div>
 
       {/* Grid */}

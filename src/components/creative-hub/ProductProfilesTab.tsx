@@ -43,7 +43,7 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
   const inboxLastSyncedAt = useCreativeHubStore((s) => s.inboxLastSyncedAt);
   const autoDiscoverProfiles = useCreativeHubStore((s) => s.autoDiscoverProfiles);
   const setActiveTab = useCreativeHubStore((s) => s.setActiveTab);
-  const openLaunchStudio = useCreativeHubStore((s) => s.openLaunchStudio);
+  const openLaunchCenter = useCreativeHubStore((s) => s.openLaunchCenter);
   const fetchInbox = useCreativeHubStore((s) => s.fetchInbox);
   const syncInbox = useCreativeHubStore((s) => s.syncInbox);
   const activeTests = useCreativeHubStore((s) => s.activeTests);
@@ -157,14 +157,28 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
   const handleLaunch = async (profile: ProductProfile) => {
     setLaunchingProfileId(profile.id);
     try {
-      openLaunchStudio(profile.id);
-
       const hasTargetCreativesLoaded = inboxCreatives.some(
         (creative) => creative.productProfileId === profile.id,
       );
+      let scopedCreatives = inboxCreatives;
 
       if (!hasTargetCreativesLoaded) {
         await fetchInbox(storeId, profile.id);
+        scopedCreatives = useCreativeHubStore.getState().inboxCreatives;
+      }
+
+      const readyCreativeIds = scopedCreatives
+        .filter(
+          (creative) =>
+            creative.productProfileId === profile.id &&
+            (creative.uploadStatus === 'ready' || !!creative.driveUrl),
+        )
+        .map((creative) => creative.id);
+
+      if (readyCreativeIds.length > 0) {
+        openLaunchCenter(profile.id, readyCreativeIds);
+      } else {
+        openLaunchCenter(profile.id);
       }
     } finally {
       setLaunchingProfileId(null);

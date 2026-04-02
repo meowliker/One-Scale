@@ -54,6 +54,7 @@ interface SnapshotAd {
   asset_feed_spec?: {
     bodies?: Array<{ text: string }>;
     titles?: Array<{ text: string }>;
+    descriptions?: Array<{ text: string }>;
   };
 }
 
@@ -220,12 +221,6 @@ interface WinningAd {
 
 // ── Helpers ──
 
-function weightedAvg(values: Array<{ value: number; weight: number }>): number {
-  const totalWeight = values.reduce((sum, v) => sum + v.weight, 0);
-  if (totalWeight === 0) return 0;
-  return values.reduce((sum, v) => sum + v.value * v.weight, 0) / totalWeight;
-}
-
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -245,6 +240,26 @@ function copyWeight(metrics: { spend: number; impressions: number; clicks: numbe
   if (metrics.impressions > 0) return metrics.impressions / 1000;
   if (metrics.clicks > 0) return metrics.clicks / 10;
   return 1;
+}
+
+function normalizeCopyKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function collectUniqueCopyValues(values: Array<string | undefined | null>): Array<{ key: string; text: string }> {
+  const out: Array<{ key: string; text: string }> = [];
+  const seen = new Set<string>();
+
+  for (const value of values) {
+    const text = String(value || '').trim();
+    if (!text) continue;
+    const key = normalizeCopyKey(text);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ key, text });
+  }
+
+  return out;
 }
 
 function aggregateCopyEntry(
@@ -297,14 +312,20 @@ function aggregateCopyEntry(
 }
 
 function finalizeCopyMetrics(entry: CopyAggregateEntry): CopyMetrics {
-  const weighted = (selector: (sample: CopyAggregateEntry['samples'][number]) => number) =>
-    weightedAvg(entry.samples.map((sample) => ({ value: selector(sample), weight: sample.weight })));
+  const avg = (selector: (sample: CopyAggregateEntry['samples'][number]) => number): number => {
+    const values = entry.samples
+      .map((sample) => selector(sample))
+      .filter((value) => Number.isFinite(value));
+    if (values.length === 0) return 0;
+    return values.reduce((sum, value) => sum + value, 0) / values.length;
+  };
 
-  const roas = entry.totalSpend > 0 ? entry.totalRevenue / entry.totalSpend : weighted((sample) => sample.roas);
-  const ctr = entry.totalImpressions > 0 ? entry.totalClicks / entry.totalImpressions : weighted((sample) => sample.ctr);
-  const cpc = entry.totalClicks > 0 ? entry.totalSpend / entry.totalClicks : weighted((sample) => sample.cpc);
-  const cpm = entry.totalImpressions > 0 ? (entry.totalSpend / entry.totalImpressions) * 1000 : weighted((sample) => sample.cpm);
-  const cpa = entry.totalPurchases > 0 ? entry.totalSpend / entry.totalPurchases : weighted((sample) => sample.cpa);
+  // Requirement: show total spend and average KPI values for all matching ads.
+  const roas = avg((sample) => sample.roas);
+  const ctr = avg((sample) => sample.ctr);
+  const cpc = avg((sample) => sample.cpc);
+  const cpm = avg((sample) => sample.cpm);
+  const cpa = avg((sample) => sample.cpa);
 
   return {
     spend: entry.totalSpend,
@@ -626,48 +647,86 @@ export async function GET(request: NextRequest) {
 
     for (const ad of matchedAds) {
       const metrics = ad.metrics || {};
+      const spend = Number(metrics.spend ?? 0);
+      const revenue = Number(metrics.revenue ?? 0);
+      const impressions = Number(metrics.impressions ?? 0);
+      const clicks = Number(metrics.clicks ?? 0);
+      const purchases = Number(metrics.conversions ?? 0);
+      const roasValue = Number(metrics.roas);
+      const ctrValue = Number(metrics.ctr);
+      const cpcValue = Number(metrics.cpc);
+      const cpmValue = Number(metrics.cpm);
+      const cpaValue = Number(metrics.cpa);
+
+      const roas = Number.isFinite(roasValue) ? roasValue : spend > 0 ? revenue / spend : 0;
+      const rawCtr = Number.isFinite(ctrValue)
+        ? ctrValue
+        : impressions > 0
+          ? (clicks / impressions) * 100
+          : 0;
+      const ctr = rawCtr > 0 && rawCtr <= 1 ? rawCtr * 100 : rawCtr;
+      const cpc = Number.isFinite(cpcValue) ? cpcValue : clicks > 0 ? spend / clicks : 0;
+      const cpm = Number.isFinite(cpmValue)
+        ? cpmValue
+        : impressions > 0
+          ? (spend / impressions) * 1000
+          : 0;
+      const cpa = Number.isFinite(cpaValue) ? cpaValue : purchases > 0 ? spend / purchases : 0;
+
       const normalizedMetrics = {
-        spend: metrics.spend ?? 0,
-        revenue: metrics.revenue ?? 0,
-        roas: metrics.roas ?? 0,
-        ctr: metrics.ctr ?? 0,
-        cpc: metrics.cpc ?? 0,
-        cpm: metrics.cpm ?? 0,
-        cpa: metrics.cpa ?? 0,
-        purchases: metrics.conversions ?? 0,
-        impressions: metrics.impressions ?? 0,
-        clicks: metrics.clicks ?? 0,
+        spend,
+        revenue,
+        roas,
+        ctr,
+        cpc,
+        cpm,
+        cpa,
+        purchases,
+        impressions,
+        clicks,
       };
       const example = ad.name || ad.id;
 
-      const body = ad.creative?.body?.trim();
-      if (body) {
+      const primaryTextCandidates = collectUniqueCopyValues([
+        ad.creative?.body,
+        ...(ad.asset_feed_spec?.bodies || []).map((item) => item.text),
+      ]);
+      for (const candidate of primaryTextCandidates) {
         aggregateCopyEntry(
           ptMap,
-          body.toLowerCase(),
-          { text: body, label: 'Primary text' },
+          candidate.key,
+          { text: candidate.text, label: 'Primary text' },
           normalizedMetrics,
           example,
         );
       }
 
-      const headline = (ad.creative?.headline || ad.creative?.title || '').trim();
-      if (headline) {
+      const headlineCandidates = collectUniqueCopyValues([
+        ad.creative?.headline,
+        ad.creative?.title,
+        ...(ad.asset_feed_spec?.titles || []).map((item) => item.text),
+      ]);
+      for (const candidate of headlineCandidates) {
         aggregateCopyEntry(
           headlineMap,
-          headline.toLowerCase(),
-          { text: headline, label: 'Headline' },
+          candidate.key,
+          { text: candidate.text, label: 'Headline' },
           normalizedMetrics,
           example,
         );
       }
 
-      const description = (ad.creative?.description || ad.creative?.title || ad.creative?.body || '').trim();
-      if (description) {
+      const descriptionCandidates = collectUniqueCopyValues([
+        ad.creative?.description,
+        ad.creative?.title,
+        ad.creative?.body,
+        ...(ad.asset_feed_spec?.descriptions || []).map((item) => item.text),
+      ]);
+      for (const candidate of descriptionCandidates) {
         aggregateCopyEntry(
           descriptionMap,
-          description.toLowerCase(),
-          { text: description, label: 'Description' },
+          candidate.key,
+          { text: candidate.text, label: 'Description' },
           normalizedMetrics,
           example,
         );

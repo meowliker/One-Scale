@@ -669,6 +669,7 @@ export interface AIInsightsData {
     worstAngle: { name: string; avgRoas: number; description: string };
     suggestedPTs: Array<{ text: string; reasoning: string }>;
     suggestedHeadlines: Array<{ text: string; reasoning: string }>;
+    suggestedDescriptions?: Array<{ text: string; reasoning: string }>;
     bestCTA: { type: string; usagePercent: number; reasoning: string };
     summary: string;
     actionItems: string[];

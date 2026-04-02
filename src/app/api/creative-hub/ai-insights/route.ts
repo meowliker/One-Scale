@@ -160,12 +160,18 @@ interface SuggestedHeadline {
   reasoning: string;
 }
 
+interface SuggestedDescription {
+  text: string;
+  reasoning: string;
+}
+
 interface AiInsights {
   winningPatterns: WinningPattern[];
   bestAngle: { name: string; avgRoas: number; description: string };
   worstAngle: { name: string; avgRoas: number; description: string };
   suggestedPTs: SuggestedPT[];
   suggestedHeadlines: SuggestedHeadline[];
+  suggestedDescriptions: SuggestedDescription[];
   bestCTA: { type: string; usagePercent: number; reasoning: string };
   summary: string;
   actionItems: string[];
@@ -541,6 +547,189 @@ function uniqueTexts(values: Array<string | null | undefined>, limit: number): s
   return cleaned;
 }
 
+function normalizeTextKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function enforceSuggestionDiversity(
+  insights: AiInsights,
+  data: WinningAdsResponse,
+  generatedCopy: GeneratedCopyDraft | null,
+  profitabilityFloor: number,
+): AiInsights {
+  const winnerPrimarySet = new Set((data.topPrimaryTexts || []).map((item) => normalizeTextKey(item.text || '')));
+  const winnerHeadlineSet = new Set((data.topHeadlines || []).map((item) => normalizeTextKey(item.text || '')));
+  const winnerDescriptionSet = new Set(((data.topDescriptions || []).map((item) => normalizeTextKey(item.text || ''))));
+
+  const winnerRoasHint = (data.topPrimaryTexts || [])[0]?.avgRoas || profitabilityFloor;
+  const expectedRoasHint = `${Math.max(profitabilityFloor, winnerRoasHint * 0.9).toFixed(2)}x+`;
+
+  const primaryPool: SuggestedPT[] = [
+    ...(generatedCopy?.primaryTexts || []).map((text) => ({
+      text,
+      reasoning: 'AI-generated from winner primary text patterns.',
+      expectedRoas: expectedRoasHint,
+    })),
+    ...(insights.suggestedPTs || []),
+  ];
+  const headlinePool: SuggestedHeadline[] = [
+    ...(generatedCopy?.headlines || []).map((text) => ({
+      text,
+      reasoning: 'AI-generated from winner headline patterns.',
+    })),
+    ...(insights.suggestedHeadlines || []),
+  ];
+  const descriptionPool: SuggestedDescription[] = [
+    ...(generatedCopy?.descriptions || []).map((text) => ({
+      text,
+      reasoning: 'AI-generated from winner description patterns.',
+    })),
+    ...(insights.suggestedDescriptions || []),
+  ];
+
+  const pickPrimary = (): SuggestedPT[] => {
+    const seen = new Set<string>();
+    const picked: SuggestedPT[] = [];
+    for (const item of primaryPool) {
+      const text = (item.text || '').trim();
+      if (!text) continue;
+      const key = normalizeTextKey(text);
+      if (winnerPrimarySet.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      picked.push({
+        text,
+        reasoning: item.reasoning || 'AI-generated from winner primary text patterns.',
+        expectedRoas: item.expectedRoas || expectedRoasHint,
+      });
+      if (picked.length >= 5) break;
+    }
+    if (picked.length === 0) {
+      const fallback = uniqueTexts([
+        `${data.productName} gives families a simple daily reading flow they can use tonight.`,
+        `Make reading practice easier this week with ${data.productName} and a clear step-by-step path.`,
+        `Parents are switching to ${data.productName} for faster, calmer reading sessions at home.`,
+      ], 3);
+      fallback.forEach((text) => picked.push({
+        text,
+        reasoning: 'AI-inspired fallback generated from winner history context.',
+        expectedRoas: expectedRoasHint,
+      }));
+    }
+    return picked.slice(0, 5);
+  };
+
+  const pickHeadlines = (): SuggestedHeadline[] => {
+    const seen = new Set<string>();
+    const picked: SuggestedHeadline[] = [];
+    for (const item of headlinePool) {
+      const text = (item.text || '').trim();
+      if (!text) continue;
+      const key = normalizeTextKey(text);
+      if (winnerHeadlineSet.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      picked.push({
+        text,
+        reasoning: item.reasoning || 'AI-generated from winner headline patterns.',
+      });
+      if (picked.length >= 5) break;
+    }
+    if (picked.length === 0) {
+      const fallback = uniqueTexts([
+        `Start ${data.productName} Today`,
+        'A Simpler Daily Reading Routine',
+        'Make Practice Time Actually Work',
+      ], 3);
+      fallback.forEach((text) => picked.push({
+        text,
+        reasoning: 'AI-inspired fallback generated from winner headline context.',
+      }));
+    }
+    return picked.slice(0, 5);
+  };
+
+  const pickDescriptions = (): SuggestedDescription[] => {
+    const seen = new Set<string>();
+    const picked: SuggestedDescription[] = [];
+    for (const item of descriptionPool) {
+      const text = (item.text || '').trim();
+      if (!text) continue;
+      const key = normalizeTextKey(text);
+      if (winnerDescriptionSet.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      picked.push({
+        text,
+        reasoning: item.reasoning || 'AI-generated from winner description patterns.',
+      });
+      if (picked.length >= 5) break;
+    }
+    if (picked.length === 0) {
+      const fallback = uniqueTexts([
+        'Short daily sessions, clear structure, and confidence-building progress.',
+        'Designed for busy families who need practical reading support fast.',
+        'Instant digital access so you can test and start today.',
+      ], 3);
+      fallback.forEach((text) => picked.push({
+        text,
+        reasoning: 'AI-inspired fallback generated from winner description context.',
+      }));
+    }
+    return picked.slice(0, 5);
+  };
+
+  return {
+    ...insights,
+    suggestedPTs: pickPrimary(),
+    suggestedHeadlines: pickHeadlines(),
+    suggestedDescriptions: pickDescriptions(),
+  };
+}
+
+function normalizeAiInsights(raw: AiInsights): AiInsights {
+  const normalizeReasoned = <T extends { text: string; reasoning: string }>(
+    values: unknown,
+  ): T[] => {
+    if (!Array.isArray(values)) return [];
+    return values
+      .map((value) => {
+        if (!value || typeof value !== 'object') return null;
+        const text = typeof (value as { text?: unknown }).text === 'string'
+          ? (value as { text?: string }).text!.trim()
+          : '';
+        if (!text) return null;
+        const reasoning = typeof (value as { reasoning?: unknown }).reasoning === 'string'
+          ? (value as { reasoning?: string }).reasoning!.trim()
+          : '';
+        return {
+          text,
+          reasoning: reasoning || 'Generated from winner-history patterns.',
+        } as T;
+      })
+      .filter((value): value is T => Boolean(value));
+  };
+
+  const suggestedPTs = normalizeReasoned<SuggestedPT>(raw.suggestedPTs).map((item) => ({
+    ...item,
+    expectedRoas:
+      typeof item.expectedRoas === 'string' && item.expectedRoas.trim()
+        ? item.expectedRoas
+        : 'Derived from winner-history benchmarks.',
+  }));
+
+  return {
+    winningPatterns: Array.isArray(raw.winningPatterns) ? raw.winningPatterns : [],
+    bestAngle: raw.bestAngle || { name: 'N/A', avgRoas: 0, description: 'Not enough data.' },
+    worstAngle: raw.worstAngle || { name: 'N/A', avgRoas: 0, description: 'Not enough data.' },
+    suggestedPTs,
+    suggestedHeadlines: normalizeReasoned<SuggestedHeadline>(raw.suggestedHeadlines),
+    suggestedDescriptions: normalizeReasoned<SuggestedDescription>(raw.suggestedDescriptions),
+    bestCTA: raw.bestCTA || { type: 'SHOP_NOW', usagePercent: 0, reasoning: 'Not enough data.' },
+    summary: typeof raw.summary === 'string' ? raw.summary : '',
+    actionItems: Array.isArray(raw.actionItems)
+      ? raw.actionItems.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [],
+  };
+}
+
 function buildSuggestedCampaignName(productName: string): string {
   return `${productName} | Creative Test ${new Date().toISOString().slice(0, 10)}`;
 }
@@ -620,10 +809,12 @@ function buildLaunchDraft(
   const winnerCTAs = winnerCtaSource.slice(0, 3).map((item) => item.text);
   const aiPrimaryTexts = insights.suggestedPTs.slice(0, 3).map((item) => item.text);
   const aiHeadlines = insights.suggestedHeadlines.slice(0, 3).map((item) => item.text);
+  const aiDescriptionSource = insights.suggestedDescriptions || [];
   const aiDescriptions = [
+    ...aiDescriptionSource.slice(0, 3).map((item) => item.text),
+    ...winnerDescriptions.slice(0, 2),
     insights.winningPatterns[0]?.reasoning,
     insights.bestAngle?.description,
-    insights.worstAngle?.description,
   ].filter(Boolean) as string[];
   const winningBody = data.ads.find((ad) => ad.primaryText.trim())?.primaryText;
   const bestHeadline = data.ads.find((ad) => ad.headline.trim())?.headline;
@@ -986,6 +1177,7 @@ Return your analysis as a JSON object with this exact schema:
   "worstAngle": { "name": "string", "avgRoas": number, "description": "string" },
   "suggestedPTs": [{ "text": "string", "reasoning": "string", "expectedRoas": "string" }],
   "suggestedHeadlines": [{ "text": "string", "reasoning": "string" }],
+  "suggestedDescriptions": [{ "text": "string", "reasoning": "string" }],
   "bestCTA": { "type": "string", "usagePercent": number, "reasoning": "string" },
   "summary": "2-3 sentence executive summary",
   "actionItems": ["string array of top 3 things to do next"]
@@ -1030,11 +1222,12 @@ Return your analysis as a JSON object with this exact schema:
     if (!jsonText) return null;
 
     const parsed = JSON.parse(jsonText) as AiInsights;
+    const normalized = normalizeAiInsights(parsed);
 
     // Basic validation
-    if (!parsed.winningPatterns || !parsed.summary) return null;
+    if (!normalized.winningPatterns || !normalized.summary) return null;
 
-    return parsed;
+    return normalized;
   } finally {
     clearTimeout(timeout);
   }
@@ -1053,6 +1246,8 @@ function buildFallbackInsights(
   const ads = data.ads.slice(0, 20);
   const pts = data.topPrimaryTexts.slice(0, 10);
   const headlines = data.topHeadlines.slice(0, 5);
+  const descriptions = (data.topDescriptions || []).slice(0, 5);
+  const hasWinnerCopyHistory = pts.length > 0 || headlines.length > 0 || descriptions.length > 0;
 
   // Best PT by ROAS
   const bestPT = pts.length > 0
@@ -1083,7 +1278,7 @@ function buildFallbackInsights(
     ? ads.reduce((sum, ad) => sum + ad.roas, 0) / ads.length
     : 0;
 
-  if (ads.length === 0) {
+  if (ads.length === 0 && !hasWinnerCopyHistory) {
     const hooks = uniqueTexts(selectedCreatives.map((creative) => creative.hook), 3);
     const angles = uniqueTexts(selectedCreatives.map((creative) => creative.angle), 3);
     const creators = uniqueTexts(selectedCreatives.map((creative) => creative.creator), 2);
@@ -1160,6 +1355,21 @@ function buildFallbackInsights(
           ? 'Claude drafted this headline to pair with the current selection-aware primary texts.'
           : 'Built from the selected creative concepts because no winner-history headline set was available.',
       })),
+      suggestedDescriptions: uniqueTexts(
+        generatedDescriptions.length > 0
+          ? generatedDescriptions
+          : [
+              descriptionLead,
+              `${data.productName} helps families act on ${leadAngle.toLowerCase()} without extra prep work.`,
+              `Use this line as support copy while you test the ${supportAngle.toLowerCase()} angle.`,
+            ],
+        5,
+      ).map((text) => ({
+        text,
+        reasoning: generatedCopy?.source === 'ai'
+          ? 'Claude drafted this support description from selection context and product constraints.'
+          : 'Generated from selected creative context and the digital-product profitability floor.',
+      })),
       bestCTA: {
         type: 'SHOP_NOW',
         usagePercent: 100,
@@ -1191,6 +1401,112 @@ function buildFallbackInsights(
     };
   }
 
+  if (ads.length === 0 && hasWinnerCopyHistory) {
+    const winnerRoasValues = [
+      ...pts.map((item) => item.avgRoas).filter((value) => Number.isFinite(value)),
+      ...headlines.map((item) => item.avgRoas).filter((value) => Number.isFinite(value)),
+      ...descriptions.map((item) => item.avgRoas).filter((value) => Number.isFinite(value)),
+    ];
+    const avgWinnerRoas = winnerRoasValues.length > 0
+      ? winnerRoasValues.reduce((sum, value) => sum + value, 0) / winnerRoasValues.length
+      : profitabilityFloor;
+
+    const topHeadline = headlines[0];
+    const topDescription = descriptions[0];
+    const topCtaEntry = (data.topCTAs || [])[0];
+    const ctaTotalUsage = (data.topCTAs || []).reduce(
+      (sum, item) => sum + (item.usageCount || item.adCount || 0),
+      0,
+    );
+    const ctaTopUsage = topCtaEntry ? (topCtaEntry.usageCount || topCtaEntry.adCount || 0) : 0;
+    const ctaUsagePercent = ctaTotalUsage > 0 ? (ctaTopUsage / ctaTotalUsage) * 100 : topCtaEntry ? 100 : 0;
+    const ctaType = topCtaEntry?.text || 'SHOP_NOW';
+
+    return {
+      winningPatterns: bestPT
+        ? [
+            {
+              pattern: `Winner text cluster led by "${bestPT.text.slice(0, 42)}..."`,
+              avgRoas: bestPT.avgRoas,
+              example: bestPT.text.slice(0, 120),
+              reasoning:
+                'Built from stored winner-text aggregates (primary texts/headlines/descriptions) even without ad-level winner rows.',
+            },
+          ]
+        : [],
+      bestAngle: bestPT
+        ? {
+            name: bestPT.text.slice(0, 50),
+            avgRoas: bestPT.avgRoas,
+            description: `Top winner primary text cluster at ${bestPT.avgRoas.toFixed(2)}x average ROAS.`,
+          }
+        : topHeadline
+          ? {
+              name: topHeadline.text.slice(0, 50),
+              avgRoas: topHeadline.avgRoas,
+              description: `Top winner headline cluster at ${topHeadline.avgRoas.toFixed(2)}x average ROAS.`,
+            }
+          : { name: data.productName, avgRoas: avgWinnerRoas, description: 'Winner text history is available and should be used as control.' },
+      worstAngle: worstPT
+        ? {
+            name: worstPT.text.slice(0, 50),
+            avgRoas: worstPT.avgRoas,
+            description: `Lowest-performing winner-text cluster at ${worstPT.avgRoas.toFixed(2)}x average ROAS.`,
+          }
+        : { name: 'Secondary winner angle', avgRoas: Math.max(avgWinnerRoas * 0.85, 0), description: 'Treat secondary winner clusters as challengers against the top control.' },
+      suggestedPTs: uniqueTexts(pts.slice(0, 4).map((item) => item.text), 4).map((text) => {
+        const match = pts.find((item) => item.text.toLowerCase() === text.toLowerCase());
+        return {
+          text,
+          reasoning: match
+            ? `Using winner primary text history (${match.avgRoas.toFixed(2)}x avg ROAS, ${match.adCount} ad${match.adCount === 1 ? '' : 's'}).`
+            : 'Using winner primary text history.',
+          expectedRoas: match
+            ? `${(match.avgRoas * 0.9).toFixed(2)}x - ${(match.avgRoas * 1.1).toFixed(2)}x`
+            : `${Math.max(profitabilityFloor, avgWinnerRoas * 0.9).toFixed(2)}x+`,
+        };
+      }),
+      suggestedHeadlines: uniqueTexts(headlines.slice(0, 4).map((item) => item.text), 4).map((text) => {
+        const match = headlines.find((item) => item.text.toLowerCase() === text.toLowerCase());
+        return {
+          text,
+          reasoning: match
+            ? `Using winner headline history (${match.avgRoas.toFixed(2)}x avg ROAS).`
+            : 'Using winner headline history.',
+        };
+      }),
+      suggestedDescriptions: uniqueTexts(
+        [
+          ...descriptions.slice(0, 4).map((item) => item.text),
+          topDescription ? topDescription.text : null,
+          bestPT ? `Support the winning angle: ${bestPT.text.slice(0, 60)}...` : null,
+        ],
+        4,
+      ).map((text) => {
+        const match = descriptions.find((item) => item.text.toLowerCase() === text.toLowerCase());
+        return {
+          text,
+          reasoning: match
+            ? `Using winner description history (${match.avgRoas.toFixed(2)}x avg ROAS).`
+            : 'Generated to support the winning primary-text angle.',
+        };
+      }),
+      bestCTA: {
+        type: ctaType,
+        usagePercent: Math.round(ctaUsagePercent),
+        reasoning: topCtaEntry
+          ? `${ctaType} is the top CTA in winner-copy history (${Math.round(ctaUsagePercent)}% share).`
+          : 'No CTA distribution available, defaulting to SHOP_NOW for digital-product tests.',
+      },
+      summary: `Using stored winner text history for ${data.productName} (${pts.length} primary text${pts.length === 1 ? '' : 's'}, ${headlines.length} headline${headlines.length === 1 ? '' : 's'}, ${descriptions.length} description${descriptions.length === 1 ? '' : 's'}). Top winner angle is ${bestPT ? `${bestPT.avgRoas.toFixed(2)}x` : `${avgWinnerRoas.toFixed(2)}x`} average ROAS.`,
+      actionItems: [
+        'Use the top winner text as control in the first lane.',
+        'Add 2-3 challenger variants derived from winner headline and description clusters.',
+        `Keep the profitability guardrail at ${profitabilityFloor.toFixed(1)}x+ ROAS.`,
+      ],
+    };
+  }
+
   return {
     winningPatterns: topAd
       ? [
@@ -1217,24 +1533,44 @@ function buildFallbackInsights(
           description: `This primary text angle only achieves ${worstPT.avgRoas.toFixed(2)}x ROAS. Consider pausing or reworking.`,
         }
       : { name: 'N/A', avgRoas: 0, description: 'Not enough data.' },
-    suggestedPTs: bestPT
-      ? [
-          {
-            text: `Variation of: ${bestPT.text.slice(0, 80)}`,
-            reasoning:
-              'Based on your top-performing primary text. Test a variation with a different hook.',
-            expectedRoas: `${(bestPT.avgRoas * 0.9).toFixed(2)}x - ${(bestPT.avgRoas * 1.1).toFixed(2)}x`,
-          },
-        ]
-      : [],
-    suggestedHeadlines: headlines.length > 0
-      ? [
-          {
-            text: `Variation of: ${headlines[0].text.slice(0, 80)}`,
-            reasoning: `Your top headline achieves ${headlines[0].avgRoas.toFixed(2)}x ROAS. Test variations.`,
-          },
-        ]
-      : [],
+    suggestedPTs: uniqueTexts(pts.slice(0, 4).map((item) => item.text), 4).map((text, index) => {
+      const match = pts.find((item) => item.text.toLowerCase() === text.toLowerCase());
+      return {
+        text,
+        reasoning: match
+          ? `Grounded in winner history (${match.avgRoas.toFixed(2)}x avg ROAS across ${match.adCount} ad${match.adCount === 1 ? '' : 's'}).`
+          : 'Grounded in winner-history primary text patterns.',
+        expectedRoas: match
+          ? `${(match.avgRoas * 0.9).toFixed(2)}x - ${(match.avgRoas * 1.1).toFixed(2)}x`
+          : index === 0
+            ? `${Math.max(profitabilityFloor, avgRoas * 0.9).toFixed(2)}x+`
+            : `${Math.max(profitabilityFloor * 0.9, 0.8).toFixed(2)}x+`,
+      };
+    }),
+    suggestedHeadlines: uniqueTexts(headlines.slice(0, 4).map((item) => item.text), 4).map((text) => {
+      const match = headlines.find((item) => item.text.toLowerCase() === text.toLowerCase());
+      return {
+        text,
+        reasoning: match
+          ? `Derived from winning headline history (${match.avgRoas.toFixed(2)}x avg ROAS).`
+          : 'Derived from winner-history headline patterns.',
+      };
+    }),
+    suggestedDescriptions: uniqueTexts(
+      [
+        ...descriptions.slice(0, 4).map((item) => item.text),
+        bestPT ? `Use the winning "${bestPT.text.slice(0, 50)}..." angle as support copy.` : null,
+      ],
+      4,
+    ).map((text) => {
+      const match = descriptions.find((item) => item.text.toLowerCase() === text.toLowerCase());
+      return {
+        text,
+        reasoning: match
+          ? `Taken from description winners (${match.avgRoas.toFixed(2)}x avg ROAS).`
+          : 'Built from winner text angles so the body/headline pairing stays consistent.',
+      };
+    }),
     bestCTA: {
       type: ctaType,
       usagePercent: Math.round(ctaPercent),
@@ -1449,9 +1785,15 @@ export async function POST(request: NextRequest) {
     });
     const selectionKey = [...(body.selectedCreativeIds || [])].sort().join('|');
     const hasSelectionContext = normalizedSelection.length > 0 || selectionKey.length > 0;
-    const shouldGenerateCopy = winningAdsData.ads.length === 0
+    const hasWinnerCopyHistory =
+      winningAdsData.topPrimaryTexts.length > 0
+      || winningAdsData.topHeadlines.length > 0
+      || (winningAdsData.topDescriptions?.length || 0) > 0;
+    const shouldGenerateCopy =
+      winningAdsData.ads.length === 0
       || winningAdsData.topPrimaryTexts.length === 0
-      || winningAdsData.topHeadlines.length === 0;
+      || winningAdsData.topHeadlines.length === 0
+      || (winningAdsData.topDescriptions?.length || 0) === 0;
     let generatedCopy: GeneratedCopyDraft | null = null;
 
     // --- CACHING: Check Supabase for cached insights (< 24h old) ---
@@ -1478,8 +1820,14 @@ export async function POST(request: NextRequest) {
                   (cachedCopyPlan?.primaryTexts?.length ?? 0) > 0 ||
                   (cachedCopyPlan?.headlines?.length ?? 0) > 0 ||
                   (cachedCopyPlan?.descriptions?.length ?? 0) > 0;
+                const cachedSummary = String(cachedData?.insights?.summary || '');
+                const cachedClaimsNoHistory = /no stored winning-ad history was available|no product-level winner history was available/i.test(
+                  cachedSummary,
+                );
                 if (shouldGenerateCopy && !cachedHasCopy) {
                   console.log('[ai-insights] Skipping cached copy-empty response so Claude can regenerate draft copy');
+                } else if (hasWinnerCopyHistory && cachedClaimsNoHistory) {
+                  console.log('[ai-insights] Skipping stale no-history cache because winner text history now exists');
                 } else {
                 console.log('[ai-insights] Returning cached insights (age:', Math.round(age / 60000), 'min)');
                 return NextResponse.json({ ...cachedData, cached: true, cacheAge: Math.round(age / 60000) });
@@ -1496,13 +1844,47 @@ export async function POST(request: NextRequest) {
           productName,
           selectionContext: selectionContextText,
           profitabilityFloor,
-          existingWinners: winningAdsData.ads.slice(0, 10).map((ad) => ({
-            primaryText: ad.primaryText,
-            headline: ad.headline,
-            roas: ad.roas,
-            cpa: ad.cpa,
-            ctr: ad.ctr,
-          })),
+          existingWinners:
+            winningAdsData.ads.length > 0
+              ? winningAdsData.ads.slice(0, 10).map((ad) => ({
+                  primaryText: ad.primaryText,
+                  headline: ad.headline,
+                  roas: ad.roas,
+                  cpa: ad.cpa,
+                  ctr: ad.ctr,
+                }))
+              : (() => {
+                  const primary = winningAdsData.topPrimaryTexts.slice(0, 6);
+                  const headline = winningAdsData.topHeadlines.slice(0, 6);
+                  const description = (winningAdsData.topDescriptions || []).slice(0, 6);
+                  const size = Math.min(6, Math.max(primary.length, headline.length, description.length));
+                  const rows: Array<{
+                    primaryText: string;
+                    headline?: string;
+                    description?: string;
+                    roas?: number;
+                    cpa?: number;
+                    ctr?: number;
+                  }> = [];
+                  for (let index = 0; index < size; index += 1) {
+                    const pt = primary[index] || primary[0];
+                    if (!pt?.text) continue;
+                    const hl = headline[index] || headline[0];
+                    const ds = description[index] || description[0];
+                    rows.push({
+                      primaryText: pt.text,
+                      headline: hl?.text,
+                      description: ds?.text,
+                      roas: pt.avgRoas || hl?.avgRoas || ds?.avgRoas,
+                      cpa: pt.avgCpa || hl?.avgCpa || ds?.avgCpa,
+                      ctr: pt.avgCtr || hl?.avgCtr || ds?.avgCtr,
+                    });
+                  }
+                  return rows;
+                })(),
+          selectedPrimaryTexts: winningAdsData.topPrimaryTexts.slice(0, 5).map((item) => item.text),
+          selectedHeadlines: winningAdsData.topHeadlines.slice(0, 5).map((item) => item.text),
+          selectedDescriptions: (winningAdsData.topDescriptions || []).slice(0, 5).map((item) => item.text),
         })
       : Promise.resolve(null);
 
@@ -1562,6 +1944,13 @@ export async function POST(request: NextRequest) {
         model = 'rule-based';
       }
     }
+
+    insights = enforceSuggestionDiversity(
+      insights,
+      winningAdsData,
+      generatedCopy,
+      profitabilityFloor,
+    );
 
     insights = mergeSelectionPlanIntoInsights(insights, selectionPlan, analyzedAds);
 

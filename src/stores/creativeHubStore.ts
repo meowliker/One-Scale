@@ -147,7 +147,15 @@ interface CreativeHubState {
   fetchWinningAds: (storeId: string, productProfileId: string) => Promise<void>;
 
   // AI insights actions
-  fetchAIInsights: (storeId: string, productProfileId: string) => Promise<void>;
+  fetchAIInsights: (
+    storeId: string,
+    productProfileId: string,
+    options?: {
+      refresh?: boolean;
+      selectedCreativeIds?: string[];
+      selectedCreatives?: Array<Record<string, unknown>>;
+    },
+  ) => Promise<void>;
 
   // Google Drive actions
   checkGoogleDriveConnection: (storeId: string) => Promise<void>;
@@ -220,10 +228,11 @@ function buildBaseLaunchConfig(
   launchMode: LaunchCenterTab = 'quick',
 ): Partial<LaunchConfig> {
   const defaultCampaignId = getDefaultCampaignId(profile);
+  const normalizedSelectedCreativeIds = [...new Set(selectedCreativeIds)];
 
   return {
     productProfileId: profile?.id,
-    selectedCreativeIds: selectedCreativeIds.slice(0, 60),
+    selectedCreativeIds: normalizedSelectedCreativeIds,
     campaignMode: defaultCampaignId ? 'existing' : 'new',
     existingCampaignId: defaultCampaignId,
     newCampaignName: defaultCampaignId ? undefined : buildSuggestedCampaignName(profile?.productName),
@@ -347,7 +356,9 @@ function buildPersistedLaunchConfig(launchConfig: Partial<LaunchConfig>): Partia
 
   return {
     productProfileId,
-    selectedCreativeIds: selectedCreativeIds?.slice(0, 60),
+    selectedCreativeIds: selectedCreativeIds
+      ? [...new Set(selectedCreativeIds)].slice(0, 500)
+      : undefined,
     campaignMode,
     existingCampaignId,
     adsetMode,
@@ -964,13 +975,27 @@ export const useCreativeHubStore = create<CreativeHubState>()(
 
   // ── AI Insights ──
 
-  fetchAIInsights: async (storeId: string, productProfileId: string) => {
+  fetchAIInsights: async (
+    storeId: string,
+    productProfileId: string,
+    options?: {
+      refresh?: boolean;
+      selectedCreativeIds?: string[];
+      selectedCreatives?: Array<Record<string, unknown>>;
+    },
+  ) => {
     set({ aiInsightsLoading: true });
     try {
       const res = await fetch('/api/creative-hub/ai-insights', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ storeId, productProfileId }),
+        body: JSON.stringify({
+          storeId,
+          productProfileId,
+          refresh: options?.refresh,
+          selectedCreativeIds: options?.selectedCreativeIds,
+          selectedCreatives: options?.selectedCreatives,
+        }),
       });
       if (!res.ok) throw new Error('Failed to fetch AI insights');
       const data = await res.json();
@@ -1214,13 +1239,23 @@ export const useCreativeHubStore = create<CreativeHubState>()(
   openLaunchCenter: (productId?: string, creativeIds?: string[]) => {
     const state = get();
     const profile = productId ? state.profiles.find(p => p.id === productId) : undefined;
-    const scopedCreativeIds = creativeIds
+    const readyCreatives = state.inboxCreatives.filter(
+      (creative) => creative.uploadStatus === 'ready' || !!creative.driveUrl,
+    );
+    const readyCreativesById = new Map(readyCreatives.map((creative) => [creative.id, creative]));
+    const seedIds = creativeIds
       ? creativeIds
       : productId
-        ? state.inboxCreatives
-            .filter(c => c.productProfileId === productId && (c.uploadStatus === 'ready' || c.driveUrl))
-            .map(c => c.id)
+        ? readyCreatives
+            .filter((creative) => creative.productProfileId === productId)
+            .map((creative) => creative.id)
         : [...state.selectedCreativeIds];
+    const scopedCreativeIds = [...new Set(seedIds)].filter((id) => {
+      const creative = readyCreativesById.get(id);
+      if (!creative) return false;
+      if (productId && creative.productProfileId !== productId) return false;
+      return true;
+    });
     set({
       launchCenterOpen: true,
       launchStudioOpen: false,

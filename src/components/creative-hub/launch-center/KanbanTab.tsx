@@ -29,10 +29,12 @@ import {
   Images,
   Layers,
   Rocket,
+  Loader2,
   Shuffle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
+import { useStoreStore } from '@/stores/storeStore';
 import { LaunchConfigPanel } from './LaunchConfigPanel';
 import type { InboxCreative, CreativeFormat, CreativeBatch } from '@/types/creativeHub';
 
@@ -43,6 +45,11 @@ const FORMAT_ICON: Record<CreativeFormat, typeof ImageIcon> = {
   video: Film,
   carousel: Images,
 };
+
+function formatCurrency(value?: number): string {
+  if (!Number.isFinite(value)) return '$0.00';
+  return `$${Number(value).toFixed(2)}`;
+}
 
 // ── Kanban Card (draggable) ──
 
@@ -188,9 +195,12 @@ function KanbanLane({
 
 export function KanbanTab() {
   const inboxCreatives = useCreativeHubStore((s) => s.inboxCreatives);
+  const profiles = useCreativeHubStore((s) => s.profiles);
   const batches = useCreativeHubStore((s) => s.batches);
   const creativesPerBatch = useCreativeHubStore((s) => s.creativesPerBatch);
   const launchConfig = useCreativeHubStore((s) => s.launchConfig);
+  const updateLaunchConfig = useCreativeHubStore((s) => s.updateLaunchConfig);
+  const executeLaunch = useCreativeHubStore((s) => s.executeLaunch);
   const createBatch = useCreativeHubStore((s) => s.createBatch);
   const removeBatch = useCreativeHubStore((s) => s.removeBatch);
   const addCreativeToBatch = useCreativeHubStore((s) => s.addCreativeToBatch);
@@ -198,8 +208,13 @@ export function KanbanTab() {
   const moveCreativeBetweenBatches = useCreativeHubStore((s) => s.moveCreativeBetweenBatches);
   const autoBatch = useCreativeHubStore((s) => s.autoBatch);
   const clearBatches = useCreativeHubStore((s) => s.clearBatches);
+  const { activeStoreId } = useStoreStore();
 
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [launching, setLaunching] = useState(false);
+  const [launchFlowWindow, setLaunchFlowWindow] = useState<'closed' | 'config' | 'overview'>(
+    'closed',
+  );
 
   // Ready creatives
   const readyCreatives = useMemo(
@@ -231,6 +246,34 @@ export function KanbanTab() {
     () => batches.reduce((sum, b) => sum + b.creativeIds.length, 0),
     [batches],
   );
+  const selectedProfile = useMemo(
+    () => profiles.find((profile) => profile.id === launchConfig.productProfileId),
+    [launchConfig.productProfileId, profiles],
+  );
+  const selectedCampaignSummary = useMemo(
+    () =>
+      selectedProfile?.campaignLinks?.find(
+        (campaign) => campaign.campaignId === launchConfig.existingCampaignId,
+      ),
+    [launchConfig.existingCampaignId, selectedProfile],
+  );
+  const selectedAdsetCount = useMemo(
+    () =>
+      Object.values(launchConfig.existingAdsetAssignments || {}).filter(
+        (assignedIds) => Array.isArray(assignedIds) && assignedIds.length > 0,
+      ).length,
+    [launchConfig.existingAdsetAssignments],
+  );
+  const effectiveStructure = launchConfig.structure ?? selectedProfile?.defaultStructure ?? 'ABO';
+  const effectiveDailyBudget = launchConfig.dailyBudget ?? selectedProfile?.defaultBudget ?? 0;
+  const effectiveDuration = launchConfig.testDuration ?? selectedProfile?.defaultDuration ?? 0;
+  const launchStatus = launchConfig.launchStatus ?? selectedProfile?.defaultLaunchStatus ?? 'PAUSED';
+  const campaignSummaryLabel =
+    launchConfig.campaignMode === 'new'
+      ? launchConfig.newCampaignName || 'New campaign (name pending)'
+      : selectedCampaignSummary?.campaignName ||
+        launchConfig.existingCampaignId ||
+        'Existing campaign not selected';
 
   // Active dragging creative
   const activeCreative = activeId ? creativesMap.get(activeId) : null;
@@ -345,6 +388,18 @@ export function KanbanTab() {
     useCreativeHubStore.setState({ selectedCreativeIds: new Set() });
   }, [readyCreatives, clearBatches, autoBatch, creativesPerBatch]);
 
+  const handleLaunch = useCallback(async () => {
+    if (batches.length === 0 || !activeStoreId) return;
+    setLaunching(true);
+    try {
+      updateLaunchConfig({ batches });
+      await executeLaunch(activeStoreId);
+      setLaunchFlowWindow('closed');
+    } finally {
+      setLaunching(false);
+    }
+  }, [activeStoreId, batches, executeLaunch, updateLaunchConfig]);
+
   return (
     <div className="flex flex-col gap-6">
       {/* Kanban Board */}
@@ -433,21 +488,172 @@ export function KanbanTab() {
         )}
       </div>
 
-      {/* Launch Config */}
       {batches.length > 0 && (
-        <LaunchConfigPanel
-          batches={batches}
-          productProfileId={launchConfig.productProfileId}
-        />
+        <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_18px_40px_-32px_rgba(15,23,42,0.45)]">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+            Launch Config
+          </p>
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+            <p>
+              {batches.length} ad set{batches.length !== 1 ? 's' : ''} • {totalAds} ad
+              {totalAds !== 1 ? 's' : ''}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setLaunchFlowWindow('config')}
+            className="mt-4 inline-flex w-full items-center justify-center rounded-[18px] bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-700"
+          >
+            Configure launch
+          </button>
+        </section>
       )}
 
-      {/* Launch Button */}
-      {batches.length > 0 && totalAds > 0 && (
-        <button className="w-full flex items-center justify-center gap-2 px-6 py-3 text-sm font-semibold rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white shadow-lg shadow-blue-500/20 transition-all">
-          <Rocket size={18} />
-          Launch {batches.length} Ad Set{batches.length !== 1 ? 's' : ''} &rarr; {totalAds} Ad{totalAds !== 1 ? 's' : ''}
-        </button>
+      {launchFlowWindow === 'config' && (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/70 p-4"
+          onClick={() => setLaunchFlowWindow('closed')}
+        >
+          <div
+            className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-[28px] border border-slate-700 bg-[#111a2f] text-slate-100 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-700 px-5 py-4">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                  Launch Config
+                </p>
+                <h3 className="mt-1 text-lg font-semibold text-slate-100">
+                  Configure campaign, ad sets, and launch details
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLaunchFlowWindow('closed')}
+                className="rounded-full border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-300 transition hover:border-slate-500 hover:text-slate-100"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto bg-[#111a2f] p-5">
+              <div className="dark">
+                <LaunchConfigPanel
+                  batches={batches}
+                  productProfileId={launchConfig.productProfileId}
+                  showOverviewButton
+                  onOverviewLaunch={() => setLaunchFlowWindow('overview')}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
       )}
+
+      {launchFlowWindow === 'overview' && (
+        <div
+          className="fixed inset-0 z-[91] flex items-center justify-center bg-slate-950/70 p-4"
+          onClick={() => setLaunchFlowWindow('closed')}
+        >
+          <div
+            className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-[28px] border border-slate-700 bg-[#111a2f] text-slate-100 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="border-b border-slate-700 px-5 py-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                Overview Launch
+              </p>
+              <h3 className="mt-1 text-lg font-semibold text-slate-100">
+                Review all launch settings before publishing
+              </h3>
+            </div>
+
+            <div className="flex-1 space-y-4 overflow-y-auto bg-[#111a2f] p-5">
+              <section className="rounded-2xl border border-slate-700 bg-slate-800/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Campaign Plan</p>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  <OverviewMeta label="Product Profile" value={selectedProfile?.productName || 'Not selected'} />
+                  <OverviewMeta
+                    label="Campaign Mode"
+                    value={launchConfig.campaignMode === 'new' ? 'Create New Campaign' : 'Use Existing Campaign'}
+                  />
+                  <OverviewMeta label="Campaign" value={campaignSummaryLabel} />
+                  <OverviewMeta
+                    label="Ad Set Mode"
+                    value={
+                      launchConfig.adsetMode === 'existing_adsets'
+                        ? `Use Existing Ad Sets (${selectedAdsetCount} selected)`
+                        : 'Create New Ad Sets'
+                    }
+                  />
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-slate-700 bg-slate-800/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Budget + Timing</p>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  <OverviewMeta label="Structure" value={effectiveStructure} />
+                  <OverviewMeta label="Launch As" value={launchStatus} />
+                  <OverviewMeta
+                    label={effectiveStructure === 'CBO' ? 'Campaign Budget' : 'Daily / Ad Set'}
+                    value={`${formatCurrency(effectiveDailyBudget)} / day`}
+                  />
+                  <OverviewMeta label="Duration" value={`${effectiveDuration} day${effectiveDuration !== 1 ? 's' : ''}`} />
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-slate-700 bg-slate-800/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Assets</p>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  <OverviewMeta label="Ad Sets" value={`${batches.length}`} />
+                  <OverviewMeta label="Ads" value={`${totalAds}`} />
+                </div>
+              </section>
+
+              {!activeStoreId && (
+                <p className="text-xs text-amber-700">
+                  Select an active store before launching from this tab.
+                </p>
+              )}
+            </div>
+
+            <div className="flex flex-wrap justify-end gap-2 border-t border-slate-700 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setLaunchFlowWindow('config')}
+                className="rounded-lg border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:border-slate-500 hover:text-white"
+              >
+                Back to config
+              </button>
+              <button
+                type="button"
+                onClick={handleLaunch}
+                disabled={launching || batches.length === 0 || !activeStoreId}
+                className={cn(
+                  'inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition',
+                  launching || batches.length === 0 || !activeStoreId
+                    ? 'cursor-not-allowed bg-slate-200 text-slate-500'
+                    : 'bg-blue-600 text-white hover:bg-blue-700',
+                )}
+              >
+                {launching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
+                {launching
+                  ? 'Launching...'
+                  : `Launch ${batches.length} ad set${batches.length !== 1 ? 's' : ''} -> ${totalAds} ad${totalAds !== 1 ? 's' : ''}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OverviewMeta({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
+      <p className="mt-1 text-sm font-semibold text-slate-100">{value}</p>
     </div>
   );
 }
