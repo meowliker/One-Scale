@@ -48,7 +48,10 @@ export const useStoreStore = create<StoreState>()(
         set({ loading: true, error: null });
         try {
           const res = await fetch('/api/settings/stores');
-          if (!res.ok) throw new Error('Failed to fetch stores');
+          if (!res.ok) {
+            const errData = await readJsonSafe<{ error?: string }>(res);
+            throw new Error(errData.error || `Failed to fetch stores (${res.status})`);
+          }
           const data = await readJsonSafe<{ stores?: Store[] }>(res);
           const stores: Store[] = data.stores || [];
           const { activeStoreId } = get();
@@ -62,7 +65,12 @@ export const useStoreStore = create<StoreState>()(
           });
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'Unknown error';
-          set({ loading: false, error: msg });
+          set({
+            stores: [],
+            activeStoreId: '',
+            loading: false,
+            error: msg,
+          });
         }
       },
 

@@ -68,13 +68,13 @@ export function InboxCreativeRow({
   return (
     <div
       className={cn(
-        'group rounded-lg border px-3 py-2.5 transition-all',
+        'group rounded-xl border px-3 py-3 transition-all',
         isSelected
-          ? 'border-blue-300 bg-blue-50/30'
+          ? 'border-blue-300 bg-blue-50/30 shadow-sm shadow-blue-500/5'
           : 'border-border bg-surface-elevated hover:border-gray-300'
       )}
     >
-      <div className="flex items-center gap-3">
+      <div className="flex items-start gap-3">
         {/* Checkbox */}
         <label className="flex-shrink-0 cursor-pointer">
           <input
@@ -86,7 +86,7 @@ export function InboxCreativeRow({
         </label>
 
         {/* Thumbnail */}
-        <div className="flex-shrink-0 h-10 w-10 rounded-lg overflow-hidden bg-gray-100 flex items-center justify-center">
+        <div className="flex-shrink-0 h-12 w-12 rounded-lg overflow-hidden bg-gray-100 flex items-center justify-center">
           {creative.thumbnailUrl ? (
             <img
               src={creative.thumbnailUrl}
@@ -116,8 +116,25 @@ export function InboxCreativeRow({
                 creative.creativeFormat.slice(1)}
             </span>
           </div>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-text-secondary">
+            {creative.clickupListName && (
+              <span className="rounded-full bg-gray-100 px-2 py-0.5 font-medium">
+                {creative.clickupListName}
+              </span>
+            )}
+            {creative.driveParentFolderName && (
+              <span className="rounded-full bg-gray-100 px-2 py-0.5 font-medium">
+                Folder: {creative.driveParentFolderName}
+              </span>
+            )}
+            {creative.creator && (
+              <span className="rounded-full bg-gray-100 px-2 py-0.5 font-medium">
+                Creator: {creative.creator}
+              </span>
+            )}
+          </div>
           {creative.hook && (
-            <p className="text-xs text-text-secondary truncate mt-0.5 max-w-md">
+            <p className="text-xs text-text-secondary truncate mt-1.5 max-w-2xl">
               {creative.hook}
             </p>
           )}

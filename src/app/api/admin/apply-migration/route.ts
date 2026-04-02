@@ -42,6 +42,8 @@ export async function POST(request: NextRequest) {
     'fee_structures',
     'order_attributions',
     'cron_logs',
+    'creative_hub_inbox_creatives',
+    'creative_hub_inbox_sync_status',
   ];
 
   for (const table of tablesToCheck) {
@@ -229,6 +231,40 @@ CREATE TABLE IF NOT EXISTS cron_logs (
   created_at timestamptz DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_cron_logs_name ON cron_logs(cron_name, created_at DESC);
+`);
+  }
+
+  if (missing.includes('creative_hub_inbox_creatives')) {
+    statements.push(`
+-- creative_hub_inbox_creatives — cached ClickUp creatives for Product Profiles + Launch Studio
+CREATE TABLE IF NOT EXISTS creative_hub_inbox_creatives (
+  id text PRIMARY KEY,
+  store_id text NOT NULL,
+  product_profile_id text NOT NULL,
+  clickup_task_id text NOT NULL,
+  creative_name text NOT NULL,
+  creative_format text NOT NULL,
+  creative_json text NOT NULL,
+  synced_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_creative_hub_inbox_creatives_store
+  ON creative_hub_inbox_creatives(store_id, product_profile_id, synced_at DESC);
+`);
+  }
+
+  if (missing.includes('creative_hub_inbox_sync_status')) {
+    statements.push(`
+-- creative_hub_inbox_sync_status — last successful ClickUp sync metadata per product
+CREATE TABLE IF NOT EXISTS creative_hub_inbox_sync_status (
+  store_id text NOT NULL,
+  product_profile_id text NOT NULL,
+  creative_count integer NOT NULL DEFAULT 0,
+  last_synced_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (store_id, product_profile_id)
+);
+CREATE INDEX IF NOT EXISTS idx_creative_hub_inbox_sync_status_store
+  ON creative_hub_inbox_sync_status(store_id, product_profile_id);
 `);
   }
 

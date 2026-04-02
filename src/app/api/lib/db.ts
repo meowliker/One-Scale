@@ -478,6 +478,26 @@ function initDb(): Database.Database {
       created_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS creative_hub_inbox_creatives (
+      id TEXT PRIMARY KEY,
+      store_id TEXT NOT NULL,
+      product_profile_id TEXT NOT NULL,
+      clickup_task_id TEXT NOT NULL,
+      creative_name TEXT NOT NULL,
+      creative_format TEXT NOT NULL,
+      creative_json TEXT NOT NULL,
+      synced_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS creative_hub_inbox_sync_status (
+      store_id TEXT NOT NULL,
+      product_profile_id TEXT NOT NULL,
+      creative_count INTEGER NOT NULL DEFAULT 0,
+      last_synced_at TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (store_id, product_profile_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_product_profiles_store
       ON product_profiles(store_id);
     CREATE INDEX IF NOT EXISTS idx_creative_tests_store
@@ -488,6 +508,10 @@ function initDb(): Database.Database {
       ON copy_library(product_profile_id, roas DESC);
     CREATE INDEX IF NOT EXISTS idx_fatigue_alerts_store
       ON creative_fatigue_alerts(product_profile_id, status);
+    CREATE INDEX IF NOT EXISTS idx_creative_hub_inbox_creatives_store
+      ON creative_hub_inbox_creatives(store_id, product_profile_id, synced_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_creative_hub_inbox_status_store
+      ON creative_hub_inbox_sync_status(store_id, product_profile_id);
   `);
 
   // Migration: back-fill stores table from existing connections

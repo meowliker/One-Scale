@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   RefreshCw,
@@ -13,6 +13,14 @@ import {
   Link2Off,
   Settings,
   Package,
+  BarChart3,
+  Sparkles,
+  Shuffle,
+  ArrowRight,
+  Image as ImageIcon,
+  Video,
+  LayoutGrid,
+  Loader2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
@@ -30,13 +38,16 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
   const inboxNotConnected = useCreativeHubStore((s) => s.inboxNotConnected);
   const inboxNotConfigured = useCreativeHubStore((s) => s.inboxNotConfigured);
   const inboxError = useCreativeHubStore((s) => s.inboxError);
+  const aiInsights = useCreativeHubStore((s) => s.aiInsights);
+  const aiInsightsLoading = useCreativeHubStore((s) => s.aiInsightsLoading);
   const selectedCreativeIds = useCreativeHubStore((s) => s.selectedCreativeIds);
   const syncInbox = useCreativeHubStore((s) => s.syncInbox);
+  const fetchAIInsights = useCreativeHubStore((s) => s.fetchAIInsights);
+  const autoBatch = useCreativeHubStore((s) => s.autoBatch);
   const toggleCreativeSelection = useCreativeHubStore((s) => s.toggleCreativeSelection);
   const selectAllCreatives = useCreativeHubStore((s) => s.selectAllCreatives);
   const deselectAllCreatives = useCreativeHubStore((s) => s.deselectAllCreatives);
-  const openLaunchWizard = useCreativeHubStore((s) => s.openLaunchWizard);
-  const openLaunchWizardForProduct = useCreativeHubStore((s) => s.openLaunchWizardForProduct);
+  const openLaunchCenter = useCreativeHubStore((s) => s.openLaunchCenter);
 
   // Local UI state
   const [syncing, setSyncing] = useState(false);
@@ -47,6 +58,7 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
   const [productFilter, setProductFilter] = useState<string>('all');
   const [formatFilter, setFormatFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const insightProductIdRef = useRef<string | null>(null);
 
   // Sync handler
   const handleSync = useCallback(async () => {
@@ -85,6 +97,27 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
     return groups;
   }, [filteredCreatives]);
 
+  const selectedCreatives = useMemo(
+    () => filteredCreatives.filter((creative) => selectedCreativeIds.has(creative.id)),
+    [filteredCreatives, selectedCreativeIds],
+  );
+
+  const selectedProductIds = useMemo(
+    () => Array.from(new Set(selectedCreatives.map((creative) => creative.productProfileId).filter(Boolean))) as string[],
+    [selectedCreatives],
+  );
+
+  const focusProductId = productFilter !== 'all'
+    ? productFilter
+    : selectedProductIds.length === 1
+      ? selectedProductIds[0]
+      : null;
+
+  const focusCreative = useMemo(
+    () => selectedCreatives[0] || filteredCreatives[0] || null,
+    [filteredCreatives, selectedCreatives],
+  );
+
   // Stats
   const totalCount = inboxCreatives.length;
   const readyCount = inboxCreatives.filter((c) => !!c.driveUrl).length;
@@ -93,6 +126,18 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
   const readySelectedCount = inboxCreatives.filter(
     (c) => selectedCreativeIds.has(c.id) && !!c.driveUrl
   ).length;
+
+  useEffect(() => {
+    if (!focusProductId || insightProductIdRef.current === focusProductId) {
+      return;
+    }
+    insightProductIdRef.current = focusProductId;
+    void fetchAIInsights(storeId, focusProductId);
+  }, [fetchAIInsights, focusProductId, storeId]);
+
+  const handleAutoBatch = useCallback((mode: 'one_per_adset' | 'by_format' | 'shuffle' | 'smart_mix', size: number) => {
+    autoBatch(mode, size);
+  }, [autoBatch]);
 
   const toggleGroup = (key: string) => {
     setCollapsedGroups((prev) => {
@@ -106,19 +151,6 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
     });
   };
 
-  // Select all creatives for a specific product group
-  const selectProductCreatives = useCallback(
-    (creatives: InboxCreative[]) => {
-      const readyIds = creatives.filter((c) => !!c.driveUrl).map((c) => c.id);
-      for (const id of readyIds) {
-        if (!selectedCreativeIds.has(id)) {
-          toggleCreativeSelection(id);
-        }
-      }
-    },
-    [selectedCreativeIds, toggleCreativeSelection]
-  );
-
   // Unique product names for filter
   const productOptions = useMemo(() => {
     const seen = new Map<string, string>();
@@ -129,6 +161,12 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
     }
     return Array.from(seen, ([id, name]) => ({ id, name }));
   }, [inboxCreatives]);
+
+  const focusProductName = focusProductId
+    ? productOptions.find((product) => product.id === focusProductId)?.name || focusCreative?.productName || null
+    : null;
+
+  const heroMediaUrl = focusCreative?.driveContentUrl || focusCreative?.driveDownloadUrl || focusCreative?.drivePreviewUrl || focusCreative?.driveUrl || null;
 
   // ClickUp not connected state
   if (!inboxLoading && inboxNotConnected) {
@@ -220,7 +258,9 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
   }
 
   return (
-    <div className="space-y-3 pb-24">
+    <div className="pb-24">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="min-w-0 space-y-3">
       {/* Header */}
       <InboxHeader syncing={syncing} onSync={handleSync} />
 
@@ -318,7 +358,6 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
               const isCollapsed = collapsedGroups.has(groupKey);
               const groupReadyCount = group.creatives.filter((c) => !!c.driveUrl).length;
               const groupNoLinkCount = group.creatives.length - groupReadyCount;
-              const productInitial = group.productName.charAt(0).toUpperCase();
 
               return (
                 <motion.div
@@ -367,7 +406,12 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
                     {/* Launch Ready button for this product */}
                     {groupReadyCount > 0 && (
                       <button
-                        onClick={() => selectProductCreatives(group.creatives)}
+                        onClick={() => {
+                          const readyIds = group.creatives
+                            .filter((creative) => !!creative.driveUrl)
+                            .map((creative) => creative.id);
+                          openLaunchCenter(groupKey, readyIds);
+                        }}
                         className="flex-shrink-0 inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 transition-colors shadow-sm"
                       >
                         <Rocket className="h-3 w-3" />
@@ -417,6 +461,180 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
         </div>
       )}
 
+        </div>
+
+        <aside className="hidden xl:flex xl:flex-col">
+          <div className="sticky top-4 space-y-4 rounded-2xl border border-border bg-surface-elevated p-4 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-text-dimmed">
+                  Creative Strategist
+                </p>
+                <h3 className="mt-1 text-base font-semibold text-text-primary">
+                  Media-first selection
+                </h3>
+                <p className="mt-1 text-xs text-text-secondary">
+                  {focusProductName
+                    ? `Buying context for ${focusProductName}`
+                    : 'Select one product or a single-product set to load strategy insights.'}
+                </p>
+              </div>
+              <div className="rounded-xl bg-blue-50 px-3 py-2 text-right">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-blue-600">
+                  Selected
+                </p>
+                <p className="text-lg font-bold text-blue-700">{selectedCount}</p>
+              </div>
+            </div>
+
+            <div className="overflow-hidden rounded-2xl border border-border bg-white">
+              <div className="relative aspect-[4/3] bg-gray-50">
+                {focusCreative ? (
+                  focusCreative.creativeFormat === 'video' && heroMediaUrl ? (
+                    <video
+                      src={heroMediaUrl}
+                      controls
+                      poster={focusCreative.thumbnailUrl || undefined}
+                      className="h-full w-full object-contain"
+                    />
+                  ) : focusCreative.thumbnailUrl ? (
+                    <img
+                      src={focusCreative.thumbnailUrl}
+                      alt={focusCreative.creativeName}
+                      className="h-full w-full object-contain"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center">
+                      {focusCreative.creativeFormat === 'video' ? (
+                        <Video className="h-12 w-12 text-gray-300" />
+                      ) : (
+                        <ImageIcon className="h-12 w-12 text-gray-300" />
+                      )}
+                    </div>
+                  )
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center text-center px-8">
+                    <div>
+                      <LayoutGrid className="mx-auto h-10 w-10 text-gray-300" />
+                      <p className="mt-3 text-sm font-medium text-gray-700">Pick a creative</p>
+                      <p className="mt-1 text-xs text-gray-500">The inspector will show the best source asset and selection context here.</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+              {focusCreative && (
+                <div className="border-t border-border px-4 py-3">
+                  <p className="truncate text-sm font-semibold text-text-primary">{focusCreative.creativeName}</p>
+                  <p className="mt-1 text-xs text-text-secondary">
+                    {focusCreative.clickupListName || focusCreative.productName || 'Unassigned'}
+                    {focusCreative.driveParentFolderName ? ` · ${focusCreative.driveParentFolderName}` : ''}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => handleAutoBatch('one_per_adset', 1)}
+                disabled={selectedCount === 0}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-white px-3 py-2 text-xs font-semibold text-text-primary transition-colors hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <ArrowRight className="h-3.5 w-3.5" />
+                1 per ad set
+              </button>
+              <button
+                onClick={() => handleAutoBatch('by_format', 3)}
+                disabled={selectedCount === 0}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-white px-3 py-2 text-xs font-semibold text-text-primary transition-colors hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+                Format split
+              </button>
+              <button
+                onClick={() => handleAutoBatch('smart_mix', 3)}
+                disabled={selectedCount === 0}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-white px-3 py-2 text-xs font-semibold text-text-primary transition-colors hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                Smart mix
+              </button>
+              <button
+                onClick={() => handleAutoBatch('shuffle', 3)}
+                disabled={selectedCount === 0}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-white px-3 py-2 text-xs font-semibold text-text-primary transition-colors hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Shuffle className="h-3.5 w-3.5" />
+                Shuffle
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-border bg-white p-4">
+              <div className="flex items-center gap-2">
+                <BarChart3 className="h-4 w-4 text-blue-600" />
+                <h4 className="text-xs font-semibold uppercase tracking-[0.18em] text-text-dimmed">
+                  AI Strategy
+                </h4>
+              </div>
+              {aiInsightsLoading && (
+                <div className="mt-4 flex items-center gap-2 text-sm text-text-secondary">
+                  <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+                  Analyzing creatives...
+                </div>
+              )}
+              {!aiInsightsLoading && aiInsights && (
+                <div className="mt-4 space-y-4">
+                  <p className="text-sm leading-6 text-text-primary">
+                    {aiInsights.insights.summary}
+                  </p>
+                  <div className="rounded-xl bg-surface px-3 py-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-dimmed">Best angle</p>
+                    <p className="mt-1 text-sm font-medium text-text-primary">{aiInsights.insights.bestAngle.name}</p>
+                    <p className="text-xs text-text-secondary">{aiInsights.insights.bestAngle.description}</p>
+                  </div>
+                  {aiInsights.insights.actionItems.length > 0 && (
+                    <div className="space-y-2">
+                      {aiInsights.insights.actionItems.slice(0, 3).map((item) => (
+                        <div key={item} className="rounded-xl border border-blue-100 bg-blue-50/70 px-3 py-2 text-xs text-blue-800">
+                          {item}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {!aiInsightsLoading && !aiInsights && (
+                <p className="mt-3 text-sm text-text-secondary">
+                  The strategist will summarize what to test, what not to test, and which creatives should stay apart once you focus on a single product.
+                </p>
+              )}
+            </div>
+
+            {focusCreative && (
+              <div className="rounded-2xl border border-border bg-white p-4">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-purple-600" />
+                  <h4 className="text-xs font-semibold uppercase tracking-[0.18em] text-text-dimmed">
+                    Selected Creative
+                  </h4>
+                </div>
+                <div className="mt-3 space-y-2 text-sm text-text-secondary">
+                  <p><span className="font-medium text-text-primary">Task:</span> {focusCreative.clickupTaskName}</p>
+                  {focusCreative.clickupTaskStatus && (
+                    <p><span className="font-medium text-text-primary">Status:</span> {focusCreative.clickupTaskStatus}</p>
+                  )}
+                  {focusCreative.hook && (
+                    <p><span className="font-medium text-text-primary">Hook:</span> {focusCreative.hook}</p>
+                  )}
+                  {focusCreative.angle && (
+                    <p><span className="font-medium text-text-primary">Angle:</span> {focusCreative.angle}</p>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </aside>
+      </div>
+
       {/* Bottom sticky bar */}
       <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-border bg-surface-elevated px-6 py-3 shadow-lg">
         <div className="mx-auto flex max-w-screen-2xl items-center gap-6">
@@ -456,9 +674,9 @@ export function CreativeInboxTab({ storeId }: CreativeInboxTabProps) {
               const productIds = new Set(selectedCreativesList.map((c) => c.productProfileId).filter(Boolean));
               if (productIds.size === 1) {
                 const productProfileId = [...productIds][0]!;
-                openLaunchWizardForProduct(productProfileId, selectedCreativesList.map((c) => c.id));
+                openLaunchCenter(productProfileId, selectedCreativesList.map((c) => c.id));
               } else {
-                openLaunchWizard();
+                openLaunchCenter(undefined, selectedCreativesList.map((c) => c.id));
               }
             }}
             disabled={readySelectedCount === 0}

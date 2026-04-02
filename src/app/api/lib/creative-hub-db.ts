@@ -1,13 +1,16 @@
 import { getDb } from '@/app/api/lib/db';
-import { isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
+import { isSupabasePersistenceEnabled, rest } from '@/app/api/lib/supabase-persistence';
 import type {
   ProductProfile,
   ProductCampaignLink,
+  InboxCreative,
   CreativeTest,
   CreativeTestItem,
   TestAdCopy,
   WinningCopy,
   FatigueAlert,
+  CreativeHubInboxCacheMeta,
+  CreativeHubInboxCacheProfileMeta,
 } from '@/types/creativeHub';
 
 // ── Supabase REST helper ──
@@ -198,6 +201,25 @@ interface FatigueAlertRow {
   created_at: string;
 }
 
+interface CreativeHubInboxCreativeRow {
+  id: string;
+  store_id: string;
+  product_profile_id: string;
+  clickup_task_id: string;
+  creative_name: string;
+  creative_format: string;
+  creative_json: string;
+  synced_at: string;
+}
+
+interface CreativeHubInboxSyncStatusRow {
+  store_id: string;
+  product_profile_id: string;
+  creative_count: number;
+  last_synced_at: string | null;
+  updated_at: string;
+}
+
 // ── Mapping helpers ──
 
 function mapProfileRow(row: ProductProfileRow): ProductProfile {
@@ -371,6 +393,388 @@ function mapFatigueAlertRow(row: FatigueAlertRow): FatigueAlert {
     snoozedUntil: row.snoozed_until ?? undefined,
     createdAt: row.created_at,
   };
+}
+
+function getAlreadyTestedTaskIds(storeId: string): Map<string, { testDate: string; roas: number; status: string }> {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT cti.clickup_task_id, cti.roas, cti.test_status, ct.created_at
+       FROM creative_test_items cti
+       JOIN creative_tests ct ON ct.id = cti.creative_test_id
+       WHERE ct.store_id = ? AND cti.clickup_task_id IS NOT NULL`
+    )
+    .all(storeId) as Array<{
+    clickup_task_id: string;
+    roas: number;
+    test_status: string;
+    created_at: string;
+  }>;
+
+  const map = new Map<string, { testDate: string; roas: number; status: string }>();
+  for (const row of rows) {
+    map.set(row.clickup_task_id, {
+      testDate: row.created_at,
+      roas: row.roas,
+      status: row.test_status,
+    });
+  }
+  return map;
+}
+
+function parseInboxCreativeJson(raw: string): InboxCreative {
+  return JSON.parse(raw) as InboxCreative;
+}
+
+function hydrateCachedInboxCreative(
+  row: CreativeHubInboxCreativeRow,
+  testedMap: Map<string, { testDate: string; roas: number; status: string }>
+): InboxCreative {
+  const parsed = parseInboxCreativeJson(row.creative_json);
+  const tested = testedMap.get(parsed.clickupTaskId);
+  return {
+    ...parsed,
+    id: row.id,
+    productProfileId: row.product_profile_id,
+    creativeName: row.creative_name,
+    creativeFormat: row.creative_format as InboxCreative['creativeFormat'],
+    syncedAt: row.synced_at,
+    alreadyTested: !!tested,
+    pastTestResult: tested
+      ? {
+          testDate: tested.testDate,
+          roas: tested.roas,
+          status: tested.status as 'winner' | 'killed' | 'inconclusive',
+        }
+      : undefined,
+  };
+}
+
+function serializeInboxCreative(creative: InboxCreative): string {
+  return JSON.stringify(creative);
+}
+
+function buildCreativeHubInboxStatusMeta(
+  row: CreativeHubInboxSyncStatusRow,
+): CreativeHubInboxCacheProfileMeta {
+  return {
+    productProfileId: row.product_profile_id,
+    creativeCount: row.creative_count,
+    lastSyncedAt: row.last_synced_at,
+  };
+}
+
+function toInboxProfileIdFilter(profileIds: string[]): string {
+  return `in.(${profileIds.map((id) => `"${id}"`).join(',')})`;
+}
+
+function dedupeProfileIds(profileIds?: string[]): string[] | undefined {
+  if (!profileIds || profileIds.length === 0) return undefined;
+  return [...new Set(profileIds.filter(Boolean))];
+}
+
+function sortMetaProfiles(rows: CreativeHubInboxCacheProfileMeta[]): CreativeHubInboxCacheProfileMeta[] {
+  return rows.sort((a, b) => a.productProfileId.localeCompare(b.productProfileId));
+}
+
+function isMissingCreativeHubInboxCacheError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes('creative_hub_inbox_creatives')
+    || message.includes('creative_hub_inbox_sync_status')
+    || message.includes('could not find the table')
+    || (message.includes('relation') && message.includes('does not exist'))
+  );
+}
+
+async function getCachedInboxCreativeRows(
+  storeId: string,
+  productProfileIds?: string[],
+): Promise<CreativeHubInboxCreativeRow[]> {
+  const uniqueIds = dedupeProfileIds(productProfileIds);
+  if (isSupabasePersistenceEnabled()) {
+    try {
+      let path = `/creative_hub_inbox_creatives?store_id=eq.${encodeURIComponent(storeId)}`;
+      if (uniqueIds && uniqueIds.length > 0) {
+        path += `&product_profile_id=${toInboxProfileIdFilter(uniqueIds)}`;
+      }
+      path += '&select=*&order=synced_at.desc';
+      return supaRest<CreativeHubInboxCreativeRow[]>(path);
+    } catch (error) {
+      if (isMissingCreativeHubInboxCacheError(error)) {
+        return [];
+      }
+      throw error;
+    }
+  }
+
+  const db = getDb();
+  if (uniqueIds && uniqueIds.length > 0) {
+    const placeholders = uniqueIds.map(() => '?').join(', ');
+    return db.prepare(
+      `SELECT * FROM creative_hub_inbox_creatives WHERE store_id = ? AND product_profile_id IN (${placeholders}) ORDER BY synced_at DESC`
+    ).all(storeId, ...uniqueIds) as CreativeHubInboxCreativeRow[];
+  }
+
+  return db.prepare(
+    'SELECT * FROM creative_hub_inbox_creatives WHERE store_id = ? ORDER BY synced_at DESC'
+  ).all(storeId) as CreativeHubInboxCreativeRow[];
+}
+
+async function getCachedInboxSyncStatusRows(
+  storeId: string,
+  productProfileIds?: string[],
+): Promise<CreativeHubInboxSyncStatusRow[]> {
+  const uniqueIds = dedupeProfileIds(productProfileIds);
+  if (isSupabasePersistenceEnabled()) {
+    try {
+      let path = `/creative_hub_inbox_sync_status?store_id=eq.${encodeURIComponent(storeId)}`;
+      if (uniqueIds && uniqueIds.length > 0) {
+        path += `&product_profile_id=${toInboxProfileIdFilter(uniqueIds)}`;
+      }
+      path += '&select=*&order=product_profile_id.asc';
+      return supaRest<CreativeHubInboxSyncStatusRow[]>(path);
+    } catch (error) {
+      if (isMissingCreativeHubInboxCacheError(error)) {
+        return [];
+      }
+      throw error;
+    }
+  }
+
+  const db = getDb();
+  if (uniqueIds && uniqueIds.length > 0) {
+    const placeholders = uniqueIds.map(() => '?').join(', ');
+    return db.prepare(
+      `SELECT * FROM creative_hub_inbox_sync_status WHERE store_id = ? AND product_profile_id IN (${placeholders}) ORDER BY product_profile_id ASC`
+    ).all(storeId, ...uniqueIds) as CreativeHubInboxSyncStatusRow[];
+  }
+
+  return db.prepare(
+    'SELECT * FROM creative_hub_inbox_sync_status WHERE store_id = ? ORDER BY product_profile_id ASC'
+  ).all(storeId) as CreativeHubInboxSyncStatusRow[];
+}
+
+export async function getCachedInboxCreativeMeta(
+  storeId: string,
+  productProfileIds?: string[],
+): Promise<CreativeHubInboxCacheMeta> {
+  const statusRows = await getCachedInboxSyncStatusRows(storeId, productProfileIds);
+  const profiles = sortMetaProfiles(statusRows.map(buildCreativeHubInboxStatusMeta));
+  const lastSyncedAt = profiles.reduce<string | null>((latest, entry) => {
+    if (!entry.lastSyncedAt) return latest;
+    if (!latest || entry.lastSyncedAt > latest) return entry.lastSyncedAt;
+    return latest;
+  }, null);
+
+  return {
+    source: 'cache',
+    lastSyncedAt,
+    profiles,
+  };
+}
+
+export async function hasCachedInboxCreatives(
+  storeId: string,
+  productProfileIds?: string[],
+): Promise<boolean> {
+  const rows = await getCachedInboxSyncStatusRows(storeId, productProfileIds);
+  const uniqueIds = dedupeProfileIds(productProfileIds);
+  if (uniqueIds && uniqueIds.length > 0) {
+    const seen = new Set(rows.map((row) => row.product_profile_id));
+    return uniqueIds.every((id) => seen.has(id));
+  }
+  return rows.length > 0;
+}
+
+export async function getCachedInboxCreatives(
+  storeId: string,
+  productProfileIds?: string[],
+): Promise<InboxCreative[]> {
+  const cacheRows = await getCachedInboxCreativeRows(storeId, productProfileIds);
+  if (cacheRows.length === 0) return [];
+  const testedMap = getAlreadyTestedTaskIds(storeId);
+  return cacheRows.map((row) => hydrateCachedInboxCreative(row, testedMap));
+}
+
+export async function replaceCachedInboxCreatives(
+  storeId: string,
+  snapshots: Array<{
+    productProfileId: string;
+    creatives: InboxCreative[];
+    lastSyncedAt: string;
+  }>,
+): Promise<void> {
+  const uniqueSnapshots = snapshots.filter((snapshot) => snapshot.productProfileId.trim().length > 0);
+  if (uniqueSnapshots.length === 0) return;
+  const creativePayloads = uniqueSnapshots.flatMap((snapshot) => snapshot.creatives.map((creative) => ({
+    id: creative.id,
+    store_id: storeId,
+    product_profile_id: snapshot.productProfileId,
+    clickup_task_id: creative.clickupTaskId,
+    creative_name: creative.creativeName,
+    creative_format: creative.creativeFormat,
+    creative_json: serializeInboxCreative(creative),
+    synced_at: snapshot.lastSyncedAt,
+  })));
+
+  if (isSupabasePersistenceEnabled()) {
+    try {
+      const profileFilter = uniqueSnapshots.map((snapshot) => snapshot.productProfileId);
+      const existingRows = await getCachedInboxCreativeRows(storeId, profileFilter);
+
+      if (creativePayloads.length > 0) {
+        await rest(
+          '/creative_hub_inbox_creatives?on_conflict=id',
+          {
+            method: 'POST',
+            headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+            body: JSON.stringify(creativePayloads),
+          },
+        );
+      }
+
+      const statusPayloads = uniqueSnapshots.map((snapshot) => ({
+        store_id: storeId,
+        product_profile_id: snapshot.productProfileId,
+        creative_count: snapshot.creatives.length,
+        last_synced_at: snapshot.lastSyncedAt,
+        updated_at: snapshot.lastSyncedAt,
+      }));
+
+      await rest(
+        '/creative_hub_inbox_sync_status?on_conflict=store_id,product_profile_id',
+        {
+          method: 'POST',
+          headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+          body: JSON.stringify(statusPayloads),
+        },
+      );
+
+      const existingIds = new Set(existingRows.map((row) => row.id));
+      const incomingIds = new Set(creativePayloads.map((creative) => creative.id));
+      const staleIds = [...existingIds].filter((id) => !incomingIds.has(id));
+      if (staleIds.length > 0) {
+        await rest(
+          `/creative_hub_inbox_creatives?id=${toInboxProfileIdFilter(staleIds)}`,
+          { method: 'DELETE' },
+        );
+      }
+    } catch (error) {
+      if (isMissingCreativeHubInboxCacheError(error)) {
+        return;
+      }
+      throw error;
+    }
+    return;
+  }
+
+  const db = getDb();
+  const insertCreative = db.prepare(`
+    INSERT INTO creative_hub_inbox_creatives (
+      id, store_id, product_profile_id, clickup_task_id, creative_name, creative_format, creative_json, synced_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      store_id = excluded.store_id,
+      product_profile_id = excluded.product_profile_id,
+      clickup_task_id = excluded.clickup_task_id,
+      creative_name = excluded.creative_name,
+      creative_format = excluded.creative_format,
+      creative_json = excluded.creative_json,
+      synced_at = excluded.synced_at
+  `);
+  const upsertStatus = db.prepare(`
+    INSERT INTO creative_hub_inbox_sync_status (
+      store_id, product_profile_id, creative_count, last_synced_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(store_id, product_profile_id) DO UPDATE SET
+      creative_count = excluded.creative_count,
+      last_synced_at = excluded.last_synced_at,
+      updated_at = excluded.updated_at
+  `);
+
+  const transaction = db.transaction(() => {
+    for (const snapshot of uniqueSnapshots) {
+      for (const creative of snapshot.creatives) {
+        insertCreative.run(
+          creative.id,
+          storeId,
+          snapshot.productProfileId,
+          creative.clickupTaskId,
+          creative.creativeName,
+          creative.creativeFormat,
+          serializeInboxCreative(creative),
+          snapshot.lastSyncedAt,
+        );
+      }
+      upsertStatus.run(
+        storeId,
+        snapshot.productProfileId,
+        snapshot.creatives.length,
+        snapshot.lastSyncedAt,
+        snapshot.lastSyncedAt,
+      );
+    }
+
+    const existingRows = db.prepare(
+      `SELECT id FROM creative_hub_inbox_creatives WHERE store_id = ? AND product_profile_id IN (${uniqueSnapshots.map(() => '?').join(', ')})`
+    ).all(storeId, ...uniqueSnapshots.map((snapshot) => snapshot.productProfileId)) as Array<{ id: string }>;
+    const incomingIds = new Set(creativePayloads.map((creative) => creative.id));
+    for (const row of existingRows) {
+      if (!incomingIds.has(row.id)) {
+        db.prepare('DELETE FROM creative_hub_inbox_creatives WHERE id = ?').run(row.id);
+      }
+    }
+  });
+
+  transaction();
+}
+
+export async function clearCachedInboxCreatives(
+  storeId: string,
+  productProfileIds?: string[],
+): Promise<void> {
+  const uniqueIds = dedupeProfileIds(productProfileIds);
+  if (isSupabasePersistenceEnabled()) {
+    try {
+      if (uniqueIds && uniqueIds.length > 0) {
+        await rest(
+          `/creative_hub_inbox_creatives?store_id=eq.${encodeURIComponent(storeId)}&product_profile_id=${toInboxProfileIdFilter(uniqueIds)}`,
+          { method: 'DELETE' },
+        );
+        await rest(
+          `/creative_hub_inbox_sync_status?store_id=eq.${encodeURIComponent(storeId)}&product_profile_id=${toInboxProfileIdFilter(uniqueIds)}`,
+          { method: 'DELETE' },
+        );
+        return;
+      }
+
+      await rest(`/creative_hub_inbox_creatives?store_id=eq.${encodeURIComponent(storeId)}`, { method: 'DELETE' });
+      await rest(`/creative_hub_inbox_sync_status?store_id=eq.${encodeURIComponent(storeId)}`, { method: 'DELETE' });
+      return;
+    } catch (error) {
+      if (isMissingCreativeHubInboxCacheError(error)) {
+        return;
+      }
+      throw error;
+    }
+  }
+
+  const db = getDb();
+  if (uniqueIds && uniqueIds.length > 0) {
+    const placeholders = uniqueIds.map(() => '?').join(', ');
+    db.prepare(
+      `DELETE FROM creative_hub_inbox_creatives WHERE store_id = ? AND product_profile_id IN (${placeholders})`
+    ).run(storeId, ...uniqueIds);
+    db.prepare(
+      `DELETE FROM creative_hub_inbox_sync_status WHERE store_id = ? AND product_profile_id IN (${placeholders})`
+    ).run(storeId, ...uniqueIds);
+    return;
+  }
+
+  db.prepare('DELETE FROM creative_hub_inbox_creatives WHERE store_id = ?').run(storeId);
+  db.prepare('DELETE FROM creative_hub_inbox_sync_status WHERE store_id = ?').run(storeId);
 }
 
 // ── Local SQLite helpers (fallback) ──
@@ -618,6 +1022,7 @@ function createCreativeTestLocal(test: {
     thumbnailUrl?: string;
     metaAssetId?: string;
     metaAssetType?: string;
+    uploadStatus?: string;
   }>;
   adCopy: Array<{
     id: string;
@@ -643,8 +1048,8 @@ function createCreativeTestLocal(test: {
     INSERT INTO creative_test_items (
       id, creative_test_id, clickup_task_id, clickup_task_name,
       creative_name, creative_format, hook, angle,
-      drive_url, thumbnail_url, meta_asset_id, meta_asset_type
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      drive_url, thumbnail_url, meta_asset_id, meta_asset_type, upload_status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const insertCopy = db.prepare(`
@@ -688,6 +1093,7 @@ function createCreativeTestLocal(test: {
         item.thumbnailUrl ?? null,
         item.metaAssetId ?? null,
         item.metaAssetType ?? null,
+        item.uploadStatus ?? (item.metaAssetId ? 'ready' : 'pending'),
       );
     }
 
@@ -1091,6 +1497,7 @@ export async function createCreativeTest(test: {
     thumbnailUrl?: string;
     metaAssetId?: string;
     metaAssetType?: string;
+    uploadStatus?: string;
   }>;
   adCopy: Array<{
     id: string;
@@ -1149,6 +1556,7 @@ export async function createCreativeTest(test: {
                 thumbnail_url: item.thumbnailUrl ?? null,
                 meta_asset_id: item.metaAssetId ?? null,
                 meta_asset_type: item.metaAssetType ?? null,
+                upload_status: item.uploadStatus ?? (item.metaAssetId ? 'ready' : 'pending'),
               })),
             ),
           },

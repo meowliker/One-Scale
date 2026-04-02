@@ -8,12 +8,14 @@ import {
   Hash,
   User,
   Type,
-  Maximize2,
-  RatioIcon,
   Link2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Modal } from '@/components/ui/Modal';
+import {
+  formatClickUpFieldValue,
+  getClickUpFieldHref,
+} from '@/lib/creative-hub/clickupFieldFormatting';
 import { UploadProgressBar } from './UploadProgressBar';
 import type { InboxCreative } from '@/types/creativeHub';
 
@@ -51,22 +53,34 @@ export function CreativePreviewModal({
 
   const FormatIcon = formatIcons[creative.creativeFormat] || ImageIcon;
   const statusInfo = uploadStatusLabels[creative.uploadStatus];
+  const mediaUrl =
+    creative.driveContentUrl ||
+    creative.driveDownloadUrl ||
+    creative.drivePreviewUrl ||
+    creative.driveUrl ||
+    '';
+  const imagePreviewUrl = creative.driveContentUrl || creative.drivePreviewUrl || creative.thumbnailUrl || '';
+  const visibleFields = creative.clickupCustomFields?.filter((field) => (
+    !['drive', 'asset', 'link', 'file', 'thumbnail', 'preview', 'cover'].some((token) =>
+      field.name.toLowerCase().includes(token)
+    )
+  )) || [];
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Creative Preview" size="lg">
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         {/* Left: Preview */}
         <div className="flex items-center justify-center rounded-xl bg-gray-100 overflow-hidden min-h-[280px]">
-          {creative.creativeFormat === 'video' && creative.driveUrl ? (
+          {creative.creativeFormat === 'video' && mediaUrl ? (
             <video
-              src={creative.driveUrl}
+              src={mediaUrl}
               controls
               className="max-h-[400px] w-full object-contain"
               poster={creative.thumbnailUrl || undefined}
             />
-          ) : creative.thumbnailUrl ? (
+          ) : imagePreviewUrl ? (
             <img
-              src={creative.thumbnailUrl}
+              src={imagePreviewUrl}
               alt={creative.creativeName}
               className="max-h-[400px] w-full object-contain"
             />
@@ -108,6 +122,12 @@ export function CreativePreviewModal({
             {creative.creator && (
               <MetadataRow icon={User} label="Creator" value={creative.creator} />
             )}
+            {creative.clickupListName && (
+              <MetadataRow icon={Hash} label="List" value={creative.clickupListName} />
+            )}
+            {creative.driveParentFolderName && (
+              <MetadataRow icon={Link2} label="Folder" value={creative.driveParentFolderName} />
+            )}
             {creative.driveUrl && (
               <MetadataRow
                 icon={Link2}
@@ -131,6 +151,54 @@ export function CreativePreviewModal({
               value={creative.clickupTaskId}
             />
           </div>
+
+          {(creative.clickupTags?.length || visibleFields.length > 0) && (
+            <div className="rounded-lg border border-border p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-text-secondary">
+                  ClickUp Metadata
+                </span>
+                <span className="text-[10px] uppercase tracking-[0.16em] text-text-dimmed">
+                  {visibleFields.length} fields
+                </span>
+              </div>
+              {creative.clickupTags && creative.clickupTags.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {creative.clickupTags.map((tag) => (
+                    <span key={tag} className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700">
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {visibleFields.length > 0 && (
+                <div className="grid gap-2">
+                  {visibleFields.slice(0, 8).map((field) => (
+                    <div key={field.id} className="rounded-md bg-gray-50 px-3 py-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-400">
+                        {field.name}
+                      </p>
+                      {getClickUpFieldHref(field) ? (
+                        <a
+                          href={getClickUpFieldHref(field) || undefined}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-1 inline-flex items-center gap-1 break-all text-sm text-blue-600 hover:text-blue-700 hover:underline"
+                        >
+                          {formatClickUpFieldValue(field)}
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      ) : (
+                        <p className="mt-1 text-sm text-text-primary break-words">
+                          {formatClickUpFieldValue(field)}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Upload Status */}
           <div className="rounded-lg border border-border p-3 space-y-2">

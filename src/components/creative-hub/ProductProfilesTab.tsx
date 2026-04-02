@@ -5,13 +5,14 @@ import {
   Sparkles,
   Plus,
   Package,
+  RefreshCw,
   ChevronDown,
   ChevronUp,
   AlertTriangle,
   Loader2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useCreativeHubStore, type UnmappedCampaign } from '@/stores/creativeHubStore';
+import { useCreativeHubStore } from '@/stores/creativeHubStore';
 import { ProductProfileCard } from '@/components/creative-hub/ProductProfileCard';
 import { EditProductProfileModal } from '@/components/creative-hub/EditProductProfileModal';
 import { UnmappedCampaignCard } from '@/components/creative-hub/UnmappedCampaignCard';
@@ -21,16 +22,30 @@ interface ProductProfilesTabProps {
   storeId: string;
 }
 
+function formatLastSyncedAt(value: string | null): string {
+  if (!value) return 'Never';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Never';
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date);
+}
+
 export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
   const profiles = useCreativeHubStore((s) => s.profiles);
   const profilesLoading = useCreativeHubStore((s) => s.profilesLoading);
   const unmappedCampaigns = useCreativeHubStore((s) => s.unmappedCampaigns);
+  const inboxCreatives = useCreativeHubStore((s) => s.inboxCreatives);
+  const profileCreativeCounts = useCreativeHubStore((s) => s.profileCreativeCounts);
+  const profileCreativeCountsLoading = useCreativeHubStore((s) => s.profileCreativeCountsLoading);
+  const inboxLoading = useCreativeHubStore((s) => s.inboxLoading);
+  const inboxLastSyncedAt = useCreativeHubStore((s) => s.inboxLastSyncedAt);
   const autoDiscoverProfiles = useCreativeHubStore((s) => s.autoDiscoverProfiles);
   const setActiveTab = useCreativeHubStore((s) => s.setActiveTab);
-  const openLaunchWizardForProduct = useCreativeHubStore((s) => s.openLaunchWizardForProduct);
-  const openLaunchCenter = useCreativeHubStore((s) => s.openLaunchCenter);
   const openLaunchStudio = useCreativeHubStore((s) => s.openLaunchStudio);
-  const inboxCreatives = useCreativeHubStore((s) => s.inboxCreatives);
+  const fetchInbox = useCreativeHubStore((s) => s.fetchInbox);
+  const syncInbox = useCreativeHubStore((s) => s.syncInbox);
   const activeTests = useCreativeHubStore((s) => s.activeTests);
   const completedTests = useCreativeHubStore((s) => s.completedTests);
 
@@ -38,17 +53,7 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
   const [editingProfile, setEditingProfile] = useState<ProductProfile | null>(null);
   const [unmappedExpanded, setUnmappedExpanded] = useState(true);
   const [notTestingExpanded, setNotTestingExpanded] = useState(false);
-
-  // Count creatives per product profile
-  const creativeCountMap = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const c of inboxCreatives) {
-      if (c.productProfileId) {
-        map.set(c.productProfileId, (map.get(c.productProfileId) ?? 0) + 1);
-      }
-    }
-    return map;
-  }, [inboxCreatives]);
+  const [launchingProfileId, setLaunchingProfileId] = useState<string | null>(null);
 
   // Build linked campaigns map from profile data returned by the API
   const linkedCampaignsMap = useMemo(() => {
@@ -89,6 +94,15 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
     }
     return map;
   }, [completedTests]);
+
+  const inboxCreativeCountsMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const creative of inboxCreatives) {
+      if (!creative.productProfileId) continue;
+      map.set(creative.productProfileId, (map.get(creative.productProfileId) ?? 0) + 1);
+    }
+    return map;
+  }, [inboxCreatives]);
 
   // Split profiles into active and inactive
   // Only show products that have campaigns. Products with 0 campaigns don't appear at all.
@@ -132,12 +146,29 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
     autoDiscoverProfiles(storeId);
   };
 
-  const handleViewCopyLibrary = (profileId: string) => {
+  const handleRefreshClickUp = async () => {
+    await syncInbox(storeId);
+  };
+
+  const handleViewCopyLibrary = () => {
     setActiveTab('copy-library');
   };
 
-  const handleLaunch = (profile: ProductProfile) => {
-    openLaunchStudio(profile.id);
+  const handleLaunch = async (profile: ProductProfile) => {
+    setLaunchingProfileId(profile.id);
+    try {
+      openLaunchStudio(profile.id);
+
+      const hasTargetCreativesLoaded = inboxCreatives.some(
+        (creative) => creative.productProfileId === profile.id,
+      );
+
+      if (!hasTargetCreativesLoaded) {
+        await fetchInbox(storeId, profile.id);
+      }
+    } finally {
+      setLaunchingProfileId(null);
+    }
   };
 
   const handleMapToProfile = async (campaignId: string, profileId: string) => {
@@ -184,9 +215,16 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
     useCreativeHubStore.setState({ unmappedCampaigns: updated });
   };
 
-  const handleCreateNewProfileFromCampaign = (campaign: UnmappedCampaign) => {
+  const handleCreateNewProfileFromCampaign = () => {
     setEditingProfile(null);
     setEditModalOpen(true);
+  };
+
+  const getProfileReadyCount = (profileId: string) => {
+    if (profileCreativeCounts[profileId] != null) {
+      return profileCreativeCounts[profileId];
+    }
+    return inboxCreativeCountsMap.get(profileId) ?? 0;
   };
 
   return (
@@ -206,6 +244,23 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
         </div>
 
         <div className="flex items-center gap-2.5">
+          <button
+            onClick={handleRefreshClickUp}
+            disabled={inboxLoading}
+            className={cn(
+              'inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors',
+              inboxLoading
+                ? 'bg-gray-100 text-text-dimmed cursor-not-allowed'
+                : 'border border-border bg-surface-elevated text-text-primary hover:bg-surface-hover'
+            )}
+          >
+            {inboxLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4 text-sky-600" />
+            )}
+            Refresh ClickUp
+          </button>
           <button
             onClick={handleAutoDiscover}
             disabled={profilesLoading}
@@ -232,6 +287,9 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
           </button>
         </div>
       </div>
+      <p className="text-xs text-text-secondary">
+        Last ClickUp refresh: <span className="font-medium text-text-primary">{formatLastSyncedAt(inboxLastSyncedAt)}</span>
+      </p>
 
       {/* Profile cards — split into Active Products and Not Testing sections */}
       {profiles.length > 0 ? (
@@ -251,13 +309,14 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
                     key={profile.id}
                     profile={profile}
                     linkedCampaigns={linkedCampaignsMap.get(profile.id) ?? []}
-                    creativeCount={creativeCountMap.get(profile.id) ?? 0}
+                    creativeCount={profileCreativeCountsLoading ? '…' : getProfileReadyCount(profile.id)}
                     testingCount={testingCountMap.get(profile.id) ?? 0}
                     launchedCount={launchedCountMap.get(profile.id) ?? 0}
                     winnersCount={winnersCountMap.get(profile.id) ?? 0}
                     onEdit={handleEdit}
                     onLaunch={handleLaunch}
                     onViewCopyLibrary={handleViewCopyLibrary}
+                    launching={launchingProfileId === profile.id}
                   />
                 ))}
               </div>
@@ -290,16 +349,18 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
               {notTestingExpanded && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 opacity-60">
                   {notTestingProfiles.map((profile) => (
-                    <ProductProfileCard
-                      key={profile.id}
-                      profile={profile}
-                      linkedCampaigns={linkedCampaignsMap.get(profile.id) ?? []}
-                      creativeCount={creativeCountMap.get(profile.id) ?? 0}
-                      testingCount={testingCountMap.get(profile.id) ?? 0}
-                      launchedCount={launchedCountMap.get(profile.id) ?? 0}
-                      winnersCount={winnersCountMap.get(profile.id) ?? 0}
-                      onEdit={handleEdit}
+                  <ProductProfileCard
+                    key={profile.id}
+                    profile={profile}
+                    linkedCampaigns={linkedCampaignsMap.get(profile.id) ?? []}
+                    creativeCount={profileCreativeCountsLoading ? '…' : getProfileReadyCount(profile.id)}
+                    testingCount={testingCountMap.get(profile.id) ?? 0}
+                    launchedCount={launchedCountMap.get(profile.id) ?? 0}
+                    winnersCount={winnersCountMap.get(profile.id) ?? 0}
+                    onEdit={handleEdit}
+                      onLaunch={handleLaunch}
                       onViewCopyLibrary={handleViewCopyLibrary}
+                      launching={launchingProfileId === profile.id}
                     />
                   ))}
                 </div>

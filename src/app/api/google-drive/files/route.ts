@@ -1,27 +1,127 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getGoogleDriveToken } from '@/app/api/lib/tokens';
+import {
+  fetchDriveFolderMeta,
+  fetchDriveFileMetadata,
+  GoogleDriveNormalizedFile,
+  GoogleDriveRequestError,
+  listDriveChildren,
+  normalizeDriveFile,
+} from '../shared';
 
-export interface GoogleDriveFile {
-  id: string;
-  name: string;
-  mimeType: string;
-  size?: string;
-  thumbnailLink?: string;
-  webViewLink?: string;
-  webContentLink?: string;
-  createdTime?: string;
-  modifiedTime?: string;
-}
+export type GoogleDriveFile = GoogleDriveNormalizedFile;
 
-interface DriveFilesResponse {
+interface DriveListingPayload {
   files: GoogleDriveFile[];
+  items: GoogleDriveFile[];
   nextPageToken?: string;
+  folderName?: string;
+  folder?: {
+    id: string;
+    name: string;
+    mimeType: string;
+  } | null;
+  recursive: boolean;
 }
 
-interface DriveFolderMeta {
-  id: string;
-  name: string;
-  mimeType: string;
+function parseBoolean(value: string | null): boolean {
+  if (!value) return false;
+  return ['1', 'true', 'yes', 'on'].includes(value.toLowerCase());
+}
+
+function parseDepth(value: string | null): number {
+  const parsed = Number.parseInt(value || '', 10);
+  if (Number.isNaN(parsed) || parsed < 0) return 20;
+  return Math.min(parsed, 50);
+}
+
+async function collectFolderItems(args: {
+  token: string;
+  storeId: string;
+  folderId: string;
+  folderPath: string;
+  depth: number;
+  recursive: boolean;
+  includeFolders: boolean;
+  maxDepth: number;
+  seen: Set<string>;
+}): Promise<GoogleDriveFile[]> {
+  const {
+    token,
+    storeId,
+    folderId,
+    folderPath,
+    depth,
+    recursive,
+    includeFolders,
+    maxDepth,
+    seen,
+  } = args;
+
+  const items: GoogleDriveFile[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const page = await listDriveChildren(token, folderId, pageToken);
+    for (const rawFile of page.files || []) {
+      const normalized = normalizeDriveFile(rawFile, storeId, {
+        folderPath,
+        depth,
+        parentId: folderId === 'root' ? undefined : folderId,
+      });
+
+      if (!normalized.isFolder || includeFolders) {
+        items.push(normalized);
+      }
+
+      if (
+        recursive &&
+        normalized.isFolder &&
+        depth < maxDepth &&
+        !seen.has(normalized.id)
+      ) {
+        seen.add(normalized.id);
+        const childPath = folderPath ? `${folderPath}/${normalized.name}` : normalized.name;
+        const childItems = await collectFolderItems({
+          token,
+          storeId,
+          folderId: normalized.id,
+          folderPath: childPath,
+          depth: depth + 1,
+          recursive,
+          includeFolders,
+          maxDepth,
+          seen,
+        });
+        items.push(...childItems);
+      }
+    }
+    pageToken = page.nextPageToken;
+  } while (pageToken);
+
+  return items;
+}
+
+async function listCurrentFolderItems(args: {
+  token: string;
+  storeId: string;
+  folderId: string;
+  folderPath: string;
+  includeFolders: boolean;
+}): Promise<{ items: GoogleDriveFile[]; nextPageToken?: string }> {
+  const page = await listDriveChildren(args.token, args.folderId);
+  return {
+    items: (page.files || [])
+      .map((rawFile) =>
+        normalizeDriveFile(rawFile, args.storeId, {
+          folderPath: args.folderPath,
+          depth: 0,
+          parentId: args.folderId === 'root' ? undefined : args.folderId,
+        })
+      )
+      .filter((item) => args.includeFolders || !item.isFolder),
+    nextPageToken: page.nextPageToken,
+  };
 }
 
 export async function GET(request: NextRequest) {
@@ -29,6 +129,9 @@ export async function GET(request: NextRequest) {
   const storeId = searchParams.get('storeId');
   const folderId = searchParams.get('folderId') || 'root';
   const fileId = searchParams.get('fileId');
+  const recursive = parseBoolean(searchParams.get('recursive') || searchParams.get('flatten'));
+  const includeFolders = searchParams.get('includeFolders') !== 'false';
+  const maxDepth = parseDepth(searchParams.get('maxDepth'));
 
   if (!storeId) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
@@ -38,77 +141,82 @@ export async function GET(request: NextRequest) {
   if (!tokenData) {
     return NextResponse.json(
       { error: 'Google Drive not connected or token expired. Please reconnect.' },
-      { status: 401 }
+      { status: 401 },
     );
   }
 
-  const authHeader = { Authorization: `Bearer ${tokenData.accessToken}` };
-
   try {
-    // Single file detail mode
     if (fileId) {
-      const fileRes = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,size,thumbnailLink,webViewLink,webContentLink,createdTime,modifiedTime`,
-        { headers: authHeader }
+      const file = await fetchDriveFileMetadata(
+        tokenData.accessToken,
+        fileId,
+        'id,name,mimeType,size,thumbnailLink,webViewLink,webContentLink,createdTime,modifiedTime,parents,shortcutDetails(targetId,targetMimeType)',
       );
 
-      if (!fileRes.ok) {
-        const errBody = await fileRes.text();
+      if (!file) {
         return NextResponse.json(
-          { error: `Failed to fetch file: ${errBody}` },
-          { status: fileRes.status }
+          { error: 'Failed to fetch file' },
+          { status: 404 },
         );
       }
 
-      const file: GoogleDriveFile = await fileRes.json();
-      return NextResponse.json({ file });
+      const normalized = normalizeDriveFile(file, storeId, {
+        folderPath: '',
+        depth: 0,
+      });
+
+      return NextResponse.json({ file: normalized });
     }
 
-    // List files in folder
-    const q = `'${folderId}' in parents and trashed=false`;
-    const fields = 'files(id,name,mimeType,size,thumbnailLink,webViewLink,webContentLink,createdTime,modifiedTime),nextPageToken';
+    const folderMeta =
+      folderId === 'root'
+        ? null
+        : await fetchDriveFolderMeta(tokenData.accessToken, folderId);
 
-    const listUrl = new URL('https://www.googleapis.com/drive/v3/files');
-    listUrl.searchParams.set('q', q);
-    listUrl.searchParams.set('fields', fields);
-    listUrl.searchParams.set('orderBy', 'name');
-    listUrl.searchParams.set('pageSize', '100');
-
-    const listRes = await fetch(listUrl.toString(), { headers: authHeader });
-
-    if (!listRes.ok) {
-      const errBody = await listRes.text();
-      return NextResponse.json(
-        { error: `Failed to list files: ${errBody}` },
-        { status: listRes.status }
-      );
-    }
-
-    const data: DriveFilesResponse = await listRes.json();
-
-    // Optionally fetch folder name for display
-    let folderName: string | undefined;
-    if (folderId !== 'root') {
-      try {
-        const folderRes = await fetch(
-          `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}?fields=id,name,mimeType`,
-          { headers: authHeader }
-        );
-        if (folderRes.ok) {
-          const folderMeta: DriveFolderMeta = await folderRes.json();
-          folderName = folderMeta.name;
+    const folderPath = folderId === 'root' ? '' : folderMeta?.name || '';
+    const currentFolder = recursive
+      ? {
+          items: await collectFolderItems({
+            token: tokenData.accessToken,
+            storeId,
+            folderId,
+            folderPath,
+            depth: 0,
+            recursive,
+            includeFolders,
+            maxDepth,
+            seen: new Set<string>(folderId === 'root' ? [] : [folderId]),
+          }),
+          nextPageToken: undefined,
         }
-      } catch {
-        // Non-critical — skip folder name
-      }
-    }
+      : await listCurrentFolderItems({
+          token: tokenData.accessToken,
+          storeId,
+          folderId,
+          folderPath,
+          includeFolders,
+        });
 
-    return NextResponse.json({
-      files: data.files ?? [],
-      folderName,
-      nextPageToken: data.nextPageToken,
-    });
+    const payload: DriveListingPayload = {
+      files: currentFolder.items,
+      items: currentFolder.items,
+      nextPageToken: currentFolder.nextPageToken,
+      folderName: folderId === 'root' ? undefined : folderMeta?.name,
+      folder: folderMeta
+        ? {
+            id: folderMeta.id,
+            name: folderMeta.name,
+            mimeType: folderMeta.mimeType,
+          }
+        : null,
+      recursive,
+    };
+
+    return NextResponse.json(payload);
   } catch (err) {
+    if (err instanceof GoogleDriveRequestError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
     const message = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json({ error: message }, { status: 500 });
   }

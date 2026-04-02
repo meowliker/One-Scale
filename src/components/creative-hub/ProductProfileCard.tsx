@@ -31,10 +31,11 @@ import type { ProductProfile, ProductCampaignLink, CampaignLinkType } from '@/ty
 interface ProductProfileCardProps {
   profile: ProductProfile;
   linkedCampaigns: ProductCampaignLink[];
-  creativeCount?: number;
+  creativeCount?: number | string;
   testingCount?: number;
   launchedCount?: number;
   winnersCount?: number;
+  launching?: boolean;
   onEdit: (profile: ProductProfile) => void;
   onViewCopyLibrary: (profileId: string) => void;
   onLaunch?: (profile: ProductProfile) => void;
@@ -90,6 +91,7 @@ export function ProductProfileCard({
   testingCount,
   launchedCount,
   winnersCount,
+  launching = false,
   onEdit,
   onViewCopyLibrary,
   onLaunch,
@@ -101,7 +103,6 @@ export function ProductProfileCard({
   // Use Meta-derived counts from API if available, fallback to DB isActive flag
   const activeCampaignCount = profile.activeCampaignCount ?? linkedCampaigns.filter(c => c.isActive).length;
   const inactiveCampaignCount = profile.inactiveCampaignCount ?? linkedCampaigns.filter(c => !c.isActive).length;
-  const isActive = activeCampaignCount > 0;
   const isTesting = linkedCampaigns.length > 0 && activeCampaignCount > 0;
 
   // Priority: profile-level name > campaign link names > ID > "Not set"
@@ -365,10 +366,20 @@ export function ProductProfileCard({
         </button>
         <button
           onClick={() => onLaunch?.(profile)}
-          className="inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 transition-colors"
+          disabled={launching}
+          className={cn(
+            'inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium text-white transition-colors',
+            launching
+              ? 'cursor-wait bg-blue-400'
+              : 'bg-blue-600 hover:bg-blue-700',
+          )}
         >
-          <Rocket className="h-3.5 w-3.5" />
-          Launch
+          {launching ? (
+            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Rocket className="h-3.5 w-3.5" />
+          )}
+          {launching ? 'Loading assets...' : 'Launch'}
         </button>
         <button
           onClick={() => onViewCopyLibrary(profile.id)}
@@ -401,7 +412,7 @@ function StatBadge({
 }: {
   icon: React.ReactNode;
   label: string;
-  count: number;
+  count: number | string;
   className: string;
 }) {
   return (

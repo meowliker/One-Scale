@@ -40,6 +40,7 @@ async function getClickUpToken(storeId: string) {
 export async function POST(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const storeId = searchParams.get('storeId') || '';
+  const productId = searchParams.get('productId') || '';
 
   if (!storeId) {
     return NextResponse.json({ error: 'storeId required' }, { status: 400 });
@@ -66,7 +67,12 @@ export async function POST(request: NextRequest) {
 
   // Perform fresh fetch by calling our own inbox GET endpoint
   const origin = new URL(request.url).origin;
-  const inboxUrl = `${origin}/api/creative-hub/inbox?storeId=${encodeURIComponent(storeId)}`;
+  const params = new URLSearchParams({
+    storeId,
+    refresh: '1',
+  });
+  if (productId) params.set('productId', productId);
+  const inboxUrl = `${origin}/api/creative-hub/inbox?${params.toString()}`;
 
   try {
     const res = await fetch(inboxUrl, {
@@ -84,10 +90,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const data = (await res.json()) as { creatives: unknown[] };
+    const data = (await res.json()) as { creatives: unknown[]; cacheMeta?: unknown };
 
     return NextResponse.json({
       creatives: data.creatives,
+      cacheMeta: data.cacheMeta,
       syncedAt: new Date().toISOString(),
     });
   } catch (err) {

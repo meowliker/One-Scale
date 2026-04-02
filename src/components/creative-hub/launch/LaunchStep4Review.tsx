@@ -2,7 +2,6 @@
 
 import { useMemo } from 'react';
 import {
-  ChevronRight,
   Image as ImageIcon,
   FolderOpen,
   Layers,
@@ -13,22 +12,39 @@ import {
 import { cn } from '@/lib/utils';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
 import { HealthCheckPanel } from './HealthCheckPanel';
-import type { PreLaunchReport, HealthCheck } from '@/types/creativeHub';
+import type {
+  HealthCheck,
+  InboxCreative,
+  LaunchConfig,
+  PreLaunchReport,
+} from '@/types/creativeHub';
 
 export function LaunchStep4Review() {
   const { launchConfig, updateLaunchConfig, profiles, inboxCreatives, selectedCreativeIds } =
     useCreativeHubStore();
 
   const selectedProfile = profiles.find((p) => p.id === launchConfig.productProfileId);
-  const selectedCreatives = inboxCreatives.filter((c) => selectedCreativeIds.has(c.id));
+  const selectedCreatives = useMemo(
+    () => resolveReviewCreatives(launchConfig, inboxCreatives, selectedCreativeIds),
+    [inboxCreatives, launchConfig, selectedCreativeIds],
+  );
+  const plannedAdSets = useMemo(
+    () => buildReviewAdSets(launchConfig, selectedCreatives),
+    [launchConfig, selectedCreatives],
+  );
   const launchStatus = launchConfig.launchStatus || 'ACTIVE';
 
-  const primaryTexts = launchConfig.primaryTexts || [];
-  const headlines = launchConfig.headlines || [];
-  const descriptions = launchConfig.descriptions || [];
+  const primaryTexts = useMemo(() => launchConfig.primaryTexts || [], [launchConfig.primaryTexts]);
+  const headlines = useMemo(() => launchConfig.headlines || [], [launchConfig.headlines]);
+  const descriptions = useMemo(() => launchConfig.descriptions || [], [launchConfig.descriptions]);
+  const backendReport = launchConfig.healthCheckReport as PreLaunchReport | undefined;
 
   // Build health check report
   const report = useMemo<PreLaunchReport>(() => {
+    if (backendReport?.checks?.length) {
+      return backendReport;
+    }
+
     const checks: HealthCheck[] = [];
 
     // Product profile
@@ -94,8 +110,8 @@ export function LaunchStep4Review() {
     } else if (launchConfig.campaignMode === 'new') {
       checks.push({
         check: 'Campaign',
-        status: launchConfig.newCampaignName ? 'ok' : 'warn',
-        message: launchConfig.newCampaignName || 'New campaign (auto-named)',
+        status: launchConfig.newCampaignName ? 'ok' : 'fail',
+        message: launchConfig.newCampaignName || 'Campaign name is required before launch',
       });
     } else {
       checks.push({ check: 'Campaign', status: 'fail', message: 'No campaign selected' });
@@ -117,14 +133,10 @@ export function LaunchStep4Review() {
       failures,
       warnings,
     };
-  }, [selectedProfile, selectedCreatives, primaryTexts, headlines, launchConfig]);
+  }, [backendReport, selectedProfile, selectedCreatives, primaryTexts, headlines, launchConfig]);
 
   // Build "What will be created" tree
-  const creativeCount = selectedCreatives.length;
-  const adsetCount =
-    launchConfig.adsetMode === 'existing_adsets'
-      ? Object.keys(launchConfig.existingAdsetAssignments || {}).length
-      : creativeCount;
+  const previewAdSets = plannedAdSets.slice(0, 5);
 
   return (
     <div className="space-y-6">
@@ -194,17 +206,17 @@ export function LaunchStep4Review() {
 
               {/* Ad set nodes */}
               <div className="ml-4 space-y-1.5 border-l-2 border-slate-200 pl-4">
-                {Array.from({ length: Math.min(adsetCount, 5) }).map((_, idx) => (
-                  <div key={idx}>
+                {previewAdSets.map((adSet, idx) => (
+                  <div key={adSet.id}>
                     <div className="flex items-center gap-2">
                       <Layers className="h-3.5 w-3.5 text-amber-500" />
                       <span className="text-xs text-slate-700">
-                        Ad Set {idx + 1}
+                        {adSet.name || `Ad Set ${idx + 1}`}
                       </span>
                     </div>
                     {/* Ad nodes */}
                     <div className="ml-4 mt-1 space-y-1 border-l border-slate-200 pl-3">
-                      {selectedCreatives.slice(0, 3).map((creative) => (
+                      {adSet.creatives.slice(0, 3).map((creative) => (
                         <div key={creative.id} className="flex items-center gap-2">
                           <ImageIcon className="h-3 w-3 text-slate-400" />
                           <span className="truncate text-[10px] text-slate-500">
@@ -212,16 +224,18 @@ export function LaunchStep4Review() {
                           </span>
                         </div>
                       ))}
-                      {selectedCreatives.length > 3 && (
+                      {adSet.creatives.length > 3 && (
                         <span className="text-[10px] text-slate-400">
-                          +{selectedCreatives.length - 3} more
+                          +{adSet.creatives.length - 3} more
                         </span>
                       )}
                     </div>
                   </div>
                 ))}
-                {adsetCount > 5 && (
-                  <span className="text-[10px] text-slate-400">+{adsetCount - 5} more ad sets</span>
+                {plannedAdSets.length > 5 && (
+                  <span className="text-[10px] text-slate-400">
+                    +{plannedAdSets.length - 5} more ad sets
+                  </span>
                 )}
               </div>
             </div>
@@ -411,4 +425,87 @@ function formatBidStrategy(strategy: string): string {
     LOWEST_COST_WITH_MIN_ROAS: 'Minimum ROAS',
   };
   return labels[strategy] || strategy;
+}
+
+function resolveReviewCreatives(
+  launchConfig: Partial<LaunchConfig>,
+  inboxCreatives: InboxCreative[],
+  selectedCreativeIds: Set<string>,
+): InboxCreative[] {
+  if (launchConfig.selectedCreativeSnapshots?.length) {
+    return launchConfig.selectedCreativeSnapshots;
+  }
+
+  if (launchConfig.selectedCreativeIds?.length) {
+    const lookup = new Map(inboxCreatives.map((creative) => [creative.id, creative]));
+    return launchConfig.selectedCreativeIds
+      .map((creativeId) => lookup.get(creativeId))
+      .filter((creative): creative is InboxCreative => Boolean(creative));
+  }
+
+  return inboxCreatives.filter((creative) => selectedCreativeIds.has(creative.id));
+}
+
+function buildReviewAdSets(
+  launchConfig: Partial<LaunchConfig>,
+  selectedCreatives: InboxCreative[],
+): Array<{ id: string; name: string; creatives: InboxCreative[] }> {
+  const creativeLookup = new Map(selectedCreatives.map((creative) => [creative.id, creative]));
+
+  if (launchConfig.batches?.length) {
+    return launchConfig.batches
+      .map((batch) => ({
+        id: batch.id,
+        name: batch.name,
+        creatives: batch.creativeIds
+          .map((creativeId) => creativeLookup.get(creativeId))
+          .filter((creative): creative is InboxCreative => Boolean(creative)),
+      }))
+      .filter((batch) => batch.creatives.length > 0);
+  }
+
+  if (launchConfig.adsetMode === 'existing_adsets' && launchConfig.existingAdsetAssignments) {
+    return Object.entries(launchConfig.existingAdsetAssignments)
+      .map(([adsetId, creativeIds]) => ({
+        id: adsetId,
+        name: adsetId,
+        creatives: creativeIds
+          .map((creativeId) => creativeLookup.get(creativeId))
+          .filter((creative): creative is InboxCreative => Boolean(creative)),
+      }))
+      .filter((adSet) => adSet.creatives.length > 0);
+  }
+
+  if (selectedCreatives.length === 0) {
+    return [];
+  }
+
+  if (launchConfig.adsetDistribution === 'all_to_one') {
+    return [{ id: 'adset-1', name: 'Ad Set 1', creatives: selectedCreatives }];
+  }
+
+  const chunkSize =
+    launchConfig.adsetDistribution === 'one_per_adset'
+      ? 1
+      : Math.max(launchConfig.creativesPerBatch ?? 1, 1);
+
+  if (chunkSize <= 1) {
+    return selectedCreatives.map((creative, index) => ({
+      id: `adset-${index + 1}`,
+      name: `Ad Set ${index + 1}`,
+      creatives: [creative],
+    }));
+  }
+
+  const adSets: Array<{ id: string; name: string; creatives: InboxCreative[] }> = [];
+  for (let index = 0; index < selectedCreatives.length; index += chunkSize) {
+    const creatives = selectedCreatives.slice(index, index + chunkSize);
+    adSets.push({
+      id: `adset-${adSets.length + 1}`,
+      name: `Ad Set ${adSets.length + 1}`,
+      creatives,
+    });
+  }
+
+  return adSets;
 }

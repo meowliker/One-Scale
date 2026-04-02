@@ -120,11 +120,87 @@ export interface ProductCampaignLink {
 
 export type UploadStatus = 'pending' | 'uploading' | 'ready' | 'failed' | 'no_link';
 export type CreativeFormat = 'video' | 'image' | 'carousel';
+export type DriveSourceType = 'file' | 'folder' | 'folder_item';
+export type CreativeSourceType = 'clickup_task' | 'drive_asset';
+
+export interface ClickUpFieldValue {
+  id: string;
+  name: string;
+  type: string;
+  value: string;
+  hasValue?: boolean;
+  color?: string;
+}
+
+export interface ClickUpTaskAssignee {
+  id?: string;
+  username: string;
+  email?: string;
+  initials?: string;
+  color?: string;
+  profilePicture?: string;
+}
+
+export interface ClickUpTaskContext {
+  status?: {
+    name?: string;
+    color?: string;
+  };
+  creator?: ClickUpTaskAssignee;
+  assignees?: ClickUpTaskAssignee[];
+  watchers?: ClickUpTaskAssignee[];
+  dueDate?: string;
+  startDate?: string;
+  dateClosed?: string;
+  dateDone?: string;
+  priority?: {
+    label?: string;
+    color?: string;
+    orderindex?: string;
+  };
+  archived?: boolean;
+  parentTaskId?: string;
+  points?: number;
+  timeEstimate?: number;
+  folder?: {
+    id?: string;
+    name?: string;
+  };
+  space?: {
+    id?: string;
+    name?: string;
+  };
+  list?: {
+    id?: string;
+    name?: string;
+  };
+}
+
+export interface CreativeAiTagSet {
+  awarenessStage: string;
+  targetAge: string;
+  persona: string;
+  gender: string;
+  angle: string;
+  confidence?: string;
+  rationale?: string;
+  source: 'gemini' | 'fallback';
+}
 
 export interface InboxCreative {
   id: string;
   clickupTaskId: string;
   clickupTaskName: string;
+  clickupTaskStatus?: string;
+  clickupTaskUrl?: string;
+  clickupCreatedAt?: string;
+  clickupUpdatedAt?: string;
+  clickupListId?: string;
+  clickupListName?: string;
+  clickupDescription?: string;
+  clickupTags?: string[];
+  clickupCustomFields?: ClickUpFieldValue[];
+  clickupTaskContext?: ClickUpTaskContext;
   productProfileId?: string;
   productName?: string;
   creativeName: string;
@@ -133,19 +209,47 @@ export interface InboxCreative {
   angle?: string;
   creator?: string;
   driveUrl?: string;
+  drivePreviewUrl?: string;
+  driveContentUrl?: string;
+  driveDownloadUrl?: string;
+  driveFileId?: string;
+  driveFolderId?: string;
+  driveCreatedAt?: string;
+  driveModifiedAt?: string;
+  driveMimeType?: string;
+  driveParentFolderName?: string;
+  driveParentFolderUrl?: string;
+  driveSourceType?: DriveSourceType;
+  sourceType?: CreativeSourceType;
+  sourceParentId?: string;
+  uploadedAt?: string;
   thumbnailUrl?: string;
   uploadStatus: UploadStatus;
   uploadProgress: number;
   uploadError?: string;
   metaAssetId?: string;
   metaAssetType?: 'IMAGE' | 'VIDEO';
+  clickupAssignees?: ClickUpTaskAssignee[];
   alreadyTested: boolean;
   pastTestResult?: {
     testDate: string;
     roas: number;
     status: 'winner' | 'killed' | 'inconclusive';
   };
+  aiTags?: CreativeAiTagSet;
   syncedAt: string;
+}
+
+export interface CreativeHubInboxCacheProfileMeta {
+  productProfileId: string;
+  creativeCount: number;
+  lastSyncedAt: string | null;
+}
+
+export interface CreativeHubInboxCacheMeta {
+  source: 'cache' | 'live';
+  lastSyncedAt: string | null;
+  profiles: CreativeHubInboxCacheProfileMeta[];
 }
 
 // ── Launch Configuration ──
@@ -157,6 +261,7 @@ export type AdsetDistribution = 'all_to_one' | 'distribute' | 'one_per_adset';
 export interface LaunchConfig {
   productProfileId: string;
   selectedCreativeIds: string[];
+  selectedCreativeSnapshots?: InboxCreative[];
   campaignMode: CampaignMode;
   // Existing campaign
   existingCampaignId?: string;
@@ -213,8 +318,10 @@ export interface LaunchConfig {
   aiEvalFrequency?: string;
   autoKill?: boolean;
   notifyOnKill?: boolean;
+  aiAutopilotEnabled?: boolean;
+  aiAutopilotRequiresConfirmation?: boolean;
   // Health check result
-  healthCheckReport?: Record<string, unknown>;
+  healthCheckReport?: PreLaunchReport;
   // Launch Center
   batches?: CreativeBatch[];
   batchStrategy?: BatchStrategy;
@@ -373,6 +480,35 @@ export interface FatigueAlert {
 
 // ── Winning Ads ──
 
+export interface WinningCopyMetrics {
+  spend: number;
+  revenue: number;
+  roas: number;
+  ctr: number;
+  cpc: number;
+  cpm: number;
+  cpa: number;
+  purchases: number;
+  impressions: number;
+  clicks: number;
+}
+
+export interface WinningCopyRankedItem {
+  rank: number;
+  text: string;
+  label?: string;
+  usageCount: number;
+  adCount: number;
+  totalSpend: number;
+  totalRevenue: number;
+  totalPurchases: number;
+  totalImpressions: number;
+  totalClicks: number;
+  blendedScore: number;
+  metrics: WinningCopyMetrics;
+  examples?: string[];
+}
+
 export interface WinningPT {
   text: string;
   combinedRoas: number;
@@ -382,6 +518,15 @@ export interface WinningPT {
   adCount: number;
   avgCtr: number;
   avgCpa: number;
+  usageCount?: number;
+  totalImpressions?: number;
+  totalClicks?: number;
+  avgCpc?: number;
+  avgCpm?: number;
+  blendedScore?: number;
+  metrics?: WinningCopyMetrics;
+  label?: string;
+  examples?: string[];
 }
 
 export interface WinningHeadline {
@@ -390,6 +535,23 @@ export interface WinningHeadline {
   combinedSpend: number;
   purchases: number;
   adCount: number;
+  usageCount?: number;
+  totalImpressions?: number;
+  totalClicks?: number;
+  avgCtr?: number;
+  avgCpa?: number;
+  avgCpc?: number;
+  avgCpm?: number;
+  blendedScore?: number;
+  metrics?: WinningCopyMetrics;
+  label?: string;
+  examples?: string[];
+}
+
+export interface WinningDescription extends WinningCopyRankedItem {}
+
+export interface WinningCTA extends WinningCopyRankedItem {
+  ctaType: string;
 }
 
 export interface WinningAd {
@@ -398,6 +560,7 @@ export interface WinningAd {
   creative: {
     headline: string;
     body: string;
+    description?: string;
     ctaType: string;
     thumbnailUrl?: string;
     destinationUrl?: string;
@@ -423,13 +586,78 @@ export interface WinningAdsData {
   uniquePTs: WinningPT[];
   uniqueHeadlines: WinningHeadline[];
   winningAds: WinningAd[];
+  winningPrimaryTexts?: WinningCopyRankedItem[];
+  winningHeadlines?: WinningCopyRankedItem[];
+  winningDescriptions?: WinningDescription[];
+  winningCTAs?: WinningCTA[];
+  copyIntelligence?: {
+    primaryTexts: WinningCopyRankedItem[];
+    headlines: WinningCopyRankedItem[];
+    descriptions: WinningDescription[];
+    ctas: WinningCTA[];
+    defaultRanking: 'blended_score' | 'roas' | 'spend';
+  };
   autoFill: {
     primaryTexts: string[];
     headlines: string[];
     cta: string;
+    descriptions?: string[];
   };
-  bestCTA: { type: string; usagePercent: number };
-  stats: { totalAds: number; totalLinkedCampaigns: number };
+  bestCTA: { type: string; usagePercent: number; blendedScore?: number };
+  stats: {
+    totalAds: number;
+    totalLinkedCampaigns: number;
+    totalSpend?: number;
+    totalPurchases?: number;
+    totalImpressions?: number;
+    totalClicks?: number;
+    dateRange?: string | null;
+  };
+}
+
+// ── Copy Rewrite Suggestions ──
+
+export interface CopyRewriteTargeting {
+  persona: string;
+  ageGroup: string;
+  gender: string;
+  awarenessStage: string;
+  angle: string;
+  rationale?: string;
+}
+
+export interface CopyRewriteSuggestion {
+  id: string;
+  title: string;
+  summary: string;
+  confidence: number;
+  intent: 'control_plus_challenger' | 'persona_match' | 'new_angle' | 'offer_shift';
+  targeting: CopyRewriteTargeting;
+  primaryTexts: string[];
+  headlines: string[];
+  descriptions: string[];
+  bestFor: string[];
+  watchouts: string[];
+  winningSignals?: string[];
+}
+
+export interface CopyRewriteAnalysis {
+  winningAudience: CopyRewriteTargeting;
+  winningSignals: string[];
+  notes: string[];
+}
+
+export interface CreativeCopyGenerationResponse {
+  source: 'ai' | 'fallback';
+  model?: string;
+  productName: string;
+  profitabilityFloor: number;
+  workflowMode: 'review_first';
+  analysis: CopyRewriteAnalysis;
+  suggestions: CopyRewriteSuggestion[];
+  primaryTexts: string[];
+  headlines: string[];
+  descriptions: string[];
 }
 
 // ── AI Insights ──
@@ -445,10 +673,101 @@ export interface AIInsightsData {
     summary: string;
     actionItems: string[];
   };
+  selectionPlan?: {
+    selectedCount: number;
+    testedCount: number;
+    winnerCount: number;
+    untestedCount: number;
+    uniqueAngles: number;
+    uniqueHooks: number;
+    uniqueCreators: number;
+    uniqueFolders: number;
+    uniqueFormats: number;
+    recommendedStrategy: BatchStrategy;
+    recommendedSize: number;
+    title: string;
+    reason: string;
+    strengths: string[];
+    cautions: string[];
+    nextMoves: string[];
+  };
+  launchDraft?: AILaunchDraft;
   source: 'ai' | 'fallback';
   model: string;
   analyzedAds: number;
   productName: string;
+  meta?: {
+    apiKeySource: string;
+    modelSource: string;
+    mode?: string;
+    selectionAware?: boolean;
+    selectionKey?: string;
+    fallbackReason?: 'timeout' | 'error';
+  };
+}
+
+export interface AILaunchActionCard {
+  id: string;
+  title: string;
+  summary: string;
+  rationale: string;
+  testGoal: string;
+  confidence: number;
+  priority: 'low' | 'medium' | 'high';
+  hypothesis: string;
+  expectedOutcome: string;
+  strategy: BatchStrategy;
+  recommendedSize: number;
+  campaignMode: CampaignMode;
+  structure: 'ABO' | 'CBO';
+  budget: number;
+  durationDays: number;
+  setup: {
+    campaignMode: CampaignMode;
+    structure: 'ABO' | 'CBO';
+    budget: number;
+    durationDays: number;
+    recommendedSize: number;
+  };
+  signals: string[];
+  watchouts: string[];
+  successMetrics: string[];
+  primaryTexts: string[];
+  headlines: string[];
+  descriptions: string[];
+  bestFor: string[];
+}
+
+export interface AILaunchDraft {
+  summary: string;
+  profitabilityFloor: number;
+  recommendedCampaignMode: CampaignMode;
+  recommendedStructure: 'ABO' | 'CBO';
+  recommendedBudget: number;
+  recommendedDurationDays: number;
+  recommendedCampaignName?: string;
+  actionCards: AILaunchActionCard[];
+  copyPlan: {
+    source: 'winner_history' | 'selection_history' | 'hybrid' | 'fallback';
+    primaryTexts: string[];
+    headlines: string[];
+    descriptions: string[];
+  };
+}
+
+export interface ExistingCampaignOption {
+  id: string;
+  campaignId: string;
+  campaignName: string;
+  campaignType: CampaignLinkType;
+  structure: 'ABO' | 'CBO';
+  effectiveStatus: string;
+  isActive: boolean;
+  budgetLabel: string;
+  bidStrategyLabel: string;
+  pageName?: string;
+  pixelName?: string;
+  recommendation?: string;
 }
 
 // ── Creative Launch Center Types ──

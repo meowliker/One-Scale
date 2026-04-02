@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { createJSONStorage, persist } from 'zustand/middleware';
 import type {
   CreativeHubTab,
   LaunchWizardStep,
@@ -33,6 +34,9 @@ interface CreativeHubState {
   profiles: ProductProfile[];
   profilesLoading: boolean;
   unmappedCampaigns: UnmappedCampaign[];
+  profileCreativeCounts: Record<string, number>;
+  profileCreativeTotal: number;
+  profileCreativeCountsLoading: boolean;
 
   // Creative Inbox
   inboxCreatives: InboxCreative[];
@@ -40,6 +44,7 @@ interface CreativeHubState {
   inboxNotConnected: boolean;
   inboxNotConfigured: boolean;
   inboxError: string | null;
+  inboxLastSyncedAt: string | null;
   selectedCreativeIds: Set<string>;
   uploadProgress: Map<string, number>;
 
@@ -90,6 +95,15 @@ interface CreativeHubState {
   launchStudioAiChat: {
     messages: Array<{ role: 'user' | 'assistant'; content: string; actionItems?: string[] }>;
     loading: boolean;
+    requestId?: string;
+    meta?: {
+      mode?: string;
+      model?: string;
+      toolCalls?: number;
+      apiKeySource?: string;
+      selectionAware?: boolean;
+      degradedReason?: string;
+    };
   };
 
   // Actions
@@ -97,6 +111,7 @@ interface CreativeHubState {
 
   // Profile actions
   fetchProfiles: (storeId: string) => Promise<void>;
+  fetchProfileCreativeCounts: (storeId: string) => Promise<void>;
   autoDiscoverProfiles: (storeId: string) => Promise<void>;
   saveProfile: (profile: Partial<ProductProfile> & { storeId: string }) => Promise<void>;
   deleteProfile: (id: string) => Promise<void>;
@@ -105,6 +120,7 @@ interface CreativeHubState {
   fetchInbox: (storeId: string, productProfileId?: string) => Promise<void>;
   syncInbox: (storeId: string) => Promise<void>;
   toggleCreativeSelection: (id: string) => void;
+  setSelectedCreativeIds: (ids: string[]) => void;
   selectAllCreatives: () => void;
   deselectAllCreatives: () => void;
   startUpload: (creativeId: string, storeId: string) => Promise<void>;
@@ -137,14 +153,15 @@ interface CreativeHubState {
   checkGoogleDriveConnection: (storeId: string) => Promise<void>;
 
   // Launch Studio actions
-  openLaunchStudio: (productId: string) => void;
+  openLaunchStudio: (productId: string, creativeIds?: string[]) => void;
+  restoreLaunchStudioSession: (productId: string, launchConfig?: Partial<LaunchConfig>) => void;
   closeLaunchStudio: () => void;
   fetchLaunchStudioAiAnalysis: (storeId: string, productProfileId: string) => Promise<void>;
   sendLaunchStudioAiChat: (storeId: string, productProfileId: string, message: string) => Promise<void>;
 
   // Launch Center actions
   setLaunchCenterTab: (tab: LaunchCenterTab) => void;
-  openLaunchCenter: (productId?: string) => void;
+  openLaunchCenter: (productId?: string, creativeIds?: string[]) => void;
   closeLaunchCenter: () => void;
   autoBatch: (strategy: BatchStrategy, size: number) => void;
   createBatch: (name: string, creativeIds: string[]) => void;
@@ -163,7 +180,246 @@ interface CreativeHubState {
   saveCopyToLibrary: (copy: Omit<WinningCopy, 'id' | 'createdAt'>) => Promise<void>;
 }
 
-export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
+function getCreativesByIds(creatives: InboxCreative[], ids: string[]): InboxCreative[] {
+  const idSet = new Set(ids);
+  return creatives.filter((creative) => idSet.has(creative.id));
+}
+
+function getActiveCampaigns(profile?: ProductProfile): NonNullable<ProductProfile['campaignLinks']> {
+  return (profile?.campaignLinks ?? []).filter(
+    (campaign) => campaign.effectiveStatus === 'ACTIVE' || (!campaign.effectiveStatus && campaign.isActive),
+  );
+}
+
+function getDefaultCampaignId(profile?: ProductProfile): string | undefined {
+  const activeCampaigns = getActiveCampaigns(profile);
+  return (
+    activeCampaigns.find((campaign) => campaign.campaignType === 'testing')?.campaignId ||
+    activeCampaigns[0]?.campaignId
+  );
+}
+
+function buildSuggestedCampaignName(productName?: string): string | undefined {
+  if (!productName) return undefined;
+  const today = new Date().toISOString().slice(0, 10);
+  return `${productName} | Creative Test ${today}`;
+}
+
+function buildCreativeCounts(creatives: InboxCreative[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const creative of creatives) {
+    if (!creative.productProfileId) continue;
+    counts[creative.productProfileId] = (counts[creative.productProfileId] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function buildBaseLaunchConfig(
+  profile?: ProductProfile,
+  selectedCreativeIds: string[] = [],
+  launchMode: LaunchCenterTab = 'quick',
+): Partial<LaunchConfig> {
+  const defaultCampaignId = getDefaultCampaignId(profile);
+
+  return {
+    productProfileId: profile?.id,
+    selectedCreativeIds: selectedCreativeIds.slice(0, 60),
+    campaignMode: defaultCampaignId ? 'existing' : 'new',
+    existingCampaignId: defaultCampaignId,
+    newCampaignName: defaultCampaignId ? undefined : buildSuggestedCampaignName(profile?.productName),
+    adsetMode: 'new_adsets',
+    adsetDistribution: 'one_per_adset',
+    structure: profile?.defaultStructure ?? 'ABO',
+    adAccountId: profile?.adAccountId,
+    pageId: profile?.pageId,
+    instagramActorId: profile?.instagramActorId,
+    pixelId: profile?.pixelId,
+    conversionEvent: profile?.conversionEvent,
+    destinationUrl: profile?.destinationUrl,
+    dailyBudget: profile?.defaultBudget ?? 20,
+    testDuration: profile?.defaultDuration ?? 3,
+    bidStrategy: profile?.defaultBidStrategy ?? 'LOWEST_COST_WITHOUT_CAP',
+    bidAmount: profile?.defaultBidAmount,
+    roasFloor: profile?.defaultRoasFloor,
+    launchStatus: profile?.defaultLaunchStatus ?? 'PAUSED',
+    launchTime: 'immediately',
+    scheduledDate: undefined,
+    scheduledTime: '09:00',
+    endDate: undefined,
+    attributionWindow: '7d_click_1d_view',
+    utmTemplate: profile?.utmTemplate,
+    primaryTexts: [],
+    headlines: [],
+    descriptions: [],
+    ctaType: 'SHOP_NOW',
+    advantageCreative: true,
+    batches: [],
+    batchStrategy: 'manual',
+    creativesPerBatch: 3,
+    launchMode,
+    aiMinSpend: profile?.aiMinSpend,
+    aiMinImpressions: profile?.aiMinImpressions,
+    aiMinHours: profile?.aiMinHours,
+    aiEvalFrequency: profile?.aiEvalFrequency,
+  };
+}
+
+type PersistedCopyItem = {
+  id: string;
+  text: string;
+  source: 'winner' | 'ai_generated' | 'manual';
+  sourceRoas?: number;
+  sourceCopyId?: string;
+};
+
+function trimCopyItems(items?: PersistedCopyItem[], limit = 12): PersistedCopyItem[] | undefined {
+  if (!items || items.length === 0) return undefined;
+  return items.slice(0, limit).map((item) => ({
+    id: item.id,
+    text: item.text,
+    source: item.source,
+    sourceRoas: item.sourceRoas,
+    sourceCopyId: item.sourceCopyId,
+  }));
+}
+
+function trimExistingAdsetAssignments(
+  assignments?: Record<string, string[]>,
+  adsetLimit = 12,
+  idsPerAdsetLimit = 12,
+): Record<string, string[]> | undefined {
+  if (!assignments) return undefined;
+  const entries = Object.entries(assignments).slice(0, adsetLimit);
+  if (entries.length === 0) return undefined;
+  return Object.fromEntries(entries.map(([adsetId, ids]) => [adsetId, ids.slice(0, idsPerAdsetLimit)]));
+}
+
+function buildPersistedLaunchConfig(launchConfig: Partial<LaunchConfig>): Partial<LaunchConfig> {
+  const {
+    productProfileId,
+    selectedCreativeIds,
+    campaignMode,
+    existingCampaignId,
+    adsetMode,
+    adsetDistribution,
+    existingAdsetAssignments,
+    newCampaignName,
+    structure,
+    adAccountId,
+    pageId,
+    instagramActorId,
+    pixelId,
+    conversionEvent,
+    destinationUrl,
+    dailyBudget,
+    testDuration,
+    bidStrategy,
+    bidAmount,
+    roasFloor,
+    launchStatus,
+    targetingPresetId,
+    customTargeting,
+    primaryTexts,
+    headlines,
+    descriptions,
+    ctaType,
+    advantageCreative,
+    launchTime,
+    scheduledDate,
+    scheduledTime,
+    endDate,
+    attributionWindow,
+    utmTemplate,
+    adsetNameOverride,
+    adNameOverride,
+    aiMinSpend,
+    aiMinImpressions,
+    aiMinHours,
+    aiEvalFrequency,
+    autoKill,
+    notifyOnKill,
+    aiAutopilotEnabled,
+    aiAutopilotRequiresConfirmation,
+    creativesPerBatch,
+    batchStrategy,
+    launchMode,
+  } = launchConfig;
+
+  return {
+    productProfileId,
+    selectedCreativeIds: selectedCreativeIds?.slice(0, 60),
+    campaignMode,
+    existingCampaignId,
+    adsetMode,
+    adsetDistribution,
+    existingAdsetAssignments: trimExistingAdsetAssignments(existingAdsetAssignments),
+    newCampaignName,
+    structure,
+    adAccountId,
+    pageId,
+    instagramActorId,
+    pixelId,
+    conversionEvent,
+    destinationUrl,
+    dailyBudget,
+    testDuration,
+    bidStrategy,
+    bidAmount,
+    roasFloor,
+    launchStatus,
+    targetingPresetId,
+    customTargeting,
+    primaryTexts: trimCopyItems(primaryTexts as PersistedCopyItem[] | undefined),
+    headlines: trimCopyItems(headlines as PersistedCopyItem[] | undefined),
+    descriptions: trimCopyItems(descriptions as PersistedCopyItem[] | undefined),
+    ctaType,
+    advantageCreative,
+    launchTime,
+    scheduledDate,
+    scheduledTime,
+    endDate,
+    attributionWindow,
+    utmTemplate,
+    adsetNameOverride,
+    adNameOverride,
+    aiMinSpend,
+    aiMinImpressions,
+    aiMinHours,
+    aiEvalFrequency,
+    autoKill,
+    notifyOnKill,
+    aiAutopilotEnabled,
+    aiAutopilotRequiresConfirmation,
+    creativesPerBatch,
+    batchStrategy,
+    launchMode,
+  };
+}
+
+const creativeHubSessionStorage = createJSONStorage(() => ({
+  getItem: (name: string) => window.localStorage.getItem(name),
+  setItem: (name: string, value: string) => {
+    try {
+      window.localStorage.setItem(name, value);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+        try {
+          window.localStorage.removeItem(name);
+          window.localStorage.setItem(name, value);
+        } catch {
+          // Persistence is best-effort only. If localStorage is full for this
+          // origin, keep the UI working and skip saving this session snapshot.
+        }
+        return;
+      }
+      throw error;
+    }
+  },
+  removeItem: (name: string) => window.localStorage.removeItem(name),
+}));
+
+export const useCreativeHubStore = create<CreativeHubState>()(
+  persist((set, get) => ({
   // ── Initial state ──
 
   activeTab: 'profiles',
@@ -171,12 +427,16 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
   profiles: [],
   profilesLoading: false,
   unmappedCampaigns: [],
+  profileCreativeCounts: {},
+  profileCreativeTotal: 0,
+  profileCreativeCountsLoading: false,
 
   inboxCreatives: [],
   inboxLoading: false,
   inboxNotConnected: false,
   inboxNotConfigured: false,
   inboxError: null,
+  inboxLastSyncedAt: null,
   selectedCreativeIds: new Set<string>(),
   uploadProgress: new Map<string, number>(),
 
@@ -213,7 +473,7 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
   launchStudioOpen: false,
   launchStudioProductId: null,
   launchStudioAiAnalysis: { loading: false, data: null, error: null },
-  launchStudioAiChat: { messages: [], loading: false },
+  launchStudioAiChat: { messages: [], loading: false, requestId: undefined, meta: undefined },
 
   // ── Tab navigation ──
 
@@ -233,6 +493,33 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
       });
     } catch {
       set({ profilesLoading: false });
+    }
+  },
+
+  fetchProfileCreativeCounts: async (storeId: string) => {
+    set({
+      profileCreativeCounts: {},
+      profileCreativeTotal: 0,
+      profileCreativeCountsLoading: true,
+    });
+    try {
+      const res = await fetch(`/api/creative-hub/inbox?storeId=${encodeURIComponent(storeId)}`);
+      const data = await res.json();
+      const creatives: InboxCreative[] = data.creatives ?? [];
+      const counts = buildCreativeCounts(creatives);
+
+      set({
+        profileCreativeCounts: counts,
+        profileCreativeTotal: creatives.length,
+        inboxCreatives: creatives,
+        inboxLastSyncedAt: data.lastSyncedAt || data.syncedAt || data.cacheMeta?.lastSyncedAt || null,
+        profileCreativeCountsLoading: false,
+        inboxNotConnected: !!data.notConnected,
+        inboxNotConfigured: !!data.notConfigured,
+        inboxError: data.error || null,
+      });
+    } catch {
+      set({ profileCreativeCountsLoading: false });
     }
   },
 
@@ -319,7 +606,13 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
   // ── Creative Inbox ──
 
   fetchInbox: async (storeId: string, productProfileId?: string) => {
-    set({ inboxLoading: true, inboxError: null, inboxNotConnected: false, inboxNotConfigured: false });
+    set({
+      inboxLoading: true,
+      inboxError: null,
+      inboxNotConnected: false,
+      inboxNotConfigured: false,
+      inboxCreatives: productProfileId ? [] : get().inboxCreatives,
+    });
     try {
       const params = new URLSearchParams({ storeId });
       if (productProfileId) params.set('productId', productProfileId);
@@ -332,6 +625,7 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
         inboxNotConnected: !!data.notConnected,
         inboxNotConfigured: !!data.notConfigured,
         inboxError: data.error || null,
+        inboxLastSyncedAt: data.lastSyncedAt || data.syncedAt || data.cacheMeta?.lastSyncedAt || null,
       });
     } catch (err) {
       set({
@@ -351,12 +645,16 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
         body: JSON.stringify({ storeId }),
       });
       const data = await res.json();
+      const creatives: InboxCreative[] = data.creatives ?? [];
       set({
-        inboxCreatives: data.creatives ?? [],
+        inboxCreatives: creatives,
         inboxLoading: false,
         inboxNotConnected: !!data.notConnected,
         inboxNotConfigured: !!data.notConfigured,
         inboxError: data.error || null,
+        inboxLastSyncedAt: data.syncedAt || data.lastSyncedAt || data.cacheMeta?.lastSyncedAt || null,
+        profileCreativeCounts: buildCreativeCounts(creatives),
+        profileCreativeTotal: creatives.length,
       });
     } catch (err) {
       set({
@@ -375,6 +673,10 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
       next.add(id);
     }
     set({ selectedCreativeIds: next });
+  },
+
+  setSelectedCreativeIds: (ids: string[]) => {
+    set({ selectedCreativeIds: new Set(ids) });
   },
 
   selectAllCreatives: () => {
@@ -439,39 +741,98 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
   // ── Launch Wizard ──
 
   openLaunchWizard: () => {
-    const { selectedCreativeIds } = get();
+    const { selectedCreativeIds, inboxCreatives } = get();
+    const creativeIds = Array.from(selectedCreativeIds);
     set({
       launchWizardOpen: true,
       launchStep: 1,
       launchConfig: {
-        selectedCreativeIds: Array.from(selectedCreativeIds),
+        selectedCreativeIds: creativeIds,
+        selectedCreativeSnapshots: getCreativesByIds(inboxCreatives, creativeIds),
       },
     });
   },
 
   openLaunchWizardForProduct: (productProfileId: string, creativeIds?: string[]) => {
-    const { profiles, selectedCreativeIds } = get();
+    const {
+      profiles,
+      selectedCreativeIds,
+      inboxCreatives,
+      batches,
+      batchStrategy,
+      creativesPerBatch,
+      launchConfig: existingLaunchConfig,
+    } = get();
     const profile = profiles.find((p) => p.id === productProfileId);
     const ids = creativeIds ?? Array.from(selectedCreativeIds);
+    const selectedSnapshots = getCreativesByIds(inboxCreatives, ids);
+    const defaultCampaignId = existingLaunchConfig.existingCampaignId || getDefaultCampaignId(profile);
 
     set({
       launchWizardOpen: true,
       launchStep: 1,
       launchConfig: {
+        ...existingLaunchConfig,
         selectedCreativeIds: ids,
+        selectedCreativeSnapshots: selectedSnapshots,
         productProfileId,
-        adAccountId: profile?.adAccountId,
-        pageId: profile?.pageId,
-        instagramActorId: profile?.instagramActorId,
-        pixelId: profile?.pixelId,
-        conversionEvent: profile?.conversionEvent,
-        destinationUrl: profile?.destinationUrl,
-        dailyBudget: profile?.defaultBudget,
-        testDuration: profile?.defaultDuration,
-        bidStrategy: profile?.defaultBidStrategy,
-        structure: profile?.defaultStructure,
-        launchStatus: profile?.defaultLaunchStatus,
-        utmTemplate: profile?.utmTemplate,
+        campaignMode:
+          existingLaunchConfig.campaignMode || (defaultCampaignId ? 'existing' : 'new'),
+        existingCampaignId: defaultCampaignId,
+        newCampaignName:
+          existingLaunchConfig.newCampaignName ||
+          (defaultCampaignId ? undefined : buildSuggestedCampaignName(profile?.productName)),
+        adsetMode: existingLaunchConfig.adsetMode || 'new_adsets',
+        adsetDistribution:
+          existingLaunchConfig.adsetDistribution ||
+          (ids.length > 1 ? 'one_per_adset' : 'all_to_one'),
+        adAccountId: existingLaunchConfig.adAccountId || profile?.adAccountId,
+        pageId: existingLaunchConfig.pageId || profile?.pageId,
+        instagramActorId:
+          existingLaunchConfig.instagramActorId || profile?.instagramActorId,
+        pixelId: existingLaunchConfig.pixelId || profile?.pixelId,
+        conversionEvent:
+          existingLaunchConfig.conversionEvent || profile?.conversionEvent,
+        destinationUrl:
+          existingLaunchConfig.destinationUrl || profile?.destinationUrl,
+        dailyBudget: existingLaunchConfig.dailyBudget ?? profile?.defaultBudget ?? 20,
+        testDuration: existingLaunchConfig.testDuration ?? profile?.defaultDuration ?? 3,
+        bidStrategy:
+          existingLaunchConfig.bidStrategy ||
+          profile?.defaultBidStrategy ||
+          'LOWEST_COST_WITHOUT_CAP',
+        bidAmount: existingLaunchConfig.bidAmount ?? profile?.defaultBidAmount,
+        roasFloor: existingLaunchConfig.roasFloor ?? profile?.defaultRoasFloor,
+        structure: existingLaunchConfig.structure || profile?.defaultStructure || 'ABO',
+        launchStatus:
+          existingLaunchConfig.launchStatus || profile?.defaultLaunchStatus || 'PAUSED',
+        launchTime: existingLaunchConfig.launchTime || 'immediately',
+        scheduledDate:
+          existingLaunchConfig.launchTime === 'scheduled'
+            ? existingLaunchConfig.scheduledDate
+            : undefined,
+        scheduledTime: existingLaunchConfig.scheduledTime || '09:00',
+        endDate: existingLaunchConfig.endDate,
+        attributionWindow:
+          existingLaunchConfig.attributionWindow || '7d_click_1d_view',
+        utmTemplate: existingLaunchConfig.utmTemplate || profile?.utmTemplate,
+        primaryTexts: existingLaunchConfig.primaryTexts || [],
+        headlines: existingLaunchConfig.headlines || [],
+        descriptions: existingLaunchConfig.descriptions || [],
+        ctaType: existingLaunchConfig.ctaType || 'SHOP_NOW',
+        advantageCreative: existingLaunchConfig.advantageCreative ?? true,
+        batches: batches.length > 0 ? batches : existingLaunchConfig.batches,
+        batchStrategy:
+          batches.length > 0 ? batchStrategy : existingLaunchConfig.batchStrategy,
+        creativesPerBatch:
+          existingLaunchConfig.creativesPerBatch ?? creativesPerBatch,
+        launchMode: existingLaunchConfig.launchMode || 'quick',
+        aiMinSpend: existingLaunchConfig.aiMinSpend ?? profile?.aiMinSpend,
+        aiMinImpressions:
+          existingLaunchConfig.aiMinImpressions ?? profile?.aiMinImpressions,
+        aiMinHours: existingLaunchConfig.aiMinHours ?? profile?.aiMinHours,
+        aiEvalFrequency:
+          existingLaunchConfig.aiEvalFrequency || profile?.aiEvalFrequency,
       },
     });
   },
@@ -641,37 +1002,81 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
 
   // ── Launch Studio ──
 
-  openLaunchStudio: (productId: string) => {
-    const state = get();
-    const creativeIds = state.inboxCreatives
-      .filter(c => c.productProfileId === productId && (c.uploadStatus === 'ready' || c.driveUrl))
-      .map(c => c.id);
+  openLaunchStudio: (productId: string, creativeIds?: string[]) => {
+    const { profiles } = get();
+    const profile = profiles.find((item) => item.id === productId);
+    const selectedIds = creativeIds ?? [];
+    const selectedSnapshots = getCreativesByIds(get().inboxCreatives, selectedIds);
     set({
       launchStudioOpen: true,
       launchStudioProductId: productId,
-      selectedCreativeIds: new Set(creativeIds),
+      selectedCreativeIds: new Set(selectedIds),
       launchStudioAiAnalysis: { loading: false, data: null, error: null },
-      launchStudioAiChat: { messages: [], loading: false },
+      launchStudioAiChat: { messages: [], loading: false, requestId: undefined, meta: undefined },
       batches: [],
+      launchConfig: {
+        ...buildBaseLaunchConfig(profile, selectedIds, 'quick'),
+        selectedCreativeSnapshots: selectedSnapshots,
+        productProfileId: productId,
+        selectedCreativeIds: selectedIds,
+      },
     });
+  },
+
+  restoreLaunchStudioSession: (productId: string, launchConfig = {}) => {
+    set((state) => ({
+      launchStudioOpen: true,
+      launchStudioProductId: productId,
+      selectedCreativeIds: new Set(launchConfig.selectedCreativeIds ?? []),
+      launchStudioAiAnalysis: { loading: false, data: null, error: null },
+      launchStudioAiChat: { messages: [], loading: false, requestId: undefined, meta: undefined },
+      batches: launchConfig.batches ?? state.batches,
+      batchStrategy: launchConfig.batchStrategy ?? state.batchStrategy,
+      creativesPerBatch: launchConfig.creativesPerBatch ?? state.creativesPerBatch,
+      launchConfig: {
+        ...state.launchConfig,
+        ...launchConfig,
+        productProfileId: productId,
+      },
+    }));
   },
 
   closeLaunchStudio: () => set({
     launchStudioOpen: false,
     launchStudioProductId: null,
     launchStudioAiAnalysis: { loading: false, data: null, error: null },
-    launchStudioAiChat: { messages: [], loading: false },
+    launchStudioAiChat: { messages: [], loading: false, requestId: undefined, meta: undefined },
   }),
 
   fetchLaunchStudioAiAnalysis: async (storeId: string, productProfileId: string) => {
-    set({ launchStudioAiAnalysis: { loading: true, data: null, error: null } });
+    const { inboxCreatives, selectedCreativeIds } = get();
+    const selectedCreatives = inboxCreatives.filter(
+      (creative) =>
+        creative.productProfileId === productProfileId &&
+        selectedCreativeIds.has(creative.id),
+    );
+
+    const previous = get().launchStudioAiAnalysis;
+    set({
+      launchStudioAiAnalysis: {
+        loading: true,
+        data: previous.data,
+        error: null,
+      },
+    });
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 120_000); // 120s client-side timeout
+    // Launch analysis can spend time rebuilding winner history plus Cloud fallback cards.
+    const timeout = setTimeout(() => controller.abort(), 90_000);
     try {
       const res = await fetch('/api/creative-hub/ai-insights', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ storeId, productProfileId }),
+        body: JSON.stringify({
+          storeId,
+          productProfileId,
+          selectedCreativeIds: selectedCreatives.map((creative) => creative.id),
+          selectedCreatives: selectedCreatives.slice(0, 20),
+        }),
         signal: controller.signal,
       });
       if (!res.ok) {
@@ -685,14 +1090,18 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
       }
       set({ launchStudioAiAnalysis: { loading: false, data, error: null } });
     } catch (err) {
+      const hasPreviousLaunchDraft =
+        Boolean(previous.data?.launchDraft?.actionCards?.length) ||
+        Boolean(previous.data?.insights?.summary);
+      const timedOut = err instanceof Error && err.name === 'AbortError';
       const message = err instanceof Error
-        ? (err.name === 'AbortError' ? 'Analysis timed out — please try again' : err.message)
+        ? (timedOut ? 'Cloud analysis took too long. Please try again in a moment.' : err.message)
         : 'Analysis failed';
       set({
         launchStudioAiAnalysis: {
           loading: false,
-          data: null,
-          error: message,
+          data: previous.data,
+          error: timedOut && hasPreviousLaunchDraft ? null : message,
         },
       });
     } finally {
@@ -701,12 +1110,23 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
   },
 
   sendLaunchStudioAiChat: async (storeId: string, productProfileId: string, message: string) => {
-    const { launchStudioAiChat, inboxCreatives, winningAds } = get();
+    const { launchStudioAiChat, inboxCreatives, winningAds, selectedCreativeIds } = get();
+    if (launchStudioAiChat.loading) {
+      return;
+    }
     const updatedMessages = [
       ...launchStudioAiChat.messages,
       { role: 'user' as const, content: message },
     ];
-    set({ launchStudioAiChat: { messages: updatedMessages, loading: true } });
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    set({
+      launchStudioAiChat: {
+        messages: updatedMessages,
+        loading: true,
+        requestId,
+        meta: launchStudioAiChat.meta,
+      },
+    });
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120_000); // 120s client-side timeout (strategist uses tool loops)
@@ -720,8 +1140,14 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
       const productCreatives = inboxCreatives.filter(
         c => c.productProfileId === productProfileId && (c.uploadStatus === 'ready' || c.driveUrl)
       );
+      const selectedCreatives = productCreatives.filter((creative) =>
+        selectedCreativeIds.has(creative.id),
+      );
       if (productCreatives.length > 0) {
         context.creatives = productCreatives.slice(0, 15);
+      }
+      if (selectedCreatives.length > 0) {
+        context.selectedCreatives = selectedCreatives.slice(0, 12);
       }
 
       const res = await fetch('/api/creative-hub/ai-strategist', {
@@ -731,7 +1157,9 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
           storeId,
           productProfileId,
           message,
+          selectedCreativeIds: selectedCreatives.map((creative) => creative.id),
           history: updatedMessages.slice(-10).map(m => ({ role: m.role, content: m.content })),
+          context,
         }),
         signal: controller.signal,
       });
@@ -745,16 +1173,24 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
         content: data.response || 'I analyzed your creatives but could not generate a response.',
         actionItems: data.actionItems,
       };
+      if (get().launchStudioAiChat.requestId !== requestId) {
+        return;
+      }
       set({
         launchStudioAiChat: {
           messages: [...updatedMessages, assistantMessage],
           loading: false,
+          requestId: undefined,
+          meta: data.meta,
         },
       });
     } catch (err) {
-      const errMsg = err instanceof Error && err.name === 'AbortError'
-        ? 'Request timed out. Please try again.'
+      const errMsg = err instanceof Error
+        ? (err.name === 'AbortError' ? 'Request timed out. Please try again.' : err.message)
         : 'Sorry, I encountered an error. Please try again.';
+      if (get().launchStudioAiChat.requestId !== requestId) {
+        return;
+      }
       set({
         launchStudioAiChat: {
           messages: [
@@ -762,6 +1198,8 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
             { role: 'assistant' as const, content: errMsg },
           ],
           loading: false,
+          requestId: undefined,
+          meta: undefined,
         },
       });
     } finally {
@@ -773,18 +1211,29 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
 
   setLaunchCenterTab: (tab: LaunchCenterTab) => set({ launchCenterTab: tab }),
 
-  openLaunchCenter: (productId?: string) => {
+  openLaunchCenter: (productId?: string, creativeIds?: string[]) => {
     const state = get();
     const profile = productId ? state.profiles.find(p => p.id === productId) : undefined;
-    const creativeIds = productId
-      ? state.inboxCreatives.filter(c => c.productProfileId === productId && (c.uploadStatus === 'ready' || c.driveUrl)).map(c => c.id)
-      : [...state.selectedCreativeIds];
+    const scopedCreativeIds = creativeIds
+      ? creativeIds
+      : productId
+        ? state.inboxCreatives
+            .filter(c => c.productProfileId === productId && (c.uploadStatus === 'ready' || c.driveUrl))
+            .map(c => c.id)
+        : [...state.selectedCreativeIds];
     set({
       launchCenterOpen: true,
+      launchStudioOpen: false,
+      launchWizardOpen: false,
       launchCenterTab: 'quick',
       batches: [],
-      selectedCreativeIds: new Set(creativeIds),
-      ...(profile ? { launchConfig: { ...state.launchConfig, productProfileId: profile.id } } : {}),
+      selectedCreativeIds: new Set(scopedCreativeIds),
+      launchConfig: {
+        ...buildBaseLaunchConfig(profile, scopedCreativeIds, 'quick'),
+        productProfileId: profile?.id,
+        selectedCreativeIds: scopedCreativeIds,
+        selectedCreativeSnapshots: getCreativesByIds(state.inboxCreatives, scopedCreativeIds),
+      },
     });
   },
 
@@ -794,6 +1243,9 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
     const state = get();
     const creativeIds = [...state.selectedCreativeIds];
     const batches: CreativeBatch[] = [];
+    const creativesById = new Map(
+      state.inboxCreatives.map((creative) => [creative.id, creative]),
+    );
 
     let ordered = [...creativeIds];
     if (strategy === 'shuffle') {
@@ -802,11 +1254,35 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
         [ordered[i], ordered[j]] = [ordered[j], ordered[i]];
       }
     } else if (strategy === 'by_format') {
-      const creatives = state.inboxCreatives;
-      const videos = ordered.filter(id => creatives.find(c => c.id === id)?.creativeFormat === 'video');
-      const images = ordered.filter(id => creatives.find(c => c.id === id)?.creativeFormat === 'image');
-      const carousels = ordered.filter(id => creatives.find(c => c.id === id)?.creativeFormat === 'carousel');
+      const videos = ordered.filter(id => creativesById.get(id)?.creativeFormat === 'video');
+      const images = ordered.filter(id => creativesById.get(id)?.creativeFormat === 'image');
+      const carousels = ordered.filter(id => creativesById.get(id)?.creativeFormat === 'carousel');
       ordered = [...videos, ...images, ...carousels];
+    } else if (strategy === 'by_folder') {
+      const grouped = new Map<string, string[]>();
+      for (const id of ordered) {
+        const creative = creativesById.get(id);
+        const key =
+          creative?.driveParentFolderName ||
+          creative?.clickupTaskName ||
+          'Ungrouped';
+        grouped.set(key, [...(grouped.get(key) || []), id]);
+      }
+
+      let batchNumber = 1;
+      for (const [groupName, ids] of grouped.entries()) {
+        for (let i = 0; i < ids.length; i += size) {
+          batches.push({
+            id: `batch-${batchNumber}`,
+            name: `${groupName} ${Math.floor(i / size) + 1}`,
+            creativeIds: ids.slice(i, i + size),
+          });
+          batchNumber += 1;
+        }
+      }
+
+      set({ batches, batchStrategy: strategy, creativesPerBatch: size });
+      return;
     } else if (strategy === 'one_per_adset') {
       // 1 creative per ad set (Marpipe-style fair test)
       for (let i = 0; i < ordered.length; i++) {
@@ -817,6 +1293,92 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
         });
       }
       set({ batches, batchStrategy: strategy, creativesPerBatch: 1 });
+      return;
+    } else if (strategy === 'smart_mix') {
+      const selectedCreatives = ordered
+        .map((id) => creativesById.get(id))
+        .filter((creative): creative is InboxCreative => !!creative);
+
+      const batchCount = Math.max(1, Math.ceil(selectedCreatives.length / Math.max(size, 1)));
+      const draftBatches = Array.from({ length: batchCount }, (_, index) => ({
+        id: `batch-${index + 1}`,
+        name: `Angle Mix ${index + 1}`,
+        creativeIds: [] as string[],
+      }));
+
+      const priority = (creative: InboxCreative): number => {
+        const result = creative.pastTestResult?.status;
+        const testScore =
+          result === 'winner'
+            ? 4
+            : result === 'inconclusive'
+              ? 2
+              : result === 'killed'
+                ? -1
+                : 3;
+        const sourceScore = creative.sourceType === 'drive_asset' ? 1 : 0;
+        const hookScore = creative.hook ? 1 : 0;
+        return testScore + sourceScore + hookScore;
+      };
+
+      const remaining = [...selectedCreatives].sort((a, b) => priority(b) - priority(a));
+      const takeBestForBatch = (existingIds: string[]): InboxCreative | undefined => {
+        if (remaining.length === 0) return undefined;
+        if (existingIds.length === 0) return remaining.shift();
+
+        const existingCreatives = existingIds
+          .map((id) => creativesById.get(id))
+          .filter((creative): creative is InboxCreative => !!creative);
+
+        let bestIndex = 0;
+        let bestScore = Number.NEGATIVE_INFINITY;
+
+        for (let index = 0; index < remaining.length; index++) {
+          const candidate = remaining[index];
+          let score = priority(candidate);
+
+          if (!existingCreatives.some((creative) => creative.creativeFormat === candidate.creativeFormat)) {
+            score += 4;
+          }
+          if (candidate.angle && !existingCreatives.some((creative) => creative.angle === candidate.angle)) {
+            score += 3;
+          }
+          if (candidate.creator && !existingCreatives.some((creative) => creative.creator === candidate.creator)) {
+            score += 2;
+          }
+          if (candidate.hook && !existingCreatives.some((creative) => creative.hook === candidate.hook)) {
+            score += 2;
+          }
+          if (
+            candidate.driveParentFolderName &&
+            !existingCreatives.some(
+              (creative) => creative.driveParentFolderName === candidate.driveParentFolderName,
+            )
+          ) {
+            score += 1;
+          }
+
+          if (score > bestScore) {
+            bestScore = score;
+            bestIndex = index;
+          }
+        }
+
+        return remaining.splice(bestIndex, 1)[0];
+      };
+
+      while (remaining.length > 0) {
+        for (const batch of draftBatches) {
+          if (batch.creativeIds.length >= size || remaining.length === 0) continue;
+          const next = takeBestForBatch(batch.creativeIds);
+          if (next) {
+            batch.creativeIds.push(next.id);
+          }
+        }
+      }
+
+      const nonEmpty = draftBatches.filter((batch) => batch.creativeIds.length > 0);
+      set({ batches: nonEmpty, batchStrategy: strategy, creativesPerBatch: size });
       return;
     }
 
@@ -897,7 +1459,7 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
     }
   },
 
-  fetchAllCopyLibrary: async (_storeId: string) => {
+  fetchAllCopyLibrary: async () => {
     try {
       const { profiles } = get();
       if (profiles.length === 0) {
@@ -1014,11 +1576,13 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
       const res = await fetch('/api/creative-hub/launch/health-check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ storeId, config: launchConfig }),
+        body: JSON.stringify({ storeId, launchConfig }),
       });
       const data = await res.json();
 
-      if (data.report) {
+      if (data?.checks) {
+        set({ healthCheckReport: data });
+      } else if (data?.report) {
         set({ healthCheckReport: data.report });
       }
     } catch {
@@ -1074,4 +1638,14 @@ export const useCreativeHubStore = create<CreativeHubState>()((set, get) => ({
       // silent
     }
   },
-}));
+}),
+  {
+    name: 'creative-hub-session',
+    storage: creativeHubSessionStorage,
+    partialize: (state) => ({
+      activeTab: state.activeTab,
+      launchCenterTab: state.launchCenterTab,
+      launchConfig: buildPersistedLaunchConfig(state.launchConfig),
+    }),
+  })
+);

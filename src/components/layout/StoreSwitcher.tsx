@@ -18,7 +18,7 @@ export function StoreSwitcher({ isCollapsed }: { isCollapsed: boolean }) {
   const [search, setSearch] = useState('');
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const { stores, activeStoreId, setActiveStore, fetchStores, loading } = useStoreStore();
+  const { stores, activeStoreId, setActiveStore, fetchStores, loading, error } = useStoreStore();
   const refreshConnectionStatus = useConnectionStore((s) => s.refreshStatus);
 
   // Fetch stores on mount
@@ -109,6 +109,17 @@ export function StoreSwitcher({ isCollapsed }: { isCollapsed: boolean }) {
               <div className="flex items-center justify-center gap-2 px-3 py-4">
                 <Loader2 className="h-4 w-4 animate-spin text-text-dimmed" />
                 <span className="text-sm text-text-muted">Loading stores...</span>
+              </div>
+            ) : error === 'Unauthorized' ? (
+              <div className="px-3 py-4 text-center">
+                <p className="text-sm text-text-muted">Your session has expired</p>
+                <Link
+                  href="/login?next=/dashboard/creative-hub"
+                  onClick={() => { setIsOpen(false); setSearch(''); }}
+                  className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary-light hover:text-primary"
+                >
+                  Sign in again
+                </Link>
               </div>
             ) : filteredStores.length === 0 && stores.length === 0 ? (
               <div className="px-3 py-4 text-center">

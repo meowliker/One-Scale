@@ -270,19 +270,41 @@ export async function getGoogleDriveToken(storeId: string): Promise<OAuthTokens 
     };
   };
 
+  const localConnection = getConnection(storeId, 'google_drive');
+
   // Try Supabase first
   if (isSupabasePersistenceEnabled()) {
     await hydrateStoreFromSupabase(storeId);
     const persistentConn = await getPersistentConnection(storeId, 'google_drive');
     if (persistentConn) {
-      return resolveToken(persistentConn, 'supabase');
+      const resolvedPersistent = await resolveToken(persistentConn, 'supabase');
+      if (resolvedPersistent) {
+        return resolvedPersistent;
+      }
     }
   }
 
   // Fallback to local SQLite
-  const conn = getConnection(storeId, 'google_drive');
-  if (!conn) return null;
-  return resolveToken(conn, 'local');
+  if (!localConnection) return null;
+
+  const resolvedLocal = await resolveToken(localConnection, 'local');
+
+  if (resolvedLocal && isSupabasePersistenceEnabled()) {
+    try {
+      await upsertPersistentConnection({
+        storeId,
+        platform: 'google_drive',
+        accessToken: resolvedLocal.accessToken,
+        refreshToken: localConnection.refresh_token ?? undefined,
+        expiresAt: resolvedLocal.expiresAt,
+        accountId: localConnection.account_id ?? undefined,
+      });
+    } catch {
+      // Non-critical. Local token still works for this request.
+    }
+  }
+
+  return resolvedLocal;
 }
 
 export async function setGoogleDriveToken(

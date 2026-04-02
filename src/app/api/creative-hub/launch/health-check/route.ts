@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { fromZonedTime, toZonedTime } from 'date-fns-tz';
 import { getMetaToken } from '@/app/api/lib/tokens';
-import { getProductProfile, getCreativeTests } from '@/app/api/lib/creative-hub-db';
+import { getProductProfile } from '@/app/api/lib/creative-hub-db';
 import { getDb } from '@/app/api/lib/db';
-import type { LaunchConfig, HealthCheck, PreLaunchReport } from '@/types/creativeHub';
+import { getStoreTimezoneFromConfig } from '@/lib/onboarding/stages/detectStoreConfig';
+import { validateLaunchPlanAssignments } from '@/lib/creative-hub/launchPlanValidation';
+import type { InboxCreative, LaunchConfig, HealthCheck, PreLaunchReport } from '@/types/creativeHub';
 
 interface CreativeTestItemRow {
   creative_name: string;
@@ -12,6 +15,37 @@ interface CreativeTestRow {
   id: string;
   product_profile_id: string;
   status: string;
+}
+
+function getSnapshotSelections(launchConfig: LaunchConfig): InboxCreative[] {
+  return launchConfig.selectedCreativeSnapshots || [];
+}
+
+function getLaneCount(launchConfig: LaunchConfig): number {
+  if (launchConfig.batches?.length) {
+    return launchConfig.batches.length;
+  }
+
+  if (launchConfig.adsetMode === 'existing_adsets') {
+    return Object.keys(launchConfig.existingAdsetAssignments || {}).length;
+  }
+
+  if (launchConfig.adsetDistribution === 'all_to_one') {
+    return launchConfig.selectedCreativeIds.length > 0 ? 1 : 0;
+  }
+
+  return launchConfig.selectedCreativeIds.length;
+}
+
+function resolveScheduledStart(launchConfig: LaunchConfig, timezone: string): Date | null {
+  if (launchConfig.launchTime !== 'scheduled' || !launchConfig.scheduledDate) {
+    return null;
+  }
+
+  return fromZonedTime(
+    `${launchConfig.scheduledDate}T${launchConfig.scheduledTime || '00:00'}:00`,
+    timezone,
+  );
 }
 
 /**
@@ -30,6 +64,7 @@ export async function POST(request: NextRequest) {
     }
 
     const checks: HealthCheck[] = [];
+    const storeTimezone = await getStoreTimezoneFromConfig(storeId);
 
     // 1. Token valid
     const token = await getMetaToken(storeId);
@@ -67,13 +102,96 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // 2b. Campaign path sanity
+    if (launchConfig.campaignMode === 'existing') {
+      if (!launchConfig.existingCampaignId) {
+        checks.push({
+          check: 'campaign_selection',
+          status: 'fail',
+          message: 'Existing campaign is required before launch',
+          details: 'Pick the campaign you want this launch to use before moving to review.',
+        });
+      } else {
+        checks.push({
+          check: 'campaign_selection',
+          status: 'ok',
+          message: 'Existing campaign is selected',
+        });
+      }
+    } else if (launchConfig.newCampaignName?.trim()) {
+      checks.push({
+        check: 'campaign_selection',
+        status: 'ok',
+        message: `New campaign ready: ${launchConfig.newCampaignName.trim()}`,
+      });
+    } else {
+      checks.push({
+        check: 'campaign_selection',
+        status: 'fail',
+        message: 'New campaign name is required before launch',
+      });
+    }
+
+    const planValidation = validateLaunchPlanAssignments(launchConfig);
+
     // 3. Spending limit check (warn only -- we cannot fetch real-time limits without Meta API call)
-    const dailyTotal = launchConfig.dailyBudget * launchConfig.selectedCreativeIds.length;
+    const laneCount = getLaneCount(launchConfig);
+    if (launchConfig.adsetMode === 'existing_adsets' && planValidation.lanes.length === 0) {
+      checks.push({
+        check: 'adset_assignment',
+        status: 'fail',
+        message: 'No existing ad sets have creatives assigned',
+        details: 'Pick at least one existing ad set and assign creatives before launching.',
+      });
+    } else if (
+      planValidation.duplicateIds.length > 0 ||
+      planValidation.missingIds.length > 0 ||
+      planValidation.unknownIds.length > 0
+    ) {
+      const issues = [
+        planValidation.duplicateIds.length > 0
+          ? `${planValidation.duplicateIds.length} creative${planValidation.duplicateIds.length === 1 ? '' : 's'} assigned more than once`
+          : null,
+        planValidation.missingIds.length > 0
+          ? `${planValidation.missingIds.length} creative${planValidation.missingIds.length === 1 ? '' : 's'} missing from the lane plan`
+          : null,
+        planValidation.unknownIds.length > 0
+          ? `${planValidation.unknownIds.length} unknown creative reference${planValidation.unknownIds.length === 1 ? '' : 's'}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+
+      checks.push({
+        check: 'adset_assignment',
+        status: 'fail',
+        message: 'Lane plan is inconsistent',
+        details: issues,
+      });
+    } else if (planValidation.lanes.length > 0) {
+      checks.push({
+        check: 'adset_assignment',
+        status: 'ok',
+        message: `${planValidation.lanes.length} lane${planValidation.lanes.length === 1 ? '' : 's'} mapped cleanly`,
+        details: `All ${launchConfig.selectedCreativeIds.length} selected creative${launchConfig.selectedCreativeIds.length === 1 ? '' : 's'} assigned exactly once.`,
+      });
+    } else if (launchConfig.selectedCreativeIds.length > 0) {
+      checks.push({
+        check: 'adset_assignment',
+        status: 'ok',
+        message: 'Lane plan will be derived from the selected creatives',
+      });
+    }
+
+    const dailyTotal =
+      launchConfig.structure === 'CBO'
+        ? launchConfig.dailyBudget
+        : launchConfig.dailyBudget * laneCount;
     if (dailyTotal > 10000) {
       checks.push({
         check: 'spending_limit',
         status: 'warn',
-        message: `High total daily budget: $${dailyTotal.toFixed(2)} across ${launchConfig.selectedCreativeIds.length} creatives`,
+        message: `High total daily budget: $${dailyTotal.toFixed(2)} across ${laneCount} planned lane${laneCount === 1 ? '' : 's'}`,
         details: 'Ensure your ad account spending limit can accommodate this budget.',
       });
     } else {
@@ -81,6 +199,40 @@ export async function POST(request: NextRequest) {
         check: 'spending_limit',
         status: 'ok',
         message: `Total daily budget: $${dailyTotal.toFixed(2)}`,
+      });
+    }
+
+    // 3b. Schedule sanity
+    const scheduledStart = resolveScheduledStart(launchConfig, storeTimezone);
+    if (scheduledStart) {
+      const scheduledDate = launchConfig.scheduledDate;
+      if (scheduledStart.getTime() <= Date.now()) {
+        checks.push({
+          check: 'schedule_valid',
+          status: 'fail',
+          message: 'Scheduled launch time must be in the future',
+          details: `${scheduledDate || 'Unknown date'} ${launchConfig.scheduledTime || '00:00'} (${storeTimezone})`,
+        });
+      } else if (launchConfig.endDate && scheduledDate && launchConfig.endDate < scheduledDate) {
+        checks.push({
+          check: 'schedule_valid',
+          status: 'fail',
+          message: 'End date is before the scheduled start date',
+          details: `Start ${scheduledDate}, end ${launchConfig.endDate}`,
+        });
+      } else {
+        checks.push({
+          check: 'schedule_valid',
+          status: 'ok',
+          message: `Scheduled for ${scheduledDate || 'Unknown date'} ${launchConfig.scheduledTime || '00:00'}`,
+          details: storeTimezone,
+        });
+      }
+    } else {
+      checks.push({
+        check: 'schedule_valid',
+        status: 'ok',
+        message: 'Launches immediately after review approval',
       });
     }
 
@@ -94,18 +246,29 @@ export async function POST(request: NextRequest) {
         ).all(...launchConfig.selectedCreativeIds) as Array<{ id: string; creative_name: string; upload_status: string }>
       : [];
 
-    if (notReadyItems.length > 0) {
+    const snapshotNotReadyItems = notReadyItems.length === 0
+      ? getSnapshotSelections(launchConfig)
+          .filter((creative) => !creative.metaAssetId && !creative.driveUrl)
+          .map((creative) => ({
+            id: creative.id,
+            creative_name: creative.creativeName,
+            upload_status: creative.uploadStatus,
+          }))
+      : [];
+
+    if (notReadyItems.length > 0 || snapshotNotReadyItems.length > 0) {
+      const failingItems = notReadyItems.length > 0 ? notReadyItems : snapshotNotReadyItems;
       checks.push({
         check: 'creatives_uploaded',
         status: 'fail',
-        message: `${notReadyItems.length} creative(s) not ready for launch`,
-        details: notReadyItems.map((i) => `${i.creative_name}: ${i.upload_status}`).join(', '),
+        message: `${failingItems.length} creative(s) not ready for launch`,
+        details: failingItems.map((i) => `${i.creative_name}: ${i.upload_status}`).join(', '),
       });
     } else {
       checks.push({
         check: 'creatives_uploaded',
         status: 'ok',
-        message: `All ${launchConfig.selectedCreativeIds.length} creative(s) are uploaded and ready`,
+        message: `All ${launchConfig.selectedCreativeIds.length} creative(s) are launchable`,
       });
     }
 
@@ -156,7 +319,9 @@ export async function POST(request: NextRequest) {
          WHERE id IN (${launchConfig.selectedCreativeIds.map(() => '?').join(',')})`
       ).all(...launchConfig.selectedCreativeIds) as CreativeTestItemRow[];
 
-      const selectedNames = selectedItems.map((i) => i.creative_name);
+      const selectedNames = selectedItems.length > 0
+        ? selectedItems.map((i) => i.creative_name)
+        : getSnapshotSelections(launchConfig).map((creative) => creative.creativeName);
 
       if (selectedNames.length > 0) {
         const existingDuplicates = db.prepare(
@@ -209,8 +374,8 @@ export async function POST(request: NextRequest) {
     }
 
     // 8. Weekend launch check
-    const now = new Date();
-    const dayOfWeek = now.getDay(); // 0 = Sunday, 6 = Saturday
+    const launchMoment = scheduledStart || new Date();
+    const dayOfWeek = toZonedTime(launchMoment, storeTimezone).getDay(); // 0 = Sunday, 6 = Saturday
     if (dayOfWeek === 0 || dayOfWeek === 6) {
       checks.push({
         check: 'weekend_launch',

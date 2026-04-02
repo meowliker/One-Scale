@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { addDays } from 'date-fns';
+import { fromZonedTime } from 'date-fns-tz';
 import { getMetaToken } from '@/app/api/lib/tokens';
 import {
   getProductProfile,
@@ -8,7 +10,9 @@ import {
   getCreativeTest,
 } from '@/app/api/lib/creative-hub-db';
 import { getDb } from '@/app/api/lib/db';
-import type { LaunchConfig, TargetingSpec } from '@/types/creativeHub';
+import { validateLaunchPlanAssignments } from '@/lib/creative-hub/launchPlanValidation';
+import { getStoreTimezoneFromConfig } from '@/lib/onboarding/stages/detectStoreConfig';
+import type { InboxCreative, LaunchConfig, TargetingSpec } from '@/types/creativeHub';
 
 const GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 const DEFAULT_META_URL_TAGS =
@@ -25,6 +29,28 @@ function normalizeAccountNode(value: string): string {
 
 function generateId(): string {
   return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function resolveStartTime(config: LaunchConfig, timezone: string): string {
+  if (config.launchTime === 'scheduled' && config.scheduledDate) {
+    return fromZonedTime(
+      `${config.scheduledDate}T${config.scheduledTime || '00:00'}:00`,
+      timezone,
+    ).toISOString();
+  }
+  return new Date().toISOString();
+}
+
+function resolveEndTime(config: LaunchConfig, timezone: string): string | undefined {
+  if (config.endDate) {
+    return fromZonedTime(`${config.endDate}T23:59:59`, timezone).toISOString();
+  }
+
+  if (!(config.testDuration > 0)) {
+    return undefined;
+  }
+
+  return addDays(new Date(resolveStartTime(config, timezone)), config.testDuration).toISOString();
 }
 
 async function postToMeta(
@@ -202,6 +228,7 @@ function buildObjectStorySpec(
 
 interface CreativeTestItemRow {
   id: string;
+  sourceCreativeId?: string | null;
   creative_name: string;
   creative_format: string | null;
   meta_asset_id: string | null;
@@ -213,6 +240,29 @@ interface CreativeTestItemRow {
   drive_url: string | null;
   thumbnail_url: string | null;
   upload_status: string;
+}
+
+function mapSnapshotToLaunchItem(snapshot: InboxCreative): CreativeTestItemRow {
+  return {
+    id: generateId(),
+    sourceCreativeId: snapshot.id,
+    creative_name: snapshot.creativeName,
+    creative_format: snapshot.creativeFormat,
+    meta_asset_id: snapshot.metaAssetId ?? null,
+    meta_asset_type: snapshot.metaAssetType ?? null,
+    clickup_task_id: snapshot.clickupTaskId,
+    clickup_task_name: snapshot.clickupTaskName,
+    hook: snapshot.hook ?? null,
+    angle: snapshot.angle ?? null,
+    drive_url: snapshot.driveUrl ?? null,
+    thumbnail_url: snapshot.thumbnailUrl ?? null,
+    upload_status:
+      snapshot.uploadStatus === 'ready' || !!snapshot.metaAssetId
+        ? 'ready'
+        : snapshot.driveUrl
+          ? 'pending'
+          : (snapshot.uploadStatus || 'no_link'),
+  };
 }
 
 /**
@@ -233,6 +283,7 @@ export async function POST(request: NextRequest) {
     if (!token) {
       return NextResponse.json({ error: 'Not authenticated with Meta' }, { status: 401 });
     }
+    const storeTimezone = await getStoreTimezoneFromConfig(storeId);
 
     const profile = await getProductProfile(launchConfig.productProfileId);
     if (!profile) {
@@ -249,15 +300,84 @@ export async function POST(request: NextRequest) {
 
     // Fetch selected creative items from DB
     const db = getDb();
-    const selectedItems = launchConfig.selectedCreativeIds.length > 0
+    const sourceItems = launchConfig.selectedCreativeIds.length > 0
       ? db.prepare(
           `SELECT * FROM creative_test_items
            WHERE id IN (${launchConfig.selectedCreativeIds.map(() => '?').join(',')})`
         ).all(...launchConfig.selectedCreativeIds) as CreativeTestItemRow[]
       : [];
 
+    const selectedItems = sourceItems.length > 0
+      ? sourceItems.map((item) => ({
+          ...item,
+          id: generateId(),
+          sourceCreativeId: item.id,
+        }))
+      : (launchConfig.selectedCreativeSnapshots || []).map(mapSnapshotToLaunchItem);
+
     if (selectedItems.length === 0) {
       return NextResponse.json({ error: 'No valid creative items found' }, { status: 400 });
+    }
+
+    if (launchConfig.campaignMode === 'existing' && !launchConfig.existingCampaignId) {
+      return NextResponse.json(
+        { error: 'Select the existing campaign before launching.' },
+        { status: 400 },
+      );
+    }
+
+    if (launchConfig.campaignMode === 'new' && !launchConfig.newCampaignName?.trim()) {
+      return NextResponse.json(
+        { error: 'Campaign name is required for new campaigns.' },
+        { status: 400 },
+      );
+    }
+
+    const planValidation = validateLaunchPlanAssignments(launchConfig);
+    if (launchConfig.adsetMode === 'existing_adsets' && planValidation.lanes.length === 0) {
+      return NextResponse.json(
+        { error: 'Assign creatives to at least one existing ad set before launching.' },
+        { status: 400 },
+      );
+    }
+
+    if (
+      planValidation.duplicateIds.length > 0 ||
+      planValidation.missingIds.length > 0 ||
+      planValidation.unknownIds.length > 0
+    ) {
+      const details = [
+        planValidation.duplicateIds.length > 0
+          ? `${planValidation.duplicateIds.length} creative${planValidation.duplicateIds.length === 1 ? '' : 's'} assigned more than once`
+          : null,
+        planValidation.missingIds.length > 0
+          ? `${planValidation.missingIds.length} creative${planValidation.missingIds.length === 1 ? '' : 's'} missing from the lane plan`
+          : null,
+        planValidation.unknownIds.length > 0
+          ? `${planValidation.unknownIds.length} unknown creative reference${planValidation.unknownIds.length === 1 ? '' : 's'} in the lane plan`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+
+      return NextResponse.json(
+        { error: `Launch plan is inconsistent. ${details}` },
+        { status: 400 },
+      );
+    }
+
+    const existingAdsetAssignments =
+      launchConfig.adsetMode === 'existing_adsets'
+        ? Object.entries(launchConfig.existingAdsetAssignments || {}).filter(
+            ([, creativeIds]) => Array.isArray(creativeIds) && creativeIds.length > 0,
+          )
+        : [];
+
+    if (launchConfig.adsetMode === 'existing_adsets' && existingAdsetAssignments.length === 0) {
+      return NextResponse.json(
+        { error: 'Assign creatives to at least one existing ad set before launching.' },
+        { status: 400 },
+      );
     }
 
     // Create test record with status = 'launching'
@@ -275,7 +395,7 @@ export async function POST(request: NextRequest) {
 
     // Determine campaign ID
     let campaignId = launchConfig.existingCampaignId || '';
-    let campaignName = launchConfig.newCampaignName || '';
+    const campaignName = launchConfig.newCampaignName || '';
 
     // Step 1: Create campaign if new
     if (launchConfig.campaignMode === 'new') {
@@ -335,6 +455,7 @@ export async function POST(request: NextRequest) {
         thumbnailUrl: item.thumbnail_url ?? undefined,
         metaAssetId: item.meta_asset_id ?? undefined,
         metaAssetType: item.meta_asset_type ?? undefined,
+        uploadStatus: item.upload_status,
       })),
       adCopy: [
         ...launchConfig.primaryTexts.map((pt, i) => ({
@@ -422,13 +543,121 @@ export async function POST(request: NextRequest) {
 
     const batches = launchConfig.batches as Array<{ id: string; name: string; creativeIds: string[]; dailyBudget?: number; bidAmount?: number }> | undefined;
 
-    if (batches && batches.length > 0) {
+    if (launchConfig.adsetMode === 'existing_adsets' && existingAdsetAssignments.length > 0) {
+      console.log(`[launch] Existing adset mode: ${existingAdsetAssignments.length} assigned adsets`);
+
+      for (const [adsetId, creativeIds] of existingAdsetAssignments) {
+        const assignedCreatives = selectedItems.filter((item) =>
+          creativeIds.includes(item.sourceCreativeId || item.id),
+        );
+
+        if (assignedCreatives.length === 0) {
+          continue;
+        }
+
+        for (const item of assignedCreatives) {
+          try {
+            if (!item.meta_asset_id) {
+              throw new Error(
+                item.drive_url
+                  ? `Creative "${item.creative_name}" failed to upload to Meta.`
+                  : `Creative "${item.creative_name}" has no Drive URL. Cannot upload.`,
+              );
+            }
+
+            const creativeUrl =
+              launchConfig.usePerCreativeUrls && launchConfig.perCreativeUrls
+                ? launchConfig.perCreativeUrls[item.sourceCreativeId || item.id]
+                : undefined;
+
+            const isFlexibleAd =
+              launchConfig.primaryTexts.length > 1 || launchConfig.headlines.length > 1;
+            const creativeBody: Record<string, string> = {
+              name: `${item.creative_name} Creative`,
+              url_tags:
+                launchConfig.utmTemplate || profile.utmTemplate || DEFAULT_META_URL_TAGS,
+            };
+
+            if (isFlexibleAd) {
+              const assetFeedSpec = buildAssetFeedSpec(launchConfig, profile, creativeUrl);
+              if (item.meta_asset_type === 'VIDEO' || item.meta_asset_type === 'video') {
+                (assetFeedSpec as Record<string, unknown>).videos = [{ video_id: item.meta_asset_id }];
+              } else {
+                (assetFeedSpec as Record<string, unknown>).images = [{ hash: item.meta_asset_id }];
+              }
+              creativeBody.asset_feed_spec = JSON.stringify(assetFeedSpec);
+              creativeBody.object_type = 'SHARE';
+
+              if (launchConfig.advantageCreative) {
+                creativeBody.degrees_of_freedom_spec = JSON.stringify({
+                  creative_features_spec: {
+                    standard_enhancements: { enroll_status: 'OPT_IN' },
+                  },
+                });
+              }
+            } else {
+              const objectStorySpec = buildObjectStorySpec(
+                launchConfig,
+                profile,
+                item.meta_asset_id,
+                item.meta_asset_type || 'IMAGE',
+                creativeUrl,
+              );
+              creativeBody.object_story_spec = JSON.stringify(objectStorySpec);
+            }
+
+            const creativeRes = await postToMeta(
+              token.accessToken,
+              `/${accountNode}/adcreatives`,
+              creativeBody,
+            );
+            const metaCreativeId = String(creativeRes.id || '');
+
+            if (!metaCreativeId) {
+              throw new Error('Meta ad creative creation did not return an ID');
+            }
+
+            const adRes = await postToMeta(token.accessToken, `/${accountNode}/ads`, {
+              name: item.creative_name,
+              adset_id: adsetId,
+              status: launchConfig.launchStatus || 'PAUSED',
+              creative: JSON.stringify({ creative_id: metaCreativeId }),
+            });
+            const adId = String(adRes.id || '');
+
+            if (!adId) {
+              throw new Error('Meta ad creation did not return an ID');
+            }
+
+            await updateCreativeTestItem(item.id, {
+              metaAdsetId: adsetId,
+              metaAdId: adId,
+              metaCreativeId,
+              launchStatus: 'created',
+            });
+          } catch (err) {
+            hasFailure = true;
+            const message = err instanceof Error ? err.message : 'Unknown error';
+            console.error(
+              `[Launch] Existing adset "${adsetId}" - Failed for "${item.creative_name}":`,
+              message,
+            );
+            await updateCreativeTestItem(item.id, {
+              launchStatus: 'failed',
+              reviewFeedback: message,
+            });
+          }
+        }
+      }
+    } else if (batches && batches.length > 0) {
       // ── BATCH MODE ──
       console.log(`[launch] Batch mode: ${batches.length} batches`);
 
       for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
         const batch = batches[batchIdx];
-        const batchCreatives = selectedItems.filter(item => batch.creativeIds.includes(item.id));
+        const batchCreatives = selectedItems.filter((item) =>
+          batch.creativeIds.includes(item.sourceCreativeId || item.id),
+        );
         if (batchCreatives.length === 0) continue;
 
         try {
@@ -443,9 +672,7 @@ export async function POST(request: NextRequest) {
             billing_event: 'IMPRESSIONS',
             optimization_goal: 'OFFSITE_CONVERSIONS',
             targeting: JSON.stringify(targetingPayload),
-            start_time: launchConfig.scheduledDate
-              ? new Date(`${launchConfig.scheduledDate}T${launchConfig.scheduledTime || '00:00'}:00`).toISOString()
-              : new Date().toISOString(),
+            start_time: resolveStartTime(launchConfig, storeTimezone),
           };
 
           // Budget (ABO puts budget on adset, CBO on campaign)
@@ -462,12 +689,9 @@ export async function POST(request: NextRequest) {
           }
 
           // End date
-          if (launchConfig.endDate) {
-            adsetBody.end_time = new Date(`${launchConfig.endDate}T23:59:59`).toISOString();
-          } else if (launchConfig.testDuration > 0) {
-            const endDate = new Date();
-            endDate.setDate(endDate.getDate() + launchConfig.testDuration);
-            adsetBody.end_time = endDate.toISOString();
+          const resolvedEndTime = resolveEndTime(launchConfig, storeTimezone);
+          if (resolvedEndTime) {
+            adsetBody.end_time = resolvedEndTime;
           }
 
           // Promoted object for conversion campaigns
@@ -501,7 +725,7 @@ export async function POST(request: NextRequest) {
               }
 
               const creativeUrl = launchConfig.usePerCreativeUrls && launchConfig.perCreativeUrls
-                ? launchConfig.perCreativeUrls[item.id]
+                ? launchConfig.perCreativeUrls[item.sourceCreativeId || item.id]
                 : undefined;
 
               // Create ad creative
@@ -603,7 +827,7 @@ export async function POST(request: NextRequest) {
 
         // Determine the creative-specific destination URL
         const creativeUrl = launchConfig.usePerCreativeUrls && launchConfig.perCreativeUrls
-          ? launchConfig.perCreativeUrls[item.id]
+          ? launchConfig.perCreativeUrls[item.sourceCreativeId || item.id]
           : undefined;
 
         // Create adset
@@ -617,9 +841,7 @@ export async function POST(request: NextRequest) {
           billing_event: 'IMPRESSIONS',
           optimization_goal: 'OFFSITE_CONVERSIONS',
           targeting: JSON.stringify(targetingPayload),
-          start_time: launchConfig.scheduledDate
-            ? new Date(`${launchConfig.scheduledDate}T${launchConfig.scheduledTime || '00:00'}:00`).toISOString()
-            : new Date().toISOString(),
+          start_time: resolveStartTime(launchConfig, storeTimezone),
         };
 
         // Budget (ABO puts budget on adset, CBO on campaign)
@@ -635,12 +857,9 @@ export async function POST(request: NextRequest) {
         }
 
         // End date
-        if (launchConfig.endDate) {
-          adsetBody.end_time = new Date(`${launchConfig.endDate}T23:59:59`).toISOString();
-        } else if (launchConfig.testDuration > 0) {
-          const endDate = new Date();
-          endDate.setDate(endDate.getDate() + launchConfig.testDuration);
-          adsetBody.end_time = endDate.toISOString();
+        const resolvedEndTime = resolveEndTime(launchConfig, storeTimezone);
+        if (resolvedEndTime) {
+          adsetBody.end_time = resolvedEndTime;
         }
 
         // Promoted object for conversion campaigns

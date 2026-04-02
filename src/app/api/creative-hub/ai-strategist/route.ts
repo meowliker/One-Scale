@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getCreativeTests, getProductProfile, getProductCampaignLinks } from '@/app/api/lib/creative-hub-db';
 import { getMetaToken } from '@/app/api/lib/tokens';
 import { fetchFromMeta } from '@/app/api/lib/meta-client';
-import {
-  getProductProfile,
-  getProductCampaignLinks,
-} from '@/app/api/lib/creative-hub-db';
+import type { CreativeTest } from '@/types/creativeHub';
 
 export const maxDuration = 120;
 
@@ -17,6 +15,68 @@ interface StrategistRequestBody {
   productProfileId: string;
   message: string;
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  selectedCreativeIds?: string[];
+  context?: {
+    creatives?: Array<Record<string, unknown>>;
+    selectedCreatives?: Array<Record<string, unknown>>;
+    winningAds?: Array<Record<string, unknown>>;
+  };
+}
+
+interface AnthropicConfig {
+  apiKey: string;
+  apiKeySource: string;
+  model: string;
+  modelSource: string;
+}
+
+interface CreativeSignal {
+  id: string;
+  creativeName: string;
+  creativeFormat: string;
+  hook: string | null;
+  angle: string | null;
+  uploadStatus: string | null;
+  testStatus: string | null;
+  roas: number | null;
+  spend: number | null;
+  purchases: number | null;
+  createdAt: string | null;
+  campaignName: string | null;
+  driveUrl: string | null;
+  thumbnailUrl: string | null;
+}
+
+interface CreativeContextSummary {
+  totalTests: number;
+  totalItems: number;
+  winnerCount: number;
+  testedCount: number;
+  selectedCount: number;
+  formatCounts: Record<string, number>;
+  topHooks: Array<{ value: string; count: number; avgRoas: number }>;
+  topAngles: Array<{ value: string; count: number; avgRoas: number }>;
+  recentSignals: CreativeSignal[];
+  selectedSignals: CreativeSignal[];
+}
+
+interface SelectedCreativePlan {
+  selectedCount: number;
+  testedCount: number;
+  winnerCount: number;
+  untestedCount: number;
+  uniqueAngles: number;
+  uniqueHooks: number;
+  uniqueCreators: number;
+  uniqueFolders: number;
+  uniqueFormats: number;
+  recommendedStrategy: 'smart_mix' | 'one_per_adset' | 'by_format' | 'by_folder';
+  recommendedSize: number;
+  title: string;
+  reason: string;
+  strengths: string[];
+  cautions: string[];
+  nextMoves: string[];
 }
 
 // Claude API types
@@ -89,6 +149,18 @@ interface MetaAdsResponse {
   data: MetaAdNode[];
   paging?: { next?: string };
 }
+
+const ANTHROPIC_API_KEY_ALIASES = [
+  'ANTHROPIC_API_KEY',
+  'CLAUDE_API_KEY',
+  'ANTHROPIC_CLOUD_API_KEY',
+];
+
+const ANTHROPIC_MODEL_ALIASES = [
+  'ANTHROPIC_STRATEGY_MODEL',
+  'ANTHROPIC_CREATIVE_MODEL',
+  'ANTHROPIC_MODEL',
+];
 
 // ---------------------------------------------------------------------------
 // Tool definitions for Claude
@@ -184,6 +256,391 @@ function buildTimeRange(days: number): string {
   });
 }
 
+function firstEnvValue(keys: string[]): { key: string; value: string } | null {
+  for (const key of keys) {
+    const value = process.env[key]?.trim();
+    if (value) {
+      return { key, value };
+    }
+  }
+  return null;
+}
+
+function getAnthropicConfig(defaultModel: string): AnthropicConfig | null {
+  const apiKey = firstEnvValue(ANTHROPIC_API_KEY_ALIASES);
+  if (!apiKey) return null;
+
+  const model = firstEnvValue(ANTHROPIC_MODEL_ALIASES);
+  return {
+    apiKey: apiKey.value,
+    apiKeySource: apiKey.key,
+    model: model?.value || defaultModel,
+    modelSource: model?.key || 'default',
+  };
+}
+
+function truncateText(value: string, maxLength = 120): string {
+  const normalized = value.trim().replace(/\s+/g, ' ');
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength - 1)}…`
+    : normalized;
+}
+
+function shortNumber(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return 'n/a';
+  return Number.isInteger(value) ? value.toString() : value.toFixed(2);
+}
+
+function buildSelectedCreativePlan(
+  selectedCreatives: Array<Record<string, unknown>> = [],
+): SelectedCreativePlan | null {
+  if (selectedCreatives.length === 0) return null;
+
+  const readString = (value: unknown): string | null =>
+    typeof value === 'string' && value.trim() ? value.trim() : null;
+
+  const winnerCount = selectedCreatives.filter(
+    (creative) =>
+      typeof creative.pastTestResult === 'object' &&
+      creative.pastTestResult !== null &&
+      readString((creative.pastTestResult as { status?: unknown }).status) === 'winner',
+  ).length;
+  const testedCount = selectedCreatives.filter(
+    (creative) =>
+      Boolean(creative.alreadyTested) ||
+      (typeof creative.pastTestResult === 'object' && creative.pastTestResult !== null),
+  ).length;
+  const untestedCount = Math.max(selectedCreatives.length - testedCount, 0);
+  const uniqueFormats = new Set(
+    selectedCreatives.map((creative) => readString(creative.creativeFormat) || 'image'),
+  ).size;
+  const uniqueHooks = new Set(selectedCreatives.map((creative) => readString(creative.hook)).filter(Boolean)).size;
+  const uniqueAngles = new Set(selectedCreatives.map((creative) => readString(creative.angle)).filter(Boolean)).size;
+  const uniqueCreators = new Set(selectedCreatives.map((creative) => readString(creative.creator)).filter(Boolean)).size;
+  const uniqueFolders = new Set(
+    selectedCreatives.map((creative) => readString(creative.driveParentFolderName)).filter(Boolean),
+  ).size;
+
+  let recommendedStrategy: SelectedCreativePlan['recommendedStrategy'] = 'smart_mix';
+  let recommendedSize = Math.min(Math.max(selectedCreatives.length, 1), 3);
+  let title = 'Balanced challenger test';
+  let reason = 'Mix the current set so each lane learns one clear thing without muddying the read.';
+
+  if (selectedCreatives.length <= 1 || untestedCount >= Math.max(2, selectedCreatives.length - 1)) {
+    recommendedStrategy = 'one_per_adset';
+    recommendedSize = 1;
+    title = 'Clean first read';
+    reason = 'Most of this set is still untested, so one creative per ad set gives the fastest honest read.';
+  } else if (uniqueFormats > 1 && selectedCreatives.length >= 4) {
+    recommendedStrategy = 'by_format';
+    recommendedSize = Math.min(Math.max(selectedCreatives.length, 2), 3);
+    title = 'Format split';
+    reason = 'Separate videos and statics before you judge hook quality so format does not hide the message signal.';
+  } else if (uniqueFolders > 1 && selectedCreatives.length >= 4) {
+    recommendedStrategy = 'by_folder';
+    recommendedSize = Math.min(Math.max(selectedCreatives.length, 2), 3);
+    title = 'Concept cluster test';
+    reason = 'The selection spans multiple folders or concepts, so keep each cluster intact for the cleanest read.';
+  }
+
+  const strengths: string[] = [];
+  const cautions: string[] = [];
+  if (winnerCount > 0) {
+    strengths.push(`${winnerCount} proven winner${winnerCount > 1 ? 's' : ''} can act as a control.`);
+  }
+  if (untestedCount > 0) {
+    strengths.push(`${untestedCount} untested creative${untestedCount > 1 ? 's are' : ' is'} ready for a fresh read.`);
+  }
+  if (uniqueHooks > 1 || uniqueAngles > 1) {
+    strengths.push('The set has enough hook or angle diversity for a meaningful comparison.');
+  }
+  if (uniqueAngles <= 1 && selectedCreatives.length > 2) {
+    cautions.push('Most selected assets share the same angle, so learnings may cluster too tightly.');
+  }
+  if (uniqueFormats === 1 && selectedCreatives.length > 3) {
+    cautions.push('Everything is the same format right now, so this batch mostly answers message questions.');
+  }
+  if (selectedCreatives.length > 8) {
+    cautions.push('This is a wide set, so control lane count carefully or budget gets diluted.');
+  }
+
+  const nextMoves = [
+    recommendedStrategy === 'one_per_adset'
+      ? 'Start with one creative per ad set for the first read.'
+      : `Apply a ${recommendedStrategy.replaceAll('_', ' ')} structure before launch.`,
+    winnerCount > 0
+      ? 'Keep the winner isolated as control and challenge it with one new variable at a time.'
+      : 'Choose one clear control creative before mixing several new ideas together.',
+    uniqueHooks > 1
+      ? 'Use the hook spread to make each lane answer one obvious question.'
+      : 'Add at least one hook challenger before spending heavily on this set.',
+  ];
+
+  return {
+    selectedCount: selectedCreatives.length,
+    testedCount,
+    winnerCount,
+    untestedCount,
+    uniqueAngles,
+    uniqueHooks,
+    uniqueCreators,
+    uniqueFolders,
+    uniqueFormats,
+    recommendedStrategy,
+    recommendedSize,
+    title,
+    reason,
+    strengths,
+    cautions,
+    nextMoves,
+  };
+}
+
+function buildCreativeContextSummary(
+  tests: CreativeTest[],
+  selectedCreativeIds: string[] = [],
+): CreativeContextSummary {
+  const formatCounts: Record<string, number> = {};
+  const hookMap = new Map<string, { count: number; roasTotal: number; roasCount: number }>();
+  const angleMap = new Map<string, { count: number; roasTotal: number; roasCount: number }>();
+  const allSignals: CreativeSignal[] = [];
+  const selectedIdSet = new Set(selectedCreativeIds);
+
+  let winnerCount = 0;
+  let testedCount = 0;
+
+  for (const test of tests) {
+    for (const item of test.items) {
+      const format = item.creativeFormat || 'unknown';
+      formatCounts[format] = (formatCounts[format] || 0) + 1;
+
+      const hook = item.hook?.trim() || null;
+      if (hook) {
+        const existing = hookMap.get(hook) || { count: 0, roasTotal: 0, roasCount: 0 };
+        existing.count += 1;
+        if (typeof item.roas === 'number' && item.roas > 0) {
+          existing.roasTotal += item.roas;
+          existing.roasCount += 1;
+        }
+        hookMap.set(hook, existing);
+      }
+
+      const angle = item.angle?.trim() || null;
+      if (angle) {
+        const existing = angleMap.get(angle) || { count: 0, roasTotal: 0, roasCount: 0 };
+        existing.count += 1;
+        if (typeof item.roas === 'number' && item.roas > 0) {
+          existing.roasTotal += item.roas;
+          existing.roasCount += 1;
+        }
+        angleMap.set(angle, existing);
+      }
+
+      if (item.testStatus && item.testStatus !== 'testing') {
+        testedCount += 1;
+      }
+      if (item.testStatus === 'winner') {
+        winnerCount += 1;
+      }
+
+      allSignals.push({
+        id: item.id,
+        creativeName: item.creativeName,
+        creativeFormat: item.creativeFormat || 'unknown',
+        hook,
+        angle,
+        uploadStatus: item.uploadStatus || null,
+        testStatus: item.testStatus || null,
+        roas: typeof item.roas === 'number' ? item.roas : null,
+        spend: typeof item.spend === 'number' ? item.spend : null,
+        purchases: typeof item.purchases === 'number' ? item.purchases : null,
+        createdAt: test.launchedAt || test.completedAt || null,
+        campaignName: test.campaignName || null,
+        driveUrl: item.driveUrl || null,
+        thumbnailUrl: item.thumbnailUrl || null,
+      });
+    }
+  }
+
+  const buildTopSignals = (
+    map: Map<string, { count: number; roasTotal: number; roasCount: number }>,
+  ) => Array.from(map.entries())
+    .map(([value, data]) => ({
+      value,
+      count: data.count,
+      avgRoas: data.roasCount > 0 ? data.roasTotal / data.roasCount : 0,
+    }))
+    .sort((a, b) => b.count - a.count || b.avgRoas - a.avgRoas)
+    .slice(0, 5);
+
+  const recentSignals = [...allSignals]
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+    .slice(0, 12);
+
+  const selectedSignals = selectedCreativeIds.length > 0
+    ? allSignals.filter((signal) => selectedIdSet.has(signal.id))
+    : [];
+
+  return {
+    totalTests: tests.length,
+    totalItems: allSignals.length,
+    winnerCount,
+    testedCount,
+    selectedCount: selectedSignals.length,
+    formatCounts,
+    topHooks: buildTopSignals(hookMap),
+    topAngles: buildTopSignals(angleMap),
+    recentSignals,
+    selectedSignals,
+  };
+}
+
+function formatCreativeContext(summary: CreativeContextSummary): string {
+  const formatLine = Object.entries(summary.formatCounts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([format, count]) => `${format}: ${count}`)
+    .join(', ');
+
+  const formatTopSignals = (items: Array<{ value: string; count: number; avgRoas: number }>) =>
+    items.length > 0
+      ? items.map((item) => `- ${truncateText(item.value, 100)} (${item.count}x, avg ROAS ${shortNumber(item.avgRoas)}x)`).join('\n')
+      : '- None yet';
+
+  const recentLines = summary.recentSignals.length > 0
+    ? summary.recentSignals.map((signal) => {
+      const parts = [
+        signal.creativeName,
+        signal.creativeFormat,
+        signal.testStatus || 'testing',
+        signal.hook ? `hook: ${truncateText(signal.hook, 70)}` : null,
+        signal.angle ? `angle: ${truncateText(signal.angle, 70)}` : null,
+        signal.roas != null ? `ROAS: ${shortNumber(signal.roas)}x` : null,
+        signal.spend != null ? `spend: $${shortNumber(signal.spend)}` : null,
+        signal.campaignName ? `campaign: ${truncateText(signal.campaignName, 50)}` : null,
+      ].filter(Boolean).join(' | ');
+      return `- ${parts}`;
+    }).join('\n')
+    : '- No creative history available yet';
+
+  const selectedLines = summary.selectedSignals.length > 0
+    ? summary.selectedSignals.map((signal) => `- ${signal.creativeName} (${signal.creativeFormat}${signal.roas != null ? `, ${shortNumber(signal.roas)}x ROAS` : ''})`).join('\n')
+    : '- No selected creative IDs provided';
+
+  return [
+    `- Total tests: ${summary.totalTests}`,
+    `- Total creatives tracked: ${summary.totalItems}`,
+    `- Winners: ${summary.winnerCount}`,
+    `- Tested creatives: ${summary.testedCount}`,
+    `- Selected creatives: ${summary.selectedCount}`,
+    `- Format mix: ${formatLine || 'none'}`,
+    `- Top hooks:\n${formatTopSignals(summary.topHooks)}`,
+    `- Top angles:\n${formatTopSignals(summary.topAngles)}`,
+    `- Selected creatives list:\n${selectedLines}`,
+    `- Recent creatives:\n${recentLines}`,
+  ].join('\n');
+}
+
+function buildFallbackStrategistResponse(
+  profileName: string,
+  campaignLinks: Array<{ campaignName?: string | null; campaignType?: string | null; isActive: boolean }>,
+  summary: CreativeContextSummary,
+  selectedPlan: SelectedCreativePlan | null,
+): { response: string; actionItems: string[] } {
+  const topHook = summary.topHooks[0];
+  const topAngle = summary.topAngles[0];
+  const activeCampaigns = campaignLinks.filter((link) => link.isActive);
+  const formatMix = Object.entries(summary.formatCounts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([format, count]) => `${format} (${count})`)
+    .slice(0, 3)
+    .join(', ') || 'No formats tracked yet';
+
+  const selectionActionItems = selectedPlan?.nextMoves || [];
+  const actionItems = [
+    ...selectionActionItems,
+    topHook
+      ? `Build 3 variations around "${truncateText(topHook.value, 70)}" and keep the format constant for the first test.`
+      : 'Start with one clean winner-vs-challenger test using the strongest asset you have.',
+    topAngle
+      ? `Run a second batch that keeps the angle "${truncateText(topAngle.value, 70)}" but changes the first frame or hook.`
+      : 'Create a batch that changes only the hook while keeping offer and format fixed.',
+    summary.recentSignals.length > 0
+      ? `Keep the top ${Math.min(3, summary.recentSignals.length)} recent creatives in a winner stack and do not mix them with brand-new angles.`
+      : 'Do not mix multiple new variables in the same test until you have a reliable baseline.',
+  ]
+    .filter(Boolean)
+    .filter((item, index, all) => all.findIndex((candidate) => candidate === item) === index)
+    .slice(0, 5);
+
+  const responseLines = [
+    `I reviewed the creative history for ${profileName}.`,
+    selectedPlan
+      ? `For the ${selectedPlan.selectedCount} creatives you selected right now, I would run a ${selectedPlan.recommendedStrategy.replaceAll('_', ' ')} setup. ${selectedPlan.reason}`
+      : null,
+    `You have ${summary.totalItems} creatives across ${summary.totalTests} test runs. The mix is currently ${formatMix}.`,
+    topHook
+      ? `The most repeated hook is "${truncateText(topHook.value, 100)}" with ${topHook.count} instance(s) and an average ROAS of ${shortNumber(topHook.avgRoas)}x.`
+      : 'There is not enough hook history yet to call a clear winner.',
+    topAngle
+      ? `The most repeated angle is "${truncateText(topAngle.value, 100)}" with ${topAngle.count} instance(s) and an average ROAS of ${shortNumber(topAngle.avgRoas)}x.`
+      : 'There is not enough angle history yet to call a clear winner.',
+    activeCampaigns.length > 0
+      ? `There are ${activeCampaigns.length} active linked campaign(s), so I would keep testing winners against a single new variable at a time.`
+      : 'There are no active linked campaigns available, so I would bias toward creative-first testing and avoid overcomplicating the batch structure.',
+    '',
+    'Action Items:',
+    ...actionItems,
+  ].filter((line): line is string => Boolean(line));
+
+  return {
+    response: responseLines.join('\n'),
+    actionItems,
+  };
+}
+
+function formatSelectedCreativeContext(selectedCreatives: Array<Record<string, unknown>> = []): string {
+  if (selectedCreatives.length === 0) {
+    return '- No current browser selection provided';
+  }
+
+  return selectedCreatives
+    .slice(0, 12)
+    .map((creative, index) => {
+      const bits = [
+        typeof creative.creativeName === 'string' ? creative.creativeName : `Creative ${index + 1}`,
+        typeof creative.creativeFormat === 'string' ? creative.creativeFormat : null,
+        typeof creative.hook === 'string' && creative.hook.trim() ? `hook: ${truncateText(creative.hook, 70)}` : null,
+        typeof creative.angle === 'string' && creative.angle.trim() ? `angle: ${truncateText(creative.angle, 70)}` : null,
+        typeof creative.creator === 'string' && creative.creator.trim() ? `creator: ${creative.creator}` : null,
+        typeof creative.driveParentFolderName === 'string' && creative.driveParentFolderName.trim()
+          ? `folder: ${truncateText(creative.driveParentFolderName, 50)}`
+          : null,
+        typeof creative.sourceType === 'string' ? `source: ${creative.sourceType}` : null,
+      ].filter(Boolean);
+      return `- ${bits.join(' | ')}`;
+    })
+    .join('\n');
+}
+
+function formatSelectedCreativePlan(selectedPlan: SelectedCreativePlan | null): string {
+  if (!selectedPlan) {
+    return '- No current browser selection provided';
+  }
+
+  return [
+    `- Selected creatives: ${selectedPlan.selectedCount}`,
+    `- Recommended first structure: ${selectedPlan.recommendedStrategy.replaceAll('_', ' ')} (${selectedPlan.recommendedSize} per set when relevant)`,
+    `- Reason: ${selectedPlan.reason}`,
+    `- Hook diversity: ${selectedPlan.uniqueHooks}`,
+    `- Angle diversity: ${selectedPlan.uniqueAngles}`,
+    `- Format diversity: ${selectedPlan.uniqueFormats}`,
+    `- Winner controls available: ${selectedPlan.winnerCount}`,
+    `- Untested creatives: ${selectedPlan.untestedCount}`,
+    `- Strengths:\n${selectedPlan.strengths.length > 0 ? selectedPlan.strengths.map((item) => `  - ${item}`).join('\n') : '  - None called out yet'}`,
+    `- Cautions:\n${selectedPlan.cautions.length > 0 ? selectedPlan.cautions.map((item) => `  - ${item}`).join('\n') : '  - None called out yet'}`,
+  ].join('\n');
+}
+
 // ---------------------------------------------------------------------------
 // Tool implementations
 // ---------------------------------------------------------------------------
@@ -191,10 +648,13 @@ function buildTimeRange(days: number): string {
 async function executeTool(
   toolName: string,
   input: Record<string, unknown>,
-  accessToken: string,
-  campaignLinks: Array<{ campaignId: string; campaignName: string; adAccountId: string }>,
+  accessToken: string | null,
+  campaignLinks: Array<{ campaignId: string; campaignName?: string | null; adAccountId: string }>,
 ): Promise<string> {
   try {
+    if (!accessToken) {
+      return JSON.stringify({ error: 'Meta access token unavailable for tool execution' });
+    }
     switch (toolName) {
       case 'get_campaign_insights':
         return await toolGetCampaignInsights(
@@ -243,7 +703,7 @@ function getActionValue(
 // Tool 1: Campaign insights
 async function toolGetCampaignInsights(
   token: string,
-  campaignLinks: Array<{ campaignId: string; campaignName: string }>,
+  campaignLinks: Array<{ campaignId: string; campaignName?: string | null }>,
   days: number,
 ): Promise<string> {
   const clampedDays = Math.min(Math.max(days, 1), 90);
@@ -301,7 +761,7 @@ async function toolGetCampaignInsights(
 // Tool 2: Ad performance
 async function toolGetAdPerformance(
   token: string,
-  campaignLinks: Array<{ campaignId: string; campaignName: string }>,
+  campaignLinks: Array<{ campaignId: string; campaignName?: string | null }>,
   campaignId: string | undefined,
   limit: number,
 ): Promise<string> {
@@ -455,23 +915,62 @@ async function toolGetAudienceBreakdown(
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const MAX_TOOL_ITERATIONS = 5;
 
+class ClaudeApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ClaudeApiError';
+    this.status = status;
+  }
+}
+
 async function callClaudeWithTools(
+  anthropic: AnthropicConfig,
   systemPrompt: string,
   messages: ClaudeMessage[],
   tools: ClaudeTool[],
-  accessToken: string,
-  campaignLinks: Array<{ campaignId: string; campaignName: string; adAccountId: string }>,
+  accessToken: string | null,
+  campaignLinks: Array<{ campaignId: string; campaignName?: string | null; adAccountId: string }>,
   abortSignal: AbortSignal,
 ): Promise<{ text: string; toolCalls: number }> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const { apiKey, model } = anthropic;
+  const currentMessages = [...messages];
+  let totalToolCalls = 0;
+
   if (!apiKey) {
-    console.error('[AI Strategist] ANTHROPIC_API_KEY not found. Available env keys with ANTHRO:', Object.keys(process.env).filter(k => k.includes('ANTHRO')));
-    throw new Error('ANTHROPIC_API_KEY not configured');
+    throw new Error('Anthropic API key not configured. Set ANTHROPIC_API_KEY, CLAUDE_API_KEY, or ANTHROPIC_CLOUD_API_KEY.');
   }
 
-  const model = process.env.ANTHROPIC_CREATIVE_MODEL || 'claude-sonnet-4-20250514';
-  let currentMessages = [...messages];
-  let totalToolCalls = 0;
+  if (tools.length === 0) {
+    const body = {
+      model,
+      max_tokens: 4096,
+      system: systemPrompt,
+      messages: currentMessages,
+    };
+
+    const res = await fetch(ANTHROPIC_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify(body),
+      signal: abortSignal,
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new ClaudeApiError(res.status, `Claude API error ${res.status}: ${errText.slice(0, 300)}`);
+    }
+
+    const response: ClaudeResponse = await res.json();
+    const textBlocks = response.content.filter((b) => b.type === 'text');
+    const finalText = textBlocks.map((b) => b.text || '').join('\n').trim();
+    return { text: finalText, toolCalls: 0 };
+  }
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     const body = {
@@ -495,7 +994,7 @@ async function callClaudeWithTools(
 
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
-      throw new Error(`Claude API error ${res.status}: ${errText.slice(0, 200)}`);
+      throw new ClaudeApiError(res.status, `Claude API error ${res.status}: ${errText.slice(0, 300)}`);
     }
 
     const response: ClaudeResponse = await res.json();
@@ -567,7 +1066,11 @@ async function callClaudeWithTools(
   });
 
   if (!finalRes.ok) {
-    throw new Error(`Claude API final call error: ${finalRes.status}`);
+    const errText = await finalRes.text().catch(() => '');
+    throw new ClaudeApiError(
+      finalRes.status,
+      `Claude API final call error ${finalRes.status}: ${errText.slice(0, 300)}`,
+    );
   }
 
   const finalResponse: ClaudeResponse = await finalRes.json();
@@ -588,8 +1091,8 @@ export async function POST(request: NextRequest) {
   const globalTimeout = setTimeout(() => abortController.abort(), 110_000);
 
   try {
-    const body: StrategistRequestBody = await request.json();
-    const { storeId, productProfileId, message, history } = body;
+    const body = (await request.json()) as StrategistRequestBody;
+    const { storeId, productProfileId, message, history, selectedCreativeIds, context } = body;
 
     if (!storeId || !productProfileId || !message) {
       return NextResponse.json(
@@ -598,22 +1101,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 1. Get Meta token
+    const anthropic = getAnthropicConfig('claude-sonnet-4-20250514');
     const metaToken = await getMetaToken(storeId);
-    if (!metaToken?.accessToken) {
-      return NextResponse.json(
-        {
-          error:
-            'Meta Ads account not connected. Connect your Meta account in Settings to use the AI Strategist.',
-        },
-        { status: 401 },
-      );
-    }
 
-    // 2. Get product profile + campaign links
-    const [profile, campaignLinks] = await Promise.all([
+    // 1. Get product profile, campaign links, and creative history
+    const [profile, campaignLinks, tests] = await Promise.all([
       getProductProfile(productProfileId),
       getProductCampaignLinks(productProfileId),
+      getCreativeTests(storeId),
     ]);
 
     if (!profile) {
@@ -623,41 +1118,72 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (campaignLinks.length === 0) {
-      return NextResponse.json(
-        {
-          error:
-            'No campaigns linked to this product profile. Link campaigns in the Creative Hub to use the AI Strategist.',
-        },
-        { status: 400 },
+    const productTests = tests.filter((test) => test.productProfileId === productProfileId);
+    const creativeSummary = buildCreativeContextSummary(
+      productTests,
+      selectedCreativeIds || [],
+    );
+    const selectedPlan = buildSelectedCreativePlan(context?.selectedCreatives || []);
+    const creativeContextText = formatCreativeContext(creativeSummary);
+    const selectedCreativeContextText = formatSelectedCreativeContext(context?.selectedCreatives || []);
+    const selectedPlanText = formatSelectedCreativePlan(selectedPlan);
+    const campaignContextText = campaignLinks.length > 0
+      ? campaignLinks
+          .map((link) => `- ${link.campaignName || link.campaignId} (${link.campaignType}, ${link.isActive ? 'active' : 'paused'})`)
+          .join('\n')
+      : '- No linked campaigns yet';
+    const canUseMetaTools = Boolean(metaToken?.accessToken && campaignLinks.length > 0);
+
+    if (!anthropic) {
+      const fallback = buildFallbackStrategistResponse(
+        profile.productName,
+        campaignLinks,
+        creativeSummary,
+        selectedPlan,
       );
+      return NextResponse.json({
+        response: fallback.response,
+        actionItems: fallback.actionItems,
+        meta: {
+          toolCalls: 0,
+          mode: canUseMetaTools ? 'meta-disabled-fallback' : 'creative-fallback',
+          campaignCount: campaignLinks.length,
+          creativeCount: creativeSummary.totalItems,
+          apiKeySource: 'fallback',
+          model: 'rule-based',
+          selectionAware: Boolean(selectedPlan),
+        },
+      });
     }
 
-    // 3. Build system prompt
-    const campaignNames = campaignLinks
-      .map((l) => `${l.campaignName} (${l.campaignType}, ${l.isActive ? 'active' : 'paused'})`)
-      .join('\n  - ');
-
-    const adAccountIds = [...new Set(campaignLinks.map((l) => l.adAccountId))].join(', ');
-
-    const systemPrompt = `You are a senior media buyer and creative strategist with 10+ years of experience managing $100M+ in annual ad spend. You have direct access to this advertiser's Meta Ads data via tools.
+    const systemPrompt = `You are a senior media buyer and creative strategist with 10+ years of experience managing $100M+ in annual ad spend.
+You think like a performance marketer reviewing creative inventory, test structure, and account health.
 
 When the user asks about performance, creative strategy, or what to test next:
-1. Use your tools to fetch REAL data from their Meta Ads account
-2. Analyze the actual numbers — don't guess
-3. Give specific, actionable recommendations based on the data
-4. Reference specific ad names, ROAS numbers, and spend figures
+1. Use real campaign tools when available.
+2. If campaign tools are unavailable, use the creative inventory and product context below.
+3. Analyze the actual numbers and historical patterns whenever present.
+4. Give specific, actionable recommendations based on the data.
+5. Think in terms of media-buyer decisions: hook, angle, format, offer, first frame, testing order, and batch structure.
 
 Product: ${profile.productName}
-Ad Account: ${adAccountIds}
 Linked campaigns:
-  - ${campaignNames}
+${campaignContextText}
 
-Always cite real data. Never make up numbers. If a tool call fails, say so honestly.
+Creative inventory:
+${creativeContextText}
+
+Current browser selection:
+${selectedCreativeContextText}
+
+Selected-set planning brief:
+${selectedPlanText}
+
+If there is no Meta access or no linked campaign data, be honest about that limitation and focus your answer on creative testing strategy and next steps. Never invent performance numbers.
 
 Format your response as clear, readable text. Use bullet points and bold where helpful. At the end of your response, include a section called "Action Items:" with 2-5 specific next steps the advertiser should take.`;
 
-    // 4. Build messages array
+    // 2. Build messages array
     const messages: ClaudeMessage[] = [];
 
     // Add conversation history
@@ -670,33 +1196,104 @@ Format your response as clear, readable text. Use bullet points and bold where h
     // Add current user message
     messages.push({ role: 'user', content: message });
 
-    // 5. Call Claude with tool loop
+    // 3. Call Claude with tool loop when Meta access is available
     const simplifiedLinks = campaignLinks.map((l) => ({
       campaignId: l.campaignId,
       campaignName: l.campaignName,
       adAccountId: l.adAccountId,
     }));
 
-    const { text, toolCalls } = await callClaudeWithTools(
-      systemPrompt,
-      messages,
-      TOOLS,
-      metaToken.accessToken,
-      simplifiedLinks,
-      abortController.signal,
+    const fallback = buildFallbackStrategistResponse(
+      profile.productName,
+      campaignLinks,
+      creativeSummary,
+      selectedPlan,
     );
+    let text = '';
+    let toolCalls = 0;
 
-    // 6. Extract action items from the response
-    const actionItems = extractActionItems(text);
+    try {
+      const result = await callClaudeWithTools(
+        anthropic,
+        systemPrompt,
+        messages,
+        canUseMetaTools ? TOOLS : [],
+        metaToken?.accessToken || null,
+        simplifiedLinks,
+        abortController.signal,
+      );
+      text = result.text;
+      toolCalls = result.toolCalls;
+    } catch (err) {
+      if (
+        err instanceof ClaudeApiError &&
+        (err.status === 429 || err.status === 529 || err.status >= 500)
+      ) {
+        return NextResponse.json({
+          response: [
+            'Claude is temporarily overloaded, so I switched to the built-in media-buyer planner for this selection.',
+            '',
+            fallback.response,
+          ].join('\n'),
+          actionItems: fallback.actionItems,
+          meta: {
+            toolCalls: 0,
+            mode: canUseMetaTools ? 'meta-fallback-after-error' : 'creative-fallback-after-error',
+            campaignCount: campaignLinks.length,
+            creativeCount: creativeSummary.totalItems,
+            apiKeySource: anthropic.apiKeySource,
+            model: 'rule-based',
+            degradedReason: err.message,
+            selectionAware: Boolean(selectedPlan),
+          },
+        });
+      }
+
+      if (err instanceof Error && err.name === 'AbortError') {
+        return NextResponse.json({
+          response: [
+            'Claude took too long to respond, so I switched to the built-in launch planner.',
+            '',
+            fallback.response,
+          ].join('\n'),
+          actionItems: fallback.actionItems,
+          meta: {
+            toolCalls: 0,
+            mode: canUseMetaTools ? 'meta-fallback-after-timeout' : 'creative-fallback-after-timeout',
+            campaignCount: campaignLinks.length,
+            creativeCount: creativeSummary.totalItems,
+            apiKeySource: anthropic.apiKeySource,
+            model: 'rule-based',
+            degradedReason: 'Claude request timed out',
+            selectionAware: Boolean(selectedPlan),
+          },
+        });
+      }
+
+      throw err;
+    }
+
+    // 4. Extract action items from the response
+    const responseText = text || fallback.response;
+    const actionItems = extractActionItems(responseText);
 
     console.log(
       `[AI Strategist] Completed: ${toolCalls} tool calls, product=${profile.productName}`,
     );
 
     return NextResponse.json({
-      response: text,
-      actionItems,
-      meta: { toolCalls },
+      response: responseText,
+      actionItems: actionItems.length > 0 ? actionItems : fallback.actionItems,
+      meta: {
+        toolCalls,
+        mode: canUseMetaTools ? 'meta-plus-creative' : 'creative-only',
+        campaignCount: campaignLinks.length,
+        creativeCount: creativeSummary.totalItems,
+        apiKeySource: anthropic.apiKeySource,
+        model: anthropic.model,
+        modelSource: anthropic.modelSource,
+        selectionAware: Boolean(selectedPlan),
+      },
     });
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
@@ -705,13 +1302,13 @@ Format your response as clear, readable text. Use bullet points and bold where h
         { status: 504 },
       );
     }
-    console.error('[AI Strategist] Error:', err);
+    const message = err instanceof Error
+      ? err.message
+      : 'An unexpected error occurred';
+    console.error('[AI Strategist] Error:', message);
     return NextResponse.json(
       {
-        error:
-          err instanceof Error
-            ? err.message
-            : 'An unexpected error occurred',
+        error: message,
       },
       { status: 500 },
     );

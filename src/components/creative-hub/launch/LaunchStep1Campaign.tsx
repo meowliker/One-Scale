@@ -407,7 +407,7 @@ export function LaunchStep1Campaign() {
             <CampaignModeCard
               icon={FolderOpen}
               title="Use Existing Ad Sets"
-              description="Add creatives as new ads in existing ad sets"
+              description="Add creatives as new ads inside current ad sets and keep their live targeting/budget setup"
               selected={adsetMode === 'existing_adsets'}
               onClick={() => updateLaunchConfig({ adsetMode: 'existing_adsets' })}
             />
