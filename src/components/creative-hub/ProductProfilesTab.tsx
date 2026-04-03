@@ -99,6 +99,7 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
     const map = new Map<string, number>();
     for (const creative of inboxCreatives) {
       if (!creative.productProfileId) continue;
+      if (creative.uploadStatus !== 'ready' && !creative.driveUrl) continue;
       map.set(creative.productProfileId, (map.get(creative.productProfileId) ?? 0) + 1);
     }
     return map;

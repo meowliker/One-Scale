@@ -611,7 +611,7 @@ function enforceSuggestionDiversity(
       ], 3);
       fallback.forEach((text) => picked.push({
         text,
-        reasoning: 'AI-inspired fallback generated from winner history context.',
+        reasoning: 'Fallback template generated from winner history context (non-LLM).',
         expectedRoas: expectedRoasHint,
       }));
     }
@@ -641,7 +641,7 @@ function enforceSuggestionDiversity(
       ], 3);
       fallback.forEach((text) => picked.push({
         text,
-        reasoning: 'AI-inspired fallback generated from winner headline context.',
+        reasoning: 'Fallback template generated from winner headline context (non-LLM).',
       }));
     }
     return picked.slice(0, 5);
@@ -670,7 +670,7 @@ function enforceSuggestionDiversity(
       ], 3);
       fallback.forEach((text) => picked.push({
         text,
-        reasoning: 'AI-inspired fallback generated from winner description context.',
+        reasoning: 'Fallback template generated from winner description context (non-LLM).',
       }));
     }
     return picked.slice(0, 5);

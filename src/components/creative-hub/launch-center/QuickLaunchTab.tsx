@@ -12,6 +12,7 @@ import {
   Image,
   Images,
   Loader2,
+  Plus,
   Rocket,
   Shuffle,
   Sparkles,
@@ -37,11 +38,33 @@ interface QuickLaunchTabProps {
 
 type CopyKey = 'primaryTexts' | 'headlines' | 'descriptions';
 type SectionTone = 'blue' | 'amber' | 'emerald';
+type SummaryTone = 'slate' | 'blue' | 'violet' | 'emerald' | 'amber';
+type QuickLaunchSummaryItem = {
+  key: string;
+  label: string;
+  value: string;
+  tone: SummaryTone;
+  noTruncate?: boolean;
+  wide?: boolean;
+  plainLabel?: boolean;
+};
 type AISuggestedCopyItem = {
   text: string;
   reasoning: string;
 };
 type AISuggestedCopyGroups = Record<CopyKey, AISuggestedCopyItem[]>;
+type AIComboOption = {
+  id: string;
+  primaryText: string;
+  headline: string;
+  description?: string;
+  ctaType: string;
+  rationale: string;
+  primaryRoas?: number;
+  headlineRoas?: number;
+  strategy?: BatchStrategy;
+  laneSize?: number;
+};
 
 const BUILD_PRESETS: Array<{
   label: string;
@@ -149,8 +172,35 @@ function formatPercent(value?: number): string {
   return `${Number(value).toFixed(0)}%`;
 }
 
+function normalizeCtaType(value?: string): string | null {
+  const raw = (value || '').trim();
+  if (!raw) return null;
+  return raw
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '') || null;
+}
+
+function formatCtaLabel(value?: string): string {
+  const normalized = normalizeCtaType(value);
+  if (!normalized) return 'Shop Now';
+  return normalized
+    .split('_')
+    .map((part) => part.charAt(0) + part.slice(1).toLowerCase())
+    .join(' ');
+}
+
 function normalizeCopyText(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function formatSuggestionReasoning(reasoning: string): string {
+  const text = reasoning.trim();
+  if (!text) return 'Suggested from winner and account context.';
+  if (/ai-inspired fallback generated/i.test(text)) {
+    return text.replace(/AI-inspired fallback generated/gi, 'Fallback template generated');
+  }
+  return text;
 }
 
 function dedupeRankedItems(items: WinningCopyRankedItem[], limit = 5): WinningCopyRankedItem[] {
@@ -177,37 +227,52 @@ function getToneClasses(tone: SectionTone): {
 } {
   if (tone === 'amber') {
     return {
-      card: 'border-amber-200 bg-amber-50/35 shadow-[0_10px_24px_-20px_rgba(217,119,6,0.45)]',
-      header: 'border-amber-200 bg-amber-50/70',
-      title: 'text-amber-900',
-      icon: 'text-amber-600',
-      count: 'border-amber-200 bg-amber-100/70 text-amber-800',
-      row: 'border-amber-200 bg-white',
-      rank: 'border-amber-200 bg-amber-50 text-amber-800',
+      card: 'border-slate-200 bg-white',
+      header: 'border-slate-200 bg-slate-50',
+      title: 'text-slate-800',
+      icon: 'text-slate-500',
+      count: 'border-slate-200 bg-white text-slate-700',
+      row: 'border-slate-200 bg-white',
+      rank: 'border-slate-300 bg-slate-50 text-slate-700',
     };
   }
 
   if (tone === 'emerald') {
     return {
-      card: 'border-emerald-200 bg-emerald-50/35 shadow-[0_10px_24px_-20px_rgba(5,150,105,0.4)]',
-      header: 'border-emerald-200 bg-emerald-50/70',
-      title: 'text-emerald-900',
-      icon: 'text-emerald-600',
-      count: 'border-emerald-200 bg-emerald-100/70 text-emerald-800',
-      row: 'border-emerald-200 bg-white',
-      rank: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+      card: 'border-slate-200 bg-white',
+      header: 'border-slate-200 bg-slate-50',
+      title: 'text-slate-800',
+      icon: 'text-slate-500',
+      count: 'border-slate-200 bg-white text-slate-700',
+      row: 'border-slate-200 bg-white',
+      rank: 'border-slate-300 bg-slate-50 text-slate-700',
     };
   }
 
   return {
-    card: 'border-blue-200 bg-blue-50/35 shadow-[0_10px_24px_-20px_rgba(37,99,235,0.45)]',
-    header: 'border-blue-200 bg-blue-50/70',
-    title: 'text-blue-900',
-    icon: 'text-blue-600',
-    count: 'border-blue-200 bg-blue-100/70 text-blue-800',
-    row: 'border-blue-200 bg-white',
-    rank: 'border-blue-200 bg-blue-50 text-blue-800',
+    card: 'border-slate-200 bg-white',
+    header: 'border-slate-200 bg-slate-50',
+    title: 'text-slate-800',
+    icon: 'text-slate-500',
+    count: 'border-slate-200 bg-white text-slate-700',
+    row: 'border-slate-200 bg-white',
+    rank: 'border-slate-300 bg-slate-50 text-slate-700',
   };
+}
+
+function getSummaryToneClasses(tone: SummaryTone): string {
+  switch (tone) {
+    case 'blue':
+      return 'border-blue-200 bg-blue-50/60';
+    case 'violet':
+      return 'border-violet-200 bg-violet-50/50';
+    case 'emerald':
+      return 'border-emerald-200 bg-emerald-50/50';
+    case 'amber':
+      return 'border-amber-200 bg-amber-50/55';
+    default:
+      return 'border-slate-200 bg-slate-50/70';
+  }
 }
 
 function fallbackSuggestions(items: string[] | undefined): Array<{ text: string }> {
@@ -309,12 +374,15 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
   const [launchFlowWindow, setLaunchFlowWindow] = useState<'closed' | 'config' | 'overview'>(
     'closed',
   );
-  const [customTextModal, setCustomTextModal] = useState<{
-    sectionKey: CopyKey | null;
-    text: string;
-  }>({
-    sectionKey: null,
-    text: '',
+  const [customTextInputs, setCustomTextInputs] = useState<Record<CopyKey, string>>({
+    primaryTexts: '',
+    headlines: '',
+    descriptions: '',
+  });
+  const [customTextEditorsOpen, setCustomTextEditorsOpen] = useState<Record<CopyKey, boolean>>({
+    primaryTexts: false,
+    headlines: false,
+    descriptions: false,
   });
   const aiInsightProductIdRef = useRef<string | null>(null);
 
@@ -510,6 +578,69 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
     () => batches.reduce((sum, batch) => sum + batch.creativeIds.length, 0),
     [batches],
   );
+  const topSummaryItems = useMemo<QuickLaunchSummaryItem[]>(() => {
+    const items: QuickLaunchSummaryItem[] = [
+      {
+        key: 'productMain',
+        label: selectedProfile?.productName || 'No product selected',
+        value: `${totalSelected} creative${totalSelected !== 1 ? 's' : ''}`,
+        tone: 'blue',
+        noTruncate: true,
+        wide: true,
+        plainLabel: true,
+      },
+    ];
+
+    items.push(
+      {
+        key: 'adsets',
+        label: 'Ad Sets',
+        value: `${batches.length}`,
+        tone: 'violet',
+      },
+      {
+        key: 'ads',
+        label: 'Ads',
+        value: `${totalAds}`,
+        tone: 'emerald',
+      },
+    );
+
+    if (formatCounts.image > 0) {
+      items.push({
+        key: 'images',
+        label: 'Images',
+        value: `${formatCounts.image}`,
+        tone: 'amber',
+      });
+    }
+    if (formatCounts.video > 0) {
+      items.push({
+        key: 'videos',
+        label: 'Videos',
+        tone: 'blue',
+        value: `${formatCounts.video}`,
+      });
+    }
+    if (formatCounts.carousel > 0) {
+      items.push({
+        key: 'carousels',
+        label: 'Carousels',
+        tone: 'emerald',
+        value: `${formatCounts.carousel}`,
+      });
+    }
+
+    return items;
+  }, [
+    batches.length,
+    formatCounts.carousel,
+    formatCounts.image,
+    formatCounts.video,
+    selectedProfile?.productName,
+    totalAds,
+    totalSelected,
+  ]);
   const aiSuggestedGroups = useMemo<AISuggestedCopyGroups>(() => {
     if (!aiInsights) {
       return {
@@ -609,6 +740,131 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
     topHeadlines,
     topPrimaryTexts,
   ]);
+  const aiComboOptions = useMemo<AIComboOption[]>(() => {
+    if (!aiInsights) return [];
+
+    const buildCandidates = (
+      winnerItems: WinningCopyRankedItem[],
+      suggestedItems: AISuggestedCopyItem[],
+      launchDraftItems: string[] | undefined,
+    ): Array<{ text: string; source: 'winner' | 'ai'; roas?: number }> => {
+      const out: Array<{ text: string; source: 'winner' | 'ai'; roas?: number }> = [];
+      const seen = new Set<string>();
+      const push = (text: string, source: 'winner' | 'ai', roas?: number) => {
+        const normalized = normalizeCopyText(text);
+        if (!normalized || seen.has(normalized)) return;
+        seen.add(normalized);
+        out.push({ text: text.trim(), source, roas });
+      };
+
+      for (const item of winnerItems.slice(0, 5)) {
+        push(item.text || '', 'winner', item.metrics?.roas);
+      }
+      for (const item of suggestedItems.slice(0, 5)) {
+        push(item.text || '', 'ai');
+      }
+      for (const text of launchDraftItems || []) {
+        push(text || '', 'ai');
+      }
+      return out;
+    };
+
+    const primaryCandidates = buildCandidates(
+      topPrimaryTexts,
+      aiSuggestedGroups.primaryTexts,
+      aiInsights.launchDraft?.copyPlan.primaryTexts,
+    );
+    const headlineCandidates = buildCandidates(
+      topHeadlines,
+      aiSuggestedGroups.headlines,
+      aiInsights.launchDraft?.copyPlan.headlines,
+    );
+    const descriptionCandidates = buildCandidates(
+      topDescriptions,
+      aiSuggestedGroups.descriptions,
+      aiInsights.launchDraft?.copyPlan.descriptions,
+    );
+
+    const ctaCandidates = Array.from(
+      new Set(
+        [
+          normalizeCtaType(aiInsights.insights.bestCTA?.type),
+          normalizeCtaType(launchConfig.ctaType),
+          'SHOP_NOW',
+          'LEARN_MORE',
+          'GET_OFFER',
+        ].filter(Boolean) as string[],
+      ),
+    );
+
+    if (primaryCandidates.length === 0 || headlineCandidates.length === 0) {
+      return [];
+    }
+
+    const combos: AIComboOption[] = [];
+    const desiredCount = Math.min(
+      3,
+      Math.max(primaryCandidates.length, headlineCandidates.length, 1),
+    );
+
+    for (let index = 0; index < desiredCount; index += 1) {
+      const primary = primaryCandidates[index] || primaryCandidates[0];
+      const headline =
+        headlineCandidates[(index + (index > 0 ? 1 : 0)) % headlineCandidates.length] ||
+        headlineCandidates[0];
+      const description = showDescriptionSection
+        ? (descriptionCandidates[index % Math.max(descriptionCandidates.length, 1)]?.text || '')
+        : '';
+      const ctaType = ctaCandidates[index % ctaCandidates.length] || 'SHOP_NOW';
+
+      const rationaleBits = [
+        primary.source === 'winner' ? 'Winner primary text' : 'AI-generated primary text',
+        headline.source === 'winner' ? 'winner headline' : 'AI-generated headline',
+        `CTA ${formatCtaLabel(ctaType)}`,
+      ];
+
+      combos.push({
+        id: `combo-${index + 1}`,
+        primaryText: primary.text,
+        headline: headline.text,
+        description,
+        ctaType,
+        rationale: `${rationaleBits.join(' + ')}.`,
+        primaryRoas: primary.roas,
+        headlineRoas: headline.roas,
+        strategy: aiBestCombo?.strategy,
+        laneSize: aiBestCombo?.laneSize,
+      });
+    }
+
+    const deduped: AIComboOption[] = [];
+    const seenComboKeys = new Set<string>();
+    for (const combo of combos) {
+      const key = [
+        normalizeCopyText(combo.primaryText),
+        normalizeCopyText(combo.headline),
+        normalizeCopyText(combo.description || ''),
+        combo.ctaType,
+      ].join('|');
+      if (seenComboKeys.has(key)) continue;
+      seenComboKeys.add(key);
+      deduped.push(combo);
+    }
+
+    return deduped.slice(0, 3);
+  }, [
+    aiBestCombo?.laneSize,
+    aiBestCombo?.strategy,
+    aiInsights,
+    aiSuggestedGroups.descriptions,
+    aiSuggestedGroups.headlines,
+    aiSuggestedGroups.primaryTexts,
+    launchConfig.ctaType,
+    showDescriptionSection,
+    topDescriptions,
+    topHeadlines,
+    topPrimaryTexts,
+  ]);
 
   const handleAutoBatch = useCallback(
     (strategy = selectedPreset) => {
@@ -655,21 +911,69 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
     [launchConfig, updateLaunchConfig],
   );
 
-  const openCustomTextModal = useCallback((key: CopyKey) => {
-    setCustomTextModal({ sectionKey: key, text: '' });
+  const setCustomTextInput = useCallback((key: CopyKey, value: string) => {
+    setCustomTextInputs((current) => ({ ...current, [key]: value }));
   }, []);
 
-  const closeCustomTextModal = useCallback(() => {
-    setCustomTextModal({ sectionKey: null, text: '' });
+  const setCustomTextEditorOpen = useCallback((key: CopyKey, open: boolean) => {
+    setCustomTextEditorsOpen((current) => ({ ...current, [key]: open }));
   }, []);
 
-  const confirmCustomTextModal = useCallback(() => {
-    if (!customTextModal.sectionKey) return;
-    const text = customTextModal.text.trim();
-    if (!text) return;
-    addCopyItem(customTextModal.sectionKey, text, 'manual');
-    closeCustomTextModal();
-  }, [addCopyItem, closeCustomTextModal, customTextModal.sectionKey, customTextModal.text]);
+  const addInlineCustomText = useCallback(
+    (key: CopyKey): boolean => {
+      const text = (customTextInputs[key] || '').trim();
+      if (!text) return false;
+      addCopyItem(key, text, 'manual');
+      setCustomTextInputs((current) => ({ ...current, [key]: '' }));
+      return true;
+    },
+    [addCopyItem, customTextInputs],
+  );
+
+  const applyAiCombo = useCallback(
+    (combo: AIComboOption) => {
+      const primaryTexts = dedupeCopyItems([
+        ...((launchConfig.primaryTexts || []) as CopyItem[]),
+        createCopyItem(combo.primaryText, 'ai_generated'),
+      ]);
+      const headlines = dedupeCopyItems([
+        ...((launchConfig.headlines || []) as CopyItem[]),
+        createCopyItem(combo.headline, 'ai_generated'),
+      ]);
+
+      const patch: Partial<LaunchConfig> = {
+        primaryTexts,
+        headlines,
+        ctaType: combo.ctaType,
+      };
+
+      if (showDescriptionSection && combo.description) {
+        patch.descriptions = dedupeCopyItems([
+          ...((launchConfig.descriptions || []) as CopyItem[]),
+          createCopyItem(combo.description, 'ai_generated'),
+        ]);
+      }
+
+      if (combo.strategy) {
+        patch.batchStrategy = combo.strategy;
+      }
+      if (combo.laneSize) {
+        patch.creativesPerBatch = combo.laneSize;
+        patch.adsetDistribution =
+          combo.laneSize === 1 ? 'one_per_adset' : launchConfig.adsetDistribution || 'distribute';
+      }
+
+      updateLaunchConfig(patch);
+    },
+    [
+      launchConfig.adsetDistribution,
+      launchConfig.descriptions,
+      launchConfig.headlines,
+      launchConfig.primaryTexts,
+      showDescriptionSection,
+      updateLaunchConfig,
+    ],
+  );
 
   const handleLaunch = useCallback(async () => {
     if (batches.length === 0) return;
@@ -699,324 +1003,391 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
       : selectedCampaignSummary?.campaignName ||
         launchConfig.existingCampaignId ||
         'Existing campaign not selected';
-  const customTextSectionLabel = customTextModal.sectionKey
-    ? COPY_SECTIONS.find((section) => section.key === customTextModal.sectionKey)?.title || 'Text'
-    : 'Text';
 
   return (
     <div className="space-y-5">
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(340px,0.95fr)]">
-        <div className="flex flex-col gap-5">
-          <section className="order-2 rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_18px_40px_-32px_rgba(15,23,42,0.45)]">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-                  Batch Build
-                </p>
-                <h4 className="mt-1 text-lg font-semibold text-slate-950">
-                  Choose the lane structure first
-                </h4>
-              </div>
-              <button
-                onClick={() => handleAutoBatch()}
-                disabled={totalSelected === 0}
-                className="inline-flex items-center gap-2 rounded-full bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+      <div className="mx-auto w-full max-w-6xl space-y-5 px-2 sm:px-4 lg:px-6">
+        <section className="w-full rounded-2xl border border-slate-200 bg-white px-2.5 py-2 shadow-[0_12px_28px_-28px_rgba(15,23,42,0.45)]">
+          <div className="flex items-stretch gap-2 overflow-x-auto">
+            {topSummaryItems.map((item) => (
+              <div
+                key={item.key}
+                className={cn(
+                  'rounded-xl border px-2.5 py-1.5',
+                  item.wide
+                    ? 'flex-none min-w-max px-3 pr-4'
+                    : 'min-w-[110px] flex-1',
+                  getSummaryToneClasses(item.tone),
+                )}
               >
-                <Zap className="h-4 w-4" />
-                Build lanes
-              </button>
-            </div>
-
-            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              {BUILD_PRESETS.map((option) => {
-                const active = selectedPreset === option.strategy;
-                return (
-                  <button
-                    key={option.strategy}
-                    onClick={() => setSelectedPreset(option.strategy)}
-                    className={cn(
-                      'rounded-2xl border px-4 py-4 text-left transition',
-                      active
-                        ? 'border-blue-500 bg-blue-50 shadow-sm'
-                        : 'border-slate-200 bg-slate-50/70 hover:border-slate-300 hover:bg-white',
-                    )}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-sm font-semibold text-slate-950">{option.label}</p>
-                      {active && <CheckCircle2 className="h-4 w-4 text-blue-600" />}
-                    </div>
-                    <p className="mt-1 text-xs text-slate-500">{option.helper}</p>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-              <span className="font-semibold text-slate-900">{preset.label}</span>
-              {' '}will create a compact lane plan using{' '}
-              <span className="font-semibold text-slate-900">{preset.helper.toLowerCase()}</span>.
-            </div>
-          </section>
-
-          <section className="order-1 rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_18px_40px_-32px_rgba(15,23,42,0.45)]">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-                  Copy Picks
-                </p>
-                <h4 className="mt-1 text-lg font-semibold text-slate-950">
-                  Pull winning copy into the launch flow
-                </h4>
-              </div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">
-                {winningAdsLoading ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Loading history
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="h-3.5 w-3.5 text-blue-600" />
-                    {winningAds?.stats.totalAds || 0} winning ads scanned
-                  </>
-                )}
-              </div>
-            </div>
-
-            <div className="mt-5 rounded-2xl border-2 border-slate-300 bg-gradient-to-br from-slate-50 to-white p-4 shadow-sm">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-                    Top Performing Texts
-                  </p>
-                  <h5 className="mt-1 text-sm font-semibold text-slate-900">
-                    Winner copy with ROAS, CPC, CPM and CTR
-                  </h5>
-                </div>
-                <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-medium text-slate-600">
-                  <BarChart3 className="h-3.5 w-3.5 text-blue-600" />
-                  Showing top {showDescriptionSection
-                    ? Math.max(topPrimaryTexts.length, topHeadlines.length, topDescriptions.length, 0)
-                    : Math.max(topPrimaryTexts.length, topHeadlines.length, 0)} ranked entries
-                </div>
-              </div>
-
-              <div className="mt-4 space-y-3">
-                <TopPerformingCopyList
-                  title="Primary Texts"
-                  icon={AlignLeft}
-                  rows={topPrimaryTexts}
-                  emptyLabel="No winning primary texts found yet."
-                  tone="blue"
-                  addLabel="Add"
-                  removeLabel="Remove"
-                  onAdd={(text) => addCopyItem('primaryTexts', text)}
-                  onRemove={(text) => removeCopyItemByText('primaryTexts', text)}
-                  selectedItems={(launchConfig.primaryTexts || []) as CopyItem[]}
-                />
-                <TopPerformingCopyList
-                  title="Headlines"
-                  icon={Type}
-                  rows={topHeadlines}
-                  emptyLabel="No winning headlines found yet."
-                  tone="amber"
-                  addLabel="Add"
-                  removeLabel="Remove"
-                  onAdd={(text) => addCopyItem('headlines', text)}
-                  onRemove={(text) => removeCopyItemByText('headlines', text)}
-                  selectedItems={(launchConfig.headlines || []) as CopyItem[]}
-                />
-                {showDescriptionSection ? (
-                  <TopPerformingCopyList
-                    title="Descriptions"
-                    icon={FileText}
-                    rows={topDescriptions}
-                    emptyLabel="No winning descriptions found yet."
-                    tone="emerald"
-                    addLabel="Add"
-                    removeLabel="Remove"
-                    onAdd={(text) => addCopyItem('descriptions', text)}
-                    onRemove={(text) => removeCopyItemByText('descriptions', text)}
-                    selectedItems={(launchConfig.descriptions || []) as CopyItem[]}
-                  />
-                ) : null}
-              </div>
-            </div>
-
-            <div className="mt-5 space-y-4">
-              {COPY_SECTIONS.filter((section) => showDescriptionSection || section.key !== 'descriptions').map((section) => {
-                const selectedItems = (launchConfig[section.key] || []) as CopyItem[];
-                const tone = getToneClasses(section.tone);
-                return (
-                  <div
-                    key={section.key}
-                    className={cn('rounded-[24px] border-2 p-4', tone.card)}
-                  >
-                    <div className={cn('flex items-center justify-between gap-3 rounded-xl border px-3 py-2', tone.header)}>
-                      <div>
-                        <p className={cn('text-sm font-semibold', tone.title)}>{section.title}</p>
-                        <p className="text-xs text-slate-500">{selectedItems.length} selected</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <div className={cn('rounded-full border px-2.5 py-1 text-[11px] font-semibold', tone.count)}>
-                          {selectedItems.length}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => openCustomTextModal(section.key)}
-                          className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-700 transition hover:border-blue-300 hover:bg-blue-100"
-                        >
-                          Custom text
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 space-y-2">
-                      {selectedItems.length > 0 ? (
-                        selectedItems.slice(0, 3).map((item) => (
-                          <div key={item.id} className={cn('rounded-2xl border px-3 py-3', tone.row)}>
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <SelectedCopyText text={item.text} />
-                                <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                                  {getSourceBadge(item.source)}
-                                </p>
-                              </div>
-                              <button
-                                onClick={() => removeCopyItem(section.key, item.id)}
-                                className="rounded-full border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-500 transition hover:border-slate-300 hover:text-slate-700"
-                              >
-                                Remove
-                              </button>
-                            </div>
-                          </div>
-                        ))
-                      ) : (
-                        <div className={cn('rounded-2xl border border-dashed px-3 py-5 text-sm text-slate-500', tone.row)}>
-                          {section.empty}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-
-          <section className="order-3 rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_18px_40px_-32px_rgba(15,23,42,0.45)]">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-                  Lane Preview
-                </p>
-                <h4 className="mt-1 text-lg font-semibold text-slate-950">
-                  Keep the batching surface light, but editable
-                </h4>
-              </div>
-              <div className="inline-flex items-center gap-2">
-                {batches.length > 0 && (
-                  <button
-                    onClick={() => useCreativeHubStore.getState().shuffleBatches()}
-                    className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
-                  >
-                    <Shuffle className="h-4 w-4" />
-                    Shuffle lanes
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setLanePreviewCollapsed((current) => !current)}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-slate-300 hover:bg-slate-50"
-                  aria-label={lanePreviewCollapsed ? 'Expand lane preview' : 'Collapse lane preview'}
-                  title={lanePreviewCollapsed ? 'Expand lane preview' : 'Collapse lane preview'}
-                >
-                  {lanePreviewCollapsed ? (
-                    <ChevronDown className="h-4 w-4" />
-                  ) : (
-                    <ChevronUp className="h-4 w-4" />
+                <p
+                  className={cn(
+                    item.plainLabel
+                      ? 'text-[12px] font-semibold text-slate-700'
+                      : 'text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500',
                   )}
-                </button>
+                >
+                  {item.label}
+                </p>
+                <p
+                  className={cn(
+                    'text-[13px] font-semibold text-slate-900',
+                    item.noTruncate ? 'whitespace-nowrap' : 'truncate',
+                  )}
+                  title={item.value}
+                >
+                  {item.value}
+                </p>
               </div>
-            </div>
+            ))}
+          </div>
+        </section>
 
-            {!lanePreviewCollapsed ? (
-              <div className="mt-4">
-                <BatchList
-                  batches={batches}
-                  creatives={selectedCreatives}
-                  onRemoveBatch={removeBatch}
-                  onRemoveCreative={removeCreativeFromBatch}
-                />
-              </div>
-            ) : null}
-          </section>
-        </div>
-
-        <div className="space-y-5">
-          <section className="w-full rounded-[24px] border border-slate-200 bg-white px-4 py-3 shadow-[0_14px_30px_-30px_rgba(15,23,42,0.45)]">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-              Quick Launch
-            </p>
-            <p className="mt-1 text-sm font-semibold text-slate-900">
-              {totalSelected} creative{totalSelected !== 1 ? 's' : ''} selected
-            </p>
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-600">
-              {selectedProfile && (
-                <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 font-medium">
-                  {selectedProfile.productName}
-                </span>
-              )}
-              <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
-                {batches.length} ad set{batches.length !== 1 ? 's' : ''}
-              </span>
-              <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
-                {totalAds} ad{totalAds !== 1 ? 's' : ''}
-              </span>
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <FormatPill icon={Image} label={`${formatCounts.image} images`} visible={formatCounts.image > 0} />
-              <FormatPill icon={Film} label={`${formatCounts.video} videos`} visible={formatCounts.video > 0} />
-              <FormatPill icon={Images} label={`${formatCounts.carousel} carousels`} visible={formatCounts.carousel > 0} />
-            </div>
-          </section>
-
-          <AIStrategyPanel
-            aiInsights={aiInsights}
-            aiInsightsLoading={aiInsightsLoading}
-            hasProductContext={Boolean(aiFocusProductId)}
-            productName={selectedProfile?.productName || null}
-            bestCombo={aiBestCombo}
-            suggestions={aiSuggestedGroups}
-            launchConfig={launchConfig}
-            showDescriptionSection={showDescriptionSection}
-            onAdd={(key, text) => addCopyItem(key, text, 'ai_generated')}
-            onRemove={removeCopyItemByText}
-          />
-
-          <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_18px_40px_-32px_rgba(15,23,42,0.45)]">
+        <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_18px_40px_-32px_rgba(15,23,42,0.45)]">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-                Launch Config
+                Copy Picks
               </p>
+              <h4 className="mt-1 text-lg font-semibold text-slate-950">
+                Pull winning copy into the launch flow
+              </h4>
+            </div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">
+              {winningAdsLoading ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Loading history
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-3.5 w-3.5 text-blue-600" />
+                  {winningAds?.stats.totalAds || 0} winning ads scanned
+                </>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/40 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                  Top Performing Texts
+                </p>
+                <h5 className="mt-1 text-sm font-semibold text-slate-900">
+                  Winner copy with ROAS, CPC, CPM and CTR
+                </h5>
+              </div>
+              <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-medium text-slate-600">
+                <BarChart3 className="h-3.5 w-3.5 text-blue-600" />
+                Showing top {showDescriptionSection
+                  ? Math.max(topPrimaryTexts.length, topHeadlines.length, topDescriptions.length, 0)
+                  : Math.max(topPrimaryTexts.length, topHeadlines.length, 0)} ranked entries
+              </div>
             </div>
 
-            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
-              <p className="mt-1">
-                {batches.length} ad set{batches.length !== 1 ? 's' : ''} • {totalAds} ad
-                {totalAds !== 1 ? 's' : ''} • {selectedCopyCount} copy text
-                {selectedCopyCount !== 1 ? 's' : ''} selected
-              </p>
+            <div className="mt-4 space-y-3">
+              <TopPerformingCopyList
+                title="Primary Texts"
+                icon={AlignLeft}
+                rows={topPrimaryTexts}
+                emptyLabel="No winning primary texts found yet."
+                tone="blue"
+                addLabel="Add"
+                removeLabel="Remove"
+                onAdd={(text) => addCopyItem('primaryTexts', text)}
+                onRemove={(text) => removeCopyItemByText('primaryTexts', text)}
+                selectedItems={(launchConfig.primaryTexts || []) as CopyItem[]}
+              />
+              <TopPerformingCopyList
+                title="Headlines"
+                icon={Type}
+                rows={topHeadlines}
+                emptyLabel="No winning headlines found yet."
+                tone="amber"
+                addLabel="Add"
+                removeLabel="Remove"
+                onAdd={(text) => addCopyItem('headlines', text)}
+                onRemove={(text) => removeCopyItemByText('headlines', text)}
+                selectedItems={(launchConfig.headlines || []) as CopyItem[]}
+              />
+              {showDescriptionSection ? (
+                <TopPerformingCopyList
+                  title="Descriptions"
+                  icon={FileText}
+                  rows={topDescriptions}
+                  emptyLabel="No winning descriptions found yet."
+                  tone="emerald"
+                  addLabel="Add"
+                  removeLabel="Remove"
+                  onAdd={(text) => addCopyItem('descriptions', text)}
+                  onRemove={(text) => removeCopyItemByText('descriptions', text)}
+                  selectedItems={(launchConfig.descriptions || []) as CopyItem[]}
+                />
+              ) : null}
             </div>
+          </div>
+        </section>
 
+        <AIStrategyPanel
+          aiInsights={aiInsights}
+          aiInsightsLoading={aiInsightsLoading}
+          hasProductContext={Boolean(aiFocusProductId)}
+          productName={selectedProfile?.productName || null}
+          bestCombo={aiBestCombo}
+          comboOptions={aiComboOptions}
+          suggestions={aiSuggestedGroups}
+          launchConfig={launchConfig}
+          showDescriptionSection={showDescriptionSection}
+          onApplyCombo={applyAiCombo}
+          onAdd={(key, text) => addCopyItem(key, text, 'ai_generated')}
+          onRemove={removeCopyItemByText}
+        />
+
+        <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_18px_40px_-32px_rgba(15,23,42,0.45)]">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+                Selected Texts
+              </p>
+              <h4 className="mt-1 text-lg font-semibold text-slate-950">
+                Review, adjust, and keep only launch-ready copy
+              </h4>
+            </div>
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600">
+              {selectedCopyCount} text{selectedCopyCount !== 1 ? 's' : ''} selected
+            </span>
+          </div>
+
+          <div className="mt-5 space-y-4">
+            {COPY_SECTIONS.filter((section) => showDescriptionSection || section.key !== 'descriptions').map((section) => {
+              const selectedItems = (launchConfig[section.key] || []) as CopyItem[];
+              const tone = getToneClasses(section.tone);
+              return (
+                <div
+                  key={section.key}
+                  className={cn('rounded-[24px] border p-4', tone.card)}
+                >
+                  <div className={cn('flex items-center justify-between gap-3 rounded-xl border px-3 py-2', tone.header)}>
+                    <div>
+                      <p className={cn('text-sm font-semibold', tone.title)}>{section.title}</p>
+                      <p className="text-xs text-slate-500">{selectedItems.length} selected</p>
+                    </div>
+                    <div className={cn('rounded-full border px-2.5 py-1 text-[11px] font-semibold', tone.count)}>
+                      {selectedItems.length}
+                    </div>
+                  </div>
+
+                  <div className="mt-3 space-y-2">
+                    {selectedItems.length > 0 ? (
+                      selectedItems.slice(0, 3).map((item) => (
+                        <div key={item.id} className={cn('rounded-2xl border px-3 py-3', tone.row)}>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <SelectedCopyText text={item.text} />
+                              <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                                {getSourceBadge(item.source)}
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => removeCopyItem(section.key, item.id)}
+                              className="rounded-full border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-500 transition hover:border-slate-300 hover:text-slate-700"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className={cn('rounded-2xl border border-dashed px-3 py-5 text-sm text-slate-500', tone.row)}>
+                        {section.empty}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      onClick={() => setCustomTextEditorOpen(section.key, !customTextEditorsOpen[section.key])}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Custom text
+                    </button>
+
+                    {customTextEditorsOpen[section.key] ? (
+                      <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50/70 p-2.5">
+                        <textarea
+                          value={customTextInputs[section.key]}
+                          onChange={(event) => setCustomTextInput(section.key, event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' && !event.shiftKey) {
+                              event.preventDefault();
+                              const added = addInlineCustomText(section.key);
+                              if (added) {
+                                setCustomTextEditorOpen(section.key, false);
+                              }
+                            }
+                          }}
+                          rows={2}
+                          placeholder={`Add custom ${section.title.toLowerCase()} and press Enter`}
+                          className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-slate-300 focus:ring-1 focus:ring-slate-300"
+                        />
+                        <div className="mt-2 flex items-center justify-between gap-2">
+                          <p className="text-[11px] text-slate-500">Press Enter to add. Use Shift+Enter for a new line.</p>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setCustomTextEditorOpen(section.key, false)}
+                              className="rounded-md border border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-800"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const added = addInlineCustomText(section.key);
+                                if (added) {
+                                  setCustomTextEditorOpen(section.key, false);
+                                }
+                              }}
+                              className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-700 transition hover:border-blue-300 hover:bg-blue-100"
+                            >
+                              Add text
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_18px_40px_-32px_rgba(15,23,42,0.45)]">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+                Batch Build
+              </p>
+              <h4 className="mt-1 text-lg font-semibold text-slate-950">
+                Choose the lane structure first
+              </h4>
+            </div>
             <button
-              type="button"
-              onClick={() => setLaunchFlowWindow('config')}
-              className="mt-4 inline-flex w-full items-center justify-center rounded-[18px] bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-700"
+              onClick={() => handleAutoBatch()}
+              disabled={totalSelected === 0}
+              className="inline-flex items-center gap-2 rounded-full bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
-              Configure launch
+              <Zap className="h-4 w-4" />
+              Build lanes
             </button>
-          </section>
-        </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {BUILD_PRESETS.map((option) => {
+              const active = selectedPreset === option.strategy;
+              return (
+                <button
+                  key={option.strategy}
+                  onClick={() => setSelectedPreset(option.strategy)}
+                  className={cn(
+                    'rounded-2xl border px-4 py-4 text-left transition',
+                    active
+                      ? 'border-blue-500 bg-blue-50 shadow-sm'
+                      : 'border-slate-200 bg-slate-50/70 hover:border-slate-300 hover:bg-white',
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-slate-950">{option.label}</p>
+                    {active && <CheckCircle2 className="h-4 w-4 text-blue-600" />}
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500">{option.helper}</p>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            <span className="font-semibold text-slate-900">{preset.label}</span>
+            {' '}will create a compact lane plan using{' '}
+            <span className="font-semibold text-slate-900">{preset.helper.toLowerCase()}</span>.
+          </div>
+        </section>
+
+        <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_18px_40px_-32px_rgba(15,23,42,0.45)]">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+                Lane Preview
+              </p>
+              <h4 className="mt-1 text-lg font-semibold text-slate-950">
+                Keep the batching surface light, but editable
+              </h4>
+            </div>
+            <div className="inline-flex items-center gap-2">
+              {batches.length > 0 && (
+                <button
+                  onClick={() => useCreativeHubStore.getState().shuffleBatches()}
+                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+                >
+                  <Shuffle className="h-4 w-4" />
+                  Shuffle lanes
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setLanePreviewCollapsed((current) => !current)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-slate-300 hover:bg-slate-50"
+                aria-label={lanePreviewCollapsed ? 'Expand lane preview' : 'Collapse lane preview'}
+                title={lanePreviewCollapsed ? 'Expand lane preview' : 'Collapse lane preview'}
+              >
+                {lanePreviewCollapsed ? (
+                  <ChevronDown className="h-4 w-4" />
+                ) : (
+                  <ChevronUp className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+          </div>
+
+          {!lanePreviewCollapsed ? (
+            <div className="mt-4">
+              <BatchList
+                batches={batches}
+                creatives={selectedCreatives}
+                onRemoveBatch={removeBatch}
+                onRemoveCreative={removeCreativeFromBatch}
+              />
+            </div>
+          ) : null}
+        </section>
+
+        <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_18px_40px_-32px_rgba(15,23,42,0.45)]">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+              Launch Config
+            </p>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+            <p className="mt-1">
+              {batches.length} ad set{batches.length !== 1 ? 's' : ''} • {totalAds} ad
+              {totalAds !== 1 ? 's' : ''} • {selectedCopyCount} copy text
+              {selectedCopyCount !== 1 ? 's' : ''} selected
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setLaunchFlowWindow('config')}
+            className="mt-4 inline-flex w-full items-center justify-center rounded-[18px] bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-700"
+          >
+            Configure launch
+          </button>
+        </section>
       </div>
 
       {launchFlowWindow === 'config' && (
@@ -1177,52 +1548,6 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
         </div>
       )}
 
-      {customTextModal.sectionKey && (
-        <div
-          className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-950/45 p-4"
-          onClick={closeCustomTextModal}
-        >
-          <div
-            className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-              Custom Text • {customTextSectionLabel}
-            </p>
-            <p className="mt-1 text-sm text-slate-600">
-              Write a custom entry for this category.
-            </p>
-
-            <textarea
-              value={customTextModal.text}
-              onChange={(event) =>
-                setCustomTextModal((current) => ({ ...current, text: event.target.value }))
-              }
-              placeholder={`Type custom ${customTextSectionLabel.toLowerCase()}...`}
-              className="mt-3 min-h-[140px] w-full resize-y rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-200/50"
-              autoFocus
-            />
-
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={closeCustomTextModal}
-                className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-800"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={confirmCustomTextModal}
-                disabled={!customTextModal.text.trim()}
-                className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition hover:border-blue-300 hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-              >
-                OK
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -1242,9 +1567,11 @@ function AIStrategyPanel({
   hasProductContext,
   productName,
   bestCombo,
+  comboOptions,
   suggestions,
   launchConfig,
   showDescriptionSection,
+  onApplyCombo,
   onAdd,
   onRemove,
 }: {
@@ -1262,9 +1589,11 @@ function AIStrategyPanel({
     strategy: BatchStrategy;
     laneSize: number;
   } | null;
+  comboOptions: AIComboOption[];
   suggestions: AISuggestedCopyGroups;
   launchConfig: Partial<LaunchConfig>;
   showDescriptionSection: boolean;
+  onApplyCombo: (combo: AIComboOption) => void;
   onAdd: (key: CopyKey, text: string) => void;
   onRemove: (key: CopyKey, text: string) => void;
 }) {
@@ -1363,6 +1692,63 @@ function AIStrategyPanel({
                 />
               )}
             </div>
+
+            {comboOptions.length > 0 ? (
+              <div className="mt-4 space-y-2">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-blue-700">
+                  Combo Options
+                </p>
+                <div className="grid gap-2 md:grid-cols-3">
+                  {comboOptions.map((combo, index) => {
+                    const hasPrimary = ((launchConfig.primaryTexts || []) as CopyItem[]).some(
+                      (item) => normalizeCopyText(item.text) === normalizeCopyText(combo.primaryText),
+                    );
+                    const hasHeadline = ((launchConfig.headlines || []) as CopyItem[]).some(
+                      (item) => normalizeCopyText(item.text) === normalizeCopyText(combo.headline),
+                    );
+                    const hasDescription = !showDescriptionSection || !combo.description
+                      ? true
+                      : ((launchConfig.descriptions || []) as CopyItem[]).some(
+                        (item) => normalizeCopyText(item.text) === normalizeCopyText(combo.description || ''),
+                      );
+                    const hasCta = normalizeCtaType(launchConfig.ctaType) === normalizeCtaType(combo.ctaType);
+                    const comboAlreadyAdded = hasPrimary && hasHeadline && hasDescription && hasCta;
+
+                    return (
+                      <div key={combo.id} className="rounded-xl border border-blue-200 bg-white p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-700">
+                            Combo {index + 1}
+                          </p>
+                          {index === 0 ? (
+                            <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                              Recommended
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="mt-2 line-clamp-2 text-xs text-slate-700">{combo.primaryText}</p>
+                        <p className="mt-1 line-clamp-1 text-xs text-slate-600">HL: {combo.headline}</p>
+                        <p className="mt-1 text-xs font-semibold text-slate-700">CTA: {formatCtaLabel(combo.ctaType)}</p>
+                        <p className="mt-1 text-[11px] text-blue-700">{combo.rationale}</p>
+                        <button
+                          type="button"
+                          onClick={() => onApplyCombo(combo)}
+                          disabled={comboAlreadyAdded}
+                          className={cn(
+                            'mt-2 inline-flex items-center rounded-md border px-2.5 py-1 text-[11px] font-semibold transition',
+                            comboAlreadyAdded
+                              ? 'cursor-default border-slate-200 bg-slate-100 text-slate-500'
+                              : 'border-blue-200 bg-blue-50 text-blue-700 hover:border-blue-300 hover:bg-blue-100',
+                          )}
+                        >
+                          {comboAlreadyAdded ? 'Added' : 'Add combo'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-3">
@@ -1465,7 +1851,7 @@ function AISuggestionList({
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm leading-5 text-slate-800 break-words">{item.text}</p>
-                  <p className="mt-1 text-[11px] text-slate-500">{item.reasoning}</p>
+                  <p className="mt-1 text-[11px] text-slate-500">{formatSuggestionReasoning(item.reasoning)}</p>
                 </div>
                 <button
                   onClick={() => (alreadySelected ? onRemove(sectionKey, item.text) : onAdd(sectionKey, item.text))}
@@ -1557,9 +1943,8 @@ function TopPerformingCopyList({
   selectedItems: CopyItem[];
 }) {
   const toneClasses = getToneClasses(tone);
-  // Use a clear cyan selection surface so selected rows stand out from the existing blue section backgrounds.
   const selectedRowHighlightClass =
-    'border-cyan-500 bg-cyan-100 ring-2 ring-cyan-200 shadow-[0_12px_26px_-18px_rgba(14,116,144,0.85)]';
+    'border-slate-300 bg-slate-100 ring-1 ring-slate-200';
   const [expandedRow, setExpandedRow] = useState<WinningCopyRankedItem | null>(null);
   const expandedAlreadySelected = expandedRow
     ? selectedItems.some(
@@ -1569,7 +1954,7 @@ function TopPerformingCopyList({
 
   return (
     <>
-      <div className={cn('rounded-2xl border-2 p-3', toneClasses.card)}>
+      <div className={cn('rounded-2xl border p-3', toneClasses.card)}>
       <div className={cn('mb-3 flex items-center gap-2 rounded-lg border px-2.5 py-2', toneClasses.header)}>
         <Icon className={cn('h-4 w-4', toneClasses.icon)} />
         <p className={cn('text-xs font-semibold uppercase tracking-[0.18em]', toneClasses.title)}>{title}</p>
@@ -1585,17 +1970,23 @@ function TopPerformingCopyList({
             const alreadySelected = selectedItems.some(
               (selected) => normalizeCopyText(selected.text) === normalizeCopyText(row.text),
             );
+            const useCompactRowLayout = row.text.trim().length <= 110;
             return (
               <div
                 key={`${title}-${row.rank}-${row.text}`}
                 className={cn(
-                  'rounded-xl border px-3 py-2 transition-all',
+                  'rounded-xl border px-3 py-1.5 transition-all',
                   toneClasses.row,
                   alreadySelected && selectedRowHighlightClass,
                 )}
               >
-                <div className="flex min-h-[108px] flex-col justify-between gap-2">
-                  <div className="min-w-0 flex items-start gap-2.5">
+                <div
+                  className={cn(
+                    'flex flex-col gap-2.5',
+                    useCompactRowLayout && 'lg:grid lg:grid-cols-[auto_minmax(0,1fr)_auto] lg:items-start lg:gap-3',
+                  )}
+                >
+                  <div className="min-w-0 flex items-start gap-2.5 lg:gap-2">
                     <div className={cn('inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ring-1', toneClasses.rank)}>
                       {row.rank}
                     </div>
@@ -1605,7 +1996,12 @@ function TopPerformingCopyList({
                     />
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-1.5 lg:justify-end">
+                  <div
+                    className={cn(
+                      'flex flex-wrap items-center gap-1.5 sm:justify-end',
+                      useCompactRowLayout && 'lg:flex-nowrap lg:self-center',
+                    )}
+                  >
                     <div className="grid grid-cols-2 gap-1 sm:grid-cols-5">
                       <MetricStat label="ROAS" value={formatRoas(row.metrics?.roas)} tone="emerald" />
                       <MetricStat label="CPC" value={formatCurrency(row.metrics?.cpc)} />
@@ -1694,63 +2090,42 @@ function ExpandableCopyPreview({
   text: string;
   onSeeMore: () => void;
 }) {
-  const textRef = useRef<HTMLParagraphElement | null>(null);
-  const [isTruncated, setIsTruncated] = useState(false);
-
-  const checkTruncation = useCallback(() => {
-    const element = textRef.current;
-    if (!element) {
-      setIsTruncated(false);
-      return;
-    }
-    setIsTruncated(element.scrollHeight > element.clientHeight + 1);
-  }, []);
-
-  useEffect(() => {
-    checkTruncation();
-  }, [checkTruncation, text]);
-
-  useEffect(() => {
-    const element = textRef.current;
-    if (!element || typeof ResizeObserver === 'undefined') return;
-
-    const observer = new ResizeObserver(() => {
-      checkTruncation();
-    });
-    observer.observe(element);
-
-    const handleResize = () => checkTruncation();
-    window.addEventListener('resize', handleResize);
-
-    return () => {
-      observer.disconnect();
-      window.removeEventListener('resize', handleResize);
+  const preview = useMemo(() => {
+    const normalized = text.trim().replace(/\s+/g, ' ');
+    const words = normalized ? normalized.split(' ') : [];
+    const wordLimit = 34;
+    const truncated = words.length > wordLimit;
+    return {
+      truncated,
+      text: truncated ? words.slice(0, wordLimit).join(' ') : normalized,
     };
-  }, [checkTruncation, text]);
+  }, [text]);
 
   return (
     <div className="min-w-0 flex-1">
-      <div className="flex items-start gap-2">
-        <div className="group relative min-w-0 flex-1">
-          <p ref={textRef} className="line-clamp-2 text-xs leading-4 text-slate-800 break-words">
-            {text}
-          </p>
-          {isTruncated && (
-            <div className="invisible absolute left-0 top-full z-30 w-[min(560px,90vw)] rounded-xl border border-slate-200 bg-white p-3 opacity-0 shadow-xl transition group-hover:visible group-hover:opacity-100">
-              <p className="text-xs leading-5 text-slate-700 whitespace-pre-wrap break-words">{text}</p>
-            </div>
-          )}
-        </div>
-
-        {isTruncated && (
-          <button
-            type="button"
-            onClick={onSeeMore}
-            className="shrink-0 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100"
-          >
-            See more
-          </button>
-        )}
+      <div className="relative min-w-0 flex-1">
+        <p className="text-xs leading-4 text-slate-800 break-words">
+          <span className="group/text relative inline">
+            {preview.text}
+            {preview.truncated && (
+              <div className="pointer-events-none invisible absolute left-0 top-full z-30 w-[min(560px,90vw)] rounded-xl border border-slate-200 bg-white p-3 opacity-0 shadow-xl transition group-hover/text:visible group-hover/text:opacity-100">
+                <p className="text-xs leading-5 text-slate-700 whitespace-pre-wrap break-words">{text}</p>
+              </div>
+            )}
+          </span>
+          {preview.truncated ? (
+            <>
+              ...{' '}
+              <button
+                type="button"
+                onClick={onSeeMore}
+                className="inline text-[11px] font-semibold text-blue-600 underline-offset-2 hover:underline"
+              >
+                See more
+              </button>
+            </>
+          ) : null}
+        </p>
       </div>
     </div>
   );
@@ -1837,9 +2212,9 @@ function MetricStat({
   return (
     <div
       className={cn(
-        'min-w-[60px] rounded-lg border px-2 py-1 text-center',
+        'min-w-[54px] rounded-lg border px-2 py-0.5 text-center',
         tone === 'emerald'
-          ? 'border-emerald-200 bg-emerald-50'
+          ? 'border-emerald-200/70 bg-emerald-50/50'
           : 'border-slate-200 bg-white',
       )}
     >

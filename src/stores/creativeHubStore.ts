@@ -217,6 +217,7 @@ function buildCreativeCounts(creatives: InboxCreative[]): Record<string, number>
   const counts: Record<string, number> = {};
   for (const creative of creatives) {
     if (!creative.productProfileId) continue;
+    if (creative.uploadStatus !== 'ready' && !creative.driveUrl) continue;
     counts[creative.productProfileId] = (counts[creative.productProfileId] ?? 0) + 1;
   }
   return counts;
