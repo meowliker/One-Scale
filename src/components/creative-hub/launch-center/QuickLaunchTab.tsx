@@ -22,6 +22,7 @@ import {
 
 import { cn } from '@/lib/utils';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
+import toast from 'react-hot-toast';
 import type {
   AIInsightsData,
   BatchStrategy,
@@ -977,15 +978,93 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
 
   const handleLaunch = useCallback(async () => {
     if (batches.length === 0) return;
+
     setLaunching(true);
     try {
-      updateLaunchConfig({ batches, batchStrategy: preset.strategy });
+      const selectedIds = selectedCreatives.map((creative) => creative.id);
+      const selectedSet = new Set(selectedIds);
+
+      // Keep batch lanes in sync with currently selected creatives and avoid duplicate lane assignment.
+      const seenBatchIds = new Set<string>();
+      const normalizedBatches = batches
+        .map((batch) => {
+          const creativeIds = (batch.creativeIds || []).filter((creativeId) => {
+            if (!selectedSet.has(creativeId)) return false;
+            if (seenBatchIds.has(creativeId)) return false;
+            seenBatchIds.add(creativeId);
+            return true;
+          });
+          return { ...batch, creativeIds };
+        })
+        .filter((batch) => batch.creativeIds.length > 0);
+
+      const patch: Partial<LaunchConfig> = {
+        batches: normalizedBatches,
+        batchStrategy: preset.strategy,
+        selectedCreativeIds: selectedIds,
+        selectedCreativeSnapshots: selectedCreatives,
+      };
+
+      if (launchConfig.adsetMode === 'existing_adsets') {
+        // Existing ad set mode should launch only creatives actually assigned in lanes.
+        const seenAssignedIds = new Set<string>();
+        const normalizedAssignments = Object.entries(launchConfig.existingAdsetAssignments || {})
+          .map(([adsetId, creativeIds]) => {
+            const ids = (creativeIds || []).filter((creativeId) => {
+              if (!selectedSet.has(creativeId)) return false;
+              if (seenAssignedIds.has(creativeId)) return false;
+              seenAssignedIds.add(creativeId);
+              return true;
+            });
+            return [adsetId, ids] as const;
+          })
+          .filter(([, creativeIds]) => creativeIds.length > 0);
+
+        patch.existingAdsetAssignments = Object.fromEntries(normalizedAssignments);
+
+        if (seenAssignedIds.size > 0) {
+          const launchableIds = selectedIds.filter((id) => seenAssignedIds.has(id));
+          patch.selectedCreativeIds = launchableIds;
+          patch.selectedCreativeSnapshots = selectedCreatives.filter((creative) =>
+            seenAssignedIds.has(creative.id),
+          );
+        }
+      } else if (normalizedBatches.length > 0) {
+        // In batch mode, launch only creatives that are still present in lane rows.
+        const launchableSet = new Set<string>();
+        for (const batch of normalizedBatches) {
+          for (const creativeId of batch.creativeIds) {
+            launchableSet.add(creativeId);
+          }
+        }
+        const launchableIds = selectedIds.filter((id) => launchableSet.has(id));
+        if (launchableIds.length > 0) {
+          patch.selectedCreativeIds = launchableIds;
+          patch.selectedCreativeSnapshots = selectedCreatives.filter((creative) =>
+            launchableSet.has(creative.id),
+          );
+        }
+      }
+
+      updateLaunchConfig(patch);
       await executeLaunch(storeId);
       setLaunchFlowWindow('closed');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Launch failed';
+      toast.error(message);
     } finally {
       setLaunching(false);
     }
-  }, [batches, executeLaunch, preset.strategy, storeId, updateLaunchConfig]);
+  }, [
+    batches,
+    executeLaunch,
+    launchConfig.adsetMode,
+    launchConfig.existingAdsetAssignments,
+    preset.strategy,
+    selectedCreatives,
+    storeId,
+    updateLaunchConfig,
+  ]);
   const selectedAdsetCount = useMemo(
     () =>
       Object.values(launchConfig.existingAdsetAssignments || {}).filter(
@@ -997,6 +1076,11 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
   const effectiveDailyBudget = launchConfig.dailyBudget ?? selectedProfile?.defaultBudget ?? 0;
   const effectiveDuration = launchConfig.testDuration ?? selectedProfile?.defaultDuration ?? 0;
   const launchStatus = launchConfig.launchStatus ?? selectedProfile?.defaultLaunchStatus ?? 'PAUSED';
+  const launchTimingLabel =
+    launchConfig.launchTime === 'scheduled'
+      ? `${launchConfig.scheduledDate || 'Select date'} ${launchConfig.scheduledTime || '09:00'}`
+      : 'Immediately';
+  const isScheduledLaunch = launchConfig.launchTime === 'scheduled';
   const campaignSummaryLabel =
     launchConfig.campaignMode === 'new'
       ? launchConfig.newCampaignName || 'New campaign (name pending)'
@@ -1475,6 +1559,7 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
                 <div className="mt-2 grid gap-2 sm:grid-cols-2">
                   <OverviewMeta label="Structure" value={effectiveStructure} />
                   <OverviewMeta label="Launch As" value={launchStatus} />
+                  <OverviewMeta label="Launch Timing" value={launchTimingLabel} />
                   <OverviewMeta
                     label={effectiveStructure === 'CBO' ? 'Campaign Budget' : 'Daily / Ad Set'}
                     value={`${formatCurrency(effectiveDailyBudget)} / day`}
@@ -1540,8 +1625,10 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
               >
                 {launching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
                 {launching
-                  ? 'Launching...'
-                  : `Launch ${totalAds || totalSelected} creative${(totalAds || totalSelected) !== 1 ? 's' : ''}`}
+                  ? isScheduledLaunch
+                    ? 'Scheduling...'
+                    : 'Launching...'
+                  : `${isScheduledLaunch ? 'Schedule' : 'Launch'} ${totalAds || totalSelected} creative${(totalAds || totalSelected) !== 1 ? 's' : ''}`}
               </button>
             </div>
           </div>
@@ -2104,7 +2191,7 @@ function ExpandableCopyPreview({
   return (
     <div className="min-w-0 flex-1">
       <div className="relative min-w-0 flex-1">
-        <p className="text-xs leading-4 text-slate-800 break-words">
+        <div className="text-xs leading-4 text-slate-800 break-words">
           <span className="group/text relative inline">
             {preview.text}
             {preview.truncated && (
@@ -2125,7 +2212,7 @@ function ExpandableCopyPreview({
               </button>
             </>
           ) : null}
-        </p>
+        </div>
       </div>
     </div>
   );

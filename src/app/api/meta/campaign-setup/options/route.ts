@@ -153,10 +153,14 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const [pagesRaw, pixelsRaw, customConversionsRaw, instagramRaw] = await Promise.all([
+    const [pagesRaw, promotedPagesRaw, pixelsRaw, customConversionsRaw, instagramRaw] = await Promise.all([
       fetchPaged(token.accessToken, '/me/accounts', {
         fields: 'id,name,instagram_business_account{id,username}',
         limit: '100',
+      }).catch(() => []),
+      fetchPaged(token.accessToken, `/${defaultAccountId}/promote_pages`, {
+        fields: 'id,name,instagram_business_account{id,username}',
+        limit: '200',
       }).catch(() => []),
       fetchPaged(token.accessToken, `/${defaultAccountId}/adspixels`, {
         fields: 'id,name,status',
@@ -172,8 +176,9 @@ export async function GET(request: NextRequest) {
       }).catch(() => []),
     ]);
 
+    const pagesCombinedRaw = [...pagesRaw, ...promotedPagesRaw];
     const pages: CampaignSetupPageOption[] = uniqueById(
-      pagesRaw.map((row) => {
+      pagesCombinedRaw.map((row) => {
         const igObj = (row.instagram_business_account && typeof row.instagram_business_account === 'object')
           ? row.instagram_business_account as Record<string, unknown>
           : null;
@@ -235,6 +240,7 @@ export async function GET(request: NextRequest) {
 
     const fetchedAnyRows =
       pagesRaw.length > 0 ||
+      promotedPagesRaw.length > 0 ||
       pixelsRaw.length > 0 ||
       customConversionsRaw.length > 0 ||
       instagramRaw.length > 0;

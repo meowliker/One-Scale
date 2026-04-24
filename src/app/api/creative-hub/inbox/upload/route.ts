@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getMetaToken } from '@/app/api/lib/tokens';
+import { getGoogleDriveToken, getMetaToken } from '@/app/api/lib/tokens';
+import { listDriveChildren } from '@/app/api/google-drive/shared';
 
 const GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 const GRAPH_VIDEO_BASE = 'https://graph-video.facebook.com/v21.0';
@@ -17,17 +18,148 @@ function normalizeAccountId(value: string): string {
   return id.startsWith('act_') ? id : `act_${id}`;
 }
 
+function mediaTypeFromFilename(filename: string): 'image' | 'video' | null {
+  const lower = filename.toLowerCase();
+  if (IMAGE_EXTENSIONS.some((ext) => lower.endsWith(ext))) return 'image';
+  if (VIDEO_EXTENSIONS.some((ext) => lower.endsWith(ext))) return 'video';
+  return null;
+}
+
+function mediaTypeFromBuffer(fileBuffer: Buffer): 'image' | 'video' | null {
+  if (fileBuffer.length < 12) return null;
+
+  // JPEG
+  if (fileBuffer[0] === 0xff && fileBuffer[1] === 0xd8 && fileBuffer[2] === 0xff) {
+    return 'image';
+  }
+  // PNG
+  if (
+    fileBuffer[0] === 0x89 &&
+    fileBuffer[1] === 0x50 &&
+    fileBuffer[2] === 0x4e &&
+    fileBuffer[3] === 0x47 &&
+    fileBuffer[4] === 0x0d &&
+    fileBuffer[5] === 0x0a &&
+    fileBuffer[6] === 0x1a &&
+    fileBuffer[7] === 0x0a
+  ) {
+    return 'image';
+  }
+  // GIF
+  if (
+    fileBuffer[0] === 0x47 &&
+    fileBuffer[1] === 0x49 &&
+    fileBuffer[2] === 0x46 &&
+    fileBuffer[3] === 0x38
+  ) {
+    return 'image';
+  }
+  // BMP
+  if (fileBuffer[0] === 0x42 && fileBuffer[1] === 0x4d) {
+    return 'image';
+  }
+  // WEBP (RIFF....WEBP)
+  if (
+    fileBuffer[0] === 0x52 &&
+    fileBuffer[1] === 0x49 &&
+    fileBuffer[2] === 0x46 &&
+    fileBuffer[3] === 0x46 &&
+    fileBuffer[8] === 0x57 &&
+    fileBuffer[9] === 0x45 &&
+    fileBuffer[10] === 0x42 &&
+    fileBuffer[11] === 0x50
+  ) {
+    return 'image';
+  }
+  // MP4/MOV/M4V family ("ftyp" at byte offset 4)
+  if (
+    fileBuffer[4] === 0x66 &&
+    fileBuffer[5] === 0x74 &&
+    fileBuffer[6] === 0x79 &&
+    fileBuffer[7] === 0x70
+  ) {
+    return 'video';
+  }
+  // AVI (RIFF....AVI)
+  if (
+    fileBuffer[0] === 0x52 &&
+    fileBuffer[1] === 0x49 &&
+    fileBuffer[2] === 0x46 &&
+    fileBuffer[3] === 0x46 &&
+    fileBuffer[8] === 0x41 &&
+    fileBuffer[9] === 0x56 &&
+    fileBuffer[10] === 0x49
+  ) {
+    return 'video';
+  }
+  // MKV/WebM (EBML)
+  if (
+    fileBuffer[0] === 0x1a &&
+    fileBuffer[1] === 0x45 &&
+    fileBuffer[2] === 0xdf &&
+    fileBuffer[3] === 0xa3
+  ) {
+    return 'video';
+  }
+
+  return null;
+}
+
+function filenameFromContentDisposition(contentDisposition: string | null): string | null {
+  if (!contentDisposition) return null;
+  const utf8 = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8?.[1]) {
+    try {
+      return decodeURIComponent(utf8[1].replace(/['"]/g, '').trim());
+    } catch {
+      return utf8[1].replace(/['"]/g, '').trim();
+    }
+  }
+  const basic = contentDisposition.match(/filename="?([^"]+)"?/i);
+  return basic?.[1]?.trim() || null;
+}
+
 function detectMediaType(
   contentType: string | null,
-  url: string
+  url: string,
+  fileName: string,
+  fileBuffer: Buffer,
+  mediaTypeHint?: string | null,
 ): 'image' | 'video' | null {
+  const normalizedContentType = (contentType || '').toLowerCase();
+
   if (contentType) {
     if (contentType.startsWith('image/')) return 'image';
     if (contentType.startsWith('video/')) return 'video';
   }
-  const urlPath = new URL(url).pathname.toLowerCase();
-  if (IMAGE_EXTENSIONS.some((ext) => urlPath.endsWith(ext))) return 'image';
-  if (VIDEO_EXTENSIONS.some((ext) => urlPath.endsWith(ext))) return 'video';
+
+  const byName = mediaTypeFromFilename(fileName);
+  if (byName) return byName;
+
+  try {
+    const urlPath = new URL(url).pathname.toLowerCase();
+    const byUrl = mediaTypeFromFilename(urlPath);
+    if (byUrl) return byUrl;
+  } catch {
+    // ignore invalid URL paths
+  }
+
+  const byBytes = mediaTypeFromBuffer(fileBuffer);
+  if (byBytes) return byBytes;
+
+  // Avoid forcing media type from hints when upstream returned a non-media document.
+  if (
+    normalizedContentType.startsWith('text/html') ||
+    normalizedContentType.startsWith('application/json') ||
+    normalizedContentType.startsWith('text/plain')
+  ) {
+    return null;
+  }
+
+  if (mediaTypeHint === 'image' || mediaTypeHint === 'video') {
+    return mediaTypeHint;
+  }
+
   return null;
 }
 
@@ -72,11 +204,121 @@ function toDirectDriveUrl(url: string): string {
   return url;
 }
 
+function extractGoogleDriveFileId(url: string): string | null {
+  const fileIdMatch = url.match(/\/file\/d\/([^/]+)/);
+  if (fileIdMatch?.[1]) return fileIdMatch[1];
+
+  try {
+    const parsed = new URL(url);
+    const idParam = parsed.searchParams.get('id');
+    if (idParam) return idParam;
+  } catch {
+    // ignore invalid URL
+  }
+
+  return null;
+}
+
+function isGoogleDriveFolderUrl(url: string): boolean {
+  return url.includes('/folders/') || url.includes('/drive/folders/');
+}
+
+function extractGoogleDriveFolderId(url: string): string | null {
+  const match = url.match(/\/folders\/([a-zA-Z0-9_-]+)/) || url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  return match ? match[1] : null;
+}
+
+function isDriveMediaMime(mimeType?: string | null): boolean {
+  const mime = (mimeType || '').toLowerCase();
+  return mime.startsWith('image/') || mime.startsWith('video/');
+}
+
+async function resolveDriveMediaFileId(
+  driveAccessToken: string,
+  folderId: string,
+  maxDepth = 2,
+): Promise<string | null> {
+  const queue: Array<{ id: string; depth: number }> = [{ id: folderId, depth: 0 }];
+  const visited = new Set<string>();
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) break;
+    if (visited.has(current.id)) continue;
+    visited.add(current.id);
+
+    const page = await listDriveChildren(driveAccessToken, current.id);
+    const files = page.files || [];
+
+    const directMedia = files.find((file) => isDriveMediaMime(file.mimeType));
+    if (directMedia?.id) return directMedia.id;
+
+    if (current.depth >= maxDepth) continue;
+
+    for (const file of files) {
+      if (file.mimeType === 'application/vnd.google-apps.folder' && file.id) {
+        queue.push({ id: file.id, depth: current.depth + 1 });
+      }
+    }
+  }
+
+  return null;
+}
+
+function maybeProxyGoogleDriveUrl(url: string, storeId: string, requestUrl: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== 'drive.google.com') return url;
+    const fileId = extractGoogleDriveFileId(url);
+    if (!fileId) return url;
+    return new URL(
+      `/api/google-drive/content?storeId=${encodeURIComponent(storeId)}&fileId=${encodeURIComponent(
+        fileId,
+      )}&mode=content&download=1`,
+      requestUrl,
+    ).toString();
+  } catch {
+    return url;
+  }
+}
+
+function toAbsoluteUrl(url: string, requestUrl: string): string {
+  if (!url) return url;
+  if (/^https?:\/\//i.test(url)) return url;
+  try {
+    return new URL(url, requestUrl).toString();
+  } catch {
+    return url;
+  }
+}
+
 async function parseGraphError(response: Response): Promise<string> {
   const text = await response.text();
   try {
-    const parsed = JSON.parse(text) as { error?: { message?: string } };
-    return parsed.error?.message || text;
+    const parsed = JSON.parse(text) as {
+      error?: {
+        message?: string;
+        type?: string;
+        code?: number;
+        error_subcode?: number;
+        error_user_title?: string;
+        error_user_msg?: string;
+        fbtrace_id?: string;
+      };
+    };
+    const err = parsed.error;
+    if (!err) return text;
+    return [
+      err.message || 'Meta API error',
+      err.type ? `type=${err.type}` : '',
+      typeof err.code === 'number' ? `code=${err.code}` : '',
+      typeof err.error_subcode === 'number' ? `subcode=${err.error_subcode}` : '',
+      err.error_user_title ? `user_title=${err.error_user_title}` : '',
+      err.error_user_msg ? `user_msg=${err.error_user_msg}` : '',
+      err.fbtrace_id ? `fbtrace=${err.fbtrace_id}` : '',
+    ]
+      .filter(Boolean)
+      .join(' | ');
   } catch {
     return text;
   }
@@ -96,6 +338,7 @@ export async function POST(request: NextRequest) {
     driveUrl?: string;
     adAccountId?: string;
     storeId?: string;
+    mediaTypeHint?: string;
   };
 
   try {
@@ -104,7 +347,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { creativeId, driveUrl, adAccountId, storeId } = body;
+  const { creativeId, driveUrl, adAccountId, storeId, mediaTypeHint } = body;
 
   if (!creativeId || !driveUrl || !adAccountId || !storeId) {
     return NextResponse.json(
@@ -132,7 +375,52 @@ export async function POST(request: NextRequest) {
 
   try {
     // Download file from Drive URL
-    const downloadUrl = toDirectDriveUrl(driveUrl);
+    const absoluteSourceUrl = toAbsoluteUrl(driveUrl, request.url);
+
+    let downloadUrl = maybeProxyGoogleDriveUrl(
+      toDirectDriveUrl(absoluteSourceUrl),
+      storeId,
+      request.url,
+    );
+
+    if (isGoogleDriveFolderUrl(absoluteSourceUrl)) {
+      const folderId = extractGoogleDriveFolderId(absoluteSourceUrl);
+      if (!folderId) {
+        return NextResponse.json(
+          { error: 'Invalid Google Drive folder URL.' },
+          { status: 422 }
+        );
+      }
+
+      const driveToken = await getGoogleDriveToken(storeId);
+      if (!driveToken) {
+        return NextResponse.json(
+          {
+            error:
+              'Google Drive is not connected for this store. Please connect Google Drive to launch creatives from folder links.',
+          },
+          { status: 422 }
+        );
+      }
+
+      const mediaFileId = await resolveDriveMediaFileId(driveToken.accessToken, folderId);
+      if (!mediaFileId) {
+        return NextResponse.json(
+          {
+            error:
+              'No image/video file found inside the linked Google Drive folder.',
+          },
+          { status: 422 }
+        );
+      }
+
+      downloadUrl = new URL(
+        `/api/google-drive/content?storeId=${encodeURIComponent(storeId)}&fileId=${encodeURIComponent(
+          mediaFileId,
+        )}&mode=content&download=1`,
+        request.url,
+      ).toString();
+    }
     const fileRes = await fetch(downloadUrl, { redirect: 'follow' });
 
     if (!fileRes.ok) {
@@ -142,17 +430,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const fileBuffer = Buffer.from(await fileRes.arrayBuffer());
     const contentType = fileRes.headers.get('content-type');
-    const mediaType = detectMediaType(contentType, driveUrl);
+    const fileName =
+      filenameFromContentDisposition(fileRes.headers.get('content-disposition')) ||
+      filenameFromUrl(fileRes.url || driveUrl) ||
+      filenameFromUrl(driveUrl) ||
+      `${creativeId || 'creative'}`;
+    const mediaType = detectMediaType(contentType, fileRes.url || driveUrl, fileName, fileBuffer, mediaTypeHint);
 
     if (!mediaType) {
       return NextResponse.json(
-        { error: 'Could not determine file type. Must be an image or video.' },
+        {
+          error:
+            'Could not determine file type. Must be an image or video. Please ensure the source is a direct media file URL.',
+        },
         { status: 422 }
       );
     }
-
-    const fileBuffer = Buffer.from(await fileRes.arrayBuffer());
     const maxSize = mediaType === 'image' ? MAX_IMAGE_SIZE : MAX_VIDEO_SIZE;
 
     if (fileBuffer.byteLength > maxSize) {
@@ -163,7 +458,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const fileName = filenameFromUrl(driveUrl);
     const blob = new Blob([fileBuffer], { type: contentType || undefined });
     const file = new File([blob], fileName);
 

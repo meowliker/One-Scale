@@ -401,6 +401,10 @@ export function LaunchConfigPanel({
       : launchConfig.dailyBudget ?? selectedProfile?.defaultBudget ?? 20;
 
   const duration = launchConfig.testDuration ?? selectedProfile?.defaultDuration ?? 3;
+  const launchTime = launchConfig.launchTime ?? 'immediately';
+  const scheduledDate = launchConfig.scheduledDate ?? '';
+  const scheduledTime = launchConfig.scheduledTime ?? '09:00';
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const totalAdSets = batches.length;
   const totalAds = useMemo(
     () => batches.reduce((sum, batch) => sum + batch.creativeIds.length, 0),
@@ -471,6 +475,15 @@ export function LaunchConfigPanel({
     if (!launchConfig.launchStatus && selectedProfile?.defaultLaunchStatus) {
       patch.launchStatus = selectedProfile.defaultLaunchStatus;
     }
+    if (!launchConfig.launchTime) {
+      patch.launchTime = 'immediately';
+    }
+    if (!launchConfig.scheduledTime) {
+      patch.scheduledTime = '09:00';
+    }
+    if (launchConfig.launchTime === 'scheduled' && !launchConfig.scheduledDate) {
+      patch.scheduledDate = today;
+    }
 
     if (Object.keys(patch).length > 0) {
       updateLaunchConfig(patch);
@@ -484,15 +497,19 @@ export function LaunchConfigPanel({
     launchConfig.existingCampaignId,
     launchConfig.instagramActorId,
     launchConfig.launchStatus,
+    launchConfig.launchTime,
     launchConfig.newCampaignName,
     launchConfig.pageId,
     launchConfig.pixelId,
     launchConfig.productProfileId,
+    launchConfig.scheduledDate,
+    launchConfig.scheduledTime,
     launchConfig.structure,
     launchConfig.testDuration,
     linkedCampaigns.length,
     selectedCampaign,
     selectedProfile,
+    today,
     updateLaunchConfig,
   ]);
 
@@ -1058,6 +1075,74 @@ export function LaunchConfigPanel({
               {formatMoney(dailyBudget)} / day
             </div>
           </FormField>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-600 dark:bg-slate-900/35">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-300">
+              Launch Timing
+            </p>
+            <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
+              {launchTime === 'scheduled'
+                ? `${scheduledDate || 'Select date'} ${scheduledTime}`
+                : 'Immediately'}
+            </span>
+          </div>
+
+          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => updateLaunchConfig({ launchTime: 'immediately', scheduledDate: undefined })}
+              className={cn(
+                'rounded-lg border px-3 py-2 text-left text-sm font-medium transition',
+                launchTime === 'immediately'
+                  ? 'border-blue-500 bg-blue-50 text-blue-800 dark:border-blue-400 dark:bg-blue-900/25 dark:text-blue-100'
+                  : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-600 dark:bg-slate-900/45 dark:text-slate-200',
+              )}
+            >
+              Launch immediately
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                updateLaunchConfig({
+                  launchTime: 'scheduled',
+                  scheduledDate: launchConfig.scheduledDate || today,
+                  scheduledTime: launchConfig.scheduledTime || '09:00',
+                })
+              }
+              className={cn(
+                'rounded-lg border px-3 py-2 text-left text-sm font-medium transition',
+                launchTime === 'scheduled'
+                  ? 'border-blue-500 bg-blue-50 text-blue-800 dark:border-blue-400 dark:bg-blue-900/25 dark:text-blue-100'
+                  : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-600 dark:bg-slate-900/45 dark:text-slate-200',
+              )}
+            >
+              Schedule launch
+            </button>
+          </div>
+
+          {launchTime === 'scheduled' && (
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <FormField label="Scheduled Date">
+                <input
+                  type="date"
+                  min={today}
+                  value={scheduledDate}
+                  onChange={(event) => updateLaunchConfig({ scheduledDate: event.target.value })}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 dark:border-slate-600 dark:bg-slate-900/60 dark:text-slate-100"
+                />
+              </FormField>
+              <FormField label="Scheduled Time">
+                <input
+                  type="time"
+                  value={scheduledTime}
+                  onChange={(event) => updateLaunchConfig({ scheduledTime: event.target.value })}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 dark:border-slate-600 dark:bg-slate-900/60 dark:text-slate-100"
+                />
+              </FormField>
+            </div>
+          )}
         </div>
       </div>
 

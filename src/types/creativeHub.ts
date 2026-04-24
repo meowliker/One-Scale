@@ -347,7 +347,13 @@ export interface MirrorAccount {
 
 // ── Creative Tests ──
 
-export type TestStatus = 'launching' | 'active' | 'completed' | 'failed' | 'partial';
+export type TestStatus =
+  | 'launching'
+  | 'scheduled'
+  | 'active'
+  | 'completed'
+  | 'failed'
+  | 'partial';
 export type ItemTestStatus = 'testing' | 'winner' | 'killed' | 'inconclusive';
 export type ReviewStatus = 'IN_REVIEW' | 'ACTIVE' | 'DISAPPROVED' | 'WITH_ISSUES';
 export type LearningPhase = 'LEARNING' | 'LEARNING_LIMITED' | 'ACTIVE';

@@ -514,6 +514,8 @@ function initDb(): Database.Database {
       ON creative_hub_inbox_sync_status(store_id, product_profile_id);
   `);
 
+  ensureOAuthPlatformConstraints(instance);
+
   // Migration: back-fill stores table from existing connections
   // This ensures stores created before the stores table was added still appear
   const orphanedConnections = instance.prepare(`
@@ -630,6 +632,123 @@ function initDb(): Database.Database {
   ensureMetaSnapshotSchema(instance);
 
   return instance;
+}
+
+function tableSql(db: Database.Database, tableName: string): string {
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(tableName) as { sql?: string } | undefined;
+  return (row?.sql || '').toLowerCase();
+}
+
+function hasGoogleDriveInPlatformConstraint(db: Database.Database, tableName: string): boolean {
+  const sql = tableSql(db, tableName);
+  if (!sql) return true;
+  return sql.includes("'google_drive'");
+}
+
+function ensureOAuthPlatformConstraints(db: Database.Database): void {
+  // Legacy local DBs used CHECK(platform IN ('meta','shopify')); recreate to include google_drive.
+  if (!hasGoogleDriveInPlatformConstraint(db, 'connections')) {
+    const columns = db.pragma('table_info(connections)') as { name: string }[];
+    const hasMetadata = columns.some((column) => column.name === 'metadata');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS connections_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        store_id TEXT NOT NULL,
+        platform TEXT NOT NULL CHECK(platform IN ('meta', 'shopify', 'google_drive')),
+        access_token TEXT NOT NULL,
+        refresh_token TEXT,
+        expires_at INTEGER,
+        account_id TEXT,
+        account_name TEXT,
+        shop_domain TEXT,
+        shop_name TEXT,
+        scopes TEXT,
+        metadata TEXT,
+        connected_at TEXT NOT NULL DEFAULT (datetime('now')),
+        last_synced TEXT,
+        UNIQUE(store_id, platform)
+      );
+      INSERT OR IGNORE INTO connections_new (
+        id, store_id, platform, access_token, refresh_token, expires_at,
+        account_id, account_name, shop_domain, shop_name, scopes, metadata, connected_at, last_synced
+      )
+      SELECT
+        id, store_id, platform, access_token, refresh_token, expires_at,
+        account_id, account_name, shop_domain, shop_name, scopes,
+        ${hasMetadata ? 'metadata' : 'NULL'},
+        connected_at, last_synced
+      FROM connections;
+      DROP TABLE connections;
+      ALTER TABLE connections_new RENAME TO connections;
+    `);
+  }
+
+  if (!hasGoogleDriveInPlatformConstraint(db, 'app_credentials')) {
+    const columns = db.pragma('table_info(app_credentials)') as { name: string }[];
+    const hasWorkspaceId = columns.some((column) => column.name === 'workspace_id');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS app_credentials_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        platform TEXT NOT NULL CHECK(platform IN ('meta', 'shopify', 'google_drive')),
+        workspace_id TEXT NOT NULL DEFAULT '__global__',
+        app_id TEXT NOT NULL,
+        app_secret TEXT NOT NULL,
+        redirect_uri TEXT NOT NULL,
+        scopes TEXT,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(platform, workspace_id)
+      );
+      INSERT OR IGNORE INTO app_credentials_new (
+        id, platform, workspace_id, app_id, app_secret, redirect_uri, scopes, updated_at
+      )
+      SELECT
+        id,
+        platform,
+        ${hasWorkspaceId ? 'workspace_id' : "'__global__'"},
+        app_id,
+        app_secret,
+        redirect_uri,
+        scopes,
+        updated_at
+      FROM app_credentials;
+      DROP TABLE app_credentials;
+      ALTER TABLE app_credentials_new RENAME TO app_credentials;
+    `);
+  }
+
+  if (!hasGoogleDriveInPlatformConstraint(db, 'oauth_states')) {
+    const columns = db.pragma('table_info(oauth_states)') as { name: string }[];
+    const hasWorkspaceId = columns.some((column) => column.name === 'workspace_id');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS oauth_states_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        state_token TEXT NOT NULL UNIQUE,
+        store_id TEXT NOT NULL,
+        platform TEXT NOT NULL CHECK(platform IN ('meta', 'shopify', 'google_drive')),
+        shop_domain TEXT,
+        workspace_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        used INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT OR IGNORE INTO oauth_states_new (
+        id, state_token, store_id, platform, shop_domain, workspace_id, created_at, used
+      )
+      SELECT
+        id,
+        state_token,
+        store_id,
+        platform,
+        shop_domain,
+        ${hasWorkspaceId ? 'workspace_id' : 'NULL'},
+        created_at,
+        used
+      FROM oauth_states;
+      DROP TABLE oauth_states;
+      ALTER TABLE oauth_states_new RENAME TO oauth_states;
+    `);
+  }
 }
 
 function ensureMetaSnapshotSchema(db: Database.Database): void {

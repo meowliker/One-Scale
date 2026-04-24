@@ -17,15 +17,16 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ tests });
     }
 
-    // Default: fetch tests with active-like statuses: active, launching, partial
-    const [activeTests, launchingTests, partialTests, fatigueAlerts] = await Promise.all([
+    // Default: fetch tests with active-like statuses: scheduled, launching, active, partial
+    const [scheduledTests, activeTests, launchingTests, partialTests, fatigueAlerts] = await Promise.all([
+      getCreativeTests(storeId, 'scheduled'),
       getCreativeTests(storeId, 'active'),
       getCreativeTests(storeId, 'launching'),
       getCreativeTests(storeId, 'partial'),
       getFatigueAlerts(storeId),
     ]);
 
-    const tests = [...launchingTests, ...activeTests, ...partialTests];
+    const tests = [...scheduledTests, ...launchingTests, ...activeTests, ...partialTests];
 
     return NextResponse.json({ tests, fatigueAlerts });
   } catch (err) {

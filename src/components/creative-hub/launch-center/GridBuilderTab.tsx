@@ -90,6 +90,11 @@ export function GridBuilderTab() {
   const effectiveDailyBudget = launchConfig.dailyBudget ?? selectedProfile?.defaultBudget ?? 0;
   const effectiveDuration = launchConfig.testDuration ?? selectedProfile?.defaultDuration ?? 0;
   const launchStatus = launchConfig.launchStatus ?? selectedProfile?.defaultLaunchStatus ?? 'PAUSED';
+  const launchTimingLabel =
+    launchConfig.launchTime === 'scheduled'
+      ? `${launchConfig.scheduledDate || 'Select date'} ${launchConfig.scheduledTime || '09:00'}`
+      : 'Immediately';
+  const isScheduledLaunch = launchConfig.launchTime === 'scheduled';
   const campaignSummaryLabel =
     launchConfig.campaignMode === 'new'
       ? launchConfig.newCampaignName || 'New campaign (name pending)'
@@ -394,6 +399,7 @@ export function GridBuilderTab() {
                 <div className="mt-2 grid gap-2 sm:grid-cols-2">
                   <OverviewMeta label="Structure" value={effectiveStructure} />
                   <OverviewMeta label="Launch As" value={launchStatus} />
+                  <OverviewMeta label="Launch Timing" value={launchTimingLabel} />
                   <OverviewMeta
                     label={effectiveStructure === 'CBO' ? 'Campaign Budget' : 'Daily / Ad Set'}
                     value={`${formatCurrency(effectiveDailyBudget)} / day`}
@@ -441,8 +447,10 @@ export function GridBuilderTab() {
               >
                 {launching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
                 {launching
-                  ? 'Launching...'
-                  : `Launch ${batches.length} ad set${batches.length !== 1 ? 's' : ''} -> ${totalAds} ad${totalAds !== 1 ? 's' : ''}`}
+                  ? isScheduledLaunch
+                    ? 'Scheduling...'
+                    : 'Launching...'
+                  : `${isScheduledLaunch ? 'Schedule' : 'Launch'} ${batches.length} ad set${batches.length !== 1 ? 's' : ''} -> ${totalAds} ad${totalAds !== 1 ? 's' : ''}`}
               </button>
             </div>
           </div>

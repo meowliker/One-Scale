@@ -177,7 +177,7 @@ export function LaunchStep4Review() {
               label="Launch Time"
               value={
                 launchConfig.launchTime === 'scheduled'
-                  ? `${launchConfig.scheduledDate} at ${launchConfig.scheduledTime || '09:00'}`
+                  ? `${launchConfig.scheduledDate || 'Select date'} at ${launchConfig.scheduledTime || '09:00'}`
                   : 'Immediately'
               }
             />
@@ -354,9 +354,13 @@ export function LaunchStep4Review() {
       <div className="flex items-start gap-3 rounded-xl border border-blue-200 bg-blue-50/80 px-4 py-3">
         <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-blue-600" />
         <div className="text-xs text-blue-800">
-          <p className="font-medium">Ready to launch?</p>
+          <p className="font-medium">
+            {launchConfig.launchTime === 'scheduled' ? 'Ready to schedule?' : 'Ready to launch?'}
+          </p>
           <p className="mt-0.5">
-            Click &ldquo;Launch Test on Meta&rdquo; below to create all campaigns, ad sets, and ads on your Meta ad account.
+            {launchConfig.launchTime === 'scheduled'
+              ? 'Click "Schedule Test" below to save this launch for later execution at the selected date and time.'
+              : 'Click "Launch Test on Meta" below to create all campaigns, ad sets, and ads on your Meta ad account.'}
             {launchConfig.mirrorAccounts?.some((a) => a.selected) && (
               <> This will also mirror to {launchConfig.mirrorAccounts.filter((a) => a.selected).length} additional account(s).</>
             )}

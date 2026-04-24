@@ -438,6 +438,23 @@ async function upsertRows<T extends Record<string, unknown>>(
   }
 }
 
+function isMissingAdAccountIsActiveColumnError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (!message) return false;
+  if (!message.includes('ad_account_is_active')) return false;
+  return (
+    message.includes('does not exist')
+    || message.includes('Could not find')
+    || message.includes('schema cache')
+  );
+}
+
+function stripAdAccountIsActive<T extends { ad_account_is_active: boolean }>(
+  rows: T[],
+): Array<Omit<T, 'ad_account_is_active'>> {
+  return rows.map(({ ad_account_is_active: _ignored, ...rest }) => rest);
+}
+
 async function getSnapshotData<T>(
   storeId: string,
   endpoint: SnapshotEndpoint,
@@ -993,11 +1010,36 @@ export async function materializeStoreMetaEntitiesFromSnapshots(params: {
     };
   }).filter((row) => row.adset_id.length > 0 && row.campaign_id.length > 0);
 
-  await Promise.all([
-    upsertRows('/meta_campaign_entities?on_conflict=store_id,campaign_id', campaignEntityRows),
-    upsertRows('/meta_adset_entities?on_conflict=store_id,adset_id', adsetEntityRows),
-    upsertRows('/meta_ad_entities?on_conflict=store_id,ad_id', adEntityRows),
-  ]);
+  try {
+    await Promise.all([
+      upsertRows('/meta_campaign_entities?on_conflict=store_id,campaign_id', campaignEntityRows),
+      upsertRows('/meta_adset_entities?on_conflict=store_id,adset_id', adsetEntityRows),
+      upsertRows('/meta_ad_entities?on_conflict=store_id,ad_id', adEntityRows),
+    ]);
+  } catch (error) {
+    if (!isMissingAdAccountIsActiveColumnError(error)) {
+      throw error;
+    }
+
+    console.warn(
+      '[Warehouse] ad_account_is_active column missing in one or more meta entity tables; retrying materialization without that field. Apply migration 041_mark_inactive_for_unlinked_accounts.sql.'
+    );
+
+    await Promise.all([
+      upsertRows(
+        '/meta_campaign_entities?on_conflict=store_id,campaign_id',
+        stripAdAccountIsActive(campaignEntityRows),
+      ),
+      upsertRows(
+        '/meta_adset_entities?on_conflict=store_id,adset_id',
+        stripAdAccountIsActive(adsetEntityRows),
+      ),
+      upsertRows(
+        '/meta_ad_entities?on_conflict=store_id,ad_id',
+        stripAdAccountIsActive(adEntityRows),
+      ),
+    ]);
+  }
 
   return {
     campaigns: campaignEntityRows.length,

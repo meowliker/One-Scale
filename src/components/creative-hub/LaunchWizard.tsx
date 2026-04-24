@@ -30,6 +30,7 @@ export function LaunchWizard() {
   if (!launchWizardOpen) return null;
 
   const currentStep = launchStep - 1; // Convert 1-based to 0-based for indicator
+  const isScheduledLaunch = launchConfig.launchTime === 'scheduled';
 
   const handleBack = () => {
     if (launchStep > 1) {
@@ -62,9 +63,11 @@ export function LaunchWizard() {
     try {
       await executeLaunch(activeStoreId);
       toast.success(
-        launchConfig.launchStatus === 'ACTIVE'
-          ? 'Creative test launched on Meta!'
-          : 'Creative test created in paused mode.',
+        isScheduledLaunch
+          ? `Creative test scheduled for ${launchConfig.scheduledDate || 'selected date'} ${launchConfig.scheduledTime || '09:00'}.`
+          : launchConfig.launchStatus === 'ACTIVE'
+            ? 'Creative test launched on Meta!'
+            : 'Creative test created in paused mode.',
         { duration: 5000 }
       );
     } catch (err) {
@@ -154,7 +157,13 @@ export function LaunchWizard() {
                 )}
               >
                 <Rocket className="h-4 w-4" />
-                {isSubmitting ? 'Launching...' : 'Launch Test on Meta'}
+                {isSubmitting
+                  ? isScheduledLaunch
+                    ? 'Scheduling...'
+                    : 'Launching...'
+                  : isScheduledLaunch
+                    ? 'Schedule Test'
+                    : 'Launch Test on Meta'}
               </button>
             )}
           </div>

@@ -10,13 +10,18 @@ import {
   ChevronUp,
   AlertTriangle,
   Loader2,
+  Rocket,
+  Search,
+  X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
 import { ProductProfileCard } from '@/components/creative-hub/ProductProfileCard';
 import { EditProductProfileModal } from '@/components/creative-hub/EditProductProfileModal';
 import { UnmappedCampaignCard } from '@/components/creative-hub/UnmappedCampaignCard';
-import type { ProductProfile, ProductCampaignLink } from '@/types/creativeHub';
+import { InboxCreativeRow } from '@/components/creative-hub/InboxCreativeRow';
+import { CreativePreviewModal } from '@/components/creative-hub/CreativePreviewModal';
+import type { ProductProfile, ProductCampaignLink, InboxCreative } from '@/types/creativeHub';
 
 interface ProductProfilesTabProps {
   storeId: string;
@@ -30,6 +35,25 @@ function formatLastSyncedAt(value: string | null): string {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(date);
+}
+
+type LaunchPickerStatusFilter = 'all' | 'ready' | 'pending' | 'uploading' | 'failed' | 'no_link';
+type LaunchPickerFormatFilter = 'all' | 'video' | 'image' | 'carousel';
+
+function getLaunchPickerStatus(creative: InboxCreative): Exclude<LaunchPickerStatusFilter, 'all'> {
+  if (creative.uploadStatus === 'ready' || !!creative.driveUrl) {
+    return 'ready';
+  }
+  if (creative.uploadStatus === 'uploading') {
+    return 'uploading';
+  }
+  if (creative.uploadStatus === 'failed') {
+    return 'failed';
+  }
+  if (creative.uploadStatus === 'no_link') {
+    return 'no_link';
+  }
+  return 'pending';
 }
 
 export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
@@ -54,6 +78,15 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
   const [unmappedExpanded, setUnmappedExpanded] = useState(true);
   const [notTestingExpanded, setNotTestingExpanded] = useState(false);
   const [launchingProfileId, setLaunchingProfileId] = useState<string | null>(null);
+  const [launchPickerProfile, setLaunchPickerProfile] = useState<ProductProfile | null>(null);
+  const [launchPickerCreatives, setLaunchPickerCreatives] = useState<InboxCreative[]>([]);
+  const [launchPickerSelectedIds, setLaunchPickerSelectedIds] = useState<Set<string>>(new Set());
+  const [launchPickerSearch, setLaunchPickerSearch] = useState('');
+  const [launchPickerStatusFilter, setLaunchPickerStatusFilter] =
+    useState<LaunchPickerStatusFilter>('all');
+  const [launchPickerFormatFilter, setLaunchPickerFormatFilter] =
+    useState<LaunchPickerFormatFilter>('all');
+  const [previewCreative, setPreviewCreative] = useState<InboxCreative | null>(null);
 
   // Build linked campaigns map from profile data returned by the API
   const linkedCampaignsMap = useMemo(() => {
@@ -155,6 +188,49 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
     setActiveTab('copy-library');
   };
 
+  const closeLaunchPicker = () => {
+    setLaunchPickerProfile(null);
+    setLaunchPickerCreatives([]);
+    setLaunchPickerSelectedIds(new Set());
+    setLaunchPickerSearch('');
+    setLaunchPickerStatusFilter('all');
+    setLaunchPickerFormatFilter('all');
+  };
+
+  const launchPickerVisibleCreatives = useMemo(() => {
+    const query = launchPickerSearch.trim().toLowerCase();
+    return launchPickerCreatives.filter((creative) => {
+      if (
+        launchPickerStatusFilter !== 'all' &&
+        getLaunchPickerStatus(creative) !== launchPickerStatusFilter
+      ) {
+        return false;
+      }
+      if (launchPickerFormatFilter !== 'all' && creative.creativeFormat !== launchPickerFormatFilter) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      const text = [
+        creative.creativeName,
+        creative.clickupTaskName,
+        creative.hook,
+        creative.angle,
+        creative.driveParentFolderName,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return text.includes(query);
+    });
+  }, [
+    launchPickerCreatives,
+    launchPickerSearch,
+    launchPickerStatusFilter,
+    launchPickerFormatFilter,
+  ]);
+
   const handleLaunch = async (profile: ProductProfile) => {
     setLaunchingProfileId(profile.id);
     try {
@@ -168,22 +244,53 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
         scopedCreatives = useCreativeHubStore.getState().inboxCreatives;
       }
 
-      const readyCreativeIds = scopedCreatives
+      const readyCreatives = scopedCreatives
         .filter(
           (creative) =>
             creative.productProfileId === profile.id &&
             (creative.uploadStatus === 'ready' || !!creative.driveUrl),
-        )
-        .map((creative) => creative.id);
+        );
+      const readyCreativeIds = readyCreatives.map((creative) => creative.id);
 
       if (readyCreativeIds.length > 0) {
-        openLaunchCenter(profile.id, readyCreativeIds);
+        setLaunchPickerProfile(profile);
+        setLaunchPickerCreatives(readyCreatives);
+        setLaunchPickerSelectedIds(new Set(readyCreativeIds));
+        setLaunchPickerSearch('');
+        setLaunchPickerStatusFilter('all');
+        setLaunchPickerFormatFilter('all');
       } else {
         openLaunchCenter(profile.id);
       }
     } finally {
       setLaunchingProfileId(null);
     }
+  };
+
+  const toggleLaunchPickerCreative = (creativeId: string) => {
+    setLaunchPickerSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(creativeId)) {
+        next.delete(creativeId);
+      } else {
+        next.add(creativeId);
+      }
+      return next;
+    });
+  };
+
+  const selectAllLaunchPickerCreatives = () => {
+    setLaunchPickerSelectedIds(new Set(launchPickerCreatives.map((creative) => creative.id)));
+  };
+
+  const clearAllLaunchPickerCreatives = () => {
+    setLaunchPickerSelectedIds(new Set());
+  };
+
+  const continueLaunchWithSelectedCreatives = () => {
+    if (!launchPickerProfile || launchPickerSelectedIds.size === 0) return;
+    openLaunchCenter(launchPickerProfile.id, [...launchPickerSelectedIds]);
+    closeLaunchPicker();
   };
 
   const handleMapToProfile = async (campaignId: string, profileId: string) => {
@@ -464,6 +571,138 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
         profile={editingProfile}
         linkedCampaigns={editingProfile ? (linkedCampaignsMap.get(editingProfile.id) ?? []) : []}
         storeId={storeId}
+      />
+
+      {launchPickerProfile && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/55 px-4 py-6">
+          <div className="w-full max-w-4xl rounded-2xl border border-border bg-surface shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-text-dimmed">
+                  Select Creatives
+                </p>
+                <h3 className="mt-1 text-lg font-semibold text-text-primary">
+                  {launchPickerProfile.productName}
+                </h3>
+                <p className="mt-1 text-sm text-text-secondary">
+                  Pick creatives to send to Launch Center.
+                </p>
+              </div>
+              <button
+                onClick={closeLaunchPicker}
+                className="rounded-lg p-2 text-text-dimmed transition-colors hover:bg-surface-hover hover:text-text-secondary"
+                aria-label="Close creative picker"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 px-5 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex w-full flex-wrap items-center gap-2">
+                  <div className="relative min-w-[220px] flex-1">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-dimmed" />
+                    <input
+                      value={launchPickerSearch}
+                      onChange={(event) => setLaunchPickerSearch(event.target.value)}
+                      placeholder="Search creatives..."
+                      className="w-full rounded-lg border border-border bg-surface-elevated py-2 pl-9 pr-3 text-sm text-text-primary outline-none transition-colors focus:border-blue-400"
+                    />
+                  </div>
+                  <select
+                    value={launchPickerStatusFilter}
+                    onChange={(event) =>
+                      setLaunchPickerStatusFilter(event.target.value as LaunchPickerStatusFilter)
+                    }
+                    className="h-10 rounded-lg border border-border bg-surface-elevated px-3 text-sm text-text-primary outline-none transition-colors focus:border-blue-400"
+                  >
+                    <option value="all">All status</option>
+                    <option value="ready">Ready</option>
+                    <option value="pending">Pending</option>
+                    <option value="uploading">Uploading</option>
+                    <option value="failed">Failed</option>
+                    <option value="no_link">No Link</option>
+                  </select>
+                  <select
+                    value={launchPickerFormatFilter}
+                    onChange={(event) =>
+                      setLaunchPickerFormatFilter(event.target.value as LaunchPickerFormatFilter)
+                    }
+                    className="h-10 rounded-lg border border-border bg-surface-elevated px-3 text-sm text-text-primary outline-none transition-colors focus:border-blue-400"
+                  >
+                    <option value="all">All formats</option>
+                    <option value="video">Video</option>
+                    <option value="image">Image</option>
+                    <option value="carousel">Carousel</option>
+                  </select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={selectAllLaunchPickerCreatives}
+                    className="rounded-lg border border-border bg-surface-elevated px-3 py-1.5 text-xs font-medium text-text-primary transition-colors hover:bg-surface-hover"
+                  >
+                    Select all
+                  </button>
+                  <button
+                    onClick={clearAllLaunchPickerCreatives}
+                    className="rounded-lg border border-border bg-surface-elevated px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-hover"
+                  >
+                    Clear
+                  </button>
+                  <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                    {launchPickerSelectedIds.size} selected
+                  </span>
+                </div>
+              </div>
+
+              <div className="max-h-[60vh] space-y-2 overflow-y-auto rounded-xl border border-border bg-surface-elevated p-3">
+                {launchPickerVisibleCreatives.length > 0 ? (
+                  launchPickerVisibleCreatives.map((creative) => (
+                    <InboxCreativeRow
+                      key={creative.id}
+                      creative={creative}
+                      isSelected={launchPickerSelectedIds.has(creative.id)}
+                      onToggleSelect={() => toggleLaunchPickerCreative(creative.id)}
+                      onPreview={() => setPreviewCreative(creative)}
+                    />
+                  ))
+                ) : (
+                  <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-text-secondary">
+                    No creatives match the current filter.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-4">
+              <button
+                onClick={closeLaunchPicker}
+                className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-surface-hover"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={continueLaunchWithSelectedCreatives}
+                disabled={launchPickerSelectedIds.size === 0}
+                className={cn(
+                  'inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white transition-colors',
+                  launchPickerSelectedIds.size === 0
+                    ? 'cursor-not-allowed bg-blue-400'
+                    : 'bg-blue-600 hover:bg-blue-700',
+                )}
+              >
+                <Rocket className="h-4 w-4" />
+                Continue to Launch Center
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <CreativePreviewModal
+        creative={previewCreative}
+        isOpen={previewCreative !== null}
+        onClose={() => setPreviewCreative(null)}
       />
     </div>
   );

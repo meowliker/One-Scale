@@ -291,7 +291,10 @@ $$;
 
 GRANT EXECUTE ON FUNCTION prune_store_meta_data_to_active_accounts(TEXT, TEXT[]) TO service_role;
 
-CREATE OR REPLACE VIEW meta_entities_flat_v AS
+-- Recreate view because CREATE OR REPLACE cannot reorder existing columns.
+DROP VIEW IF EXISTS meta_entities_flat_v;
+
+CREATE VIEW meta_entities_flat_v AS
 SELECT
   a.store_id,
   c.campaign_id,
