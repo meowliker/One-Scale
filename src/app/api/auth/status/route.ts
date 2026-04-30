@@ -3,6 +3,7 @@ import { getConnectionStatus } from '@/app/api/lib/db';
 import { canWorkspaceAccessStore } from '@/app/api/lib/auth-users';
 import { isSupabasePersistenceEnabled, getPersistentConnectionStatus } from '@/app/api/lib/supabase-persistence';
 import { readSessionFromRequest } from '@/lib/auth/request-session';
+import { getMetaToken, getShopifyToken, getGoogleDriveToken } from '@/app/api/lib/tokens';
 
 export async function GET(request: NextRequest) {
   const session = await readSessionFromRequest(request);
@@ -22,10 +23,38 @@ export async function GET(request: NextRequest) {
   }
 
   const sb = isSupabasePersistenceEnabled();
-  if (sb) {
-    const status = await getPersistentConnectionStatus(storeId);
-    return NextResponse.json(status);
+  const baseStatus = sb
+    ? await getPersistentConnectionStatus(storeId)
+    : getConnectionStatus(storeId);
+
+  // Token-aware validity: a connection row may exist while token is expired/invalid.
+  // Surface that as disconnected so UI and launch behavior stay consistent.
+  let metaConnected = false;
+  let shopifyConnected = false;
+  let googleDriveConnected = false;
+  try {
+    [metaConnected, shopifyConnected, googleDriveConnected] = await Promise.all([
+      getMetaToken(storeId).then(Boolean).catch(() => false),
+      getShopifyToken(storeId).then(Boolean).catch(() => false),
+      getGoogleDriveToken(storeId).then(Boolean).catch(() => false),
+    ]);
+  } catch {
+    // Keep defaults false if token checks fail unexpectedly.
   }
-  const status = getConnectionStatus(storeId);
-  return NextResponse.json(status);
+
+  return NextResponse.json({
+    ...baseStatus,
+    meta: {
+      ...baseStatus.meta,
+      connected: metaConnected,
+    },
+    shopify: {
+      ...baseStatus.shopify,
+      connected: shopifyConnected,
+    },
+    google_drive: {
+      ...baseStatus.google_drive,
+      connected: googleDriveConnected,
+    },
+  });
 }

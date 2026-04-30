@@ -18,6 +18,37 @@ interface GoogleDriveAbout {
   };
 }
 
+function isLocalHostname(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+}
+
+function resolveGoogleRedirectUri(savedRedirectUri: string | undefined, appUrl: string): string {
+  const defaultRedirectUri = `${appUrl}/api/auth/google-drive/callback`;
+  if (!savedRedirectUri) return defaultRedirectUri;
+
+  const normalizedSaved = savedRedirectUri.trim();
+  if (!normalizedSaved) return defaultRedirectUri;
+
+  try {
+    const saved = new URL(normalizedSaved);
+    const current = new URL(appUrl);
+
+    // Keep callback/token redirect URI aligned with the active local origin
+    // when a stale localhost port was saved previously.
+    if (
+      isLocalHostname(saved.hostname) &&
+      isLocalHostname(current.hostname) &&
+      saved.host !== current.host
+    ) {
+      return defaultRedirectUri;
+    }
+
+    return normalizedSaved;
+  } catch {
+    return defaultRedirectUri;
+  }
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get('code');
@@ -75,7 +106,7 @@ export async function GET(request: NextRequest) {
 
     const clientId = googleCreds.app_id;
     const clientSecret = googleCreds.app_secret;
-    const redirectUri = googleCreds.redirect_uri || `${appUrl}/api/auth/google-drive/callback`;
+    const redirectUri = resolveGoogleRedirectUri(googleCreds.redirect_uri, appUrl);
 
     // Exchange authorization code for tokens
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {

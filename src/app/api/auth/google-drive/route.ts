@@ -11,6 +11,38 @@ import { readSessionFromRequest } from '@/lib/auth/request-session';
 
 const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
 
+function isLocalHostname(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+}
+
+function resolveGoogleRedirectUri(savedRedirectUri: string | undefined, appUrl: string): string {
+  const defaultRedirectUri = `${appUrl}/api/auth/google-drive/callback`;
+  if (!savedRedirectUri) return defaultRedirectUri;
+
+  const normalizedSaved = savedRedirectUri.trim();
+  if (!normalizedSaved) return defaultRedirectUri;
+
+  try {
+    const saved = new URL(normalizedSaved);
+    const current = new URL(appUrl);
+
+    // Local dev safety: if a stale localhost port is saved (e.g. :3000)
+    // but the app currently runs on a different localhost origin (e.g. :3001),
+    // use the current origin callback so OAuth can return to the active server.
+    if (
+      isLocalHostname(saved.hostname) &&
+      isLocalHostname(current.hostname) &&
+      saved.host !== current.host
+    ) {
+      return defaultRedirectUri;
+    }
+
+    return normalizedSaved;
+  } catch {
+    return defaultRedirectUri;
+  }
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const storeId = searchParams.get('storeId');
@@ -41,7 +73,7 @@ export async function GET(request: NextRequest) {
     }
 
     const clientId = googleCreds.app_id;
-    const redirectUri = googleCreds.redirect_uri || `${appUrl}/api/auth/google-drive/callback`;
+    const redirectUri = resolveGoogleRedirectUri(googleCreds.redirect_uri, appUrl);
 
     // Create CSRF state token
     const sb = isSupabasePersistenceEnabled();

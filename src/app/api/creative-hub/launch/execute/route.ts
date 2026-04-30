@@ -824,7 +824,13 @@ export async function POST(request: NextRequest) {
 
     const token = await getMetaToken(storeId);
     if (!token) {
-      return NextResponse.json({ error: 'Not authenticated with Meta' }, { status: 401 });
+      return NextResponse.json(
+        {
+          error:
+            'Meta token is missing or expired for this store. Please reconnect Meta in Settings → Integrations and try again.',
+        },
+        { status: 401 },
+      );
     }
     const storeTimezone = await getStoreTimezoneFromConfig(storeId);
 
