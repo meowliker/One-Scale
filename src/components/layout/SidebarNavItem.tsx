@@ -32,7 +32,7 @@ export function SidebarNavItem({ item, isCollapsed, isActive }: SidebarNavItemPr
       prefetch={true}
       onMouseEnter={handleMouseEnter}
       className={cn(
-        'relative flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13px] font-medium transition-colors duration-150',
+        'relative flex items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-[13px] font-medium transition-colors duration-150',
         isActive
           ? 'text-primary'
           : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary',
@@ -42,7 +42,7 @@ export function SidebarNavItem({ item, isCollapsed, isActive }: SidebarNavItemPr
       {isActive && (
         <motion.div
           layoutId="sidebar-active"
-          className="absolute inset-0 rounded-md bg-primary/10"
+          className="absolute inset-0 rounded-lg border border-primary/25 bg-primary/10"
           transition={{ type: 'spring', stiffness: 400, damping: 30 }}
         />
       )}

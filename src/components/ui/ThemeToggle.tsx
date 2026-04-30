@@ -41,8 +41,8 @@ export function ThemeToggle({ className }: ThemeToggleProps) {
       ref={buttonRef}
       onClick={handleToggle}
       className={cn(
-        'relative flex h-8 w-14 items-center rounded-full p-1 transition-colors duration-300',
-        isDark ? 'bg-surface-hover' : 'bg-primary/15',
+        'relative flex h-8 w-14 items-center rounded-full border p-1 transition-colors duration-300',
+        isDark ? 'border-border bg-surface-hover' : 'border-border bg-surface',
         className
       )}
       title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
@@ -52,7 +52,7 @@ export function ThemeToggle({ className }: ThemeToggleProps) {
           'flex h-6 w-6 items-center justify-center rounded-full transition-all duration-300',
           isDark
             ? 'translate-x-0 bg-surface-elevated'
-            : 'translate-x-6 bg-white shadow-sm'
+            : 'translate-x-6 bg-surface-elevated shadow-sm'
         )}
       >
         <div key={theme} className="theme-icon-enter">

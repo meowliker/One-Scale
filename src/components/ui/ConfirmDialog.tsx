@@ -33,7 +33,7 @@ export function ConfirmDialog({
       <div className="mt-6 flex justify-end gap-3">
         <button
           onClick={onClose}
-          className="rounded-lg border border-border-light px-4 py-2 text-sm font-medium text-text-secondary hover:bg-surface-hover transition-colors"
+          className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-text-secondary hover:bg-surface-hover transition-colors"
         >
           Cancel
         </button>

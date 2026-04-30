@@ -53,11 +53,14 @@ function LoginForm() {
     }
   };
 
+  const inputClass =
+    'w-full rounded-xl border border-border bg-surface px-3 py-2.5 text-sm text-text-primary placeholder:text-text-dimmed outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-colors';
+
   return (
-    <div className="min-h-screen bg-[#f5f5f7] flex items-center justify-center p-4">
-      <div className="w-full max-w-md rounded-2xl border border-black/[0.06] bg-white p-8 shadow-sm">
-        <h1 className="text-2xl font-semibold text-[#1d1d1f]">OneScale</h1>
-        <p className="mt-1 text-sm text-[#86868b]">
+    <div className="flex min-h-screen items-center justify-center bg-background p-4">
+      <div className="w-full max-w-md rounded-3xl border border-border bg-surface p-8 shadow-md">
+        <h1 className="text-2xl font-semibold tracking-tight text-text-primary">OneScale</h1>
+        <p className="mt-1 text-sm text-text-muted">
           {isFirstSetup === null
             ? 'Loading...'
             : isFirstSetup
@@ -70,7 +73,7 @@ function LoginForm() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="Email"
-            className="w-full rounded-lg border border-black/[0.1] bg-[#f5f5f7] px-3 py-2.5 text-sm text-[#1d1d1f] placeholder:text-[#aeaeb2] outline-none focus:border-[#0071e3] focus:ring-2 focus:ring-[#0071e3]/20 transition-colors"
+            className={inputClass}
             required
           />
           {isFirstSetup && (
@@ -79,7 +82,7 @@ function LoginForm() {
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
               placeholder="Full name"
-              className="w-full rounded-lg border border-black/[0.1] bg-[#f5f5f7] px-3 py-2.5 text-sm text-[#1d1d1f] placeholder:text-[#aeaeb2] outline-none focus:border-[#0071e3] focus:ring-2 focus:ring-[#0071e3]/20 transition-colors"
+              className={inputClass}
             />
           )}
           <input
@@ -87,7 +90,7 @@ function LoginForm() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Password"
-            className="w-full rounded-lg border border-black/[0.1] bg-[#f5f5f7] px-3 py-2.5 text-sm text-[#1d1d1f] placeholder:text-[#aeaeb2] outline-none focus:border-[#0071e3] focus:ring-2 focus:ring-[#0071e3]/20 transition-colors"
+            className={inputClass}
             required
           />
           <input
@@ -95,24 +98,24 @@ function LoginForm() {
             value={accessCode}
             onChange={(e) => setAccessCode(e.target.value)}
             placeholder={isFirstSetup ? 'Setup code' : 'Invite / access code (if required)'}
-            className="w-full rounded-lg border border-black/[0.1] bg-[#f5f5f7] px-3 py-2.5 text-sm text-[#1d1d1f] placeholder:text-[#aeaeb2] outline-none focus:border-[#0071e3] focus:ring-2 focus:ring-[#0071e3]/20 transition-colors"
+            className={inputClass}
           />
-          <label className="flex items-center gap-2 text-sm text-[#86868b]">
+          <label className="flex items-center gap-2 text-sm text-text-muted">
             <input
               type="checkbox"
               checked={remember}
               onChange={(e) => setRemember(e.target.checked)}
-              className="accent-[#0071e3]"
+              className="h-4 w-4 accent-primary"
             />
             Keep me signed in
           </label>
           {error && (
-            <p className="rounded-lg border border-[#ff3b30]/20 bg-[#ff3b30]/8 px-3 py-2 text-sm text-[#ff3b30]">{error}</p>
+            <p className="rounded-xl border border-red-300/35 bg-red-500/10 px-3 py-2 text-sm text-red-600 dark:text-red-300">{error}</p>
           )}
           <button
             type="submit"
             disabled={loading || isFirstSetup === null}
-            className="w-full rounded-lg bg-[#0071e3] px-3 py-2.5 text-sm font-medium text-white hover:bg-[#0077ED] disabled:opacity-60 transition-colors"
+            className="w-full rounded-xl bg-primary px-3 py-2.5 text-sm font-semibold text-white hover:bg-primary-dark disabled:opacity-60 transition-colors"
           >
             {loading
               ? 'Signing in...'
@@ -122,9 +125,9 @@ function LoginForm() {
           </button>
         </form>
         {isFirstSetup === false && (
-          <p className="mt-4 text-center text-sm text-[#86868b]">
+          <p className="mt-4 text-center text-sm text-text-muted">
             {"Don't have an account? "}
-            <Link href="/login/signup" className="text-[#0071e3] hover:underline">
+            <Link href="/login/signup" className="text-primary hover:underline">
               Create one
             </Link>
           </p>
@@ -137,9 +140,9 @@ function LoginForm() {
 export default function LoginPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen bg-[#f5f5f7] flex items-center justify-center p-4">
-        <div className="w-full max-w-md rounded-2xl border border-black/[0.06] bg-white p-8 shadow-sm">
-          <p className="text-sm text-[#86868b]">Loading...</p>
+      <div className="flex min-h-screen items-center justify-center bg-background p-4">
+        <div className="w-full max-w-md rounded-3xl border border-border bg-surface p-8 shadow-md">
+          <p className="text-sm text-text-muted">Loading...</p>
         </div>
       </div>
     }>

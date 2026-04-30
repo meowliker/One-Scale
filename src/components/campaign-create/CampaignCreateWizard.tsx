@@ -325,8 +325,8 @@ export function CampaignCreateWizard() {
           className={cn(
             'rounded-2xl border px-4 py-3 text-sm shadow-sm',
             analysisError
-              ? 'border-amber-200 bg-amber-50 text-amber-800'
-              : 'border-blue-200 bg-blue-50 text-blue-700'
+              ? 'border-amber-300/40 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+              : 'border-blue-300/40 bg-blue-500/10 text-blue-700 dark:text-blue-300'
           )}
         >
           {analysisError
@@ -337,7 +337,7 @@ export function CampaignCreateWizard() {
 
       <WizardStepIndicator currentStep={currentStep} steps={STEPS} />
 
-      <div className="min-h-[400px] rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/40 backdrop-blur">
+      <div className="min-h-[400px] rounded-2xl border border-border bg-surface p-6 shadow-sm">
         {currentStep === 0 && <ObjectiveStep />}
         {currentStep === 1 && <TargetingStep />}
         {currentStep === 2 && <BudgetScheduleStep />}
@@ -345,12 +345,12 @@ export function CampaignCreateWizard() {
         {currentStep === 4 && <ReviewStep />}
       </div>
 
-      <div className="flex items-center justify-between border-t border-slate-200/80 pt-6">
+      <div className="flex items-center justify-between border-t border-border pt-6">
         <div>
           {currentStep > 0 && (
             <button
               onClick={prevStep}
-              className="rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
+              className="rounded-xl border border-border bg-surface px-5 py-2.5 text-sm font-medium text-text-secondary shadow-sm transition-colors hover:bg-surface-hover"
             >
               Back
             </button>
@@ -360,11 +360,11 @@ export function CampaignCreateWizard() {
           onClick={handleNext}
           disabled={isSubmitting}
           className={cn(
-            'rounded-xl px-5 py-2.5 text-sm font-medium text-white shadow-lg shadow-blue-500/20 transition-colors',
+            'rounded-xl px-5 py-2.5 text-sm font-semibold text-white transition-colors',
             isSubmitting && 'cursor-not-allowed opacity-70',
             currentStep === 4
               ? 'bg-emerald-600 hover:bg-emerald-700'
-              : 'bg-blue-600 hover:bg-blue-700'
+              : 'bg-primary hover:bg-primary-dark'
           )}
         >
           {currentStep === 4

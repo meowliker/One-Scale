@@ -11,7 +11,7 @@ export interface TabsProps {
 export function Tabs({ tabs, activeTab, onChange }: TabsProps) {
   return (
     <div className="border-b border-border">
-      <nav className="-mb-px flex space-x-6" aria-label="Tabs">
+      <nav className="-mb-px flex flex-wrap gap-x-6 gap-y-1" aria-label="Tabs">
         {tabs.map((tab) => (
           <button
             key={tab.id}
@@ -19,7 +19,7 @@ export function Tabs({ tabs, activeTab, onChange }: TabsProps) {
             className={cn(
               'whitespace-nowrap border-b-2 px-1 py-3 text-sm font-medium transition-colors',
               activeTab === tab.id
-                ? 'border-primary text-primary-light'
+                ? 'border-primary text-text-primary'
                 : 'border-transparent text-text-muted hover:border-border-light hover:text-text-primary'
             )}
           >

@@ -1,7 +1,15 @@
 import type { Metadata, Viewport } from 'next';
+import { Plus_Jakarta_Sans } from 'next/font/google';
 import { ThemeProvider } from '@/components/providers/ThemeProvider';
 import { Toaster } from '@/components/ui/Toaster';
 import './globals.css';
+
+const plusJakarta = Plus_Jakarta_Sans({
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-plus-jakarta',
+  weight: ['400', '500', '600', '700'],
+});
 
 export const viewport: Viewport = {
   width: 'device-width',
@@ -23,7 +31,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="light" suppressHydrationWarning>
-      <body className="font-sans antialiased" suppressHydrationWarning>
+      <body className={`${plusJakarta.variable} font-sans antialiased`} suppressHydrationWarning>
         <ThemeProvider>
           {children}
           <Toaster />

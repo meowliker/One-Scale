@@ -40,7 +40,7 @@ export function DropdownMenu({ trigger, items, align = 'right' }: DropdownMenuPr
       {open && (
         <div
           className={cn(
-            'absolute z-50 mt-1 min-w-[160px] rounded-lg border border-border bg-surface-elevated py-1 shadow-lg',
+            'absolute z-50 mt-1 min-w-[180px] rounded-xl border border-border bg-surface-elevated py-1 shadow-lg',
             align === 'right' ? 'right-0' : 'left-0'
           )}
         >
@@ -54,7 +54,7 @@ export function DropdownMenu({ trigger, items, align = 'right' }: DropdownMenuPr
               className={cn(
                 'flex w-full items-center gap-2 px-3 py-2 text-sm transition-colors',
                 item.danger
-                  ? 'text-red-600 hover:bg-red-50'
+                  ? 'text-red-600 hover:bg-red-500/10'
                   : 'text-text-secondary hover:bg-surface-hover'
               )}
             >

@@ -59,12 +59,12 @@ export function ObjectiveStep() {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-slate-900">Choose your campaign objective</h2>
-        <p className="mt-1 text-sm text-slate-600">
+        <h2 className="text-lg font-semibold text-text-primary">Choose your campaign objective</h2>
+        <p className="mt-1 text-sm text-text-secondary">
           Select the goal that best describes what you want to achieve with this campaign.
         </p>
         {winner && (
-          <div className="mt-3 inline-flex rounded-xl border border-blue-200 bg-blue-50/80 px-1 py-1">
+          <div className="mt-3 inline-flex rounded-xl border border-blue-300/40 bg-blue-500/10 px-1 py-1">
             <WinnerChip title={winner.title} value={winner.value} />
           </div>
         )}
@@ -82,18 +82,18 @@ export function ObjectiveStep() {
               className={cn(
                 'group relative flex items-start gap-4 rounded-2xl border p-5 text-left transition-all',
                 isSelected
-                  ? 'border-blue-500 bg-gradient-to-br from-blue-50 to-cyan-50 shadow-lg shadow-blue-100/80'
-                  : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-md'
+                  ? 'border-primary bg-primary/10 shadow-sm'
+                  : 'border-border bg-surface hover:border-border-focus/40 hover:bg-surface-hover'
               )}
             >
               <div className={cn(
                 'absolute inset-x-0 top-0 h-1 rounded-t-2xl transition-opacity',
-                isSelected ? 'bg-gradient-to-r from-blue-500 to-cyan-400 opacity-100' : 'opacity-0'
+                isSelected ? 'bg-primary opacity-100' : 'opacity-0'
               )} />
               <div
                 className={cn(
                   'flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl',
-                  isSelected ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500'
+                  isSelected ? 'bg-primary/15 text-primary' : 'bg-surface-hover text-text-muted'
                 )}
               >
                 <Icon className="w-5 h-5" />
@@ -102,7 +102,7 @@ export function ObjectiveStep() {
                 <h3
                   className={cn(
                     'text-sm font-semibold',
-                    isSelected ? 'text-blue-900' : 'text-slate-900'
+                    isSelected ? 'text-text-primary' : 'text-text-primary'
                   )}
                 >
                   {opt.title}
@@ -110,7 +110,7 @@ export function ObjectiveStep() {
                 <p
                   className={cn(
                     'text-xs mt-0.5',
-                    isSelected ? 'text-blue-700' : 'text-slate-500'
+                    isSelected ? 'text-text-secondary' : 'text-text-muted'
                   )}
                 >
                   {opt.description}

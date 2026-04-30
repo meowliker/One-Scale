@@ -10,7 +10,7 @@ interface WizardStepIndicatorProps {
 
 export function WizardStepIndicator({ currentStep, steps }: WizardStepIndicatorProps) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-4">
+    <div className="rounded-2xl border border-border bg-surface-hover/70 px-4 py-4">
       <div className="flex items-center justify-between">
       {steps.map((step, index) => {
         const isCompleted = index < currentStep;
@@ -24,8 +24,8 @@ export function WizardStepIndicator({ currentStep, steps }: WizardStepIndicatorP
                 className={cn(
                   'flex h-10 w-10 items-center justify-center rounded-full border-2 text-sm font-semibold transition-colors',
                   isCompleted && 'border-emerald-500 bg-emerald-500 text-white',
-                  isCurrent && 'border-blue-600 bg-blue-600 text-white shadow-lg shadow-blue-500/25',
-                  isFuture && 'border-slate-300 bg-white text-slate-500'
+                  isCurrent && 'border-primary bg-primary text-white',
+                  isFuture && 'border-border bg-surface text-text-muted'
                 )}
               >
                 {isCompleted ? (
@@ -38,8 +38,8 @@ export function WizardStepIndicator({ currentStep, steps }: WizardStepIndicatorP
                 className={cn(
                   'mt-2 whitespace-nowrap text-xs',
                   isCompleted && 'font-medium text-emerald-700',
-                  isCurrent && 'font-bold text-blue-700',
-                  isFuture && 'text-slate-500'
+                  isCurrent && 'font-bold text-primary',
+                  isFuture && 'text-text-muted'
                 )}
               >
                 {step}
@@ -51,8 +51,8 @@ export function WizardStepIndicator({ currentStep, steps }: WizardStepIndicatorP
                 className={cn(
                   'mx-3 mt-[-1.25rem] h-0.5 flex-1',
                   index < currentStep
-                    ? 'bg-gradient-to-r from-emerald-500 to-blue-500'
-                    : 'bg-slate-300'
+                    ? 'bg-emerald-500'
+                    : 'bg-border'
                 )}
               />
             )}

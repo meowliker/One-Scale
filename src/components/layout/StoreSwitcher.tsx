@@ -8,9 +8,9 @@ import { useStoreStore } from '@/stores/storeStore';
 import { useConnectionStore } from '@/stores/connectionStore';
 
 const platformColors: Record<string, string> = {
-  shopify: 'bg-emerald-500/10 text-emerald-400',
-  woocommerce: 'bg-purple-500/10 text-purple-400',
-  custom: 'bg-surface-hover text-text-secondary',
+  shopify: 'border border-emerald-300/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+  woocommerce: 'border border-indigo-300/40 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300',
+  custom: 'border border-border bg-surface-hover text-text-secondary',
 };
 
 export function StoreSwitcher({ isCollapsed }: { isCollapsed: boolean }) {
@@ -56,7 +56,7 @@ export function StoreSwitcher({ isCollapsed }: { isCollapsed: boolean }) {
       <button
         onClick={() => setIsOpen(!isOpen)}
         className={cn(
-          'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-text-secondary hover:bg-surface-hover transition-colors',
+          'flex w-full items-center gap-2 rounded-lg border border-transparent px-3 py-2 text-sm text-text-secondary hover:border-border hover:bg-surface-hover transition-colors',
           isCollapsed && 'justify-center px-2'
         )}
       >
@@ -84,7 +84,7 @@ export function StoreSwitcher({ isCollapsed }: { isCollapsed: boolean }) {
       {isOpen && (
         <div
           className={cn(
-            'absolute z-50 mt-1 w-72 rounded-lg border border-border bg-surface-elevated shadow-lg',
+            'absolute z-50 mt-1 w-72 rounded-xl border border-border bg-surface-elevated shadow-lg',
             isCollapsed ? 'left-full ml-2 top-0' : 'left-0'
           )}
         >
@@ -97,7 +97,7 @@ export function StoreSwitcher({ isCollapsed }: { isCollapsed: boolean }) {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search stores..."
-                className="w-full rounded-md border border-border-light bg-surface-elevated py-1.5 pl-8 pr-3 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                className="w-full rounded-lg border border-border bg-surface py-1.5 pl-8 pr-3 text-sm text-text-primary placeholder:text-text-dimmed focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/25"
                 autoFocus
               />
             </div>
@@ -161,7 +161,7 @@ export function StoreSwitcher({ isCollapsed }: { isCollapsed: boolean }) {
                     <p className="truncate text-xs text-text-muted">{store.domain || ''}</p>
                   </div>
                   {store.needsReauth ? (
-                    <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium bg-red-500/10 text-red-400">
+                    <span className="inline-flex items-center gap-1 rounded-full border border-red-300/40 bg-red-500/10 px-2 py-0.5 text-[10px] font-medium text-red-600 dark:text-red-300">
                       <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
                       Expired
                     </span>

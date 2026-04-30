@@ -368,10 +368,10 @@ export function ProductProfileCard({
           onClick={() => onLaunch?.(profile)}
           disabled={launching}
           className={cn(
-            'inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium text-white transition-colors',
+            'inline-flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25',
             launching
-              ? 'cursor-wait bg-blue-400'
-              : 'bg-blue-600 hover:bg-blue-700',
+              ? 'cursor-wait border-border bg-surface-hover text-text-dimmed'
+              : 'border-primary/20 bg-primary text-white shadow-sm shadow-primary/20 hover:bg-primary-dark',
           )}
         >
           {launching ? (

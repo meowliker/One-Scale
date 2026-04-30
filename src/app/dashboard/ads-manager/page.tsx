@@ -175,7 +175,7 @@ export default function AdsManagerPage() {
     <div>
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <h1 className="text-sm font-semibold text-[#1d1d1f]">
+          <h1 className="text-sm font-semibold text-text-primary">
             Ads Manager
             {isFetching && campaigns.length > 0 && (
               <span className="ml-2 inline-block h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />

@@ -61,7 +61,7 @@ export function UserProfile({ isCollapsed }: UserProfileProps) {
       'flex items-center gap-3 px-4 py-3',
       isCollapsed && 'justify-center px-2'
     )}>
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-emerald-600 text-sm font-medium text-white">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-surface-hover text-sm font-semibold text-text-secondary">
         {avatarLetter}
       </div>
       {!isCollapsed && (

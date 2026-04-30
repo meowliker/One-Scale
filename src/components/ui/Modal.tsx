@@ -44,22 +44,22 @@ export function Modal({ isOpen, onClose, title, children, size = 'md' }: ModalPr
     <div className="fixed inset-0 z-[60] flex items-center justify-center">
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-black/30 backdrop-blur-sm transition-opacity"
+        className="fixed inset-0 bg-slate-950/45 backdrop-blur-sm transition-opacity"
         onClick={onClose}
       />
       {/* Panel */}
       <div
         className={cn(
-          'relative z-10 w-full mx-4 rounded-xl bg-surface-elevated shadow-2xl',
+          'relative z-10 mx-4 w-full rounded-2xl border border-border bg-surface-elevated shadow-2xl',
           sizeClasses[size]
         )}
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-border px-6 py-4">
-          <h2 className="text-lg font-semibold text-text-primary">{title}</h2>
+          <h2 className="text-lg font-semibold tracking-tight text-text-primary">{title}</h2>
           <button
             onClick={onClose}
-            className="rounded-md p-1 text-text-dimmed hover:bg-surface-hover hover:text-text-secondary transition-colors"
+            className="rounded-lg p-1.5 text-text-dimmed hover:bg-surface-hover hover:text-text-secondary transition-colors"
           >
             <X className="h-5 w-5" />
           </button>

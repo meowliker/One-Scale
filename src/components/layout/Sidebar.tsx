@@ -20,7 +20,7 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        'flex h-screen flex-col border-r border-border bg-surface transition-all duration-200',
+        'flex h-screen flex-col border-r border-border bg-surface-elevated transition-all duration-200',
         isCollapsed ? 'w-16' : 'w-64'
       )}
     >
@@ -29,15 +29,15 @@ export function Sidebar() {
         'flex items-center gap-3 border-b border-border px-4 py-4',
         isCollapsed && 'justify-center px-2'
       )}>
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-primary shadow-lg shadow-primary-glow">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-surface">
           <Image src="/onescale-logo.svg" alt="OneScale" width={24} height={24} />
         </div>
         {!isCollapsed && (
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-text-primary">
+            <p className="truncate text-sm font-semibold tracking-tight text-text-primary">
               {sidebarConfig.brand.name}
             </p>
-            <p className="truncate text-xs text-text-muted">
+            <p className="truncate text-[11px] text-text-muted">
               {sidebarConfig.brand.domain}
             </p>
           </div>
@@ -54,7 +54,7 @@ export function Sidebar() {
 
       {/* Scrollable nav area */}
       <LayoutGroup>
-        <nav className="flex-1 overflow-y-auto px-2 py-2">
+        <nav className="flex-1 overflow-y-auto px-2 py-3">
           {/* Top items */}
           <div className="space-y-1">
             {sidebarConfig.topItems.map((item) => (
@@ -107,11 +107,11 @@ export function Sidebar() {
 
       {/* Theme Toggle */}
       <div className={cn(
-        'border-t border-border px-3 py-2 flex items-center',
+        'border-t border-border px-3 py-2.5 flex items-center',
         isCollapsed ? 'justify-center' : 'justify-between'
       )}>
         {!isCollapsed && (
-          <span className="text-xs text-text-muted">Theme</span>
+          <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-dimmed">Theme</span>
         )}
         <ThemeToggle />
       </div>
@@ -121,7 +121,7 @@ export function Sidebar() {
         <button
           onClick={() => setIsCollapsed(!isCollapsed)}
           className={cn(
-            'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-text-muted hover:bg-surface-hover hover:text-text-secondary transition-colors',
+            'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-text-muted hover:bg-surface-hover hover:text-text-secondary transition-colors',
             isCollapsed && 'justify-center px-2'
           )}
         >
