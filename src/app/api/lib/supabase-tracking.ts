@@ -60,23 +60,47 @@ function headers(extra?: Record<string, string>): Record<string, string> {
   return out;
 }
 
+function isRetryableSupabaseError(status: number, body: string): boolean {
+  const lower = body.toLowerCase();
+  return (
+    status >= 500 ||
+    lower.includes('tuple concurrently updated') ||
+    lower.includes('could not serialize access')
+  );
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function rest<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
-    ...init,
-    headers: {
-      ...headers(),
-      ...(init?.headers || {}),
-    },
-    cache: 'no-store',
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Supabase request failed (${res.status}): ${text}`);
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
+      ...init,
+      headers: {
+        ...headers(),
+        ...(init?.headers || {}),
+      },
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      lastError = new Error(`Supabase request failed (${res.status}): ${text}`);
+      if (attempt < 2 && isRetryableSupabaseError(res.status, text)) {
+        await wait(150 * (attempt + 1));
+        continue;
+      }
+      throw lastError;
+    }
+    if (res.status === 204) return undefined as T;
+    const body = await res.text();
+    if (!body) return undefined as T;
+    return JSON.parse(body) as T;
   }
-  if (res.status === 204) return undefined as T;
-  const body = await res.text();
-  if (!body) return undefined as T;
-  return JSON.parse(body) as T;
+
+  throw lastError || new Error('Supabase request failed');
 }
 
 // ---- Row shape returned from Supabase ----

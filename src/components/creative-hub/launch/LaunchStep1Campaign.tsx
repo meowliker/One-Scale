@@ -27,7 +27,7 @@ interface FetchedAdset {
 }
 
 const BID_STRATEGIES: { value: BidStrategy; label: string; description: string; hasInput?: 'amount' | 'roas' }[] = [
-  { value: 'LOWEST_COST_WITHOUT_CAP', label: 'Lowest Cost', description: 'Maximize results for your budget' },
+  { value: 'LOWEST_COST_WITHOUT_CAP', label: 'Highest volume or value', description: 'Maximize results for your budget' },
   { value: 'COST_CAP', label: 'Cost Cap', description: 'Keep cost per result around your target', hasInput: 'amount' },
   { value: 'LOWEST_COST_WITH_BID_CAP', label: 'Bid Cap', description: 'Control your bid in each auction', hasInput: 'amount' },
   { value: 'LOWEST_COST_WITH_MIN_ROAS', label: 'Minimum ROAS', description: 'Optimize for minimum return on ad spend', hasInput: 'roas' },
@@ -199,7 +199,7 @@ export function LaunchStep1Campaign() {
                       destinationUrl: profile.destinationUrl,
                       dailyBudget: profile.defaultBudget,
                       testDuration: profile.defaultDuration,
-                      bidStrategy: profile.defaultBidStrategy,
+                      bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
                       structure: profile.defaultStructure,
                       launchStatus: profile.defaultLaunchStatus,
                       utmTemplate: profile.utmTemplate,
@@ -431,7 +431,7 @@ export function LaunchStep1Campaign() {
                     (selectedCampaignLink?.campaignBidStrategy === 'BID_CAP' || selectedCampaignLink?.campaignBidStrategy === 'LOWEST_COST_WITH_BID_CAP') ? 'Bid Cap' :
                     selectedCampaignLink?.campaignBidStrategy === 'COST_CAP' ? 'Cost Cap' :
                     (selectedCampaignLink?.campaignBidStrategy === 'MINIMUM_ROAS' || selectedCampaignLink?.campaignBidStrategy === 'LOWEST_COST_WITH_MIN_ROAS') ? 'ROAS Goal' :
-                    'Lowest Cost'
+                    'Highest volume or value'
                   }</span>
                 </p>
               </div>
@@ -743,7 +743,7 @@ export function LaunchStep1Campaign() {
                 <FormField label="Campaign Bid Strategy">
                   <div className="space-y-2">
                     {[
-                      { value: 'LOWEST_COST_WITHOUT_CAP' as const, label: 'Lowest Cost', desc: 'Maximize results for your budget' },
+                      { value: 'LOWEST_COST_WITHOUT_CAP' as const, label: 'Highest volume or value', desc: 'Maximize results for your budget' },
                       { value: 'COST_CAP' as const, label: 'Cost Cap', desc: 'Keep cost per result around your target' },
                       { value: 'LOWEST_COST_WITH_BID_CAP' as const, label: 'Bid Cap', desc: 'Control your bid in each auction' },
                       { value: 'LOWEST_COST_WITH_MIN_ROAS' as const, label: 'ROAS Goal', desc: 'Hit a minimum return on ad spend' },

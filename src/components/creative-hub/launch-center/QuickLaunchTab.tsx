@@ -21,6 +21,11 @@ import {
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import {
+  WORLDWIDE_COUNTRY_VALUE,
+  getCountryLabel,
+  normalizeCountryCode,
+} from '@/lib/countryOptions';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
 import toast from 'react-hot-toast';
 import type {
@@ -469,7 +474,7 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
       patch.launchStatus = selectedProfile.defaultLaunchStatus ?? 'PAUSED';
     }
     if (!launchConfig.bidStrategy) {
-      patch.bidStrategy = selectedProfile.defaultBidStrategy ?? 'LOWEST_COST_WITHOUT_CAP';
+      patch.bidStrategy = 'LOWEST_COST_WITHOUT_CAP';
     }
     if (!launchConfig.existingCampaignId) {
       const existingCampaignId = selectedProfile.campaignLinks?.[0]?.campaignId;
@@ -1561,6 +1566,18 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
                   <OverviewMeta label="Launch As" value={launchStatus} />
                   <OverviewMeta label="Launch Timing" value={launchTimingLabel} />
                   <OverviewMeta
+                    label="Attribution"
+                    value={formatAttributionWindow(launchConfig.attributionWindow)}
+                  />
+                  <OverviewMeta
+                    label="Include Location"
+                    value={formatCountryList(launchConfig.customTargeting?.geoLocations?.countries)}
+                  />
+                  <OverviewMeta
+                    label="Exclude Location"
+                    value={formatCountryList(launchConfig.customTargeting?.excludedGeoLocations?.countries, 'None')}
+                  />
+                  <OverviewMeta
                     label={effectiveStructure === 'CBO' ? 'Campaign Budget' : 'Daily / Ad Set'}
                     value={`${formatCurrency(effectiveDailyBudget)} / day`}
                   />
@@ -1646,6 +1663,31 @@ function OverviewMeta({ label, value }: { label: string; value: string }) {
       <p className="mt-1 text-sm font-semibold text-slate-100">{value}</p>
     </div>
   );
+}
+
+function formatAttributionWindow(value?: string): string {
+  switch (value) {
+    case '1d_click':
+      return '1-day click';
+    case '7d_click':
+      return '7-day click';
+    case '1d_click_1d_view':
+      return '1-day click, 1-day view';
+    case '7d_click_1d_view':
+      return '7-day click, 1-day view';
+    case '7d_click_1d_engagement':
+    default:
+      return '7-day click, 1-day engagement';
+  }
+}
+
+function formatCountryList(values?: string[], emptyLabel = 'Not set'): string {
+  const normalized = [...new Set((values || []).map(normalizeCountryCode).filter(Boolean))];
+  if (normalized.includes(WORLDWIDE_COUNTRY_VALUE)) return 'Worldwide';
+  const labels = normalized.map(getCountryLabel);
+
+  if (labels.length > 3) return `${labels.length} countries`;
+  return labels.length > 0 ? labels.join(', ') : emptyLabel;
 }
 
 function AIStrategyPanel({
@@ -2234,7 +2276,8 @@ function SelectedCopyText({ text }: { text: string }) {
   }, [expanded]);
 
   useEffect(() => {
-    checkTruncation();
+    const frame = window.requestAnimationFrame(checkTruncation);
+    return () => window.cancelAnimationFrame(frame);
   }, [checkTruncation, text]);
 
   useEffect(() => {

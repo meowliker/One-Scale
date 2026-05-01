@@ -6,7 +6,7 @@ import {
   updateCreativeTestStatus,
   updateCreativeTestItem,
 } from '@/app/api/lib/creative-hub-db';
-import type { TargetingSpec } from '@/types/creativeHub';
+import { getStoreCurrencyFromConfig } from '@/lib/onboarding/stages/detectStoreConfig';
 
 const GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 const DEFAULT_META_URL_TAGS =
@@ -17,6 +17,31 @@ function normalizeAccountNode(value: string): string {
   if (!node) return '';
   if (node.startsWith('act_')) return node;
   return `act_${node.replace(/^act_/, '')}`;
+}
+
+function inferDefaultCountry(storeCurrency?: string, destinationUrl?: string | null): string {
+  try {
+    const hostname = new URL(destinationUrl || '').hostname.toLowerCase();
+    if (hostname.endsWith('.in')) return 'IN';
+    if (hostname.endsWith('.ca')) return 'CA';
+    if (hostname.endsWith('.co.uk') || hostname.endsWith('.uk')) return 'GB';
+    if (hostname.endsWith('.com.au') || hostname.endsWith('.au')) return 'AU';
+    if (hostname.endsWith('.ae')) return 'AE';
+    if (hostname.endsWith('.sg')) return 'SG';
+  } catch {
+    // Fall back to currency below.
+  }
+
+  const currencyCountryMap: Record<string, string> = {
+    INR: 'IN',
+    USD: 'US',
+    CAD: 'CA',
+    GBP: 'GB',
+    AUD: 'AU',
+    AED: 'AE',
+    SGD: 'SG',
+  };
+  return currencyCountryMap[String(storeCurrency || '').toUpperCase()] || 'US';
 }
 
 async function postToMeta(
@@ -96,6 +121,8 @@ export async function POST(
     }
 
     const accountNode = normalizeAccountNode(profile.adAccountId);
+    const storeCurrency = await getStoreCurrencyFromConfig(storeId);
+    const defaultCountry = inferDefaultCountry(storeCurrency, profile.destinationUrl);
     const failedItems = test.items.filter((item) => item.launchStatus === 'failed');
 
     if (failedItems.length === 0) {
@@ -114,7 +141,7 @@ export async function POST(
 
         // Build targeting from profile defaults
         const targetingPayload: Record<string, unknown> = {
-          geo_locations: { countries: ['US'] },
+          geo_locations: { countries: [defaultCountry] },
           age_min: 18,
           age_max: 65,
         };

@@ -248,7 +248,7 @@ function buildBaseLaunchConfig(
     destinationUrl: profile?.destinationUrl,
     dailyBudget: profile?.defaultBudget ?? 20,
     testDuration: profile?.defaultDuration ?? 3,
-    bidStrategy: profile?.defaultBidStrategy ?? 'LOWEST_COST_WITHOUT_CAP',
+    bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
     bidAmount: profile?.defaultBidAmount,
     roasFloor: profile?.defaultRoasFloor,
     launchStatus: profile?.defaultLaunchStatus ?? 'PAUSED',
@@ -256,13 +256,13 @@ function buildBaseLaunchConfig(
     scheduledDate: undefined,
     scheduledTime: '09:00',
     endDate: undefined,
-    attributionWindow: '7d_click_1d_view',
+    attributionWindow: '7d_click_1d_engagement',
     utmTemplate: profile?.utmTemplate,
     primaryTexts: [],
     headlines: [],
     descriptions: [],
     ctaType: 'SHOP_NOW',
-    advantageCreative: true,
+    advantageCreative: false,
     batches: [],
     batchStrategy: 'manual',
     creativesPerBatch: 3,
@@ -811,7 +811,6 @@ export const useCreativeHubStore = create<CreativeHubState>()(
         testDuration: existingLaunchConfig.testDuration ?? profile?.defaultDuration ?? 3,
         bidStrategy:
           existingLaunchConfig.bidStrategy ||
-          profile?.defaultBidStrategy ||
           'LOWEST_COST_WITHOUT_CAP',
         bidAmount: existingLaunchConfig.bidAmount ?? profile?.defaultBidAmount,
         roasFloor: existingLaunchConfig.roasFloor ?? profile?.defaultRoasFloor,
@@ -826,13 +825,13 @@ export const useCreativeHubStore = create<CreativeHubState>()(
         scheduledTime: existingLaunchConfig.scheduledTime || '09:00',
         endDate: existingLaunchConfig.endDate,
         attributionWindow:
-          existingLaunchConfig.attributionWindow || '7d_click_1d_view',
+          existingLaunchConfig.attributionWindow || '7d_click_1d_engagement',
         utmTemplate: existingLaunchConfig.utmTemplate || profile?.utmTemplate,
         primaryTexts: existingLaunchConfig.primaryTexts || [],
         headlines: existingLaunchConfig.headlines || [],
         descriptions: existingLaunchConfig.descriptions || [],
         ctaType: existingLaunchConfig.ctaType || 'SHOP_NOW',
-        advantageCreative: existingLaunchConfig.advantageCreative ?? true,
+        advantageCreative: existingLaunchConfig.advantageCreative ?? false,
         batches: batches.length > 0 ? batches : existingLaunchConfig.batches,
         batchStrategy:
           batches.length > 0 ? batchStrategy : existingLaunchConfig.batchStrategy,

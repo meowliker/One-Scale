@@ -18,6 +18,7 @@ import type { MirrorAccount } from '@/types/creativeHub';
 const ATTRIBUTION_WINDOWS = [
   { value: '1d_click', label: '1 Day Click' },
   { value: '7d_click', label: '7 Day Click' },
+  { value: '7d_click_1d_engagement', label: '7 Day Click, 1 Day Engagement' },
   { value: '1d_click_1d_view', label: '1 Day Click, 1 Day View' },
   { value: '7d_click_1d_view', label: '7 Day Click, 1 Day View' },
   { value: '28d_click_1d_view', label: '28 Day Click, 1 Day View' },
@@ -59,7 +60,7 @@ export function LaunchStep3Settings() {
   const [showMultiAccount, setShowMultiAccount] = useState(false);
   const [showAiRules, setShowAiRules] = useState(true);
 
-  const attributionWindow = launchConfig.attributionWindow || '7d_click_1d_view';
+  const attributionWindow = launchConfig.attributionWindow || '7d_click_1d_engagement';
 
   // Naming overrides
   const namingCampaign = launchConfig.newCampaignName || '';

@@ -12,12 +12,13 @@ import {
 } from '@/app/api/lib/creative-hub-db';
 import { getDb } from '@/app/api/lib/db';
 import { validateLaunchPlanAssignments } from '@/lib/creative-hub/launchPlanValidation';
-import { getStoreTimezoneFromConfig } from '@/lib/onboarding/stages/detectStoreConfig';
+import { getStoreCurrencyFromConfig, getStoreTimezoneFromConfig } from '@/lib/onboarding/stages/detectStoreConfig';
 import type { InboxCreative, LaunchConfig, TargetingSpec } from '@/types/creativeHub';
 
 const GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 const DEFAULT_META_URL_TAGS =
   'utm_source=FbAds&utm_medium={{adset.name}}&utm_campaign={{campaign.name}}&utm_content={{ad.name}}&campaign_id={{campaign.id}}&adset_id={{adset.id}}&ad_id={{ad.id}}';
+const WORLDWIDE_COUNTRY_VALUE = 'WORLDWIDE';
 
 // ── Helpers ──
 
@@ -125,10 +126,14 @@ function resolveAdsetBidConfig(
   strategyInput: string | undefined,
   bidAmountInput?: number | null,
   dailyBudgetInput?: number | null,
-): { bidStrategy: string; bidAmountCents?: number } {
+): { bidStrategy?: string; bidAmountCents?: number } {
   const strategy = normalizeBidStrategy(strategyInput);
   const explicitBidAmount = toPositiveNumber(bidAmountInput);
   const fallbackBidAmount = estimateBidAmountFromDailyBudget(dailyBudgetInput);
+
+  if (strategy === 'LOWEST_COST_WITHOUT_CAP') {
+    return {};
+  }
 
   if (!bidStrategyRequiresBidAmount(strategy)) {
     return { bidStrategy: strategy };
@@ -138,13 +143,35 @@ function resolveAdsetBidConfig(
   const bidAmountCents = toBidAmountCents(resolvedBidAmount);
 
   if (!bidAmountCents) {
-    return { bidStrategy: 'LOWEST_COST_WITHOUT_CAP' };
+    return {};
   }
 
   return {
     bidStrategy: strategy,
     bidAmountCents,
   };
+}
+
+function resolveCampaignBidConfig(
+  strategyInput: string | undefined,
+  bidAmountInput?: number | null,
+  dailyBudgetInput?: number | null,
+): { bidStrategy: string; bidAmountCents?: number } {
+  const strategy = normalizeBidStrategy(strategyInput);
+
+  if (!bidStrategyRequiresBidAmount(strategy)) {
+    return { bidStrategy: strategy };
+  }
+
+  const explicitBidAmount = toPositiveNumber(bidAmountInput);
+  const fallbackBidAmount = estimateBidAmountFromDailyBudget(dailyBudgetInput);
+  const bidAmountCents = toBidAmountCents(explicitBidAmount ?? fallbackBidAmount);
+
+  if (!bidAmountCents) {
+    return { bidStrategy: 'LOWEST_COST_WITHOUT_CAP' };
+  }
+
+  return { bidStrategy: strategy, bidAmountCents };
 }
 
 function isBidAmountRequiredMetaError(message: string): boolean {
@@ -172,6 +199,140 @@ function isVideoThumbnailRequiredMetaError(message: string): boolean {
     lower.includes('needs a video thumbnail') ||
     lower.includes('image_hash or image_url in the video_data field')
   );
+}
+
+function isDegreesOfFreedomMetaError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('degrees_of_freedom_spec') ||
+    lower.includes('creative_features_spec') ||
+    lower.includes('contextual_multi_ads') ||
+    lower.includes('enroll_status') ||
+    lower.includes('unsupported field')
+  );
+}
+
+function isGenericAdCreativeMetaError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('subcode=2490433') ||
+    lower.includes('unexpected error occurred') ||
+    lower.includes('user_title=something went wrong')
+  );
+}
+
+function isAssetFeedFormatMetaError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('subcode=1885374') ||
+    lower.includes('invalid ad formats in asset feed') ||
+    lower.includes('asset feed can have exactly one ad format')
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function classifyVideoProcessingState(raw: Record<string, unknown>): 'ready' | 'processing' | 'failed' | 'unknown' {
+  const statusObject =
+    raw.status && typeof raw.status === 'object'
+      ? (raw.status as Record<string, unknown>)
+      : undefined;
+  const processingPhase =
+    statusObject?.processing_phase && typeof statusObject.processing_phase === 'object'
+      ? (statusObject.processing_phase as Record<string, unknown>)
+      : undefined;
+  const publishingPhase =
+    statusObject?.publishing_phase && typeof statusObject.publishing_phase === 'object'
+      ? (statusObject.publishing_phase as Record<string, unknown>)
+      : undefined;
+  const uploadingPhase =
+    statusObject?.uploading_phase && typeof statusObject.uploading_phase === 'object'
+      ? (statusObject.uploading_phase as Record<string, unknown>)
+      : undefined;
+
+  const states = [
+    asString(raw.video_status),
+    asString(statusObject?.video_status),
+    asString(statusObject?.status),
+    asString(processingPhase?.status),
+    asString(publishingPhase?.status),
+    asString(uploadingPhase?.status),
+  ]
+    .map((value) => value?.toLowerCase())
+    .filter(Boolean) as string[];
+
+  if (states.length === 0) return 'unknown';
+  if (states.some((value) => ['error', 'failed', 'failure'].includes(value))) return 'failed';
+  if (states.some((value) => ['ready', 'completed', 'complete', 'finished', 'published'].includes(value))) {
+    return 'ready';
+  }
+  if (states.some((value) => ['processing', 'in_progress', 'pending', 'not_started'].includes(value))) {
+    return 'processing';
+  }
+  return 'unknown';
+}
+
+async function waitForVideoReady(
+  accessToken: string,
+  videoId: string,
+  timeoutMs = 45_000,
+  pollMs = 3_000,
+): Promise<'ready' | 'processing' | 'failed'> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const meta = await fetchFromMeta<Record<string, unknown>>(
+        accessToken,
+        `/${videoId}`,
+        { fields: 'status,video_status' },
+        10_000,
+        1,
+      );
+      const state = classifyVideoProcessingState(meta);
+      if (state === 'ready') return 'ready';
+      if (state === 'failed') return 'failed';
+    } catch {
+      // Best effort polling only.
+    }
+
+    await sleep(pollMs);
+  }
+
+  return 'processing';
+}
+
+function extractVideoIdFromCreativeBody(creativeBody: Record<string, string>): string | undefined {
+  if (creativeBody.object_story_spec) {
+    try {
+      const parsed = JSON.parse(creativeBody.object_story_spec) as Record<string, unknown>;
+      const videoData =
+        parsed && typeof parsed === 'object'
+          ? ((parsed.video_data as Record<string, unknown> | undefined) ?? undefined)
+          : undefined;
+      const videoId = asString(videoData?.video_id);
+      if (videoId) return videoId;
+    } catch {
+      // Ignore parse errors and continue.
+    }
+  }
+
+  if (creativeBody.asset_feed_spec) {
+    try {
+      const parsed = JSON.parse(creativeBody.asset_feed_spec) as Record<string, unknown>;
+      const videos = Array.isArray(parsed.videos)
+        ? (parsed.videos as Array<Record<string, unknown>>)
+        : [];
+      const firstVideoId = asString(videos[0]?.video_id);
+      if (firstVideoId) return firstVideoId;
+    } catch {
+      // Ignore parse errors.
+    }
+  }
+
+  return undefined;
 }
 
 function isValidHttpUrl(value: string | null | undefined): value is string {
@@ -368,24 +529,128 @@ async function addVideoThumbnailToCreativeBody(
   }
 }
 
+function removeDegreesOfFreedomFromCreativeBody(
+  creativeBody: Record<string, string>,
+): Record<string, string> | null {
+  if (!creativeBody.degrees_of_freedom_spec) {
+    return null;
+  }
+
+  const sanitized = { ...creativeBody };
+  delete sanitized.degrees_of_freedom_spec;
+  return sanitized;
+}
+
+function sanitizeDegreesOfFreedomSpecForMeta(
+  creativeBody: Record<string, string>,
+): Record<string, string> {
+  if (!creativeBody.degrees_of_freedom_spec) {
+    return creativeBody;
+  }
+
+  try {
+    const parsed = JSON.parse(creativeBody.degrees_of_freedom_spec) as Record<string, unknown>;
+    const featureSpec =
+      parsed.creative_features_spec && typeof parsed.creative_features_spec === 'object'
+        ? { ...(parsed.creative_features_spec as Record<string, unknown>) }
+        : undefined;
+
+    if (featureSpec) {
+      delete featureSpec.standard_enhancements;
+      delete featureSpec.standard_enhancements_catalog;
+    }
+
+    const sanitizedSpec: Record<string, unknown> = {
+      ...parsed,
+      ...(featureSpec ? { creative_features_spec: featureSpec } : {}),
+    };
+    delete sanitizedSpec.contextual_multi_ads;
+
+    const sanitizedFeatureSpec =
+      sanitizedSpec.creative_features_spec && typeof sanitizedSpec.creative_features_spec === 'object'
+        ? (sanitizedSpec.creative_features_spec as Record<string, unknown>)
+        : undefined;
+
+    if (sanitizedFeatureSpec && Object.keys(sanitizedFeatureSpec).length === 0) {
+      delete sanitizedSpec.creative_features_spec;
+    }
+
+    if (Object.keys(sanitizedSpec).length === 0) {
+      const withoutDegrees = { ...creativeBody };
+      delete withoutDegrees.degrees_of_freedom_spec;
+      return withoutDegrees;
+    }
+
+    return {
+      ...creativeBody,
+      degrees_of_freedom_spec: JSON.stringify(sanitizedSpec),
+    };
+  } catch {
+    const withoutDegrees = { ...creativeBody };
+    delete withoutDegrees.degrees_of_freedom_spec;
+    return withoutDegrees;
+  }
+}
+
 async function createAdCreativeWithFallback(
   accessToken: string,
   accountNode: string,
   creativeBody: Record<string, string>,
   preferredThumbnailUrl?: string,
+  fallbackObjectStorySpec?: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const attemptErrors: string[] = [];
+  const initialBody = sanitizeDegreesOfFreedomSpecForMeta(creativeBody);
 
   try {
-    return await postToMeta(accessToken, `/${accountNode}/adcreatives`, creativeBody);
+    return await postToMeta(accessToken, `/${accountNode}/adcreatives`, initialBody);
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
     const message = error.message || 'Meta adcreative creation failed';
     attemptErrors.push(`attempt_1:${message}`);
 
-    let workingBody = creativeBody;
+    let workingBody = initialBody;
+    const videoId = extractVideoIdFromCreativeBody(workingBody);
+    const firstErrorWasGeneric = isGenericAdCreativeMetaError(message);
+    let currentMessage = message;
 
-    if (isInvalidInstagramActorMetaError(message)) {
+    if (firstErrorWasGeneric && videoId) {
+      const videoState = await waitForVideoReady(accessToken, videoId);
+      if (videoState === 'failed') {
+        attemptErrors.push('video_processing_failed');
+      }
+
+      if (videoState === 'ready' || videoState === 'processing') {
+        // Even if processing is not fully complete yet, a second attempt often succeeds.
+        if (videoState === 'processing') {
+          await sleep(2_000);
+        }
+        try {
+          return await postToMeta(accessToken, `/${accountNode}/adcreatives`, workingBody);
+        } catch (retryErr) {
+          const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          attemptErrors.push(`attempt_2_after_video_ready:${retryMessage}`);
+          currentMessage = retryMessage;
+        }
+      }
+
+      if (videoState !== 'ready' && videoState !== 'processing') {
+        attemptErrors.push('video_still_processing_after_wait');
+      }
+    }
+
+    if (firstErrorWasGeneric && !videoId) {
+      await sleep(1_500);
+      try {
+        return await postToMeta(accessToken, `/${accountNode}/adcreatives`, workingBody);
+      } catch (retryErr) {
+        const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        attemptErrors.push(`attempt_2_after_generic_retry:${retryMessage}`);
+        currentMessage = retryMessage;
+      }
+    }
+
+    if (isInvalidInstagramActorMetaError(currentMessage)) {
       const withoutInstagramActor = removeInstagramActorFromCreativeBody(workingBody);
       if (withoutInstagramActor) {
         workingBody = withoutInstagramActor;
@@ -402,7 +667,64 @@ async function createAdCreativeWithFallback(
       }
     }
 
-    if (isVideoThumbnailRequiredMetaError(message) || attemptErrors.some((entry) => isVideoThumbnailRequiredMetaError(entry))) {
+    if (fallbackObjectStorySpec && workingBody.asset_feed_spec && isGenericAdCreativeMetaError(currentMessage)) {
+      const downgradedBody: Record<string, string> = {
+        ...workingBody,
+        object_story_spec: JSON.stringify(fallbackObjectStorySpec),
+      };
+      delete downgradedBody.asset_feed_spec;
+      delete downgradedBody.object_type;
+      delete downgradedBody.degrees_of_freedom_spec;
+
+      try {
+        return await postToMeta(accessToken, `/${accountNode}/adcreatives`, downgradedBody);
+      } catch (downgradeErr) {
+        const downgradeMessage =
+          downgradeErr instanceof Error ? downgradeErr.message : String(downgradeErr);
+        attemptErrors.push(`attempt_2_downgrade_object_story_spec:${downgradeMessage}`);
+        currentMessage = downgradeMessage;
+      }
+    }
+
+    if (isDegreesOfFreedomMetaError(currentMessage)) {
+      const withoutDegrees = removeDegreesOfFreedomFromCreativeBody(workingBody);
+      if (withoutDegrees) {
+        workingBody = withoutDegrees;
+        try {
+          return await postToMeta(accessToken, `/${accountNode}/adcreatives`, workingBody);
+        } catch (degreesErr) {
+          const degreesMessage =
+            degreesErr instanceof Error ? degreesErr.message : String(degreesErr);
+          attemptErrors.push(`attempt_without_degrees_of_freedom:${degreesMessage}`);
+          currentMessage = degreesMessage;
+        }
+      }
+    }
+
+    if (fallbackObjectStorySpec && workingBody.asset_feed_spec && isAssetFeedFormatMetaError(currentMessage)) {
+      const downgradedBody: Record<string, string> = {
+        ...workingBody,
+        object_story_spec: JSON.stringify(fallbackObjectStorySpec),
+      };
+      delete downgradedBody.asset_feed_spec;
+      delete downgradedBody.object_type;
+      delete downgradedBody.degrees_of_freedom_spec;
+
+      workingBody = downgradedBody;
+      try {
+        return await postToMeta(accessToken, `/${accountNode}/adcreatives`, workingBody);
+      } catch (downgradeErr) {
+        const downgradeMessage =
+          downgradeErr instanceof Error ? downgradeErr.message : String(downgradeErr);
+        attemptErrors.push(`attempt_downgrade_after_asset_feed_format:${downgradeMessage}`);
+        currentMessage = downgradeMessage;
+      }
+    }
+
+    if (
+      isVideoThumbnailRequiredMetaError(currentMessage) ||
+      attemptErrors.some((entry) => isVideoThumbnailRequiredMetaError(entry))
+    ) {
       const withThumbnail = await addVideoThumbnailToCreativeBody(
         accessToken,
         accountNode,
@@ -410,8 +732,9 @@ async function createAdCreativeWithFallback(
         preferredThumbnailUrl,
       );
       if (withThumbnail) {
+        const sanitizedThumbnailBody = sanitizeDegreesOfFreedomSpecForMeta(withThumbnail);
         try {
-          return await postToMeta(accessToken, `/${accountNode}/adcreatives`, withThumbnail);
+          return await postToMeta(accessToken, `/${accountNode}/adcreatives`, sanitizedThumbnailBody);
         } catch (thumbnailErr) {
           const thumbnailMessage =
             thumbnailErr instanceof Error ? thumbnailErr.message : String(thumbnailErr);
@@ -493,19 +816,24 @@ async function createAdsetWithFallback(
   adsetBody: Record<string, string>,
   fallbackBidAmountCents?: number,
 ): Promise<Record<string, unknown>> {
-  const normalizedStrategy = normalizeBidStrategy(adsetBody.bid_strategy);
-  const baseCandidate: Record<string, string> = { ...adsetBody, bid_strategy: normalizedStrategy };
+  const normalizedStrategy = adsetBody.bid_strategy
+    ? normalizeBidStrategy(adsetBody.bid_strategy)
+    : undefined;
+  const baseCandidate: Record<string, string> = { ...adsetBody };
+  if (normalizedStrategy) {
+    baseCandidate.bid_strategy = normalizedStrategy;
+  }
   const candidates: Array<Record<string, string>> = [];
   const seen = new Set<string>();
 
   const pushCandidate = (candidate: Record<string, string>) => {
-    const key = `${candidate.bid_strategy || '__none__'}|${candidate.bid_amount || '__none__'}`;
+    const key = `${candidate.bid_strategy || '__none__'}|${candidate.bid_amount || '__none__'}|${candidate.daily_budget || '__none__'}`;
     if (seen.has(key)) return;
     seen.add(key);
     candidates.push(candidate);
   };
 
-  if (!bidStrategyRequiresBidAmount(normalizedStrategy)) {
+  if (!normalizedStrategy || !bidStrategyRequiresBidAmount(normalizedStrategy)) {
     delete baseCandidate.bid_amount;
   } else if (
     (!baseCandidate.bid_amount ||
@@ -516,9 +844,11 @@ async function createAdsetWithFallback(
     baseCandidate.bid_amount = String(fallbackBidAmountCents);
   }
 
-  pushCandidate(baseCandidate);
+  if (!normalizedStrategy || !bidStrategyRequiresBidAmount(normalizedStrategy) || baseCandidate.bid_amount) {
+    pushCandidate(baseCandidate);
+  }
 
-  if (fallbackBidAmountCents) {
+  if (fallbackBidAmountCents && normalizedStrategy && bidStrategyRequiresBidAmount(normalizedStrategy)) {
     pushCandidate({
       ...adsetBody,
       bid_strategy: 'LOWEST_COST_WITH_BID_CAP',
@@ -531,17 +861,17 @@ async function createAdsetWithFallback(
     });
   }
 
+  const noBidFieldsCandidate: Record<string, string> = { ...adsetBody };
+  delete noBidFieldsCandidate.bid_strategy;
+  delete noBidFieldsCandidate.bid_amount;
+  pushCandidate(noBidFieldsCandidate);
+
   const lowestCostCandidate: Record<string, string> = {
     ...adsetBody,
     bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
   };
   delete lowestCostCandidate.bid_amount;
   pushCandidate(lowestCostCandidate);
-
-  const noBidFieldsCandidate: Record<string, string> = { ...adsetBody };
-  delete noBidFieldsCandidate.bid_strategy;
-  delete noBidFieldsCandidate.bid_amount;
-  pushCandidate(noBidFieldsCandidate);
 
   let lastError: Error | null = null;
   const errors: string[] = [];
@@ -554,7 +884,9 @@ async function createAdsetWithFallback(
       const error = err instanceof Error ? err : new Error(String(err));
       const message = error.message || 'unknown';
       lastError = error;
-      errors.push(`attempt_${index + 1}:${message}`);
+      errors.push(
+        `attempt_${index + 1}[bid_strategy=${candidate.bid_strategy || 'omitted'},bid_amount=${candidate.bid_amount || 'omitted'}]:${message}`,
+      );
 
       // Continue through all candidate payloads to maximize recovery chance.
       if (!isBidAmountRequiredMetaError(message)) continue;
@@ -573,6 +905,8 @@ async function createCampaignWithFallback(
   campaignName: string,
   structure: 'ABO' | 'CBO',
   dailyBudget: number,
+  bidStrategyInput?: string,
+  bidAmountInput?: number | null,
 ): Promise<Record<string, unknown>> {
   // Keep launch-center campaign creation on ODAX objectives only.
   const objectiveCandidates = ['OUTCOME_SALES'];
@@ -603,6 +937,18 @@ async function createCampaignWithFallback(
                 campaignBody.daily_budget = String(budgetCents);
               }
 
+              if (structure === 'CBO') {
+                const campaignBidConfig = resolveCampaignBidConfig(
+                  bidStrategyInput,
+                  bidAmountInput,
+                  dailyBudget,
+                );
+                campaignBody.bid_strategy = campaignBidConfig.bidStrategy;
+                if (campaignBidConfig.bidAmountCents) {
+                  campaignBody.bid_amount = String(campaignBidConfig.bidAmountCents);
+                }
+              }
+
               if (adsetBudgetSharingMode === 'false') {
                 campaignBody.is_adset_budget_sharing_enabled = 'false';
               } else if (adsetBudgetSharingMode === 'true') {
@@ -613,13 +959,25 @@ async function createCampaignWithFallback(
                 campaignBody.buying_type = 'AUCTION';
               }
 
-              return await postToMeta(accessToken, `/${accountNode}/campaigns`, campaignBody);
+              const response = await postToMeta(accessToken, `/${accountNode}/campaigns`, campaignBody);
+              if (structure === 'CBO') {
+                console.log(
+                  `[launch] Created CBO campaign ${response.id || 'unknown'} with bid_strategy=${
+                    campaignBody.bid_strategy || 'omitted'
+                  }, bid_amount=${campaignBody.bid_amount || 'omitted'}`,
+                );
+              }
+              return response;
             } catch (err) {
               const message = err instanceof Error ? err.message : String(err);
               errors.push(
                 `${objective}/${statusMode}/${specialAdCategories}/${
                   includeBuyingType ? 'buying_type' : 'no_buying_type'
-                }/adset_budget_sharing_${adsetBudgetSharingMode}: ${message}`,
+                }/adset_budget_sharing_${adsetBudgetSharingMode}/campaign_bid_${
+                  structure === 'CBO'
+                    ? resolveCampaignBidConfig(bidStrategyInput, bidAmountInput, dailyBudget).bidStrategy
+                    : 'adset_level'
+                }: ${message}`,
               );
             }
           }
@@ -646,10 +1004,50 @@ async function cleanupCampaignOnFailure(
   return 'paused';
 }
 
-function buildTargetingPayload(targeting?: TargetingSpec): Record<string, unknown> {
+function normalizeCountryCodes(values?: string[]): string[] {
+  return [...new Set((values || [])
+    .map((value) => value.trim().toUpperCase())
+    .filter((value) => /^[A-Z]{2}$/.test(value)))];
+}
+
+function hasWorldwideTargeting(values?: string[]): boolean {
+  return (values || []).some((value) => value.trim().toUpperCase() === WORLDWIDE_COUNTRY_VALUE);
+}
+
+function inferDefaultCountryFromStore(storeCurrency?: string, destinationUrl?: string | null): string {
+  try {
+    const hostname = new URL(destinationUrl || '').hostname.toLowerCase();
+    if (hostname.endsWith('.in')) return 'IN';
+    if (hostname.endsWith('.ca')) return 'CA';
+    if (hostname.endsWith('.co.uk') || hostname.endsWith('.uk')) return 'GB';
+    if (hostname.endsWith('.com.au') || hostname.endsWith('.au')) return 'AU';
+    if (hostname.endsWith('.ae')) return 'AE';
+    if (hostname.endsWith('.sg')) return 'SG';
+  } catch {
+    // Non-critical fallback only.
+  }
+
+  const currencyCountryMap: Record<string, string> = {
+    INR: 'IN',
+    USD: 'US',
+    CAD: 'CA',
+    GBP: 'GB',
+    AUD: 'AU',
+    EUR: 'DE',
+    AED: 'AE',
+    SGD: 'SG',
+  };
+  const currencyCountry = currencyCountryMap[String(storeCurrency || '').toUpperCase()];
+  if (currencyCountry) return currencyCountry;
+
+  return 'US';
+}
+
+function buildTargetingPayload(targeting?: TargetingSpec, defaultCountries: string[] = ['US']): Record<string, unknown> {
+  const safeDefaultCountries = normalizeCountryCodes(defaultCountries);
   if (!targeting) {
     return {
-      geo_locations: { countries: ['US'] },
+      geo_locations: { countries: safeDefaultCountries.length > 0 ? safeDefaultCountries : ['US'] },
       age_min: 18,
       age_max: 65,
     };
@@ -663,12 +1061,29 @@ function buildTargetingPayload(targeting?: TargetingSpec): Record<string, unknow
 
   if (targeting.geoLocations) {
     const geo: Record<string, unknown> = {};
-    if (targeting.geoLocations.countries?.length) geo.countries = targeting.geoLocations.countries;
+    const isWorldwide = hasWorldwideTargeting(targeting.geoLocations.countries);
+    const countries = normalizeCountryCodes(targeting.geoLocations.countries);
+    if (isWorldwide) {
+      geo.country_groups = ['worldwide'];
+    } else if (countries.length) {
+      geo.countries = countries;
+    }
     if (targeting.geoLocations.regions?.length) geo.regions = targeting.geoLocations.regions;
     if (targeting.geoLocations.cities?.length) geo.cities = targeting.geoLocations.cities;
-    result.geo_locations = Object.keys(geo).length > 0 ? geo : { countries: ['US'] };
+    result.geo_locations = Object.keys(geo).length > 0 ? geo : { countries: safeDefaultCountries.length > 0 ? safeDefaultCountries : ['US'] };
   } else {
-    result.geo_locations = { countries: ['US'] };
+    result.geo_locations = { countries: safeDefaultCountries.length > 0 ? safeDefaultCountries : ['US'] };
+  }
+
+  if (targeting.excludedGeoLocations) {
+    const excludedGeo: Record<string, unknown> = {};
+    const excludedCountries = normalizeCountryCodes(targeting.excludedGeoLocations.countries);
+    if (excludedCountries.length) excludedGeo.countries = excludedCountries;
+    if (targeting.excludedGeoLocations.regions?.length) excludedGeo.regions = targeting.excludedGeoLocations.regions;
+    if (targeting.excludedGeoLocations.cities?.length) excludedGeo.cities = targeting.excludedGeoLocations.cities;
+    if (Object.keys(excludedGeo).length > 0) {
+      result.excluded_geo_locations = excludedGeo;
+    }
   }
 
   if (targeting.customAudiences?.length) result.custom_audiences = targeting.customAudiences;
@@ -682,12 +1097,100 @@ function buildTargetingPayload(targeting?: TargetingSpec): Record<string, unknow
   return result;
 }
 
+function buildAttributionSpec(attributionWindow?: string): Array<{ event_type: string; window_days: number }> {
+  switch (attributionWindow) {
+    case '1d_click':
+      return [{ event_type: 'CLICK_THROUGH', window_days: 1 }];
+    case '7d_click':
+      return [{ event_type: 'CLICK_THROUGH', window_days: 7 }];
+    case '1d_click_1d_view':
+      return [
+        { event_type: 'CLICK_THROUGH', window_days: 1 },
+        { event_type: 'VIEW_THROUGH', window_days: 1 },
+      ];
+    case '7d_click_1d_view':
+      return [
+        { event_type: 'CLICK_THROUGH', window_days: 7 },
+        { event_type: 'VIEW_THROUGH', window_days: 1 },
+      ];
+    case '7d_click_1d_engagement':
+    case '7d_click_1d_engaged_view':
+    default:
+      return [
+        { event_type: 'CLICK_THROUGH', window_days: 7 },
+        { event_type: 'ENGAGED_VIDEO_VIEW', window_days: 1 },
+      ];
+  }
+}
+
+const CREATIVE_FEATURE_OPT_OUTS = [
+  'image_templates',
+  'image_touchups',
+  'video_auto_crop',
+  'image_brightness_and_contrast',
+  'text_optimizations',
+  'media_type_automation',
+  'pac_relaxation',
+  'description_automation',
+  'inline_comment',
+  'video_filtering',
+  'text_overlay_translation',
+  'profile_card',
+  'add_text_overlay',
+  'carousel_to_video',
+  'image_animation',
+  'image_auto_crop',
+  'image_background_gen',
+  'multi_photo_to_video',
+  'music_generation',
+  'profile_extension',
+  'video_to_image',
+  'translate_voiceover',
+  'text_generation',
+  'image_enhancement',
+  'product_metadata_automation',
+];
+
+function buildDegreesOfFreedomSpec(enabled?: boolean): Record<string, unknown> {
+  if (enabled) {
+    return {
+      creative_features_spec: {
+        image_touchups: { enroll_status: 'OPT_IN' },
+      },
+    };
+  }
+
+  return {
+    creative_features_spec: Object.fromEntries(
+      CREATIVE_FEATURE_OPT_OUTS.map((feature) => [feature, { enroll_status: 'OPT_OUT' }]),
+    ),
+  };
+}
+
+function attachCreativeAssetToAssetFeedSpec(
+  assetFeedSpec: Record<string, unknown>,
+  assetId: string | null,
+  assetType?: string | null,
+): void {
+  if (!assetId) return;
+
+  const isVideo = assetType === 'VIDEO' || assetType === 'video';
+  if (isVideo) {
+    assetFeedSpec.videos = [{ video_id: assetId }];
+    assetFeedSpec.ad_formats = ['SINGLE_VIDEO'];
+    return;
+  }
+
+  assetFeedSpec.images = [{ hash: assetId }];
+  assetFeedSpec.ad_formats = ['SINGLE_IMAGE'];
+}
+
 function buildAssetFeedSpec(
   config: LaunchConfig,
   profile: { pageId?: string; instagramActorId?: string; destinationUrl?: string },
   creativeUrl?: string
 ): Record<string, unknown> {
-  const destinationUrl = creativeUrl || config.destinationUrl || profile.destinationUrl || '';
+  const destinationUrl = creativeUrl || profile.destinationUrl || config.destinationUrl || '';
 
   const spec: Record<string, unknown> = {};
 
@@ -716,10 +1219,7 @@ function buildAssetFeedSpec(
     spec.call_to_action_types = [config.ctaType];
   }
 
-  // Advantage+ creative optimization
-  if (config.advantageCreative) {
-    spec.optimization_type = 'DEGREES_OF_FREEDOM';
-  }
+  spec.optimization_type = config.advantageCreative ? 'DEGREES_OF_FREEDOM' : 'REGULAR';
 
   return spec;
 }
@@ -731,18 +1231,16 @@ function buildObjectStorySpec(
   assetType: string,
   creativeUrl?: string
 ): Record<string, unknown> {
-  const destinationUrl = creativeUrl || config.destinationUrl || profile.destinationUrl || '';
-  const pageId = config.pageId || profile.pageId;
-  const instagramActorId = config.instagramActorId || profile.instagramActorId;
+  const destinationUrl = creativeUrl || profile.destinationUrl || config.destinationUrl || '';
+  const pageId = profile.pageId || config.pageId;
 
   const story: Record<string, unknown> = { page_id: pageId };
-  if (instagramActorId) story.instagram_actor_id = instagramActorId;
 
   const primaryText = config.primaryTexts[0]?.text || '';
   const headline = config.headlines[0]?.text || '';
   const description = config.descriptions[0]?.text || '';
 
-  const cta = config.ctaType
+  const cta = config.ctaType && isValidHttpUrl(destinationUrl)
     ? { type: config.ctaType, value: { link: destinationUrl } }
     : undefined;
 
@@ -767,6 +1265,14 @@ function buildObjectStorySpec(
   }
 
   return story;
+}
+
+function buildStoryIdentitySpec(
+  profile: { pageId?: string; instagramActorId?: string },
+  launchConfig: LaunchConfig,
+): Record<string, unknown> {
+  const pageId = profile.pageId || launchConfig.pageId;
+  return { page_id: pageId };
 }
 
 interface CreativeTestItemRow {
@@ -833,6 +1339,7 @@ export async function POST(request: NextRequest) {
       );
     }
     const storeTimezone = await getStoreTimezoneFromConfig(storeId);
+    const storeCurrency = await getStoreCurrencyFromConfig(storeId);
 
     const profile = await getProductProfile(launchConfig.productProfileId);
     if (!profile) {
@@ -927,10 +1434,37 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const resolvedDestinationUrl = (
+      launchConfig.destinationUrl ||
+      profile.destinationUrl ||
+      ''
+    ).trim();
+    if (!resolvedDestinationUrl) {
+      return NextResponse.json(
+        {
+          error:
+            'Destination URL is required. Please set a valid product URL in Product Profile or Launch Config.',
+        },
+        { status: 400 },
+      );
+    }
+    if (!isValidHttpUrl(resolvedDestinationUrl)) {
+      return NextResponse.json(
+        {
+          error:
+            'Destination URL is invalid. Please use a full URL starting with http:// or https://',
+        },
+        { status: 400 },
+      );
+    }
+    const defaultTargetingCountries = [
+      inferDefaultCountryFromStore(storeCurrency, resolvedDestinationUrl),
+    ];
+
     const launchProfileContext = {
       pageId: resolvedPageId || undefined,
       instagramActorId: resolvedInstagramActorId || undefined,
-      destinationUrl: profile.destinationUrl,
+      destinationUrl: resolvedDestinationUrl,
     };
 
     // Fetch selected creative items from DB
@@ -1141,6 +1675,8 @@ export async function POST(request: NextRequest) {
         campaignName,
         launchConfig.structure,
         launchConfig.dailyBudget,
+        launchConfig.bidStrategy,
+        launchConfig.bidAmount,
       );
       campaignId = String(campaignRes.id || '');
 
@@ -1252,24 +1788,26 @@ export async function POST(request: NextRequest) {
               url_tags:
                 launchConfig.utmTemplate || profile.utmTemplate || DEFAULT_META_URL_TAGS,
             };
+            const fallbackObjectStorySpec = buildObjectStorySpec(
+              launchConfig,
+              launchProfileContext,
+              item.meta_asset_id,
+              item.meta_asset_type || 'IMAGE',
+              creativeUrl,
+            );
 
             if (isFlexibleAd) {
               const assetFeedSpec = buildAssetFeedSpec(launchConfig, launchProfileContext, creativeUrl);
-              if (item.meta_asset_type === 'VIDEO' || item.meta_asset_type === 'video') {
-                (assetFeedSpec as Record<string, unknown>).videos = [{ video_id: item.meta_asset_id }];
-              } else {
-                (assetFeedSpec as Record<string, unknown>).images = [{ hash: item.meta_asset_id }];
-              }
+              attachCreativeAssetToAssetFeedSpec(assetFeedSpec, item.meta_asset_id, item.meta_asset_type);
               creativeBody.asset_feed_spec = JSON.stringify(assetFeedSpec);
               creativeBody.object_type = 'SHARE';
+              creativeBody.object_story_spec = JSON.stringify(
+                buildStoryIdentitySpec(launchProfileContext, launchConfig),
+              );
 
-              if (launchConfig.advantageCreative) {
-                creativeBody.degrees_of_freedom_spec = JSON.stringify({
-                  creative_features_spec: {
-                    standard_enhancements: { enroll_status: 'OPT_IN' },
-                  },
-                });
-              }
+              creativeBody.degrees_of_freedom_spec = JSON.stringify(
+                buildDegreesOfFreedomSpec(launchConfig.advantageCreative),
+              );
             } else {
               const objectStorySpec = buildObjectStorySpec(
                 launchConfig,
@@ -1281,11 +1819,16 @@ export async function POST(request: NextRequest) {
               creativeBody.object_story_spec = JSON.stringify(objectStorySpec);
             }
 
+            creativeBody.degrees_of_freedom_spec = JSON.stringify(
+              buildDegreesOfFreedomSpec(launchConfig.advantageCreative),
+            );
+
             const creativeRes = await createAdCreativeWithFallback(
               token.accessToken,
               accountNode,
               creativeBody,
               item.thumbnail_url || undefined,
+              fallbackObjectStorySpec,
             );
             const metaCreativeId = String(creativeRes.id || '');
 
@@ -1338,7 +1881,7 @@ export async function POST(request: NextRequest) {
 
         try {
           // Create one adset per batch
-          const targetingPayload = buildTargetingPayload(targeting);
+          const targetingPayload = buildTargetingPayload(targeting, defaultTargetingCountries);
           const adsetName = batch.name;
 
           const adsetBody: Record<string, string> = {
@@ -1348,6 +1891,7 @@ export async function POST(request: NextRequest) {
             billing_event: 'IMPRESSIONS',
             optimization_goal: 'OFFSITE_CONVERSIONS',
             targeting: JSON.stringify(targetingPayload),
+            attribution_spec: JSON.stringify(buildAttributionSpec(launchConfig.attributionWindow)),
             start_time: resolveStartTime(launchConfig, storeTimezone),
           };
 
@@ -1361,7 +1905,9 @@ export async function POST(request: NextRequest) {
           const bidAmt = batch.bidAmount ?? launchConfig.bidAmount;
           const batchDailyBudget = batch.dailyBudget ?? launchConfig.dailyBudget;
           const bidConfig = resolveAdsetBidConfig(launchConfig.bidStrategy, bidAmt, batchDailyBudget);
-          adsetBody.bid_strategy = bidConfig.bidStrategy;
+          if (bidConfig.bidStrategy) {
+            adsetBody.bid_strategy = bidConfig.bidStrategy;
+          }
           if (bidConfig.bidAmountCents) {
             adsetBody.bid_amount = String(bidConfig.bidAmountCents);
           }
@@ -1419,24 +1965,26 @@ export async function POST(request: NextRequest) {
                 name: `${item.creative_name} Creative`,
                 url_tags: launchConfig.utmTemplate || profile.utmTemplate || DEFAULT_META_URL_TAGS,
               };
+              const fallbackObjectStorySpec = buildObjectStorySpec(
+                launchConfig,
+                launchProfileContext,
+                item.meta_asset_id!,
+                item.meta_asset_type || 'IMAGE',
+                creativeUrl,
+              );
 
               if (isFlexibleAd) {
                 const assetFeedSpec = buildAssetFeedSpec(launchConfig, launchProfileContext, creativeUrl);
-                if (item.meta_asset_type === 'VIDEO' || item.meta_asset_type === 'video') {
-                  (assetFeedSpec as Record<string, unknown>).videos = [{ video_id: item.meta_asset_id }];
-                } else {
-                  (assetFeedSpec as Record<string, unknown>).images = [{ hash: item.meta_asset_id }];
-                }
+                attachCreativeAssetToAssetFeedSpec(assetFeedSpec, item.meta_asset_id, item.meta_asset_type);
                 creativeBody.asset_feed_spec = JSON.stringify(assetFeedSpec);
                 creativeBody.object_type = 'SHARE';
+                creativeBody.object_story_spec = JSON.stringify(
+                  buildStoryIdentitySpec(launchProfileContext, launchConfig),
+                );
 
-                if (launchConfig.advantageCreative) {
-                  creativeBody.degrees_of_freedom_spec = JSON.stringify({
-                    creative_features_spec: {
-                      standard_enhancements: { enroll_status: 'OPT_IN' },
-                    },
-                  });
-                }
+                creativeBody.degrees_of_freedom_spec = JSON.stringify(
+                  buildDegreesOfFreedomSpec(launchConfig.advantageCreative),
+                );
               } else {
                 const objectStorySpec = buildObjectStorySpec(
                   launchConfig,
@@ -1448,11 +1996,16 @@ export async function POST(request: NextRequest) {
                 creativeBody.object_story_spec = JSON.stringify(objectStorySpec);
               }
 
+              creativeBody.degrees_of_freedom_spec = JSON.stringify(
+                buildDegreesOfFreedomSpec(launchConfig.advantageCreative),
+              );
+
               const creativeRes = await createAdCreativeWithFallback(
                 token.accessToken,
                 accountNode,
                 creativeBody,
                 item.thumbnail_url || undefined,
+                fallbackObjectStorySpec,
               );
               const metaCreativeId = String(creativeRes.id || '');
 
@@ -1521,7 +2074,7 @@ export async function POST(request: NextRequest) {
           : undefined;
 
         // Create adset
-        const targetingPayload = buildTargetingPayload(targeting);
+        const targetingPayload = buildTargetingPayload(targeting, defaultTargetingCountries);
         const adsetName = item.creative_name;
 
         const adsetBody: Record<string, string> = {
@@ -1531,6 +2084,7 @@ export async function POST(request: NextRequest) {
           billing_event: 'IMPRESSIONS',
           optimization_goal: 'OFFSITE_CONVERSIONS',
           targeting: JSON.stringify(targetingPayload),
+          attribution_spec: JSON.stringify(buildAttributionSpec(launchConfig.attributionWindow)),
           start_time: resolveStartTime(launchConfig, storeTimezone),
         };
 
@@ -1546,7 +2100,9 @@ export async function POST(request: NextRequest) {
           launchConfig.bidAmount,
           launchConfig.dailyBudget,
         );
-        adsetBody.bid_strategy = bidConfig.bidStrategy;
+        if (bidConfig.bidStrategy) {
+          adsetBody.bid_strategy = bidConfig.bidStrategy;
+        }
         if (bidConfig.bidAmountCents) {
           adsetBody.bid_amount = String(bidConfig.bidAmountCents);
         }
@@ -1590,29 +2146,28 @@ export async function POST(request: NextRequest) {
           name: `${item.creative_name} Creative`,
           url_tags: launchConfig.utmTemplate || profile.utmTemplate || DEFAULT_META_URL_TAGS,
         };
+        const fallbackObjectStorySpec = buildObjectStorySpec(
+          launchConfig,
+          launchProfileContext,
+          item.meta_asset_id!,
+          item.meta_asset_type || 'IMAGE',
+          creativeUrl,
+        );
 
         if (isFlexibleAd) {
           // Flexible Ads with asset_feed_spec
           const assetFeedSpec = buildAssetFeedSpec(launchConfig, launchProfileContext, creativeUrl);
-
-          // Add the creative's asset to the feed spec
-          if (item.meta_asset_type === 'VIDEO' || item.meta_asset_type === 'video') {
-            (assetFeedSpec as Record<string, unknown>).videos = [{ video_id: item.meta_asset_id }];
-          } else {
-            (assetFeedSpec as Record<string, unknown>).images = [{ hash: item.meta_asset_id }];
-          }
+          attachCreativeAssetToAssetFeedSpec(assetFeedSpec, item.meta_asset_id, item.meta_asset_type);
 
           creativeBody.asset_feed_spec = JSON.stringify(assetFeedSpec);
           creativeBody.object_type = 'SHARE';
+          creativeBody.object_story_spec = JSON.stringify(
+            buildStoryIdentitySpec(launchProfileContext, launchConfig),
+          );
 
-          // Degrees of freedom spec for Advantage+ creative
-          if (launchConfig.advantageCreative) {
-            creativeBody.degrees_of_freedom_spec = JSON.stringify({
-              creative_features_spec: {
-                standard_enhancements: { enroll_status: 'OPT_IN' },
-              },
-            });
-          }
+          creativeBody.degrees_of_freedom_spec = JSON.stringify(
+            buildDegreesOfFreedomSpec(launchConfig.advantageCreative),
+          );
         } else {
           // Single PT/HL -- use object_story_spec
           const objectStorySpec = buildObjectStorySpec(
@@ -1625,11 +2180,16 @@ export async function POST(request: NextRequest) {
           creativeBody.object_story_spec = JSON.stringify(objectStorySpec);
         }
 
+        creativeBody.degrees_of_freedom_spec = JSON.stringify(
+          buildDegreesOfFreedomSpec(launchConfig.advantageCreative),
+        );
+
         const creativeRes = await createAdCreativeWithFallback(
           token.accessToken,
           accountNode,
           creativeBody,
           item.thumbnail_url || undefined,
+          fallbackObjectStorySpec,
         );
         const creativeId = String(creativeRes.id || '');
 

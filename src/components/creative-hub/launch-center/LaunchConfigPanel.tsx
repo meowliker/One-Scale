@@ -12,6 +12,14 @@ import {
   Target,
 } from 'lucide-react';
 
+import {
+  COUNTRY_OPTIONS,
+  WORLDWIDE_COUNTRY_VALUE,
+  dedupeCountryCodes,
+  getCountryLabel,
+  normalizeCountryCode,
+  parseCountryInput,
+} from '@/lib/countryOptions';
 import { cn } from '@/lib/utils';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
 import { useStoreStore } from '@/stores/storeStore';
@@ -20,6 +28,7 @@ import type {
   CreativeBatch,
   LaunchConfig,
   ProductCampaignLink,
+  TargetingSpec,
 } from '@/types/creativeHub';
 
 interface LaunchConfigPanelProps {
@@ -55,21 +64,6 @@ function inferCampaignType(campaignName?: string): ProductCampaignLink['campaign
   return 'testing';
 }
 
-function normalizeWords(value?: string): string[] {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter((word) => word.length >= 3);
-}
-
-function campaignMatchesProduct(campaignName: string, productName?: string): boolean {
-  const tokens = normalizeWords(productName);
-  if (tokens.length === 0) return true;
-  const lowerCampaignName = campaignName.toLowerCase();
-  return tokens.some((token) => lowerCampaignName.includes(token));
-}
-
 function isCboCampaign(campaign?: ProductCampaignLink): boolean {
   return Boolean(
     campaign &&
@@ -83,11 +77,12 @@ function formatMoney(value?: number): string {
 }
 
 function getBidStrategyLabel(value?: string): string {
-  if (!value) return 'Lowest Cost';
+  if (!value) return 'Highest volume or value';
+  if (value === 'LOWEST_COST' || value === 'LOWEST_COST_WITHOUT_CAP') return 'Highest volume or value';
   if (value === 'BID_CAP' || value === 'LOWEST_COST_WITH_BID_CAP') return 'Bid Cap';
   if (value === 'COST_CAP') return 'Cost Cap';
   if (value === 'MINIMUM_ROAS' || value === 'LOWEST_COST_WITH_MIN_ROAS') return 'ROAS Goal';
-  return 'Lowest Cost';
+  return 'Highest volume or value';
 }
 
 function shouldShowBidAmount(strategy?: string): boolean {
@@ -108,6 +103,67 @@ function buildSuggestedCampaignName(productName?: string): string {
   return `${productName} | Creative Test ${today}`;
 }
 
+const DEFAULT_ATTRIBUTION_WINDOW = '7d_click_1d_engagement';
+const DEFAULT_BID_STRATEGY: BidStrategy = 'LOWEST_COST_WITHOUT_CAP';
+
+const ATTRIBUTION_WINDOW_OPTIONS = [
+  { value: '7d_click_1d_engagement', label: '7-day click, 1-day engagement' },
+  { value: '7d_click', label: '7-day click' },
+  { value: '1d_click', label: '1-day click' },
+  { value: '7d_click_1d_view', label: '7-day click, 1-day view' },
+  { value: '1d_click_1d_view', label: '1-day click, 1-day view' },
+];
+
+type CountryListKind = 'included' | 'excluded';
+
+function inferCountryFromUrl(value?: string): string | undefined {
+  try {
+    const hostname = new URL(value || '').hostname.toLowerCase();
+    if (hostname.endsWith('.in')) return 'IN';
+    if (hostname.endsWith('.ca')) return 'CA';
+    if (hostname.endsWith('.co.uk') || hostname.endsWith('.uk')) return 'GB';
+    if (hostname.endsWith('.com.au') || hostname.endsWith('.au')) return 'AU';
+    if (hostname.endsWith('.ae')) return 'AE';
+    if (hostname.endsWith('.sg')) return 'SG';
+    if (hostname.endsWith('.de')) return 'DE';
+    if (hostname.endsWith('.fr')) return 'FR';
+    if (hostname.endsWith('.it')) return 'IT';
+    if (hostname.endsWith('.es')) return 'ES';
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function inferCountryFromCurrency(value?: string): string | undefined {
+  const map: Record<string, string> = {
+    INR: 'IN',
+    USD: 'US',
+    CAD: 'CA',
+    GBP: 'GB',
+    AUD: 'AU',
+    AED: 'AE',
+    SGD: 'SG',
+    EUR: 'DE',
+  };
+  return map[String(value || '').trim().toUpperCase()];
+}
+
+function formatCountryCount(count: number, kind: CountryListKind): string {
+  const noun = kind === 'included' ? 'included' : 'excluded';
+  return `${count} ${noun}`;
+}
+
+function mergeTargeting(
+  current: TargetingSpec | undefined,
+  patch: Partial<TargetingSpec>,
+): TargetingSpec {
+  return {
+    ...(current || {}),
+    ...patch,
+  };
+}
+
 export function LaunchConfigPanel({
   batches,
   productProfileId,
@@ -120,13 +176,16 @@ export function LaunchConfigPanel({
   const inboxCreatives = useCreativeHubStore((state) => state.inboxCreatives);
   const selectedCreativeIds = useCreativeHubStore((state) => state.selectedCreativeIds);
 
-  const { activeStoreId } = useStoreStore();
+  const { activeStoreId, stores } = useStoreStore();
 
   const [fetchedCampaigns, setFetchedCampaigns] = useState<FetchedCampaign[]>([]);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
   const [campaignAdsets, setCampaignAdsets] = useState<FetchedAdset[]>([]);
   const [adsetsLoading, setAdsetsLoading] = useState(false);
   const [adsetDropdownOpen, setAdsetDropdownOpen] = useState(false);
+  const [includeCountryPaste, setIncludeCountryPaste] = useState('');
+  const [excludeCountryPaste, setExcludeCountryPaste] = useState('');
+  const [countryListModal, setCountryListModal] = useState<CountryListKind | null>(null);
   const adsetDropdownRef = useRef<HTMLDivElement | null>(null);
 
   const selectedProfile = useMemo(() => {
@@ -150,6 +209,10 @@ export function LaunchConfigPanel({
     [adsetAssignments],
   );
   const resolvedStoreId = activeStoreId || selectedProfile?.storeId || '';
+  const activeStore = useMemo(
+    () => stores.find((store) => store.id === resolvedStoreId),
+    [resolvedStoreId, stores],
+  );
 
   useEffect(() => {
     if (!adsetDropdownOpen) return;
@@ -190,10 +253,11 @@ export function LaunchConfigPanel({
         });
         const cachedResponse = await fetch(`/api/meta/campaigns?${cachedParams.toString()}`);
         const cachedData = await cachedResponse.json();
-        let campaignRows = Array.isArray(cachedData.data) ? cachedData.data : [];
+        const cachedRows = Array.isArray(cachedData.data) ? cachedData.data : [];
+        let liveRows: unknown[] = [];
 
-        // Match old behavior: if cache is cold, immediately try a live fetch.
-        if (campaignRows.length === 0) {
+        // The launch dropdown should reflect Ads Manager now, not only the latest cron cache.
+        try {
           const liveParams = new URLSearchParams({
             storeId: resolvedStoreId,
             accountId: selectedProfile.adAccountId,
@@ -201,10 +265,25 @@ export function LaunchConfigPanel({
           });
           const liveResponse = await fetch(`/api/meta/campaigns?${liveParams.toString()}`);
           const liveData = await liveResponse.json();
-          campaignRows = Array.isArray(liveData.data) ? liveData.data : [];
+          liveRows = Array.isArray(liveData.data) ? liveData.data : [];
+        } catch {
+          liveRows = [];
         }
 
         if (!active) return;
+
+        const campaignRowsById = new Map<string, Record<string, unknown>>();
+        for (const campaign of cachedRows) {
+          if (campaign && typeof campaign === 'object') {
+            campaignRowsById.set(String((campaign as Record<string, unknown>).id || ''), campaign as Record<string, unknown>);
+          }
+        }
+        for (const campaign of liveRows) {
+          if (campaign && typeof campaign === 'object') {
+            campaignRowsById.set(String((campaign as Record<string, unknown>).id || ''), campaign as Record<string, unknown>);
+          }
+        }
+        const campaignRows = Array.from(campaignRowsById.values()).filter((campaign) => campaign.id);
 
         setFetchedCampaigns(
           campaignRows.map((campaign: Record<string, unknown>) => {
@@ -257,7 +336,7 @@ export function LaunchConfigPanel({
     };
   }, [resolvedStoreId, selectedProfile?.adAccountId]);
 
-  // Merge linked campaigns with live campaign fetch for the selected product.
+  // Merge linked campaigns with current Meta campaigns for the selected ad account.
   const linkedCampaigns = useMemo(() => {
     const byCampaignId = new Map<string, ProductCampaignLink>();
 
@@ -266,12 +345,7 @@ export function LaunchConfigPanel({
       byCampaignId.set(campaign.campaignId, campaign);
     }
 
-    const fetchedMatches = fetchedCampaigns.filter((campaign) =>
-      campaignMatchesProduct(campaign.campaignName, selectedProfile?.productName),
-    );
-    const fetchedSource = fetchedMatches.length > 0 ? fetchedMatches : fetchedCampaigns;
-
-    for (const fetched of fetchedSource) {
+    for (const fetched of fetchedCampaigns) {
       if (!fetched.campaignId) continue;
       const existing = byCampaignId.get(fetched.campaignId);
       if (existing) {
@@ -386,12 +460,11 @@ export function LaunchConfigPanel({
   const derivedBidStrategy =
     (campaignMode === 'existing' && selectedCampaign?.campaignBidStrategy
       ? selectedCampaign.campaignBidStrategy
-      : launchConfig.bidStrategy ?? selectedProfile?.defaultBidStrategy ?? 'LOWEST_COST_WITHOUT_CAP') as
+      : launchConfig.bidStrategy ?? DEFAULT_BID_STRATEGY) as
       | BidStrategy
       | string;
   const newCampaignBidStrategy = (launchConfig.bidStrategy ??
-    selectedProfile?.defaultBidStrategy ??
-    'LOWEST_COST_WITHOUT_CAP') as BidStrategy;
+    DEFAULT_BID_STRATEGY) as BidStrategy;
 
   const currency = selectedProfile?.adAccountCurrency || 'USD';
 
@@ -404,12 +477,108 @@ export function LaunchConfigPanel({
   const launchTime = launchConfig.launchTime ?? 'immediately';
   const scheduledDate = launchConfig.scheduledDate ?? '';
   const scheduledTime = launchConfig.scheduledTime ?? '09:00';
+  const attributionWindow = launchConfig.attributionWindow ?? DEFAULT_ATTRIBUTION_WINDOW;
+  const inferredIncludedCountry = useMemo(
+    () =>
+      inferCountryFromUrl(selectedProfile?.destinationUrl) ||
+      inferCountryFromUrl(activeStore?.domain) ||
+      inferCountryFromCurrency(selectedProfile?.adAccountCurrency) ||
+      'US',
+    [activeStore?.domain, selectedProfile?.adAccountCurrency, selectedProfile?.destinationUrl],
+  );
+  const includedCountries = useMemo(
+    () =>
+      dedupeCountryCodes(launchConfig.customTargeting?.geoLocations?.countries || []),
+    [launchConfig.customTargeting?.geoLocations?.countries],
+  );
+  const displayedIncludedCountries = includedCountries.length > 0 ? includedCountries : [inferredIncludedCountry];
+  const includesWorldwide = displayedIncludedCountries.includes(WORLDWIDE_COUNTRY_VALUE);
+  const excludedCountries = useMemo(
+    () =>
+      dedupeCountryCodes(launchConfig.customTargeting?.excludedGeoLocations?.countries || []),
+    [launchConfig.customTargeting?.excludedGeoLocations?.countries],
+  );
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const totalAdSets = batches.length;
   const totalAds = useMemo(
     () => batches.reduce((sum, batch) => sum + batch.creativeIds.length, 0),
     [batches],
   );
+
+  const updateIncludedCountries = (countryCodes: string[]) => {
+    const normalized = dedupeCountryCodes(countryCodes);
+    const nextIncludedCountries = normalized.includes(WORLDWIDE_COUNTRY_VALUE)
+      ? [WORLDWIDE_COUNTRY_VALUE]
+      : normalized.length > 0
+        ? normalized
+        : [inferredIncludedCountry];
+    updateLaunchConfig({
+      customTargeting: mergeTargeting(launchConfig.customTargeting, {
+        geoLocations: {
+          ...(launchConfig.customTargeting?.geoLocations || {}),
+          countries: nextIncludedCountries,
+        },
+        excludedGeoLocations: {
+          ...(launchConfig.customTargeting?.excludedGeoLocations || {}),
+          countries: excludedCountries.filter((countryCode) => !nextIncludedCountries.includes(countryCode)),
+        },
+      }),
+    });
+  };
+
+  const addIncludedCountries = (countryCodes: string[]) => {
+    const normalized = dedupeCountryCodes(countryCodes);
+    if (normalized.includes(WORLDWIDE_COUNTRY_VALUE)) {
+      updateIncludedCountries([WORLDWIDE_COUNTRY_VALUE]);
+      return;
+    }
+    updateIncludedCountries([
+      ...(includesWorldwide ? [] : displayedIncludedCountries),
+      ...normalized,
+    ]);
+  };
+
+  const updateExcludedCountries = (countryCodes: string[]) => {
+    const normalized = dedupeCountryCodes(countryCodes).filter(
+      (countryCode) => countryCode !== WORLDWIDE_COUNTRY_VALUE && !displayedIncludedCountries.includes(countryCode),
+    );
+    updateLaunchConfig({
+      customTargeting: mergeTargeting(launchConfig.customTargeting, {
+        excludedGeoLocations: {
+          ...(launchConfig.customTargeting?.excludedGeoLocations || {}),
+          countries: normalized,
+        },
+      }),
+    });
+  };
+
+  const addExcludedCountries = (countryCodes: string[]) => {
+    updateExcludedCountries([...excludedCountries, ...countryCodes]);
+  };
+
+  const removeExcludedCountry = (countryCode: string) => {
+    const normalized = normalizeCountryCode(countryCode);
+    updateExcludedCountries(excludedCountries.filter((code) => code !== normalized));
+  };
+
+  const removeIncludedCountry = (countryCode: string) => {
+    const normalized = normalizeCountryCode(countryCode);
+    updateIncludedCountries(displayedIncludedCountries.filter((code) => code !== normalized));
+  };
+
+  const handleBulkCountryPaste = (kind: CountryListKind) => {
+    const rawValue = kind === 'included' ? includeCountryPaste : excludeCountryPaste;
+    const parsedCountries = parseCountryInput(rawValue);
+    if (parsedCountries.length === 0) return;
+
+    if (kind === 'included') {
+      addIncludedCountries(parsedCountries);
+      setIncludeCountryPaste('');
+    } else {
+      addExcludedCountries(parsedCountries);
+      setExcludeCountryPaste('');
+    }
+  };
 
   useEffect(() => {
     const patch: Partial<LaunchConfig> = {};
@@ -463,8 +632,8 @@ export function LaunchConfigPanel({
       }
     }
 
-    if (!launchConfig.bidStrategy && selectedProfile?.defaultBidStrategy) {
-      patch.bidStrategy = selectedProfile.defaultBidStrategy;
+    if (!launchConfig.bidStrategy) {
+      patch.bidStrategy = DEFAULT_BID_STRATEGY;
     }
     if (launchConfig.dailyBudget == null && selectedProfile?.defaultBudget != null) {
       patch.dailyBudget = selectedProfile.defaultBudget;
@@ -481,6 +650,17 @@ export function LaunchConfigPanel({
     if (!launchConfig.scheduledTime) {
       patch.scheduledTime = '09:00';
     }
+    if (!launchConfig.attributionWindow) {
+      patch.attributionWindow = DEFAULT_ATTRIBUTION_WINDOW;
+    }
+    if (!launchConfig.customTargeting?.geoLocations?.countries?.length && inferredIncludedCountry) {
+      patch.customTargeting = mergeTargeting(launchConfig.customTargeting, {
+        geoLocations: {
+          ...(launchConfig.customTargeting?.geoLocations || {}),
+          countries: [inferredIncludedCountry],
+        },
+      });
+    }
     if (launchConfig.launchTime === 'scheduled' && !launchConfig.scheduledDate) {
       patch.scheduledDate = today;
     }
@@ -491,8 +671,10 @@ export function LaunchConfigPanel({
   }, [
     existingCampaignIsCbo,
     launchConfig.adsetMode,
+    launchConfig.attributionWindow,
     launchConfig.bidStrategy,
     launchConfig.campaignMode,
+    launchConfig.customTargeting,
     launchConfig.dailyBudget,
     launchConfig.existingCampaignId,
     launchConfig.instagramActorId,
@@ -506,6 +688,7 @@ export function LaunchConfigPanel({
     launchConfig.scheduledTime,
     launchConfig.structure,
     launchConfig.testDuration,
+    inferredIncludedCountry,
     linkedCampaigns.length,
     selectedCampaign,
     selectedProfile,
@@ -750,15 +933,19 @@ export function LaunchConfigPanel({
                   </FormField>
                 </div>
 
-                <FormField label="Bid Strategy">
+                <FormField label="Ad Set Bid Strategy">
                   <select
-                    value={launchConfig.bidStrategy ?? selectedProfile.defaultBidStrategy ?? 'LOWEST_COST_WITHOUT_CAP'}
+                    value={launchConfig.bidStrategy ?? DEFAULT_BID_STRATEGY}
                     onChange={(event) =>
-                      updateLaunchConfig({ bidStrategy: event.target.value as BidStrategy })
+                      updateLaunchConfig({
+                        bidStrategy: event.target.value as BidStrategy,
+                        bidAmount: event.target.value === DEFAULT_BID_STRATEGY ? undefined : launchConfig.bidAmount,
+                        roasFloor: event.target.value === DEFAULT_BID_STRATEGY ? undefined : launchConfig.roasFloor,
+                      })
                     }
                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 dark:border-slate-600 dark:bg-slate-900/60 dark:text-slate-100"
                   >
-                    <option value="LOWEST_COST_WITHOUT_CAP">Lowest Cost</option>
+                    <option value="LOWEST_COST_WITHOUT_CAP">Highest volume or value</option>
                     <option value="COST_CAP">Cost Cap</option>
                     <option value="LOWEST_COST_WITH_BID_CAP">Bid Cap</option>
                     <option value="LOWEST_COST_WITH_MIN_ROAS">ROAS Goal</option>
@@ -952,7 +1139,7 @@ export function LaunchConfigPanel({
               <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-6 py-6 text-center dark:border-slate-600 dark:bg-slate-900/40">
                 <FolderOpen className="mx-auto h-6 w-6 text-slate-400" />
                 <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">No ad sets found in this campaign.</p>
-                <p className="text-xs text-slate-400 dark:text-slate-400">Choose "Create New Ad Sets" instead.</p>
+                <p className="text-xs text-slate-400 dark:text-slate-400">Choose Create New Ad Sets instead.</p>
               </div>
             )}
           </div>
@@ -1010,46 +1197,6 @@ export function LaunchConfigPanel({
               </FormField>
             </div>
 
-            <FormField label="Bid Strategy">
-              <select
-                value={newCampaignBidStrategy}
-                onChange={(event) =>
-                  updateLaunchConfig({ bidStrategy: event.target.value as BidStrategy })
-                }
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 dark:border-slate-600 dark:bg-slate-900/60 dark:text-slate-100"
-              >
-                <option value="LOWEST_COST_WITHOUT_CAP">Lowest Cost</option>
-                <option value="COST_CAP">Cost Cap</option>
-                <option value="LOWEST_COST_WITH_BID_CAP">Bid Cap</option>
-                <option value="LOWEST_COST_WITH_MIN_ROAS">ROAS Goal</option>
-              </select>
-            </FormField>
-
-            {shouldShowBidAmount(newCampaignBidStrategy) && (
-              <FormField
-                label={newCampaignBidStrategy === 'COST_CAP' ? 'Cost Per Result Goal' : 'Bid Cap Amount'}
-              >
-                <CurrencyInput
-                  currency={currency}
-                  min={0.01}
-                  step={0.01}
-                  value={launchConfig.bidAmount}
-                  onChange={(value) => updateLaunchConfig({ bidAmount: value })}
-                />
-              </FormField>
-            )}
-
-            {shouldShowRoas(newCampaignBidStrategy) && (
-              <FormField label="ROAS Goal">
-                <NumberWithSuffix
-                  min={0.01}
-                  step={0.01}
-                  suffix="x"
-                  value={launchConfig.roasFloor}
-                  onChange={(value) => updateLaunchConfig({ roasFloor: value })}
-                />
-              </FormField>
-            )}
           </div>
         )}
 
@@ -1075,6 +1222,172 @@ export function LaunchConfigPanel({
               {formatMoney(dailyBudget)} / day
             </div>
           </FormField>
+
+          <FormField label="Attribution Settings">
+            <select
+              value={attributionWindow}
+              onChange={(event) => updateLaunchConfig({ attributionWindow: event.target.value })}
+              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 dark:border-slate-600 dark:bg-slate-900/60 dark:text-slate-100"
+            >
+              {ATTRIBUTION_WINDOW_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </FormField>
+
+          {campaignMode === 'new' && (
+            <FormField label="Campaign Bid Strategy">
+              <select
+                value={newCampaignBidStrategy}
+                onChange={(event) =>
+                  updateLaunchConfig({
+                    bidStrategy: event.target.value as BidStrategy,
+                    bidAmount: event.target.value === DEFAULT_BID_STRATEGY ? undefined : launchConfig.bidAmount,
+                    roasFloor: event.target.value === DEFAULT_BID_STRATEGY ? undefined : launchConfig.roasFloor,
+                  })
+                }
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 dark:border-slate-600 dark:bg-slate-900/60 dark:text-slate-100"
+              >
+                <option value="LOWEST_COST_WITHOUT_CAP">Highest volume or value</option>
+                <option value="COST_CAP">Cost Cap</option>
+                <option value="LOWEST_COST_WITH_BID_CAP">Bid Cap</option>
+                <option value="LOWEST_COST_WITH_MIN_ROAS">ROAS Goal</option>
+              </select>
+            </FormField>
+          )}
+        </div>
+
+        {campaignMode === 'new' && shouldShowBidAmount(newCampaignBidStrategy) && (
+          <FormField
+            label={newCampaignBidStrategy === 'COST_CAP' ? 'Cost Per Result Goal' : 'Bid Cap Amount'}
+          >
+            <CurrencyInput
+              currency={currency}
+              min={0.01}
+              step={0.01}
+              value={launchConfig.bidAmount}
+              onChange={(value) => updateLaunchConfig({ bidAmount: value })}
+            />
+          </FormField>
+        )}
+
+        {campaignMode === 'new' && shouldShowRoas(newCampaignBidStrategy) && (
+          <FormField label="ROAS Goal">
+            <NumberWithSuffix
+              min={0.01}
+              step={0.01}
+              suffix="x"
+              value={launchConfig.roasFloor}
+              onChange={(value) => updateLaunchConfig({ roasFloor: value })}
+            />
+          </FormField>
+        )}
+
+        <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-600 dark:bg-slate-900/35">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-300">
+              Location Targeting
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setCountryListModal('included')}
+                className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 transition hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-300"
+              >
+                {includesWorldwide ? 'Worldwide' : formatCountryCount(displayedIncludedCountries.length, 'included')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setCountryListModal('excluded')}
+                className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 transition hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-300"
+              >
+                {formatCountryCount(excludedCountries.length, 'excluded')}
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <FormField label="Include Locations" helper="Add one country or paste many names at once.">
+              <div className="flex gap-2">
+                <select
+                  value=""
+                  onChange={(event) => {
+                    addIncludedCountries([event.target.value]);
+                    event.target.value = '';
+                  }}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 dark:border-slate-600 dark:bg-slate-900/60 dark:text-slate-100"
+                >
+                  <option value="">Add included country...</option>
+                  {COUNTRY_OPTIONS.filter((option) => !displayedIncludedCountries.includes(option.value)).map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="mt-2 flex gap-2">
+                <textarea
+                  value={includeCountryPaste}
+                  onChange={(event) => setIncludeCountryPaste(event.target.value)}
+                  rows={2}
+                  placeholder="Paste countries: India, United States, GB..."
+                  className="min-h-16 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 dark:border-slate-600 dark:bg-slate-900/60 dark:text-slate-100"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleBulkCountryPaste('included')}
+                  disabled={parseCountryInput(includeCountryPaste).length === 0}
+                  className="rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:bg-slate-900/60 dark:text-slate-200"
+                >
+                  Add
+                </button>
+              </div>
+            </FormField>
+
+            <FormField label="Exclude Locations" helper="Optional. Add one country or paste a large block.">
+              <div className="flex gap-2">
+                <select
+                  value=""
+                  onChange={(event) => {
+                    addExcludedCountries([event.target.value]);
+                    event.target.value = '';
+                  }}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 dark:border-slate-600 dark:bg-slate-900/60 dark:text-slate-100"
+                >
+                  <option value="">Add excluded country...</option>
+                  {COUNTRY_OPTIONS.filter(
+                    (option) =>
+                      option.value !== WORLDWIDE_COUNTRY_VALUE &&
+                      !displayedIncludedCountries.includes(option.value) &&
+                      !excludedCountries.includes(option.value),
+                  ).map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="mt-2 flex gap-2">
+                <textarea
+                  value={excludeCountryPaste}
+                  onChange={(event) => setExcludeCountryPaste(event.target.value)}
+                  rows={2}
+                  placeholder="Paste exclusions, one per line or comma separated"
+                  className="min-h-16 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 dark:border-slate-600 dark:bg-slate-900/60 dark:text-slate-100"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleBulkCountryPaste('excluded')}
+                  disabled={parseCountryInput(excludeCountryPaste).length === 0}
+                  className="rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition hover:border-blue-200 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:bg-slate-900/60 dark:text-slate-200"
+                >
+                  Add
+                </button>
+              </div>
+            </FormField>
+          </div>
         </div>
 
         <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-600 dark:bg-slate-900/35">
@@ -1182,6 +1495,78 @@ export function LaunchConfigPanel({
           >
             Overview Launch
           </button>
+        </div>
+      )}
+
+      {countryListModal && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/60 p-4"
+          onClick={() => setCountryListModal(null)}
+        >
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 dark:border-slate-700">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                  {countryListModal === 'included' ? 'Included Countries' : 'Excluded Countries'}
+                </p>
+                <h3 className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-100">
+                  {countryListModal === 'included' && includesWorldwide
+                    ? 'Worldwide'
+                    : formatCountryCount(
+                        countryListModal === 'included'
+                          ? displayedIncludedCountries.length
+                          : excludedCountries.length,
+                        countryListModal,
+                      )}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCountryListModal(null)}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-slate-300 dark:border-slate-700 dark:text-slate-300"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="max-h-[56vh] overflow-y-auto p-4">
+              {(countryListModal === 'included' ? displayedIncludedCountries : excludedCountries).length > 0 ? (
+                <div className="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 dark:divide-slate-700 dark:border-slate-700">
+                  {(countryListModal === 'included' ? displayedIncludedCountries : excludedCountries).map(
+                    (countryCode) => (
+                      <div
+                        key={countryCode}
+                        className="flex items-center justify-between gap-3 bg-white px-3 py-2 dark:bg-slate-900/70"
+                      >
+                        <span className="text-xs font-medium text-slate-700 dark:text-slate-200">
+                          {getCountryLabel(countryCode)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            countryListModal === 'included'
+                              ? removeIncludedCountry(countryCode)
+                              : removeExcludedCountry(countryCode)
+                          }
+                          className="flex h-6 w-6 items-center justify-center rounded-md text-base font-semibold leading-none text-slate-400 transition hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-500/10"
+                          aria-label={`Remove ${getCountryLabel(countryCode)}`}
+                        >
+                          -
+                        </button>
+                      </div>
+                    ),
+                  )}
+                </div>
+              ) : (
+                <p className="rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                  No countries selected.
+                </p>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

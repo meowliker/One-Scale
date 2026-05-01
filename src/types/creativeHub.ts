@@ -66,6 +66,11 @@ export interface TargetingSpec {
     regions?: { key: string }[];
     cities?: { key: string; radius?: number; distanceUnit?: string }[];
   };
+  excludedGeoLocations?: {
+    countries?: string[];
+    regions?: { key: string }[];
+    cities?: { key: string; radius?: number; distanceUnit?: string }[];
+  };
   customAudiences?: { id: string; name?: string }[];
   excludedCustomAudiences?: { id: string; name?: string }[];
   flexibleSpec?: {

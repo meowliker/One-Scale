@@ -145,7 +145,7 @@ export function LaunchStep2AdCopy() {
   const headlines = launchConfig.headlines || [];
   const descriptions = launchConfig.descriptions || [];
   const ctaType = launchConfig.ctaType || 'SHOP_NOW';
-  const advantageCreative = launchConfig.advantageCreative ?? true;
+  const advantageCreative = launchConfig.advantageCreative ?? false;
   const usePerCreativeUrls = launchConfig.usePerCreativeUrls ?? false;
   const perCreativeUrls = launchConfig.perCreativeUrls || {};
 

@@ -1653,7 +1653,7 @@ function buildExistingCampaignOptions(
           : 'Ad set budget';
     const bidStrategyLabel = campaign.campaignBidStrategy
       ? campaign.campaignBidStrategy.replaceAll('_', ' ')
-      : 'Lowest cost';
+      : 'Highest volume or value';
 
     return {
       id: campaign.id,
@@ -4900,7 +4900,7 @@ export function CreativeLaunchStudio({ storeId }: CreativeLaunchStudioProps) {
       dailyBudget: launchConfig.dailyBudget ?? profile?.defaultBudget ?? 20,
       testDuration: launchConfig.testDuration ?? profile?.defaultDuration ?? 3,
       bidStrategy:
-        launchConfig.bidStrategy || profile?.defaultBidStrategy || 'LOWEST_COST_WITHOUT_CAP',
+        launchConfig.bidStrategy || 'LOWEST_COST_WITHOUT_CAP',
       bidAmount: launchConfig.bidAmount ?? profile?.defaultBidAmount,
       roasFloor: launchConfig.roasFloor ?? profile?.defaultRoasFloor,
       launchStatus: launchConfig.launchStatus || profile?.defaultLaunchStatus || 'PAUSED',
@@ -4909,13 +4909,13 @@ export function CreativeLaunchStudio({ storeId }: CreativeLaunchStudioProps) {
         launchConfig.launchTime === 'scheduled' ? launchConfig.scheduledDate : undefined,
       scheduledTime: launchConfig.scheduledTime || '09:00',
       endDate: launchConfig.endDate,
-      attributionWindow: launchConfig.attributionWindow || '7d_click_1d_view',
+      attributionWindow: launchConfig.attributionWindow || '7d_click_1d_engagement',
       utmTemplate: launchConfig.utmTemplate || profile?.utmTemplate,
       primaryTexts: launchConfig.primaryTexts || [],
       headlines: launchConfig.headlines || [],
       descriptions: launchConfig.descriptions || [],
       ctaType: launchConfig.ctaType || 'SHOP_NOW',
-      advantageCreative: launchConfig.advantageCreative ?? true,
+      advantageCreative: launchConfig.advantageCreative ?? false,
       batches: effectiveBatches.length > 0 ? effectiveBatches : undefined,
       batchStrategy:
         effectiveBatches.length > 0

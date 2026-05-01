@@ -350,7 +350,7 @@ function formatBidStrategyLabel(value: LaunchConfig['bidStrategy'] | undefined):
       return 'Minimum ROAS';
     case 'LOWEST_COST_WITHOUT_CAP':
     default:
-      return 'Lowest cost';
+      return 'Highest volume or value';
   }
 }
 
@@ -3540,7 +3540,7 @@ export function CreativeLaunchStudioPlanningWorkspace({
                             }
                             className={cn('mt-1.5 w-full bg-transparent text-sm font-semibold outline-none', darkMode ? 'text-slate-100' : 'text-slate-900')}
                           >
-                            <option value="LOWEST_COST_WITHOUT_CAP">Lowest cost</option>
+                            <option value="LOWEST_COST_WITHOUT_CAP">Highest volume or value</option>
                             <option value="COST_CAP">Cost cap</option>
                             <option value="LOWEST_COST_WITH_BID_CAP">Bid cap</option>
                             <option value="LOWEST_COST_WITH_MIN_ROAS">Minimum ROAS</option>

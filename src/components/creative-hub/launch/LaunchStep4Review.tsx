@@ -184,7 +184,7 @@ export function LaunchStep4Review() {
             <DetailRow label="CTA" value={launchConfig.ctaType || 'SHOP_NOW'} />
             <DetailRow
               label="Advantage+ Creative"
-              value={launchConfig.advantageCreative !== false ? 'Enabled' : 'Disabled'}
+              value={launchConfig.advantageCreative === true ? 'Enabled' : 'Disabled'}
             />
           </div>
         </div>
@@ -423,7 +423,7 @@ function CopySummaryColumn({
 
 function formatBidStrategy(strategy: string): string {
   const labels: Record<string, string> = {
-    LOWEST_COST_WITHOUT_CAP: 'Lowest Cost',
+    LOWEST_COST_WITHOUT_CAP: 'Highest volume or value',
     COST_CAP: 'Cost Cap',
     LOWEST_COST_WITH_BID_CAP: 'Bid Cap',
     LOWEST_COST_WITH_MIN_ROAS: 'Minimum ROAS',
