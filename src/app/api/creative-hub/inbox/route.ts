@@ -413,36 +413,21 @@ async function fetchTaskDetails(token: string, taskId: string): Promise<ClickUpT
   }
 }
 
-async function fetchTasksFromList(token: string, listId: string, status: string): Promise<ClickUpTask[]> {
-  const tasks: ClickUpTask[] = [];
-  const pageSize = 100;
+function normalizeClickUpStatusName(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s_-]+/g, ' ');
+}
 
-  try {
-    for (let page = 0; page < 20; page += 1) {
-      const params = new URLSearchParams({
-        include_closed: 'false',
-        subtasks: 'true',
-        page: String(page),
-      });
-      params.append('statuses[]', status);
+function isReadyLikeClickUpTask(task: ClickUpTask, readyStatus: string): boolean {
+  const taskStatus = normalizeClickUpStatusName(task.status?.status || '');
+  const configuredStatus = normalizeClickUpStatusName(readyStatus);
+  if (!taskStatus) return false;
+  if (taskStatus === configuredStatus) return true;
 
-      const res = await fetch(
-        `https://api.clickup.com/api/v2/list/${listId}/task?${params.toString()}`,
-        { headers: { Authorization: token } }
-      );
-      if (!res.ok) break;
+  // Older stores sometimes have slightly different ready-column names.
+  return taskStatus.includes('ready') && taskStatus.includes('launch');
+}
 
-      const data = (await res.json()) as { tasks?: ClickUpTask[] };
-      const pageTasks = data.tasks || [];
-      if (pageTasks.length === 0) break;
-
-      tasks.push(...pageTasks);
-      if (pageTasks.length < pageSize) break;
-    }
-  } catch {
-    return tasks;
-  }
-
+async function hydrateClickUpTasks(token: string, tasks: ClickUpTask[]): Promise<ClickUpTask[]> {
   if (tasks.length === 0) return [];
 
   const hydratedTasks: ClickUpTask[] = [];
@@ -456,6 +441,75 @@ async function fetchTasksFromList(token: string, listId: string, status: string)
   }
 
   return hydratedTasks;
+}
+
+async function fetchTasksFromList(
+  token: string,
+  listId: string,
+  status: string,
+  options: { fallbackToReadyLike?: boolean; includeStatusFilter?: boolean } = {},
+): Promise<ClickUpTask[]> {
+  const tasks: ClickUpTask[] = [];
+  const pageSize = 100;
+  const includeStatusFilter = options.includeStatusFilter !== false;
+
+  try {
+    for (let page = 0; page < 20; page += 1) {
+      const params = new URLSearchParams({
+        include_closed: 'false',
+        subtasks: 'true',
+        page: String(page),
+      });
+      if (includeStatusFilter) {
+        params.append('statuses[]', status);
+      }
+
+      const res = await fetch(
+        `https://api.clickup.com/api/v2/list/${listId}/task?${params.toString()}`,
+        { headers: { Authorization: token } }
+      );
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        if (res.status === 401 || res.status === 403) {
+          throw new Error(`ClickUp token invalid or expired (${res.status}): ${body.slice(0, 240)}`);
+        }
+        console.warn(
+          `[creative-hub/inbox] ClickUp list ${listId} task fetch failed (${res.status}): ${body.slice(0, 240)}`,
+        );
+        break;
+      }
+
+      const data = (await res.json()) as { tasks?: ClickUpTask[] };
+      const pageTasks = data.tasks || [];
+      if (pageTasks.length === 0) break;
+
+      tasks.push(...pageTasks);
+      if (pageTasks.length < pageSize) break;
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.toLowerCase().includes('clickup token invalid')) {
+      throw err;
+    }
+    console.warn(`[creative-hub/inbox] ClickUp list ${listId} task fetch error: ${message}`);
+    return tasks;
+  }
+
+  if (tasks.length === 0 && options.fallbackToReadyLike !== false) {
+    const unfilteredTasks = await fetchTasksFromList(token, listId, status, {
+      fallbackToReadyLike: false,
+      includeStatusFilter: false,
+    });
+    const readyLikeTasks = unfilteredTasks.filter((task) => isReadyLikeClickUpTask(task, status));
+    if (readyLikeTasks.length > 0) {
+      console.log(
+        `[creative-hub/inbox] ClickUp exact status "${status}" returned 0 tasks for list ${listId}; ready-like fallback found ${readyLikeTasks.length}.`,
+      );
+      return readyLikeTasks;
+    }
+  }
+
+  return hydrateClickUpTasks(token, tasks);
 }
 
 function getAlreadyTestedTaskIds(storeId: string): Map<string, { testDate: string; roas: number; status: string }> {
@@ -871,14 +925,30 @@ export async function GET(request: NextRequest) {
   const googleDrive = await getGoogleDriveToken(storeId);
   const driveAccessToken = googleDrive?.accessToken || null;
 
-  const liveResult = await buildLiveInboxCreatives(
-    storeId,
-    listProfileMap,
-    token,
-    readyStatus,
-    testedMap,
-    driveAccessToken,
-  );
+  let liveResult: LiveInboxCreativesResult;
+  try {
+    liveResult = await buildLiveInboxCreatives(
+      storeId,
+      listProfileMap,
+      token,
+      readyStatus,
+      testedMap,
+      driveAccessToken,
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to fetch ClickUp creatives';
+    const tokenInvalid = message.toLowerCase().includes('clickup token invalid');
+    return NextResponse.json(
+      {
+        creatives: [],
+        error: tokenInvalid
+          ? 'ClickUp token is invalid or expired. Reconnect ClickUp from Settings > Integrations, then refresh ClickUp.'
+          : message,
+        notConnected: tokenInvalid,
+      },
+      { status: tokenInvalid ? 401 : 500 },
+    );
+  }
 
   await replaceCachedInboxCreatives(storeId, liveResult.snapshots);
 

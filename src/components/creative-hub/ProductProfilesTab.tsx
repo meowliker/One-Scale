@@ -64,6 +64,8 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
   const profileCreativeCounts = useCreativeHubStore((s) => s.profileCreativeCounts);
   const profileCreativeCountsLoading = useCreativeHubStore((s) => s.profileCreativeCountsLoading);
   const inboxLoading = useCreativeHubStore((s) => s.inboxLoading);
+  const inboxError = useCreativeHubStore((s) => s.inboxError);
+  const inboxNotConnected = useCreativeHubStore((s) => s.inboxNotConnected);
   const inboxLastSyncedAt = useCreativeHubStore((s) => s.inboxLastSyncedAt);
   const autoDiscoverProfiles = useCreativeHubStore((s) => s.autoDiscoverProfiles);
   const setActiveTab = useCreativeHubStore((s) => s.setActiveTab);
@@ -412,6 +414,18 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
       <p className="text-xs text-text-secondary">
         Last ClickUp refresh: <span className="font-medium text-text-primary">{formatLastSyncedAt(inboxLastSyncedAt)}</span>
       </p>
+
+      {inboxError && (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <AlertTriangle className="mt-0.5 h-4 w-4 flex-none text-amber-600" />
+          <div>
+            <p className="font-medium">
+              {inboxNotConnected ? 'ClickUp needs to be reconnected' : 'ClickUp sync needs attention'}
+            </p>
+            <p className="mt-0.5 text-amber-800">{inboxError}</p>
+          </div>
+        </div>
+      )}
 
       {/* Profile cards — split into Active Products and Not Testing sections */}
       {profiles.length > 0 ? (
