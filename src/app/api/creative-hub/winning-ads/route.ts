@@ -1,7 +1,7 @@
 export const maxDuration = 60;
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getProductCampaignLinks } from '@/app/api/lib/creative-hub-db';
+import { getProductCampaignLinks, getProductProfile } from '@/app/api/lib/creative-hub-db';
 
 // ── Supabase REST helper ──
 
@@ -63,6 +63,23 @@ interface AdsSnapshotRow {
   payload_json: string;
 }
 
+interface WarehouseAdRow {
+  ad_id: string;
+  ad_name?: string | null;
+  adset_id?: string | null;
+  campaign_id?: string | null;
+  status?: string | null;
+  creative_type?: string | null;
+  primary_text?: string | null;
+  headline?: string | null;
+  cta_type?: string | null;
+  media_url?: string | null;
+  thumbnail_url?: string | null;
+  destination_url?: string | null;
+  metrics_json?: Record<string, unknown> | null;
+  raw_json?: Record<string, unknown> | null;
+}
+
 interface SnapshotAdset {
   id?: string;
   campaign_id?: string;
@@ -119,7 +136,7 @@ interface WinningHeadline extends RankedCopyItem {
   avgCpm: number;
 }
 
-interface WinningDescription extends RankedCopyItem {}
+type WinningDescription = RankedCopyItem;
 
 interface WinningCTA extends RankedCopyItem {
   ctaType: string;
@@ -149,46 +166,6 @@ interface CopyAggregateEntry {
     weight: number;
   }>;
   examples: string[];
-}
-
-interface UniquePT {
-  text: string;
-  combinedRoas: number;
-  combinedSpend: number;
-  combinedRevenue: number;
-  purchases: number;
-  adCount: number;
-  avgCtr: number;
-  avgCpa: number;
-  usageCount?: number;
-  totalImpressions?: number;
-  totalClicks?: number;
-  avgCpc?: number;
-  avgCpm?: number;
-  blendedScore?: number;
-  metrics?: CopyMetrics;
-  label?: string;
-  examples?: string[];
-}
-
-interface UniqueHeadline {
-  text: string;
-  combinedRoas: number;
-  combinedSpend: number;
-  combinedRevenue?: number;
-  purchases: number;
-  adCount: number;
-  usageCount?: number;
-  totalImpressions?: number;
-  totalClicks?: number;
-  avgCtr?: number;
-  avgCpa?: number;
-  avgCpc?: number;
-  avgCpm?: number;
-  blendedScore?: number;
-  metrics?: CopyMetrics;
-  label?: string;
-  examples?: string[];
 }
 
 interface WinningAd {
@@ -260,6 +237,170 @@ function collectUniqueCopyValues(values: Array<string | undefined | null>): Arra
   }
 
   return out;
+}
+
+function asNumber(value: unknown): number {
+  const number = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function compactIdsForInFilter(ids: Iterable<string>): string {
+  return Array.from(new Set(ids))
+    .filter(Boolean)
+    .map((id) => `"${id.replace(/"/g, '\\"')}"`)
+    .join(',');
+}
+
+function extractProductUrlNeedles(destinationUrl?: string | null): string[] {
+  if (!destinationUrl) return [];
+
+  try {
+    const url = new URL(destinationUrl);
+    const pathParts = url.pathname.split('/').filter(Boolean);
+    const productHandle = pathParts[pathParts.length - 1];
+    return Array.from(
+      new Set(
+        [
+          productHandle,
+          url.pathname.replace(/^\/+/, ''),
+          `${url.hostname}${url.pathname}`,
+        ]
+          .map((value) => value.trim())
+          .filter((value) => value.length >= 3),
+      ),
+    );
+  } catch {
+    return destinationUrl
+      .split(/[/?#&=]+/)
+      .map((part) => part.trim())
+      .filter((part) => part.length >= 3);
+  }
+}
+
+function mapWarehouseAd(row: WarehouseAdRow): SnapshotAd {
+  const metrics = row.metrics_json || {};
+  const raw = row.raw_json || {};
+  const rawCreative =
+    raw.creative && typeof raw.creative === 'object'
+      ? (raw.creative as Record<string, unknown>)
+      : {};
+
+  return {
+    id: row.ad_id,
+    name: row.ad_name || row.ad_id,
+    campaign_id: row.campaign_id || undefined,
+    campaignId: row.campaign_id || undefined,
+    adSetId: row.adset_id || undefined,
+    status: row.status || undefined,
+    creative: {
+      headline: row.headline || asText(rawCreative.headline) || asText(rawCreative.title),
+      title: asText(rawCreative.title),
+      body: row.primary_text || asText(rawCreative.body),
+      description: asText(rawCreative.description),
+      ctaType: row.cta_type || asText(rawCreative.ctaType),
+      thumbnailUrl: row.thumbnail_url || asText(rawCreative.thumbnailUrl),
+      destinationUrl: row.destination_url || asText(rawCreative.destinationUrl),
+      type: row.creative_type || asText(rawCreative.type),
+    },
+    metrics: {
+      spend: asNumber(metrics.spend),
+      revenue: asNumber(metrics.revenue ?? metrics.purchaseValue),
+      roas: asNumber(metrics.roas ?? metrics.appPixelRoas),
+      cpa: asNumber(metrics.cpa ?? metrics.costPerResult),
+      cpm: asNumber(metrics.cpm),
+      cpc: asNumber(metrics.cpc),
+      ctr: asNumber(metrics.ctr),
+      impressions: asNumber(metrics.impressions),
+      clicks: asNumber(metrics.clicks),
+      conversions: asNumber(metrics.conversions ?? metrics.purchases ?? metrics.results),
+    },
+  };
+}
+
+async function fetchWarehouseAds(storeId: string, campaignIds: Set<string>): Promise<SnapshotAd[]> {
+  if (campaignIds.size === 0) return [];
+
+  try {
+    const campaignFilter = compactIdsForInFilter(campaignIds);
+    const rows = await supabaseRest<WarehouseAdRow[]>(
+      `/meta_ad_entities?store_id=eq.${encodeURIComponent(storeId)}` +
+        `&campaign_id=in.(${encodeURIComponent(campaignFilter)})` +
+        '&select=ad_id,ad_name,adset_id,campaign_id,status,creative_type,primary_text,headline,cta_type,media_url,thumbnail_url,destination_url,metrics_json,raw_json' +
+        '&limit=1000',
+    );
+    return rows.map(mapWarehouseAd);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchWarehouseAdsByDestinationUrl(storeId: string, destinationUrl?: string | null): Promise<SnapshotAd[]> {
+  const needles = extractProductUrlNeedles(destinationUrl);
+  if (needles.length === 0) return [];
+
+  const rowsByAdId = new Map<string, WarehouseAdRow>();
+
+  for (const needle of needles.slice(0, 3)) {
+    try {
+      const rows = await supabaseRest<WarehouseAdRow[]>(
+        `/meta_ad_entities?store_id=eq.${encodeURIComponent(storeId)}` +
+          `&destination_url=ilike.*${encodeURIComponent(needle)}*` +
+          '&primary_text=not.is.null' +
+          '&select=ad_id,ad_name,adset_id,campaign_id,status,creative_type,primary_text,headline,cta_type,media_url,thumbnail_url,destination_url,metrics_json,raw_json' +
+          '&limit=1000',
+      );
+      for (const row of rows) {
+        rowsByAdId.set(row.ad_id, row);
+      }
+    } catch {
+      // Destination URL matching is a fallback only; keep linked-campaign results intact.
+    }
+  }
+
+  return Array.from(rowsByAdId.values()).map(mapWarehouseAd);
+}
+
+function mergeAdsById(primary: SnapshotAd[], fallback: SnapshotAd[]): SnapshotAd[] {
+  const merged = new Map<string, SnapshotAd>();
+  for (const ad of primary) {
+    merged.set(ad.id, ad);
+  }
+
+  for (const ad of fallback) {
+    const existing = merged.get(ad.id);
+    if (!existing) {
+      merged.set(ad.id, ad);
+      continue;
+    }
+
+    merged.set(ad.id, {
+      ...existing,
+      campaign_id: existing.campaign_id || ad.campaign_id,
+      campaignId: existing.campaignId || ad.campaignId,
+      adSetId: existing.adSetId || ad.adSetId,
+      creative: {
+        ...existing.creative,
+        headline: existing.creative?.headline || ad.creative?.headline,
+        title: existing.creative?.title || ad.creative?.title,
+        body: existing.creative?.body || ad.creative?.body,
+        description: existing.creative?.description || ad.creative?.description,
+        ctaType: existing.creative?.ctaType || ad.creative?.ctaType,
+        thumbnailUrl: existing.creative?.thumbnailUrl || ad.creative?.thumbnailUrl,
+        destinationUrl: existing.creative?.destinationUrl || ad.creative?.destinationUrl,
+        type: existing.creative?.type || ad.creative?.type,
+      },
+      metrics: {
+        ...ad.metrics,
+        ...existing.metrics,
+      },
+    });
+  }
+
+  return Array.from(merged.values());
 }
 
 function aggregateCopyEntry(
@@ -479,37 +620,12 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // 1. Get linked campaign IDs
-    const campaignLinks = await getProductCampaignLinks(productProfileId);
-    if (campaignLinks.length === 0) {
-      return NextResponse.json({
-        uniquePTs: [],
-        uniqueHeadlines: [],
-        winningPrimaryTexts: [],
-        winningHeadlines: [],
-        winningDescriptions: [],
-        winningCTAs: [],
-        copyIntelligence: {
-          primaryTexts: [],
-          headlines: [],
-          descriptions: [],
-          ctas: [],
-          defaultRanking: 'blended_score',
-        },
-        winningAds: [],
-        autoFill: { primaryTexts: [], headlines: [], descriptions: [], cta: '' },
-        bestCTA: { type: '', usagePercent: 0, blendedScore: 0 },
-        stats: {
-          totalAds: 0,
-          totalLinkedCampaigns: 0,
-          totalSpend: 0,
-          totalPurchases: 0,
-          totalImpressions: 0,
-          totalClicks: 0,
-          dateRange: null,
-        },
-      });
-    }
+    // 1. Get product context and linked campaign IDs. Linked campaign rows can be
+    // stale, so we also use the product destination URL as a safe warehouse fallback.
+    const [profile, campaignLinks] = await Promise.all([
+      getProductProfile(productProfileId),
+      getProductCampaignLinks(productProfileId),
+    ]);
 
     const linkedCampaignIds = new Set(campaignLinks.map((l) => l.campaignId));
 
@@ -518,12 +634,15 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Supabase not configured' }, { status: 500 });
     }
 
-    const [adsSnapshots, adsetSnapshots] = await Promise.all([
+    const [adsSnapshots, adsetSnapshots, linkedWarehouseAds, productUrlWarehouseAds] = await Promise.all([
       fetchLatestSnapshots<AdsSnapshotRow>(storeId, 'ads'),
       fetchLatestSnapshots<AdsSnapshotRow>(storeId, 'adsets'),
+      fetchWarehouseAds(storeId, linkedCampaignIds),
+      fetchWarehouseAdsByDestinationUrl(storeId, profile?.destinationUrl),
     ]);
+    const warehouseAds = mergeAdsById(linkedWarehouseAds, productUrlWarehouseAds);
 
-    if (adsSnapshots.length === 0) {
+    if (adsSnapshots.length === 0 && warehouseAds.length === 0) {
       return NextResponse.json({
         uniquePTs: [],
         uniqueHeadlines: [],
@@ -609,7 +728,9 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    if (matchedAds.length === 0) {
+    const adsForRanking = mergeAdsById(matchedAds, warehouseAds);
+
+    if (adsForRanking.length === 0) {
       return NextResponse.json({
         uniquePTs: [],
         uniqueHeadlines: [],
@@ -645,7 +766,7 @@ export async function GET(request: NextRequest) {
     const descriptionMap = new Map<string, CopyAggregateEntry>();
     const ctaMap = new Map<string, CopyAggregateEntry>();
 
-    for (const ad of matchedAds) {
+    for (const ad of adsForRanking) {
       const metrics = ad.metrics || {};
       const spend = Number(metrics.spend ?? 0);
       const revenue = Number(metrics.revenue ?? 0);
@@ -761,7 +882,7 @@ export async function GET(request: NextRequest) {
     }));
 
     // 6. Winning Ads: rank by ROAS with min $10 spend filter
-    const winningAds: WinningAd[] = matchedAds
+    const winningAds: WinningAd[] = adsForRanking
       .filter((ad) => (ad.metrics?.spend ?? 0) >= 10)
       .sort((a, b) => {
         const roasA = a.metrics?.roas ?? 0;
@@ -850,10 +971,10 @@ export async function GET(request: NextRequest) {
       blendedScore: bestCTAItem?.blendedScore,
     };
 
-    const totalSpend = matchedAds.reduce((sum, ad) => sum + (ad.metrics?.spend ?? 0), 0);
-    const totalPurchases = matchedAds.reduce((sum, ad) => sum + (ad.metrics?.conversions ?? 0), 0);
-    const totalImpressions = matchedAds.reduce((sum, ad) => sum + (ad.metrics?.impressions ?? 0), 0);
-    const totalClicks = matchedAds.reduce((sum, ad) => sum + (ad.metrics?.clicks ?? 0), 0);
+    const totalSpend = adsForRanking.reduce((sum, ad) => sum + (ad.metrics?.spend ?? 0), 0);
+    const totalPurchases = adsForRanking.reduce((sum, ad) => sum + (ad.metrics?.conversions ?? 0), 0);
+    const totalImpressions = adsForRanking.reduce((sum, ad) => sum + (ad.metrics?.impressions ?? 0), 0);
+    const totalClicks = adsForRanking.reduce((sum, ad) => sum + (ad.metrics?.clicks ?? 0), 0);
 
     // 9. Response
     return NextResponse.json({
@@ -874,7 +995,7 @@ export async function GET(request: NextRequest) {
       autoFill,
       bestCTA,
       stats: {
-        totalAds: matchedAds.length,
+        totalAds: adsForRanking.length,
         totalLinkedCampaigns: linkedCampaignIds.size,
         totalSpend,
         totalPurchases,

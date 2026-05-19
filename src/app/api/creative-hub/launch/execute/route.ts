@@ -37,6 +37,42 @@ function asString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
+function cleanMetaName(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().slice(0, 255);
+}
+
+function renderNameTemplate(
+  template: string | undefined,
+  fallbackName: string,
+  context: {
+    index: number;
+    total: number;
+    batchName?: string;
+    creativeName?: string;
+    productName?: string;
+  },
+): string {
+  const rawTemplate = template?.trim();
+  if (!rawTemplate) return cleanMetaName(fallbackName);
+
+  const today = new Date().toISOString().slice(0, 10);
+  let rendered = rawTemplate
+    .replace(/\{\{\s*(index|number)\s*\}\}/gi, String(context.index))
+    .replace(/\{\{\s*total\s*\}\}/gi, String(context.total))
+    .replace(/\{\{\s*(batch\.name|batchName)\s*\}\}/gi, context.batchName || fallbackName)
+    .replace(/\{\{\s*(creative\.name|creativeName)\s*\}\}/gi, context.creativeName || fallbackName)
+    .replace(/\{\{\s*(product\.name|productName)\s*\}\}/gi, context.productName || '')
+    .replace(/\{\{\s*date\s*\}\}/gi, today);
+
+  const hasUniqueToken = /\{\{\s*(index|number|batch\.name|batchName|creative\.name|creativeName)\s*\}\}/i
+    .test(rawTemplate);
+  if (context.total > 1 && !hasUniqueToken) {
+    rendered = `${rendered} ${context.index}`;
+  }
+
+  return cleanMetaName(rendered) || cleanMetaName(fallbackName);
+}
+
 function resolveStartTime(config: LaunchConfig, timezone: string): string {
   if (config.launchTime === 'scheduled' && config.scheduledDate) {
     return fromZonedTime(
@@ -1882,7 +1918,16 @@ export async function POST(request: NextRequest) {
         try {
           // Create one adset per batch
           const targetingPayload = buildTargetingPayload(targeting, defaultTargetingCountries);
-          const adsetName = batch.name;
+          const adsetName = renderNameTemplate(
+            launchConfig.adsetNameOverride,
+            batch.name,
+            {
+              index: batchIdx + 1,
+              total: batches.length,
+              batchName: batch.name,
+              productName: profile.productName,
+            },
+          );
 
           const adsetBody: Record<string, string> = {
             name: adsetName,
@@ -2075,7 +2120,16 @@ export async function POST(request: NextRequest) {
 
         // Create adset
         const targetingPayload = buildTargetingPayload(targeting, defaultTargetingCountries);
-        const adsetName = item.creative_name;
+        const adsetName = renderNameTemplate(
+          launchConfig.adsetNameOverride,
+          item.creative_name,
+          {
+            index: selectedItems.indexOf(item) + 1,
+            total: selectedItems.length,
+            creativeName: item.creative_name,
+            productName: profile.productName,
+          },
+        );
 
         const adsetBody: Record<string, string> = {
           name: adsetName,

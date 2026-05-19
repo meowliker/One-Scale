@@ -8,6 +8,7 @@ import type { CreativeBatch, InboxCreative, CreativeFormat } from '@/types/creat
 interface BatchListProps {
   batches: CreativeBatch[];
   creatives: InboxCreative[];
+  onRenameBatch?: (batchId: string, name: string) => void;
   onRemoveBatch: (batchId: string) => void;
   onRemoveCreative: (batchId: string, creativeId: string) => void;
 }
@@ -24,7 +25,13 @@ const FORMAT_COLOR: Record<CreativeFormat, string> = {
   carousel: 'border-green-500/40 bg-green-500/10',
 };
 
-export function BatchList({ batches, creatives, onRemoveBatch, onRemoveCreative }: BatchListProps) {
+export function BatchList({
+  batches,
+  creatives,
+  onRenameBatch,
+  onRemoveBatch,
+  onRemoveCreative,
+}: BatchListProps) {
   const creativesMap = useMemo(() => {
     const map = new Map<string, InboxCreative>();
     creatives.forEach((c) => map.set(c.id, c));
@@ -44,15 +51,32 @@ export function BatchList({ batches, creatives, onRemoveBatch, onRemoveCreative 
 
   return (
     <div className="flex flex-col gap-2">
-      {batches.map((batch) => (
+      {batches.map((batch, index) => (
         <div
           key={batch.id}
           className="flex items-center gap-3 rounded-lg border border-slate-300 bg-slate-100/95 px-4 py-3"
         >
           {/* Batch label */}
-          <span className="min-w-[80px] whitespace-nowrap text-sm font-semibold text-slate-800">
-            {batch.name}
-          </span>
+          {onRenameBatch ? (
+            <input
+              type="text"
+              value={batch.name}
+              onChange={(event) => onRenameBatch(batch.id, event.target.value)}
+              onBlur={(event) => {
+                if (!event.target.value.trim()) {
+                  onRenameBatch(batch.id, `Ad Set ${index + 1}`);
+                }
+              }}
+              onClick={(event) => event.stopPropagation()}
+              aria-label={`Rename ${batch.name}`}
+              placeholder="Ad set name"
+              className="min-w-[110px] max-w-[240px] flex-[0_1_220px] rounded-md border border-transparent bg-transparent px-2 py-1 text-sm font-semibold text-slate-800 outline-none transition hover:border-slate-300 hover:bg-white focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-500/20"
+            />
+          ) : (
+            <span className="min-w-[80px] whitespace-nowrap text-sm font-semibold text-slate-800">
+              {batch.name}
+            </span>
+          )}
 
           {/* Creative pills */}
           <div className="flex items-center gap-1.5 flex-1 overflow-x-auto py-1">

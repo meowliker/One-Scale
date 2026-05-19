@@ -62,6 +62,7 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
   const unmappedCampaigns = useCreativeHubStore((s) => s.unmappedCampaigns);
   const inboxCreatives = useCreativeHubStore((s) => s.inboxCreatives);
   const profileCreativeCounts = useCreativeHubStore((s) => s.profileCreativeCounts);
+  const profileClickUpStatusCounts = useCreativeHubStore((s) => s.profileClickUpStatusCounts);
   const profileCreativeCountsLoading = useCreativeHubStore((s) => s.profileCreativeCountsLoading);
   const inboxLoading = useCreativeHubStore((s) => s.inboxLoading);
   const inboxError = useCreativeHubStore((s) => s.inboxError);
@@ -351,6 +352,18 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
     return inboxCreativeCountsMap.get(profileId) ?? 0;
   };
 
+  const getProfileStatusCount = (
+    profileId: string,
+    key: 'testing' | 'launched' | 'winners',
+    fallback: number,
+  ) => {
+    const clickupCounts = profileClickUpStatusCounts[profileId];
+    if (clickupCounts && clickupCounts[key] != null) {
+      return clickupCounts[key];
+    }
+    return fallback;
+  };
+
   return (
     <div className="space-y-6">
       {/* Header row */}
@@ -446,9 +459,9 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
                     profile={profile}
                     linkedCampaigns={linkedCampaignsMap.get(profile.id) ?? []}
                     creativeCount={profileCreativeCountsLoading ? '…' : getProfileReadyCount(profile.id)}
-                    testingCount={testingCountMap.get(profile.id) ?? 0}
-                    launchedCount={launchedCountMap.get(profile.id) ?? 0}
-                    winnersCount={winnersCountMap.get(profile.id) ?? 0}
+                    testingCount={getProfileStatusCount(profile.id, 'testing', testingCountMap.get(profile.id) ?? 0)}
+                    launchedCount={getProfileStatusCount(profile.id, 'launched', launchedCountMap.get(profile.id) ?? 0)}
+                    winnersCount={getProfileStatusCount(profile.id, 'winners', winnersCountMap.get(profile.id) ?? 0)}
                     onEdit={handleEdit}
                     onLaunch={handleLaunch}
                     onViewCopyLibrary={handleViewCopyLibrary}
@@ -490,9 +503,9 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
                     profile={profile}
                     linkedCampaigns={linkedCampaignsMap.get(profile.id) ?? []}
                     creativeCount={profileCreativeCountsLoading ? '…' : getProfileReadyCount(profile.id)}
-                    testingCount={testingCountMap.get(profile.id) ?? 0}
-                    launchedCount={launchedCountMap.get(profile.id) ?? 0}
-                    winnersCount={winnersCountMap.get(profile.id) ?? 0}
+                    testingCount={getProfileStatusCount(profile.id, 'testing', testingCountMap.get(profile.id) ?? 0)}
+                    launchedCount={getProfileStatusCount(profile.id, 'launched', launchedCountMap.get(profile.id) ?? 0)}
+                    winnersCount={getProfileStatusCount(profile.id, 'winners', winnersCountMap.get(profile.id) ?? 0)}
                     onEdit={handleEdit}
                       onLaunch={handleLaunch}
                       onViewCopyLibrary={handleViewCopyLibrary}

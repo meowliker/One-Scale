@@ -366,6 +366,7 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
   const aiInsights = useCreativeHubStore((state) => state.aiInsights);
   const aiInsightsLoading = useCreativeHubStore((state) => state.aiInsightsLoading);
   const autoBatch = useCreativeHubStore((state) => state.autoBatch);
+  const renameBatch = useCreativeHubStore((state) => state.renameBatch);
   const removeBatch = useCreativeHubStore((state) => state.removeBatch);
   const removeCreativeFromBatch = useCreativeHubStore((state) => state.removeCreativeFromBatch);
   const executeLaunch = useCreativeHubStore((state) => state.executeLaunch);
@@ -1447,6 +1448,7 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
               <BatchList
                 batches={batches}
                 creatives={selectedCreatives}
+                onRenameBatch={renameBatch}
                 onRemoveBatch={removeBatch}
                 onRemoveCreative={removeCreativeFromBatch}
               />

@@ -9,8 +9,16 @@ export async function GET() {
       isFirstSetup: userCount === 0,
       signupCodeRequired: signupCode.length > 0,
     });
-  } catch {
-    // If Supabase is unreachable, assume first setup so the form stays functional
-    return NextResponse.json({ isFirstSetup: true, signupCodeRequired: false });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to check account setup status.';
+    console.error('[auth/setup-status] Failed to check setup status:', message);
+    return NextResponse.json(
+      {
+        isFirstSetup: false,
+        signupCodeRequired: false,
+        error: 'Unable to verify existing accounts. Please check the auth database connection and try again.',
+      },
+      { status: 503 }
+    );
   }
 }

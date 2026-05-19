@@ -8,6 +8,7 @@ import type {
   BatchStrategy,
   CreativeBatch,
   ProductProfile,
+  ClickUpProfileStatusCounts,
   InboxCreative,
   CreativeTest,
   WinningCopy,
@@ -35,6 +36,7 @@ interface CreativeHubState {
   profilesLoading: boolean;
   unmappedCampaigns: UnmappedCampaign[];
   profileCreativeCounts: Record<string, number>;
+  profileClickUpStatusCounts: Record<string, ClickUpProfileStatusCounts>;
   profileCreativeTotal: number;
   profileCreativeCountsLoading: boolean;
 
@@ -173,6 +175,7 @@ interface CreativeHubState {
   closeLaunchCenter: () => void;
   autoBatch: (strategy: BatchStrategy, size: number) => void;
   createBatch: (name: string, creativeIds: string[]) => void;
+  renameBatch: (batchId: string, name: string) => void;
   removeBatch: (batchId: string) => void;
   addCreativeToBatch: (batchId: string, creativeId: string) => void;
   removeCreativeFromBatch: (batchId: string, creativeId: string) => void;
@@ -221,6 +224,23 @@ function buildCreativeCounts(creatives: InboxCreative[]): Record<string, number>
     counts[creative.productProfileId] = (counts[creative.productProfileId] ?? 0) + 1;
   }
   return counts;
+}
+
+function readyCountsFromClickUpStatus(
+  counts: Record<string, ClickUpProfileStatusCounts>
+): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(counts).map(([profileId, profileCounts]) => [profileId, profileCounts.ready])
+  );
+}
+
+async function fetchClickUpStatusCounts(storeId: string): Promise<Record<string, ClickUpProfileStatusCounts>> {
+  const res = await fetch(`/api/creative-hub/product-profiles/clickup-counts?storeId=${encodeURIComponent(storeId)}`);
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to fetch ClickUp status counts');
+  }
+  return data.counts ?? {};
 }
 
 function buildBaseLaunchConfig(
@@ -440,6 +460,7 @@ export const useCreativeHubStore = create<CreativeHubState>()(
   profilesLoading: false,
   unmappedCampaigns: [],
   profileCreativeCounts: {},
+  profileClickUpStatusCounts: {},
   profileCreativeTotal: 0,
   profileCreativeCountsLoading: false,
 
@@ -511,24 +532,40 @@ export const useCreativeHubStore = create<CreativeHubState>()(
   fetchProfileCreativeCounts: async (storeId: string) => {
     set({
       profileCreativeCounts: {},
+      profileClickUpStatusCounts: {},
       profileCreativeTotal: 0,
       profileCreativeCountsLoading: true,
     });
     try {
-      const res = await fetch(`/api/creative-hub/inbox?storeId=${encodeURIComponent(storeId)}`);
-      const data = await res.json();
+      const [inboxResult, clickupCountsResult] = await Promise.allSettled([
+        fetch(`/api/creative-hub/inbox?storeId=${encodeURIComponent(storeId)}`).then(async (res) => {
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Failed to fetch inbox');
+          return data;
+        }),
+        fetchClickUpStatusCounts(storeId),
+      ]);
+
+      const data = inboxResult.status === 'fulfilled' ? inboxResult.value : {};
       const creatives: InboxCreative[] = data.creatives ?? [];
-      const counts = buildCreativeCounts(creatives);
+      const clickupCounts =
+        clickupCountsResult.status === 'fulfilled' ? clickupCountsResult.value : {};
+      const counts = Object.keys(clickupCounts).length > 0
+        ? { ...buildCreativeCounts(creatives), ...readyCountsFromClickUpStatus(clickupCounts) }
+        : buildCreativeCounts(creatives);
 
       set({
         profileCreativeCounts: counts,
+        profileClickUpStatusCounts: clickupCounts,
         profileCreativeTotal: creatives.length,
         inboxCreatives: creatives,
         inboxLastSyncedAt: data.lastSyncedAt || data.syncedAt || data.cacheMeta?.lastSyncedAt || null,
         profileCreativeCountsLoading: false,
         inboxNotConnected: !!data.notConnected,
         inboxNotConfigured: !!data.notConfigured,
-        inboxError: data.error || null,
+        inboxError:
+          data.error ||
+          (inboxResult.status === 'rejected' ? inboxResult.reason?.message || 'Failed to fetch inbox' : null),
       });
     } catch {
       set({ profileCreativeCountsLoading: false });
@@ -651,13 +688,30 @@ export const useCreativeHubStore = create<CreativeHubState>()(
     set({ inboxLoading: true, inboxError: null, inboxNotConnected: false, inboxNotConfigured: false });
     try {
       const params = new URLSearchParams({ storeId });
-      const res = await fetch(`/api/creative-hub/inbox/sync?${params.toString()}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ storeId }),
-      });
-      const data = await res.json();
+      const [syncResult, clickupCountsResult] = await Promise.allSettled([
+        fetch(`/api/creative-hub/inbox/sync?${params.toString()}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ storeId }),
+        }).then(async (res) => {
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Sync failed');
+          return data;
+        }),
+        fetchClickUpStatusCounts(storeId),
+      ]);
+
+      if (syncResult.status === 'rejected') {
+        throw syncResult.reason;
+      }
+
+      const data = syncResult.value;
       const creatives: InboxCreative[] = data.creatives ?? [];
+      const clickupCounts =
+        clickupCountsResult.status === 'fulfilled' ? clickupCountsResult.value : {};
+      const readyCounts = Object.keys(clickupCounts).length > 0
+        ? { ...buildCreativeCounts(creatives), ...readyCountsFromClickUpStatus(clickupCounts) }
+        : buildCreativeCounts(creatives);
       set({
         inboxCreatives: creatives,
         inboxLoading: false,
@@ -665,7 +719,8 @@ export const useCreativeHubStore = create<CreativeHubState>()(
         inboxNotConfigured: !!data.notConfigured,
         inboxError: data.error || null,
         inboxLastSyncedAt: data.syncedAt || data.lastSyncedAt || data.cacheMeta?.lastSyncedAt || null,
-        profileCreativeCounts: buildCreativeCounts(creatives),
+        profileCreativeCounts: readyCounts,
+        profileClickUpStatusCounts: clickupCounts,
         profileCreativeTotal: creatives.length,
       });
     } catch (err) {
@@ -1438,6 +1493,17 @@ export const useCreativeHubStore = create<CreativeHubState>()(
       creativeIds,
     };
     set({ batches: [...state.batches, newBatch] });
+  },
+
+  renameBatch: (batchId: string, name: string) => {
+    const nextName = name.slice(0, 120);
+    set({
+      batches: get().batches.map((batch) =>
+        batch.id === batchId
+          ? { ...batch, name: nextName }
+          : batch,
+      ),
+    });
   },
 
   removeBatch: (batchId: string) => {

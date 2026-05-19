@@ -45,6 +45,15 @@ export interface ProductProfile {
   inactiveCampaignCount?: number;
 }
 
+export interface ClickUpProfileStatusCounts {
+  ready: number;
+  testing: number;
+  launched: number;
+  winners: number;
+  total: number;
+  statusBreakdown?: Record<string, number>;
+}
+
 export interface NamingTemplate {
   campaign: string;
   adset: string;
@@ -559,7 +568,7 @@ export interface WinningHeadline {
   examples?: string[];
 }
 
-export interface WinningDescription extends WinningCopyRankedItem {}
+export type WinningDescription = WinningCopyRankedItem;
 
 export interface WinningCTA extends WinningCopyRankedItem {
   ctaType: string;

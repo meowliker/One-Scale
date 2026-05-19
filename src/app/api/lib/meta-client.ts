@@ -801,6 +801,7 @@ export async function fetchMetaAdSetsByAccount(
           g === 1 ? 'male' : g === 2 ? 'female' : 'all'
         ) || ['all'],
         locations: targeting.geo_locations?.countries || [],
+        excludedLocations: targeting.excluded_geo_locations?.countries || [],
         interests: targeting.flexible_spec?.[0]?.interests?.map(
           (i: { name: string }) => i.name
         ) || [],
@@ -1149,6 +1150,7 @@ export async function fetchMetaAdSets(
           g === 1 ? 'male' : g === 2 ? 'female' : 'all'
         ) || ['all'],
         locations: targeting.geo_locations?.countries || [],
+        excludedLocations: targeting.excluded_geo_locations?.countries || [],
         interests: targeting.flexible_spec?.[0]?.interests?.map(
           (i: { name: string }) => i.name
         ) || [],

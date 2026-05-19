@@ -57,6 +57,13 @@ interface FetchedCampaign {
   campaignBidStrategy?: string;
 }
 
+interface StoreLocationSuggestions {
+  includedCountries: string[];
+  excludedCountries: string[];
+  sourceAdsetCount: number;
+  latestSyncedAt?: string | null;
+}
+
 function inferCampaignType(campaignName?: string): ProductCampaignLink['campaignType'] {
   const name = String(campaignName || '').toLowerCase();
   if (name.includes('retarget')) return 'retargeting';
@@ -186,6 +193,10 @@ export function LaunchConfigPanel({
   const [includeCountryPaste, setIncludeCountryPaste] = useState('');
   const [excludeCountryPaste, setExcludeCountryPaste] = useState('');
   const [countryListModal, setCountryListModal] = useState<CountryListKind | null>(null);
+  const [storeLocationSuggestions, setStoreLocationSuggestions] =
+    useState<StoreLocationSuggestions | null>(null);
+  const [locationSuggestionsLoading, setLocationSuggestionsLoading] = useState(false);
+  const [locationSuggestionsResolved, setLocationSuggestionsResolved] = useState(false);
   const adsetDropdownRef = useRef<HTMLDivElement | null>(null);
 
   const selectedProfile = useMemo(() => {
@@ -200,7 +211,10 @@ export function LaunchConfigPanel({
 
   const campaignMode = launchConfig.campaignMode ?? 'existing';
   const adsetMode = launchConfig.adsetMode ?? 'new_adsets';
-  const adsetAssignments = launchConfig.existingAdsetAssignments || {};
+  const adsetAssignments = useMemo(
+    () => launchConfig.existingAdsetAssignments || {},
+    [launchConfig.existingAdsetAssignments],
+  );
   const selectedAdsetIds = useMemo(
     () =>
       Object.entries(adsetAssignments)
@@ -213,6 +227,52 @@ export function LaunchConfigPanel({
     () => stores.find((store) => store.id === resolvedStoreId),
     [resolvedStoreId, stores],
   );
+
+  useEffect(() => {
+    if (!resolvedStoreId || !selectedProfile?.adAccountId) {
+      setStoreLocationSuggestions(null);
+      setLocationSuggestionsLoading(false);
+      setLocationSuggestionsResolved(true);
+      return;
+    }
+
+    let active = true;
+
+    const fetchLocationSuggestions = async () => {
+      setLocationSuggestionsLoading(true);
+      setLocationSuggestionsResolved(false);
+      try {
+        const params = new URLSearchParams({
+          storeId: resolvedStoreId,
+          adAccountId: selectedProfile.adAccountId,
+        });
+        const response = await fetch(`/api/creative-hub/launch/location-suggestions?${params.toString()}`);
+        const data = await response.json();
+        if (!active) return;
+        setStoreLocationSuggestions({
+          includedCountries: dedupeCountryCodes(data.includedCountries || []),
+          excludedCountries: dedupeCountryCodes(data.excludedCountries || []).filter(
+            (countryCode) => countryCode !== WORLDWIDE_COUNTRY_VALUE,
+          ),
+          sourceAdsetCount: Number(data.sourceAdsetCount || 0),
+          latestSyncedAt: data.latestSyncedAt || null,
+        });
+      } catch {
+        if (active) setStoreLocationSuggestions(null);
+      } finally {
+        if (active) {
+          setLocationSuggestionsLoading(false);
+          setLocationSuggestionsResolved(true);
+        }
+      }
+    };
+
+    void fetchLocationSuggestions();
+
+    return () => {
+      active = false;
+    };
+  }, [resolvedStoreId, selectedProfile?.adAccountId]);
 
   useEffect(() => {
     if (!adsetDropdownOpen) return;
@@ -396,11 +456,11 @@ export function LaunchConfigPanel({
   const selectedCampaign = useMemo(
     () =>
       linkedCampaigns.find((campaign) => campaign.campaignId === launchConfig.existingCampaignId) ||
-      linkedCampaigns[0],
+      (!launchConfig.existingCampaignId ? linkedCampaigns[0] : undefined),
     [launchConfig.existingCampaignId, linkedCampaigns],
   );
 
-  const selectedCampaignId = selectedCampaign?.campaignId;
+  const selectedCampaignId = selectedCampaign?.campaignId || launchConfig.existingCampaignId;
 
   // Old flow: fetch ad sets live whenever existing campaign is selected.
   const fetchAdsets = useCallback(
@@ -448,13 +508,17 @@ export function LaunchConfigPanel({
     setCampaignAdsets([]);
   }, [campaignMode, fetchAdsets, selectedCampaignId]);
 
-  const existingCampaignIsCbo = campaignMode === 'existing' && isCboCampaign(selectedCampaign);
+  const existingCampaignStructure =
+    selectedCampaign
+      ? isCboCampaign(selectedCampaign)
+        ? 'CBO'
+        : 'ABO'
+      : launchConfig.structure ?? selectedProfile?.defaultStructure ?? 'ABO';
+  const existingCampaignIsCbo = campaignMode === 'existing' && existingCampaignStructure === 'CBO';
 
   const structure =
     campaignMode === 'existing'
-      ? existingCampaignIsCbo
-        ? 'CBO'
-        : 'ABO'
+      ? existingCampaignStructure
       : launchConfig.structure ?? selectedProfile?.defaultStructure ?? 'ABO';
 
   const derivedBidStrategy =
@@ -486,12 +550,27 @@ export function LaunchConfigPanel({
       'US',
     [activeStore?.domain, selectedProfile?.adAccountCurrency, selectedProfile?.destinationUrl],
   );
+  const learnedIncludedCountries = useMemo(
+    () => dedupeCountryCodes(storeLocationSuggestions?.includedCountries || []),
+    [storeLocationSuggestions?.includedCountries],
+  );
+  const learnedExcludedCountries = useMemo(
+    () =>
+      dedupeCountryCodes(storeLocationSuggestions?.excludedCountries || []).filter(
+        (countryCode) => countryCode !== WORLDWIDE_COUNTRY_VALUE,
+      ),
+    [storeLocationSuggestions?.excludedCountries],
+  );
+  const defaultIncludedCountries = useMemo(
+    () => (learnedIncludedCountries.length > 0 ? learnedIncludedCountries : [inferredIncludedCountry]),
+    [inferredIncludedCountry, learnedIncludedCountries],
+  );
   const includedCountries = useMemo(
     () =>
       dedupeCountryCodes(launchConfig.customTargeting?.geoLocations?.countries || []),
     [launchConfig.customTargeting?.geoLocations?.countries],
   );
-  const displayedIncludedCountries = includedCountries.length > 0 ? includedCountries : [inferredIncludedCountry];
+  const displayedIncludedCountries = includedCountries.length > 0 ? includedCountries : defaultIncludedCountries;
   const includesWorldwide = displayedIncludedCountries.includes(WORLDWIDE_COUNTRY_VALUE);
   const excludedCountries = useMemo(
     () =>
@@ -511,7 +590,7 @@ export function LaunchConfigPanel({
       ? [WORLDWIDE_COUNTRY_VALUE]
       : normalized.length > 0
         ? normalized
-        : [inferredIncludedCountry];
+        : defaultIncludedCountries;
     updateLaunchConfig({
       customTargeting: mergeTargeting(launchConfig.customTargeting, {
         geoLocations: {
@@ -592,7 +671,7 @@ export function LaunchConfigPanel({
     }
 
     if ((launchConfig.campaignMode ?? (linkedCampaigns.length > 0 ? 'existing' : 'new')) === 'existing') {
-      if (selectedCampaign && launchConfig.existingCampaignId !== selectedCampaign.campaignId) {
+      if (selectedCampaign && !launchConfig.existingCampaignId) {
         patch.existingCampaignId = selectedCampaign.campaignId;
       }
       if (selectedCampaign?.pageId && launchConfig.pageId !== selectedCampaign.pageId) {
@@ -610,8 +689,12 @@ export function LaunchConfigPanel({
       if (!launchConfig.adsetMode) {
         patch.adsetMode = 'new_adsets';
       }
-      const expectedStructure = existingCampaignIsCbo ? 'CBO' : 'ABO';
-      if (launchConfig.structure !== expectedStructure) {
+      const expectedStructure = selectedCampaign
+        ? isCboCampaign(selectedCampaign)
+          ? 'CBO'
+          : 'ABO'
+        : undefined;
+      if (expectedStructure && launchConfig.structure !== expectedStructure) {
         patch.structure = expectedStructure;
       }
       if (existingCampaignIsCbo && Number.isFinite(selectedCampaign?.campaignDailyBudget)) {
@@ -653,13 +736,42 @@ export function LaunchConfigPanel({
     if (!launchConfig.attributionWindow) {
       patch.attributionWindow = DEFAULT_ATTRIBUTION_WINDOW;
     }
-    if (!launchConfig.customTargeting?.geoLocations?.countries?.length && inferredIncludedCountry) {
-      patch.customTargeting = mergeTargeting(launchConfig.customTargeting, {
-        geoLocations: {
+    if (locationSuggestionsResolved) {
+      const customTargetingPatch: Partial<TargetingSpec> = {};
+      const currentIncludedCountries = dedupeCountryCodes(
+        launchConfig.customTargeting?.geoLocations?.countries || [],
+      );
+      const hasOnlyFallbackIncludedCountry =
+        currentIncludedCountries.length === 1 &&
+        currentIncludedCountries[0] === inferredIncludedCountry;
+      const learnedHasMoreSpecificIncludedCountries =
+        learnedIncludedCountries.length > 0 &&
+        (
+          learnedIncludedCountries.length !== currentIncludedCountries.length ||
+          learnedIncludedCountries.some((countryCode) => !currentIncludedCountries.includes(countryCode))
+        );
+
+      if (
+        (!currentIncludedCountries.length && defaultIncludedCountries.length > 0) ||
+        (hasOnlyFallbackIncludedCountry && learnedHasMoreSpecificIncludedCountries)
+      ) {
+        customTargetingPatch.geoLocations = {
           ...(launchConfig.customTargeting?.geoLocations || {}),
-          countries: [inferredIncludedCountry],
-        },
-      });
+          countries: defaultIncludedCountries,
+        };
+      }
+      if (
+        !launchConfig.customTargeting?.excludedGeoLocations?.countries?.length &&
+        learnedExcludedCountries.length > 0
+      ) {
+        customTargetingPatch.excludedGeoLocations = {
+          ...(launchConfig.customTargeting?.excludedGeoLocations || {}),
+          countries: learnedExcludedCountries,
+        };
+      }
+      if (Object.keys(customTargetingPatch).length > 0) {
+        patch.customTargeting = mergeTargeting(launchConfig.customTargeting, customTargetingPatch);
+      }
     }
     if (launchConfig.launchTime === 'scheduled' && !launchConfig.scheduledDate) {
       patch.scheduledDate = today;
@@ -688,8 +800,12 @@ export function LaunchConfigPanel({
     launchConfig.scheduledTime,
     launchConfig.structure,
     launchConfig.testDuration,
+    defaultIncludedCountries,
     inferredIncludedCountry,
+    learnedIncludedCountries,
+    learnedExcludedCountries,
     linkedCampaigns.length,
+    locationSuggestionsResolved,
     selectedCampaign,
     selectedProfile,
     today,
@@ -1287,9 +1403,18 @@ export function LaunchConfigPanel({
 
         <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-600 dark:bg-slate-900/35">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-300">
-              Location Targeting
-            </p>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-300">
+                Location Targeting
+              </p>
+              <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                {locationSuggestionsLoading
+                  ? 'Checking existing store ad sets...'
+                  : storeLocationSuggestions?.sourceAdsetCount
+                    ? `Auto-filled from ${storeLocationSuggestions.sourceAdsetCount} existing ad sets.`
+                    : 'Add locations manually, or they will fall back to the store default.'}
+              </p>
+            </div>
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"

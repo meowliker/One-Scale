@@ -133,6 +133,7 @@ export interface TargetingSpec {
   ageMax: number;
   genders: ('male' | 'female' | 'all')[];
   locations: string[];
+  excludedLocations?: string[];
   interests: string[];
   customAudiences: string[];
 }

@@ -18,9 +18,17 @@ function LoginForm() {
 
   useEffect(() => {
     fetch('/api/auth/setup-status')
-      .then((res) => res.json())
-      .then((data) => setIsFirstSetup(!!data.isFirstSetup))
-      .catch(() => setIsFirstSetup(true));
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setError(typeof data?.error === 'string' ? data.error : 'Unable to verify account setup.');
+        }
+        setIsFirstSetup(!!data.isFirstSetup);
+      })
+      .catch(() => {
+        setError('Unable to verify account setup. Please check the auth database connection and try again.');
+        setIsFirstSetup(false);
+      });
   }, []);
 
   const nextPath = useMemo(() => {
