@@ -1705,7 +1705,8 @@ function buildLaunchHealthKey(config: Partial<LaunchConfig>, creativeIds: string
     structure: config.structure || 'ABO',
     dailyBudget: config.dailyBudget ?? 0,
     testDuration: config.testDuration ?? 0,
-    launchStatus: config.launchStatus || 'PAUSED',
+    launchStatus: config.launchStatus || 'ACTIVE',
+    adLaunchStatus: config.adLaunchStatus || config.launchStatus || 'ACTIVE',
     launchTime: config.launchTime || 'immediately',
     scheduledDate: config.scheduledDate || '',
     scheduledTime: config.scheduledTime || '',
@@ -1883,7 +1884,7 @@ function LaunchPlannerPanel({
   const structure = launchConfig.structure ?? profile?.defaultStructure ?? 'ABO';
   const budget = launchConfig.dailyBudget ?? profile?.defaultBudget ?? 20;
   const duration = launchConfig.testDuration ?? profile?.defaultDuration ?? 3;
-  const launchStatus = launchConfig.launchStatus ?? profile?.defaultLaunchStatus ?? 'PAUSED';
+  const launchStatus = launchConfig.launchStatus ?? 'ACTIVE';
   const launchTime = launchConfig.launchTime ?? 'immediately';
   const scheduledDate = launchConfig.scheduledDate ?? '';
   const scheduledTime = launchConfig.scheduledTime ?? '09:00';
@@ -4903,7 +4904,8 @@ export function CreativeLaunchStudio({ storeId }: CreativeLaunchStudioProps) {
         launchConfig.bidStrategy || 'LOWEST_COST_WITHOUT_CAP',
       bidAmount: launchConfig.bidAmount ?? profile?.defaultBidAmount,
       roasFloor: launchConfig.roasFloor ?? profile?.defaultRoasFloor,
-      launchStatus: launchConfig.launchStatus || profile?.defaultLaunchStatus || 'PAUSED',
+      launchStatus: launchConfig.launchStatus || 'ACTIVE',
+      adLaunchStatus: launchConfig.adLaunchStatus || launchConfig.launchStatus || 'ACTIVE',
       launchTime: launchConfig.launchTime || 'immediately',
       scheduledDate:
         launchConfig.launchTime === 'scheduled' ? launchConfig.scheduledDate : undefined,

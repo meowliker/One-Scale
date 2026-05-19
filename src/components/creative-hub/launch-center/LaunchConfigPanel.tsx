@@ -542,6 +542,9 @@ export function LaunchConfigPanel({
   const scheduledDate = launchConfig.scheduledDate ?? '';
   const scheduledTime = launchConfig.scheduledTime ?? '09:00';
   const attributionWindow = launchConfig.attributionWindow ?? DEFAULT_ATTRIBUTION_WINDOW;
+  const launchCreativesAsPaused =
+    (launchConfig.launchStatus ?? 'ACTIVE') === 'PAUSED' &&
+    (launchConfig.adLaunchStatus ?? launchConfig.launchStatus ?? 'ACTIVE') === 'PAUSED';
   const inferredIncludedCountry = useMemo(
     () =>
       inferCountryFromUrl(selectedProfile?.destinationUrl) ||
@@ -724,8 +727,11 @@ export function LaunchConfigPanel({
     if (launchConfig.testDuration == null && selectedProfile?.defaultDuration != null) {
       patch.testDuration = selectedProfile.defaultDuration;
     }
-    if (!launchConfig.launchStatus && selectedProfile?.defaultLaunchStatus) {
-      patch.launchStatus = selectedProfile.defaultLaunchStatus;
+    if (!launchConfig.launchStatus) {
+      patch.launchStatus = 'ACTIVE';
+    }
+    if (!launchConfig.adLaunchStatus) {
+      patch.adLaunchStatus = launchConfig.launchStatus || 'ACTIVE';
     }
     if (!launchConfig.launchTime) {
       patch.launchTime = 'immediately';
@@ -791,6 +797,7 @@ export function LaunchConfigPanel({
     launchConfig.existingCampaignId,
     launchConfig.instagramActorId,
     launchConfig.launchStatus,
+    launchConfig.adLaunchStatus,
     launchConfig.launchTime,
     launchConfig.newCampaignName,
     launchConfig.pageId,
@@ -1317,19 +1324,6 @@ export function LaunchConfigPanel({
         )}
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <FormField label="Launch As">
-            <select
-              value={launchConfig.launchStatus ?? selectedProfile?.defaultLaunchStatus ?? 'PAUSED'}
-              onChange={(event) =>
-                updateLaunchConfig({ launchStatus: event.target.value as 'ACTIVE' | 'PAUSED' })
-              }
-              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 dark:border-slate-600 dark:bg-slate-900/60 dark:text-slate-100"
-            >
-              <option value="PAUSED">Paused</option>
-              <option value="ACTIVE">Active</option>
-            </select>
-          </FormField>
-
           <FormField
             label={structure === 'CBO' ? 'Campaign Budget' : 'Daily / Ad Set'}
             helper={structure === 'CBO' ? 'Campaign-level budget model' : 'Ad set-level budget model'}
@@ -1520,11 +1514,43 @@ export function LaunchConfigPanel({
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-300">
               Launch Timing
             </p>
-            <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
-              {launchTime === 'scheduled'
-                ? `${scheduledDate || 'Select date'} ${scheduledTime}`
-                : 'Immediately'}
-            </span>
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                {launchTime === 'scheduled'
+                  ? `${scheduledDate || 'Select date'} ${scheduledTime}`
+                  : 'Immediately'}
+              </span>
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900/55 dark:text-slate-300">
+                <span>Launch Creatives as Paused</span>
+                <input
+                  type="checkbox"
+                  checked={launchCreativesAsPaused}
+                  onChange={(event) => {
+                    const status = event.target.checked ? 'PAUSED' : 'ACTIVE';
+                    updateLaunchConfig({
+                      launchStatus: status,
+                      adLaunchStatus: status,
+                    });
+                  }}
+                  className="sr-only"
+                />
+                <span
+                  className={cn(
+                    'relative h-5 w-9 rounded-full border transition',
+                    launchCreativesAsPaused
+                      ? 'border-blue-500 bg-blue-600'
+                      : 'border-slate-300 bg-slate-200 dark:border-slate-600 dark:bg-slate-800',
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition',
+                      launchCreativesAsPaused ? 'left-4' : 'left-0.5',
+                    )}
+                  />
+                </span>
+              </label>
+            </div>
           </div>
 
           <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">

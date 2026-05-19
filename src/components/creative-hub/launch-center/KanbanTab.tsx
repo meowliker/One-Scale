@@ -267,7 +267,7 @@ export function KanbanTab() {
   const effectiveStructure = launchConfig.structure ?? selectedProfile?.defaultStructure ?? 'ABO';
   const effectiveDailyBudget = launchConfig.dailyBudget ?? selectedProfile?.defaultBudget ?? 0;
   const effectiveDuration = launchConfig.testDuration ?? selectedProfile?.defaultDuration ?? 0;
-  const launchStatus = launchConfig.launchStatus ?? selectedProfile?.defaultLaunchStatus ?? 'PAUSED';
+  const launchStatus = launchConfig.launchStatus ?? 'ACTIVE';
   const launchTimingLabel =
     launchConfig.launchTime === 'scheduled'
       ? `${launchConfig.scheduledDate || 'Select date'} ${launchConfig.scheduledTime || '09:00'}`
@@ -325,7 +325,7 @@ export function KanbanTab() {
       if (!over) return;
 
       const activeItemId = active.id as string;
-      let overId = over.id as string;
+      const overId = over.id as string;
 
       // Determine source and destination containers
       const sourceContainer = findContainer(activeItemId);

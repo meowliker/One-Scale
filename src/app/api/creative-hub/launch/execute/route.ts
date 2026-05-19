@@ -1618,6 +1618,8 @@ export async function POST(request: NextRequest) {
     let campaignId = launchConfig.existingCampaignId || '';
     let campaignCreatedInThisRun = false;
     const campaignName = launchConfig.newCampaignName || '';
+    const entityLaunchStatus = launchConfig.launchStatus || 'ACTIVE';
+    const adLaunchStatus = launchConfig.adLaunchStatus || entityLaunchStatus;
 
     const testPayloadBase = {
       id: testId,
@@ -1631,7 +1633,7 @@ export async function POST(request: NextRequest) {
       roasFloor: launchConfig.roasFloor,
       dailyBudget: launchConfig.dailyBudget,
       testDuration: launchConfig.testDuration,
-      launchStatus: launchConfig.launchStatus,
+      launchStatus: entityLaunchStatus,
       launchedBy: 'user',
       items: selectedItems.map((item) => ({
         id: item.id,
@@ -1875,7 +1877,7 @@ export async function POST(request: NextRequest) {
             const adRes = await postToMeta(token.accessToken, `/${accountNode}/ads`, {
               name: item.creative_name,
               adset_id: adsetId,
-              status: launchConfig.launchStatus || 'PAUSED',
+              status: adLaunchStatus,
               creative: JSON.stringify({ creative_id: metaCreativeId }),
             });
             const adId = String(adRes.id || '');
@@ -1932,7 +1934,7 @@ export async function POST(request: NextRequest) {
           const adsetBody: Record<string, string> = {
             name: adsetName,
             campaign_id: campaignId,
-            status: launchConfig.launchStatus || 'PAUSED',
+            status: entityLaunchStatus,
             billing_event: 'IMPRESSIONS',
             optimization_goal: 'OFFSITE_CONVERSIONS',
             targeting: JSON.stringify(targetingPayload),
@@ -2062,7 +2064,7 @@ export async function POST(request: NextRequest) {
               const adRes = await postToMeta(token.accessToken, `/${accountNode}/ads`, {
                 name: item.creative_name,
                 adset_id: adsetId,
-                status: launchConfig.launchStatus || 'PAUSED',
+                status: adLaunchStatus,
                 creative: JSON.stringify({ creative_id: metaCreativeId }),
               });
               const adId = String(adRes.id || '');
@@ -2134,7 +2136,7 @@ export async function POST(request: NextRequest) {
         const adsetBody: Record<string, string> = {
           name: adsetName,
           campaign_id: campaignId,
-          status: launchConfig.launchStatus || 'PAUSED',
+          status: entityLaunchStatus,
           billing_event: 'IMPRESSIONS',
           optimization_goal: 'OFFSITE_CONVERSIONS',
           targeting: JSON.stringify(targetingPayload),
@@ -2255,7 +2257,7 @@ export async function POST(request: NextRequest) {
         const adRes = await postToMeta(token.accessToken, `/${accountNode}/ads`, {
           name: item.creative_name,
           adset_id: adsetId,
-          status: launchConfig.launchStatus || 'PAUSED',
+          status: adLaunchStatus,
           creative: JSON.stringify({ creative_id: creativeId }),
         });
         const adId = String(adRes.id || '');
@@ -2315,7 +2317,7 @@ export async function POST(request: NextRequest) {
       }
       await updateCreativeTestStatus(testId, 'partial');
     } else {
-      if (launchConfig.campaignMode === 'new' && launchConfig.launchStatus === 'ACTIVE' && campaignId) {
+      if (launchConfig.campaignMode === 'new' && entityLaunchStatus === 'ACTIVE' && campaignId) {
         await postToMeta(token.accessToken, `/${campaignId}`, { status: 'ACTIVE' });
       }
       await updateCreativeTestStatus(testId, 'active');

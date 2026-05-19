@@ -271,7 +271,8 @@ function buildBaseLaunchConfig(
     bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
     bidAmount: profile?.defaultBidAmount,
     roasFloor: profile?.defaultRoasFloor,
-    launchStatus: profile?.defaultLaunchStatus ?? 'PAUSED',
+    launchStatus: 'ACTIVE',
+    adLaunchStatus: 'ACTIVE',
     launchTime: 'immediately',
     scheduledDate: undefined,
     scheduledTime: '09:00',
@@ -870,8 +871,8 @@ export const useCreativeHubStore = create<CreativeHubState>()(
         bidAmount: existingLaunchConfig.bidAmount ?? profile?.defaultBidAmount,
         roasFloor: existingLaunchConfig.roasFloor ?? profile?.defaultRoasFloor,
         structure: existingLaunchConfig.structure || profile?.defaultStructure || 'ABO',
-        launchStatus:
-          existingLaunchConfig.launchStatus || profile?.defaultLaunchStatus || 'PAUSED',
+        launchStatus: existingLaunchConfig.launchStatus || 'ACTIVE',
+        adLaunchStatus: existingLaunchConfig.adLaunchStatus || existingLaunchConfig.launchStatus || 'ACTIVE',
         launchTime: existingLaunchConfig.launchTime || 'immediately',
         scheduledDate:
           existingLaunchConfig.launchTime === 'scheduled'

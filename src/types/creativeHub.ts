@@ -299,6 +299,7 @@ export interface LaunchConfig {
   bidAmount?: number;
   roasFloor?: number;
   launchStatus: 'ACTIVE' | 'PAUSED';
+  adLaunchStatus: 'ACTIVE' | 'PAUSED';
   // Targeting
   targetingPresetId?: string;
   customTargeting?: TargetingSpec;

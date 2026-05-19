@@ -472,7 +472,10 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
       patch.structure = selectedProfile.defaultStructure ?? 'ABO';
     }
     if (!launchConfig.launchStatus) {
-      patch.launchStatus = selectedProfile.defaultLaunchStatus ?? 'PAUSED';
+      patch.launchStatus = 'ACTIVE';
+    }
+    if (!launchConfig.adLaunchStatus) {
+      patch.adLaunchStatus = launchConfig.launchStatus || 'ACTIVE';
     }
     if (!launchConfig.bidStrategy) {
       patch.bidStrategy = 'LOWEST_COST_WITHOUT_CAP';
@@ -1081,7 +1084,7 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
   const effectiveStructure = launchConfig.structure ?? selectedProfile?.defaultStructure ?? 'ABO';
   const effectiveDailyBudget = launchConfig.dailyBudget ?? selectedProfile?.defaultBudget ?? 0;
   const effectiveDuration = launchConfig.testDuration ?? selectedProfile?.defaultDuration ?? 0;
-  const launchStatus = launchConfig.launchStatus ?? selectedProfile?.defaultLaunchStatus ?? 'PAUSED';
+  const launchStatus = launchConfig.launchStatus ?? 'ACTIVE';
   const launchTimingLabel =
     launchConfig.launchTime === 'scheduled'
       ? `${launchConfig.scheduledDate || 'Select date'} ${launchConfig.scheduledTime || '09:00'}`
