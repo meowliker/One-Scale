@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { spawn } from 'child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { access, mkdtemp, readdir, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import path from 'path';
 import ffmpegPath from 'ffmpeg-static';
@@ -632,17 +632,68 @@ async function uploadVideoToMeta(
   });
 }
 
-async function transcodeVideoForMeta(fileBuffer: Buffer, fileName: string): Promise<{ buffer: Buffer; fileName: string }> {
-  if (!ffmpegPath) {
-    throw new Error('Video transcoding is not available in this deployment.');
+async function fileExists(filePath?: string | null): Promise<boolean> {
+  if (!filePath) return false;
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
   }
-  const binaryPath = ffmpegPath;
+}
+
+async function resolveFfmpegBinaryPath(): Promise<string> {
+  const executable = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+  const packagePath = typeof ffmpegPath === 'string' ? ffmpegPath : null;
+  const tracedNodeModulesDirs = await Promise.all(
+    [path.join(process.cwd(), '.next', 'node_modules'), path.join('/var/task', '.next', 'node_modules')].map(
+      async (dir) => {
+        try {
+          const entries = await readdir(dir);
+          return entries
+            .filter((entry) => entry.startsWith('ffmpeg-static-'))
+            .map((entry) => path.join(dir, entry, executable));
+        } catch {
+          return [];
+        }
+      },
+    ),
+  );
+  const candidates = Array.from(
+    new Set(
+      [
+        process.env.FFMPEG_PATH,
+        packagePath,
+        path.join(process.cwd(), 'node_modules', 'ffmpeg-static', executable),
+        path.join(process.cwd(), '.next', 'server', 'node_modules', 'ffmpeg-static', executable),
+        path.join('/var/task', 'node_modules', 'ffmpeg-static', executable),
+        path.join('/var/task', '.next', 'server', 'node_modules', 'ffmpeg-static', executable),
+        path.join('/ROOT', 'node_modules', 'ffmpeg-static', executable),
+        ...tracedNodeModulesDirs.flat(),
+      ].filter((candidate): candidate is string => Boolean(candidate)),
+    ),
+  );
+
+  for (const candidate of candidates) {
+    if (await fileExists(candidate)) return candidate;
+  }
+
+  throw new Error(`ffmpeg binary not found. Checked: ${candidates.join(', ')}`);
+}
+
+async function transcodeVideoForMeta(fileBuffer: Buffer, fileName: string): Promise<{ buffer: Buffer; fileName: string }> {
+  const binaryPath = await resolveFfmpegBinaryPath();
 
   const workDir = await mkdtemp(path.join(tmpdir(), 'creative-upload-'));
   const inputPath = path.join(workDir, fileName || 'input-video');
   const outputPath = path.join(workDir, `${path.parse(fileName || 'creative').name || 'creative'}-meta.mp4`);
 
   try {
+    console.info('[creative-hub] normalizing video for Meta upload', {
+      fileName,
+      ffmpegPath: typeof ffmpegPath === 'string' ? ffmpegPath : null,
+      binaryPath,
+    });
     await writeFile(inputPath, fileBuffer);
     await new Promise<void>((resolve, reject) => {
       const child = spawn(binaryPath, [

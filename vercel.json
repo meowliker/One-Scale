@@ -2,12 +2,12 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "functions": {
+    "src/app/api/**/route.ts": {
+      "maxDuration": 60
+    },
     "src/app/api/creative-hub/inbox/upload/route.ts": {
       "maxDuration": 60,
       "includeFiles": "node_modules/ffmpeg-static/ffmpeg"
-    },
-    "src/app/api/**/route.ts": {
-      "maxDuration": 60
     },
     "src/app/api/cron/**/route.ts": {
       "maxDuration": 300

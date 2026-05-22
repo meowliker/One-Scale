@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ['better-sqlite3'],
+  serverExternalPackages: ['better-sqlite3', 'ffmpeg-static'],
   outputFileTracingIncludes: {
     '/api/creative-hub/inbox/upload': ['./node_modules/ffmpeg-static/ffmpeg'],
   },
