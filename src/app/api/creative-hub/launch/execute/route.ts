@@ -646,6 +646,27 @@ function removeDegreesOfFreedomFromCreativeBody(
   return sanitized;
 }
 
+function buildContextualMultiAdsOptOutFeatures(): Record<string, unknown> {
+  return {
+    contextual_multi_ads: { enroll_status: 'OPT_OUT' },
+  };
+}
+
+function buildContextualMultiAdsOptOutSpec(): Record<string, unknown> {
+  return {
+    creative_features_spec: buildContextualMultiAdsOptOutFeatures(),
+  };
+}
+
+function keepOnlyContextualMultiAdsOptOutInCreativeBody(
+  creativeBody: Record<string, string>,
+): Record<string, string> {
+  return {
+    ...creativeBody,
+    degrees_of_freedom_spec: JSON.stringify(buildContextualMultiAdsOptOutSpec()),
+  };
+}
+
 function sanitizeDegreesOfFreedomSpecForMeta(
   creativeBody: Record<string, string>,
 ): Record<string, string> {
@@ -778,7 +799,6 @@ async function createAdCreativeWithFallback(
       };
       delete downgradedBody.asset_feed_spec;
       delete downgradedBody.object_type;
-      delete downgradedBody.degrees_of_freedom_spec;
 
       try {
         return await postToMeta(accessToken, `/${accountNode}/adcreatives`, downgradedBody);
@@ -791,6 +811,17 @@ async function createAdCreativeWithFallback(
     }
 
     if (isDegreesOfFreedomMetaError(currentMessage)) {
+      const contextualOnlyBody = keepOnlyContextualMultiAdsOptOutInCreativeBody(workingBody);
+      workingBody = contextualOnlyBody;
+      try {
+        return await postToMeta(accessToken, `/${accountNode}/adcreatives`, workingBody);
+      } catch (contextualErr) {
+        const contextualMessage =
+          contextualErr instanceof Error ? contextualErr.message : String(contextualErr);
+        attemptErrors.push(`attempt_contextual_multi_ads_only:${contextualMessage}`);
+        currentMessage = contextualMessage;
+      }
+
       const withoutDegrees = removeDegreesOfFreedomFromCreativeBody(workingBody);
       if (withoutDegrees) {
         workingBody = withoutDegrees;
@@ -812,7 +843,6 @@ async function createAdCreativeWithFallback(
       };
       delete downgradedBody.asset_feed_spec;
       delete downgradedBody.object_type;
-      delete downgradedBody.degrees_of_freedom_spec;
 
       workingBody = downgradedBody;
       try {
@@ -902,7 +932,6 @@ async function createAdWithCreativeFallback(input: {
     };
     delete normalCreativeBody.asset_feed_spec;
     delete normalCreativeBody.object_type;
-    delete normalCreativeBody.degrees_of_freedom_spec;
 
     const fallbackCreativeRes = await createAdCreativeWithFallback(
       accessToken,
@@ -1356,7 +1385,7 @@ function buildDegreesOfFreedomSpec(enabled?: boolean): Record<string, unknown> {
   if (enabled) {
     return {
       creative_features_spec: {
-        contextual_multi_ads: { enroll_status: 'OPT_OUT' },
+        ...buildContextualMultiAdsOptOutFeatures(),
         image_touchups: { enroll_status: 'OPT_IN' },
       },
     };
@@ -1367,7 +1396,7 @@ function buildDegreesOfFreedomSpec(enabled?: boolean): Record<string, unknown> {
       ...Object.fromEntries(
         CREATIVE_FEATURE_OPT_OUTS.map((feature) => [feature, { enroll_status: 'OPT_OUT' }]),
       ),
-      contextual_multi_ads: { enroll_status: 'OPT_OUT' },
+      ...buildContextualMultiAdsOptOutFeatures(),
     },
   };
 }

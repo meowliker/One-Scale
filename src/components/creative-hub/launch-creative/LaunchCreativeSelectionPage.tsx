@@ -1412,6 +1412,14 @@ export default function LaunchCreativeSelectionPage() {
     return false;
   };
 
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [currentStep]);
+
   const loadCreatives = useCallback(async (forceRefresh = false) => {
     const cachedReadyCreatives = getReadyCreatives(
       useCreativeHubStore.getState().inboxCreatives,
