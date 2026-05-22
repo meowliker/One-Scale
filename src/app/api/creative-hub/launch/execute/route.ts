@@ -394,8 +394,8 @@ function classifyVideoProcessingState(raw: Record<string, unknown>): 'ready' | '
 async function waitForVideoReady(
   accessToken: string,
   videoId: string,
-  timeoutMs = 45_000,
-  pollMs = 3_000,
+  timeoutMs = 12_000,
+  pollMs = 2_000,
 ): Promise<'ready' | 'processing' | 'failed'> {
   const startedAt = Date.now();
 
@@ -873,15 +873,6 @@ async function createAdCreativeWithFallback(
       );
       if (withThumbnail) {
         const sanitizedThumbnailBody = sanitizeDegreesOfFreedomSpecForMeta(withThumbnail);
-        const thumbnailVideoId = extractVideoIdFromCreativeBody(sanitizedThumbnailBody);
-        if (thumbnailVideoId) {
-          const videoState = await waitForVideoReady(accessToken, thumbnailVideoId, 90_000, 4_000);
-          if (videoState === 'failed') {
-            attemptErrors.push('video_processing_failed_before_thumbnail_retry');
-          } else if (videoState === 'processing') {
-            attemptErrors.push('video_still_processing_before_thumbnail_retry');
-          }
-        }
         try {
           return await postToMeta(accessToken, `/${accountNode}/adcreatives`, sanitizedThumbnailBody);
         } catch (thumbnailErr) {
@@ -899,7 +890,7 @@ async function createAdCreativeWithFallback(
     if (isVideoNotReadyMetaError(currentMessage)) {
       const videoId = extractVideoIdFromCreativeBody(workingBody);
       if (videoId) {
-        const videoState = await waitForVideoReady(accessToken, videoId, 90_000, 4_000);
+        const videoState = await waitForVideoReady(accessToken, videoId);
         if (videoState === 'ready') {
           try {
             return await postToMeta(accessToken, `/${accountNode}/adcreatives`, workingBody);
@@ -915,6 +906,9 @@ async function createAdCreativeWithFallback(
     }
 
     if (attemptErrors.length > 0) {
+      if (isVideoNotReadyMetaError(currentMessage)) {
+        throw new Error(`${attemptErrors.join(' || ')} || video_processing_retry_later=Meta is still processing this video. Wait a minute and launch again.`);
+      }
       throw new Error(attemptErrors.join(' || '));
     }
     throw error;
