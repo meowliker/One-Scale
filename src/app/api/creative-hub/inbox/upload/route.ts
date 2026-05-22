@@ -1,4 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { spawn } from 'child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import path from 'path';
+import ffmpegPath from 'ffmpeg-static';
 import { getGoogleDriveToken, getMetaToken } from '@/app/api/lib/tokens';
 import { GOOGLE_DRIVE_BASE_URL, listDriveChildren } from '@/app/api/google-drive/shared';
 import { getThirdPartyToken, upsertThirdPartyToken } from '@/app/api/lib/db';
@@ -11,6 +16,8 @@ import {
 
 const GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 const GRAPH_VIDEO_BASE = 'https://graph-video.facebook.com/v21.0';
+
+export const runtime = 'nodejs';
 
 // Max file sizes
 const MAX_IMAGE_SIZE = 30 * 1024 * 1024; // 30 MB
@@ -593,6 +600,105 @@ async function parseGraphError(response: Response): Promise<string> {
   }
 }
 
+function isUnsupportedVideoFormatMetaError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('unsupported video format') ||
+    lower.includes('subcode=1363024') ||
+    lower.includes("video you're trying to upload is in a format that isn't supported")
+  );
+}
+
+async function uploadVideoToMeta(
+  accessToken: string,
+  accountNode: string,
+  fileBuffer: Buffer,
+  fileName: string,
+  contentType?: string | null,
+): Promise<Response> {
+  const uploadForm = new FormData();
+  uploadForm.set('access_token', accessToken);
+  const blobBytes = new Uint8Array(fileBuffer);
+  uploadForm.set(
+    'source',
+    new File([new Blob([blobBytes], { type: contentType || 'video/mp4' })], fileName),
+    fileName,
+  );
+  uploadForm.set('title', fileName);
+
+  return fetch(`${GRAPH_VIDEO_BASE}/${accountNode}/advideos`, {
+    method: 'POST',
+    body: uploadForm,
+  });
+}
+
+async function transcodeVideoForMeta(fileBuffer: Buffer, fileName: string): Promise<{ buffer: Buffer; fileName: string }> {
+  if (!ffmpegPath) {
+    throw new Error('Video transcoding is not available in this deployment.');
+  }
+  const binaryPath = ffmpegPath;
+
+  const workDir = await mkdtemp(path.join(tmpdir(), 'creative-upload-'));
+  const inputPath = path.join(workDir, fileName || 'input-video');
+  const outputPath = path.join(workDir, `${path.parse(fileName || 'creative').name || 'creative'}-meta.mp4`);
+
+  try {
+    await writeFile(inputPath, fileBuffer);
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(binaryPath, [
+        '-y',
+        '-i',
+        inputPath,
+        '-map',
+        '0:v:0',
+        '-map',
+        '0:a?',
+        '-vf',
+        'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+        '-c:v',
+        'libx264',
+        '-profile:v',
+        'main',
+        '-level',
+        '4.1',
+        '-pix_fmt',
+        'yuv420p',
+        '-preset',
+        'veryfast',
+        '-crf',
+        '23',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '128k',
+        '-movflags',
+        '+faststart',
+        outputPath,
+      ]);
+
+      let stderr = '';
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+      child.on('error', reject);
+      child.on('close', (code: number | null) => {
+        if (code === 0) {
+          resolve();
+          return;
+        }
+        reject(new Error(stderr.trim() || `ffmpeg exited with code ${code}`));
+      });
+    });
+
+    return {
+      buffer: await readFile(outputPath),
+      fileName: path.basename(outputPath),
+    };
+  } finally {
+    await rm(workDir, { recursive: true, force: true });
+  }
+}
+
 /**
  * POST /api/creative-hub/inbox/upload
  *
@@ -789,19 +895,58 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Video upload
-    const uploadForm = new FormData();
-    uploadForm.set('access_token', tokenData.accessToken);
-    uploadForm.set('source', file, fileName);
-    uploadForm.set('title', fileName);
-
-    const metaRes = await fetch(
-      `${GRAPH_VIDEO_BASE}/${accountNode}/advideos`,
-      { method: 'POST', body: uploadForm }
+    // Video upload. If Meta rejects the source codec/container, normalize it
+    // to a conservative H.264/AAC MP4 and retry once.
+    let metaRes = await uploadVideoToMeta(
+      tokenData.accessToken,
+      accountNode,
+      fileBuffer,
+      fileName,
+      contentType,
     );
 
     if (!metaRes.ok) {
       const msg = await parseGraphError(metaRes);
+      if (isUnsupportedVideoFormatMetaError(msg)) {
+        try {
+          const normalized = await transcodeVideoForMeta(fileBuffer, fileName);
+          metaRes = await uploadVideoToMeta(
+            tokenData.accessToken,
+            accountNode,
+            normalized.buffer,
+            normalized.fileName,
+            'video/mp4',
+          );
+          if (metaRes.ok) {
+            const metaBody = (await metaRes.json()) as { id?: string };
+            const videoId = metaBody.id;
+
+            if (!videoId) {
+              return NextResponse.json(
+                { error: 'Meta did not return a video ID after transcoding' },
+                { status: 500 }
+              );
+            }
+
+            return NextResponse.json({
+              creativeId,
+              metaAssetId: videoId,
+              metaAssetType: 'VIDEO' as const,
+              videoProcessing: true,
+              normalizedForMeta: true,
+            });
+          }
+
+          const retryMsg = await parseGraphError(metaRes);
+          return NextResponse.json({ error: `${msg} | retry_after_transcode=${retryMsg}` }, { status: 500 });
+        } catch (transcodeErr) {
+          const transcodeMessage = transcodeErr instanceof Error ? transcodeErr.message : String(transcodeErr);
+          return NextResponse.json(
+            { error: `${msg} | transcode_failed=${transcodeMessage}` },
+            { status: 500 },
+          );
+        }
+      }
       return NextResponse.json({ error: msg }, { status: 500 });
     }
 
