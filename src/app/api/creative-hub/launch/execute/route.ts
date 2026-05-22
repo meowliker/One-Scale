@@ -302,10 +302,13 @@ function isDegreesOfFreedomMetaError(message: string): boolean {
   return (
     lower.includes('degrees_of_freedom_spec') ||
     lower.includes('creative_features_spec') ||
-    lower.includes('contextual_multi_ads') ||
     lower.includes('enroll_status') ||
     lower.includes('unsupported field')
   );
+}
+
+function isContextualMultiAdsMetaError(message: string): boolean {
+  return message.toLowerCase().includes('contextual_multi_ads');
 }
 
 function isGenericAdCreativeMetaError(message: string): boolean {
@@ -332,6 +335,15 @@ function isDynamicCreativeAdsetMismatchMetaError(message: string): boolean {
     lower.includes('subcode=1885998') ||
     lower.includes('cannot create dynamic creative ad in non-dynamic creative ad set') ||
     lower.includes('dynamic creative ads can only be created under dynamic creative ad sets')
+  );
+}
+
+function isVideoNotReadyMetaError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('subcode=1885252') ||
+    lower.includes('video is still being processed') ||
+    lower.includes('video not ready for use in an ad')
   );
 }
 
@@ -646,25 +658,18 @@ function removeDegreesOfFreedomFromCreativeBody(
   return sanitized;
 }
 
-function buildContextualMultiAdsOptOutFeatures(): Record<string, unknown> {
-  return {
-    contextual_multi_ads: { enroll_status: 'OPT_OUT' },
-  };
-}
-
 function buildContextualMultiAdsOptOutSpec(): Record<string, unknown> {
   return {
-    creative_features_spec: buildContextualMultiAdsOptOutFeatures(),
+    enroll_status: 'OPT_OUT',
   };
 }
 
-function keepOnlyContextualMultiAdsOptOutInCreativeBody(
+function removeContextualMultiAdsFromCreativeBody(
   creativeBody: Record<string, string>,
 ): Record<string, string> {
-  return {
-    ...creativeBody,
-    degrees_of_freedom_spec: JSON.stringify(buildContextualMultiAdsOptOutSpec()),
-  };
+  const sanitized = { ...creativeBody };
+  delete sanitized.contextual_multi_ads;
+  return sanitized;
 }
 
 function sanitizeDegreesOfFreedomSpecForMeta(
@@ -810,18 +815,19 @@ async function createAdCreativeWithFallback(
       }
     }
 
-    if (isDegreesOfFreedomMetaError(currentMessage)) {
-      const contextualOnlyBody = keepOnlyContextualMultiAdsOptOutInCreativeBody(workingBody);
-      workingBody = contextualOnlyBody;
+    if (isContextualMultiAdsMetaError(currentMessage)) {
+      workingBody = removeContextualMultiAdsFromCreativeBody(workingBody);
       try {
         return await postToMeta(accessToken, `/${accountNode}/adcreatives`, workingBody);
       } catch (contextualErr) {
         const contextualMessage =
           contextualErr instanceof Error ? contextualErr.message : String(contextualErr);
-        attemptErrors.push(`attempt_contextual_multi_ads_only:${contextualMessage}`);
+        attemptErrors.push(`attempt_without_contextual_multi_ads:${contextualMessage}`);
         currentMessage = contextualMessage;
       }
+    }
 
+    if (isDegreesOfFreedomMetaError(currentMessage)) {
       const withoutDegrees = removeDegreesOfFreedomFromCreativeBody(workingBody);
       if (withoutDegrees) {
         workingBody = withoutDegrees;
@@ -867,13 +873,43 @@ async function createAdCreativeWithFallback(
       );
       if (withThumbnail) {
         const sanitizedThumbnailBody = sanitizeDegreesOfFreedomSpecForMeta(withThumbnail);
+        const thumbnailVideoId = extractVideoIdFromCreativeBody(sanitizedThumbnailBody);
+        if (thumbnailVideoId) {
+          const videoState = await waitForVideoReady(accessToken, thumbnailVideoId, 90_000, 4_000);
+          if (videoState === 'failed') {
+            attemptErrors.push('video_processing_failed_before_thumbnail_retry');
+          } else if (videoState === 'processing') {
+            attemptErrors.push('video_still_processing_before_thumbnail_retry');
+          }
+        }
         try {
           return await postToMeta(accessToken, `/${accountNode}/adcreatives`, sanitizedThumbnailBody);
         } catch (thumbnailErr) {
           const thumbnailMessage =
             thumbnailErr instanceof Error ? thumbnailErr.message : String(thumbnailErr);
           attemptErrors.push(`attempt_3_with_video_thumbnail:${thumbnailMessage}`);
-          throw new Error(attemptErrors.join(' || '));
+          currentMessage = thumbnailMessage;
+          if (!isVideoNotReadyMetaError(thumbnailMessage)) {
+            throw new Error(attemptErrors.join(' || '));
+          }
+        }
+      }
+    }
+
+    if (isVideoNotReadyMetaError(currentMessage)) {
+      const videoId = extractVideoIdFromCreativeBody(workingBody);
+      if (videoId) {
+        const videoState = await waitForVideoReady(accessToken, videoId, 90_000, 4_000);
+        if (videoState === 'ready') {
+          try {
+            return await postToMeta(accessToken, `/${accountNode}/adcreatives`, workingBody);
+          } catch (videoRetryErr) {
+            const videoRetryMessage =
+              videoRetryErr instanceof Error ? videoRetryErr.message : String(videoRetryErr);
+            attemptErrors.push(`attempt_after_video_ready:${videoRetryMessage}`);
+          }
+        } else {
+          attemptErrors.push(`video_${videoState}_after_wait`);
         }
       }
     }
@@ -1385,7 +1421,6 @@ function buildDegreesOfFreedomSpec(enabled?: boolean): Record<string, unknown> {
   if (enabled) {
     return {
       creative_features_spec: {
-        ...buildContextualMultiAdsOptOutFeatures(),
         image_touchups: { enroll_status: 'OPT_IN' },
       },
     };
@@ -1396,7 +1431,6 @@ function buildDegreesOfFreedomSpec(enabled?: boolean): Record<string, unknown> {
       ...Object.fromEntries(
         CREATIVE_FEATURE_OPT_OUTS.map((feature) => [feature, { enroll_status: 'OPT_OUT' }]),
       ),
-      ...buildContextualMultiAdsOptOutFeatures(),
     },
   };
 }
@@ -1460,8 +1494,12 @@ function buildCreativeBody(
     name: `${item.creative_name} Creative`,
     url_tags: config.utmTemplate || profile.utmTemplate || DEFAULT_META_URL_TAGS,
     object_story_spec: JSON.stringify(fallbackObjectStorySpec),
-    degrees_of_freedom_spec: JSON.stringify(buildDegreesOfFreedomSpec(config.advantageCreative)),
+    contextual_multi_ads: JSON.stringify(buildContextualMultiAdsOptOutSpec()),
   };
+
+  if (config.advantageCreative) {
+    creativeBody.degrees_of_freedom_spec = JSON.stringify(buildDegreesOfFreedomSpec(true));
+  }
 
   if (shouldUseFlexibleCreative(config)) {
     creativeBody.asset_feed_spec = JSON.stringify(buildAssetFeedSpec(config));
