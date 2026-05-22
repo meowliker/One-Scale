@@ -20,13 +20,6 @@ const DEFAULT_META_URL_TAGS =
   'utm_source=FbAds&utm_medium={{adset.name}}&utm_campaign={{campaign.name}}&utm_content={{ad.name}}&campaign_id={{campaign.id}}&adset_id={{adset.id}}&ad_id={{ad.id}}';
 const WORLDWIDE_COUNTRY_VALUE = 'WORLDWIDE';
 type VideoThumbnailOverride = NonNullable<LaunchConfig['videoThumbnails']>[string];
-type CopyVariant = {
-  index: number;
-  total: number;
-  primaryText?: string;
-  headline?: string;
-  description?: string;
-};
 
 // ── Helpers ──
 
@@ -945,81 +938,6 @@ async function createAdWithCreativeFallback(input: {
   }
 }
 
-async function createAdsForCopyVariants(input: {
-  accessToken: string;
-  accountNode: string;
-  adsetId: string;
-  adStatus: string;
-  config: LaunchConfig;
-  profile: { pageId?: string; instagramActorId?: string; destinationUrl?: string; utmTemplate?: string };
-  item: CreativeTestItemRow;
-  creativeUrl?: string;
-}): Promise<{ primaryAdId: string; primaryCreativeId: string; adIds: string[]; creativeIds: string[] }> {
-  const variants = buildCopyVariants(input.config);
-  const adIds: string[] = [];
-  const creativeIds: string[] = [];
-
-  for (const variant of variants) {
-    const variantConfig = launchConfigForCopyVariant(input.config, variant);
-    const variantAdName = nameForCopyVariant(input.item.creative_name, variant);
-    const variantItem: CreativeTestItemRow = {
-      ...input.item,
-      creative_name: variantAdName,
-    };
-    const { creativeBody, fallbackObjectStorySpec } = buildCreativeBody(
-      variantConfig,
-      input.profile,
-      variantItem,
-      input.creativeUrl,
-    );
-
-    const creativeRes = await createAdCreativeWithFallback(
-      input.accessToken,
-      input.accountNode,
-      creativeBody,
-      input.item.thumbnail_url || undefined,
-      fallbackObjectStorySpec,
-    );
-    const metaCreativeId = String(creativeRes.id || '');
-
-    if (!metaCreativeId) {
-      throw new Error('Meta ad creative creation did not return an ID');
-    }
-
-    const createdAd = await createAdWithCreativeFallback({
-      accessToken: input.accessToken,
-      accountNode: input.accountNode,
-      adsetId: input.adsetId,
-      adName: variantAdName,
-      adStatus: input.adStatus,
-      metaCreativeId,
-      creativeBody,
-      preferredThumbnailUrl: input.item.thumbnail_url || undefined,
-      fallbackObjectStorySpec,
-    });
-
-    adIds.push(createdAd.adId);
-    creativeIds.push(createdAd.metaCreativeId);
-  }
-
-  const primaryAdId = adIds[0];
-  const primaryCreativeId = creativeIds[0];
-  if (!primaryAdId || !primaryCreativeId) {
-    throw new Error('Meta ad creation did not return an ID');
-  }
-
-  if (adIds.length > 1) {
-    console.info('[launch] Created copy variant ads', {
-      adsetId: input.adsetId,
-      creativeName: input.item.creative_name,
-      variantCount: adIds.length,
-      adIds,
-    });
-  }
-
-  return { primaryAdId, primaryCreativeId, adIds, creativeIds };
-}
-
 async function postToMeta(
   accessToken: string,
   endpoint: string,
@@ -1438,45 +1356,20 @@ function buildDegreesOfFreedomSpec(enabled?: boolean): Record<string, unknown> {
   if (enabled) {
     return {
       creative_features_spec: {
+        contextual_multi_ads: { enroll_status: 'OPT_OUT' },
         image_touchups: { enroll_status: 'OPT_IN' },
       },
-      contextual_multi_ads: { enroll_status: 'OPT_OUT' },
     };
   }
 
   return {
-    creative_features_spec: Object.fromEntries(
-      CREATIVE_FEATURE_OPT_OUTS.map((feature) => [feature, { enroll_status: 'OPT_OUT' }]),
-    ),
-    contextual_multi_ads: { enroll_status: 'OPT_OUT' },
+    creative_features_spec: {
+      ...Object.fromEntries(
+        CREATIVE_FEATURE_OPT_OUTS.map((feature) => [feature, { enroll_status: 'OPT_OUT' }]),
+      ),
+      contextual_multi_ads: { enroll_status: 'OPT_OUT' },
+    },
   };
-}
-
-function attachCreativeAssetToAssetFeedSpec(
-  assetFeedSpec: Record<string, unknown>,
-  assetId: string | null,
-  assetType?: string | null,
-  thumbnailSelection?: VideoThumbnailOverride,
-): void {
-  if (!assetId) return;
-
-  const isVideo = assetType === 'VIDEO' || assetType === 'video';
-  if (isVideo) {
-    const videoAsset: Record<string, unknown> = { video_id: assetId };
-    if (thumbnailSelection?.source === 'manual') {
-      if (thumbnailSelection.imageHash) {
-        videoAsset.thumbnail_hash = thumbnailSelection.imageHash;
-      } else if (thumbnailSelection.imageUrl && isValidHttpUrl(thumbnailSelection.imageUrl)) {
-        videoAsset.thumbnail_url = thumbnailSelection.imageUrl;
-      }
-    }
-    assetFeedSpec.videos = [videoAsset];
-    assetFeedSpec.ad_formats = ['SINGLE_VIDEO'];
-    return;
-  }
-
-  assetFeedSpec.images = [{ hash: assetId }];
-  assetFeedSpec.ad_formats = ['SINGLE_IMAGE'];
 }
 
 function uniqueCopyItems(items: LaunchConfig['primaryTexts']): Array<{ text: string }> {
@@ -1493,53 +1386,9 @@ function uniqueCopyItems(items: LaunchConfig['primaryTexts']): Array<{ text: str
   return result.slice(0, 5);
 }
 
-function uniqueCopyTexts(items: LaunchConfig['primaryTexts']): string[] {
-  return uniqueCopyItems(items).map((item) => item.text);
-}
-
-function buildCopyVariants(config: LaunchConfig): CopyVariant[] {
-  const primaryTexts = uniqueCopyTexts(config.primaryTexts);
-  const headlines = uniqueCopyTexts(config.headlines);
-  const descriptions = uniqueCopyTexts(config.descriptions);
-  const total = Math.max(primaryTexts.length, headlines.length, descriptions.length, 1);
-
-  return Array.from({ length: total }, (_, index) => ({
-    index: index + 1,
-    total,
-    primaryText: primaryTexts.length > 0 ? primaryTexts[index % primaryTexts.length] : undefined,
-    headline: headlines.length > 0 ? headlines[index % headlines.length] : undefined,
-    description: descriptions.length > 0 ? descriptions[index % descriptions.length] : undefined,
-  }));
-}
-
-function copyItemFromVariantText(id: string, text?: string): LaunchConfig['primaryTexts'][number][] {
-  return text ? [{ id, text, source: 'manual' }] : [];
-}
-
-function launchConfigForCopyVariant(config: LaunchConfig, variant: CopyVariant): LaunchConfig {
-  return {
-    ...config,
-    primaryTexts: copyItemFromVariantText(`copy-variant-${variant.index}-primary`, variant.primaryText),
-    headlines: copyItemFromVariantText(`copy-variant-${variant.index}-headline`, variant.headline),
-    descriptions: copyItemFromVariantText(`copy-variant-${variant.index}-description`, variant.description),
-  };
-}
-
-function nameForCopyVariant(baseName: string, variant: CopyVariant): string {
-  if (variant.total <= 1) return baseName;
-  return cleanMetaName(`${baseName} | Copy ${variant.index}`);
-}
-
 function buildAssetFeedSpec(
   config: LaunchConfig,
-  profile: { pageId?: string; instagramActorId?: string; destinationUrl?: string },
-  assetId: string,
-  assetType: string,
-  creativeUrl?: string,
-  thumbnailSelection?: VideoThumbnailOverride,
 ): Record<string, unknown> {
-  const destinationUrl = creativeUrl || profile.destinationUrl || config.destinationUrl || '';
-
   const spec: Record<string, unknown> = {};
   const bodies = uniqueCopyItems(config.primaryTexts);
   const titles = uniqueCopyItems(config.headlines);
@@ -1548,11 +1397,7 @@ function buildAssetFeedSpec(
   if (bodies.length > 0) spec.bodies = bodies;
   if (titles.length > 0) spec.titles = titles;
   if (descriptions.length > 0) spec.descriptions = descriptions;
-  if (destinationUrl) spec.link_urls = [{ website_url: destinationUrl }];
-  if (config.ctaType) spec.call_to_action_types = [config.ctaType];
-
-  attachCreativeAssetToAssetFeedSpec(spec, assetId, assetType, thumbnailSelection);
-  spec.optimization_type = config.advantageCreative ? 'DEGREES_OF_FREEDOM' : 'REGULAR';
+  spec.optimization_type = 'DEGREES_OF_FREEDOM';
 
   return spec;
 }
@@ -1585,18 +1430,12 @@ function buildCreativeBody(
   const creativeBody: Record<string, string> = {
     name: `${item.creative_name} Creative`,
     url_tags: config.utmTemplate || profile.utmTemplate || DEFAULT_META_URL_TAGS,
-    object_story_spec: JSON.stringify(
-      shouldUseFlexibleCreative(config)
-        ? { page_id: profile.pageId || config.pageId }
-        : fallbackObjectStorySpec,
-    ),
+    object_story_spec: JSON.stringify(fallbackObjectStorySpec),
     degrees_of_freedom_spec: JSON.stringify(buildDegreesOfFreedomSpec(config.advantageCreative)),
   };
 
   if (shouldUseFlexibleCreative(config)) {
-    creativeBody.asset_feed_spec = JSON.stringify(
-      buildAssetFeedSpec(config, profile, assetId, assetType, creativeUrl, thumbnailSelection),
-    );
+    creativeBody.asset_feed_spec = JSON.stringify(buildAssetFeedSpec(config));
   }
 
   return { creativeBody, fallbackObjectStorySpec };
@@ -2173,21 +2012,42 @@ export async function POST(request: NextRequest) {
               launchConfig.usePerCreativeUrls && launchConfig.perCreativeUrls
                 ? launchConfig.perCreativeUrls[item.sourceCreativeId || item.id]
                 : undefined;
-            const createdAds = await createAdsForCopyVariants({
+            const { creativeBody, fallbackObjectStorySpec } = buildCreativeBody(
+              launchConfig,
+              launchProfileContext,
+              item,
+              creativeUrl,
+            );
+
+            const creativeRes = await createAdCreativeWithFallback(
+              token.accessToken,
+              accountNode,
+              creativeBody,
+              item.thumbnail_url || undefined,
+              fallbackObjectStorySpec,
+            );
+            const metaCreativeId = String(creativeRes.id || '');
+
+            if (!metaCreativeId) {
+              throw new Error('Meta ad creative creation did not return an ID');
+            }
+
+            const createdAd = await createAdWithCreativeFallback({
               accessToken: token.accessToken,
               accountNode,
               adsetId,
+              adName: item.creative_name,
               adStatus: adLaunchStatus,
-              config: launchConfig,
-              profile: launchProfileContext,
-              item,
-              creativeUrl,
+              metaCreativeId,
+              creativeBody,
+              preferredThumbnailUrl: item.thumbnail_url || undefined,
+              fallbackObjectStorySpec,
             });
 
             await updateCreativeTestItem(item.id, {
               metaAdsetId: adsetId,
-              metaAdId: createdAds.primaryAdId,
-              metaCreativeId: createdAds.primaryCreativeId,
+              metaAdId: createdAd.adId,
+              metaCreativeId: createdAd.metaCreativeId,
               launchStatus: 'created',
             });
           } catch (err) {
@@ -2313,21 +2173,42 @@ export async function POST(request: NextRequest) {
               const creativeUrl = launchConfig.usePerCreativeUrls && launchConfig.perCreativeUrls
                 ? launchConfig.perCreativeUrls[item.sourceCreativeId || item.id]
                 : undefined;
-              const createdAds = await createAdsForCopyVariants({
+              const { creativeBody, fallbackObjectStorySpec } = buildCreativeBody(
+                launchConfig,
+                launchProfileContext,
+                item,
+                creativeUrl,
+              );
+
+              const creativeRes = await createAdCreativeWithFallback(
+                token.accessToken,
+                accountNode,
+                creativeBody,
+                item.thumbnail_url || undefined,
+                fallbackObjectStorySpec,
+              );
+              const metaCreativeId = String(creativeRes.id || '');
+
+              if (!metaCreativeId) {
+                throw new Error('Meta ad creative creation did not return an ID');
+              }
+
+              const createdAd = await createAdWithCreativeFallback({
                 accessToken: token.accessToken,
                 accountNode,
                 adsetId,
+                adName: item.creative_name,
                 adStatus: adLaunchStatus,
-                config: launchConfig,
-                profile: launchProfileContext,
-                item,
-                creativeUrl,
+                metaCreativeId,
+                creativeBody,
+                preferredThumbnailUrl: item.thumbnail_url || undefined,
+                fallbackObjectStorySpec,
               });
 
               await updateCreativeTestItem(item.id, {
                 metaAdsetId: adsetId,
-                metaAdId: createdAds.primaryAdId,
-                metaCreativeId: createdAds.primaryCreativeId,
+                metaAdId: createdAd.adId,
+                metaCreativeId: createdAd.metaCreativeId,
                 launchStatus: 'created',
               });
             } catch (err) {
@@ -2452,22 +2333,43 @@ export async function POST(request: NextRequest) {
 
         createdAdsetIds.push(adsetId);
 
-        const createdAds = await createAdsForCopyVariants({
+        const { creativeBody, fallbackObjectStorySpec } = buildCreativeBody(
+          launchConfig,
+          launchProfileContext,
+          item,
+          creativeUrl,
+        );
+
+        const creativeRes = await createAdCreativeWithFallback(
+          token.accessToken,
+          accountNode,
+          creativeBody,
+          item.thumbnail_url || undefined,
+          fallbackObjectStorySpec,
+        );
+        const creativeId = String(creativeRes.id || '');
+
+        if (!creativeId) {
+          throw new Error('Meta ad creative creation did not return an ID');
+        }
+
+        const createdAd = await createAdWithCreativeFallback({
           accessToken: token.accessToken,
           accountNode,
           adsetId,
+          adName: item.creative_name,
           adStatus: adLaunchStatus,
-          config: launchConfig,
-          profile: launchProfileContext,
-          item,
-          creativeUrl,
+          metaCreativeId: creativeId,
+          creativeBody,
+          preferredThumbnailUrl: item.thumbnail_url || undefined,
+          fallbackObjectStorySpec,
         });
 
         // Update creative_test_item with Meta IDs
         await updateCreativeTestItem(item.id, {
           metaAdsetId: adsetId,
-          metaAdId: createdAds.primaryAdId,
-          metaCreativeId: createdAds.primaryCreativeId,
+          metaAdId: createdAd.adId,
+          metaCreativeId: createdAd.metaCreativeId,
           launchStatus: 'created',
         });
       } catch (err) {
