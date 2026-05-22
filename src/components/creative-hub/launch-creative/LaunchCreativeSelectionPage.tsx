@@ -113,6 +113,7 @@ interface InheritedAdSettings {
   sourceAdSetId: string;
   sourceAdSetName: string;
   sourceMode: 'selected_adset' | 'latest_adset';
+  sourceAdCount?: number;
   sourceCampaignId?: string;
   sourceCampaignName?: string;
   updatedAt?: string;
@@ -797,6 +798,36 @@ function normalizeInheritedAdSettings(
     ctaType: asString(creative?.ctaType),
     destinationUrl: asString(creative?.destinationUrl),
     urlTags: asString(creative?.urlTags),
+  };
+}
+
+function mergeInheritedAdSettings(settings: InheritedAdSettings[]): InheritedAdSettings | null {
+  const validSettings = settings.filter((item) =>
+    item.primaryTexts.length > 0 || item.headlines.length > 0 || item.descriptions.length > 0,
+  );
+  const first = validSettings[0] || settings[0];
+  if (!first) return null;
+
+  const uniqueAdSetNames = uniqueTexts(settings.map((item) => item.sourceAdSetName));
+  const sourceAdCount = settings.length;
+
+  return {
+    ...first,
+    sourceAdId: settings.map((item) => item.sourceAdId).join(','),
+    sourceAdName: sourceAdCount > 1 ? `${sourceAdCount} latest ads` : first.sourceAdName,
+    sourceAdSetId: settings.map((item) => item.sourceAdSetId).join(','),
+    sourceAdSetName:
+      sourceAdCount > 1
+        ? `${uniqueAdSetNames.length} latest ad set${uniqueAdSetNames.length === 1 ? '' : 's'}`
+        : first.sourceAdSetName,
+    sourceAdCount,
+    updatedAt: first.updatedAt,
+    primaryTexts: uniqueTexts(settings.flatMap((item) => item.primaryTexts)),
+    headlines: uniqueTexts(settings.flatMap((item) => item.headlines)),
+    descriptions: uniqueTexts(settings.flatMap((item) => item.descriptions)),
+    ctaType: settings.find((item) => item.ctaType)?.ctaType,
+    destinationUrl: settings.find((item) => item.destinationUrl)?.destinationUrl,
+    urlTags: settings.find((item) => item.urlTags)?.urlTags,
   };
 }
 
@@ -1668,8 +1699,8 @@ export default function LaunchCreativeSelectionPage() {
         const sourceAdSets =
           sourceMode === 'selected_adset'
             ? [sourceAdSet]
-            : sortByLatest(adSets, (adSet) => adSet.updatedTime || adSet.startDate);
-        let nextSettings: InheritedAdSettings | null = null;
+            : sortByLatest(adSets, (adSet) => adSet.updatedTime || adSet.startDate).slice(0, 4);
+        const inheritedCandidates: InheritedAdSettings[] = [];
 
         for (const candidateAdSet of sourceAdSets) {
           const params = new URLSearchParams({
@@ -1690,13 +1721,14 @@ export default function LaunchCreativeSelectionPage() {
             return record ? getAdUpdatedAt(record) : undefined;
           })[0];
           const record = asRecord(latestAd);
-          nextSettings = record ? normalizeInheritedAdSettings(record, candidateAdSet, sourceMode) : null;
-          if (nextSettings) break;
+          const nextSettings = record ? normalizeInheritedAdSettings(record, candidateAdSet, sourceMode) : null;
+          if (nextSettings) inheritedCandidates.push(nextSettings);
         }
 
+        const mergedSettings = mergeInheritedAdSettings(inheritedCandidates);
         if (!active) return;
-        setInheritedSettings(nextSettings);
-        if (!nextSettings) {
+        setInheritedSettings(mergedSettings);
+        if (!mergedSettings) {
           setInheritedSettingsError('No ads found in the available source ad sets yet.');
         }
       } catch (err) {
@@ -3875,7 +3907,7 @@ function CopySelectionStep({
               Select and edit launch copy
             </h2>
             <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
-              Start from the latest ad copy inherited from the latest available ad set, then edit, add custom copy, or ask Claude for product-specific variants.
+              Start from recent ad copy inherited from the latest available ad sets, then edit, add custom copy, or ask Claude for product-specific variants.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
@@ -3898,7 +3930,7 @@ function CopySelectionStep({
             <div>
               <p className="text-sm font-semibold text-slate-950">
                 {inheritedSettingsLoading
-                  ? 'Fetching copy from the latest ad...'
+                  ? 'Fetching copy from recent ads...'
                   : inheritedSettings
                     ? `Using copy from ${inheritedSettings.sourceAdName}`
                     : 'No latest ad copy found yet'}
@@ -5502,7 +5534,7 @@ function CopyLoadingState() {
         <div>
           <p className="text-sm font-semibold text-slate-950">Loading latest ad copy</p>
           <p className="mt-1 text-sm leading-6 text-slate-500">
-            Fetching the latest ad from the latest available ad set, then pulling its primary texts, headlines, descriptions, and CTA.
+            Fetching the latest ads from up to 4 recent ad sets, then pulling their primary texts, headlines, descriptions, and CTA.
           </p>
         </div>
       </div>

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getGoogleDriveToken, getMetaToken } from '@/app/api/lib/tokens';
-import { listDriveChildren } from '@/app/api/google-drive/shared';
+import { GOOGLE_DRIVE_BASE_URL, listDriveChildren } from '@/app/api/google-drive/shared';
 import { getThirdPartyToken, upsertThirdPartyToken } from '@/app/api/lib/db';
 import {
   getPersistentThirdPartyToken,
@@ -376,6 +376,19 @@ function usesGoogleDriveProxy(url: string): boolean {
   }
 }
 
+function parseGoogleDriveProxyUrl(url: string): { storeId: string; fileId: string } | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.pathname !== '/api/google-drive/content') return null;
+    const storeId = parsed.searchParams.get('storeId');
+    const fileId = parsed.searchParams.get('fileId');
+    if (!storeId || !fileId) return null;
+    return { storeId, fileId };
+  } catch {
+    return null;
+  }
+}
+
 function toAbsoluteUrl(url: string, requestUrl: string): string {
   if (!url) return url;
   if (/^https?:\/\//i.test(url)) return url;
@@ -425,6 +438,29 @@ async function fetchSourceFile(input: {
     diagnostics.googleDriveProxyUsed && input.requestCookie
       ? { Cookie: input.requestCookie }
       : {};
+
+  if (diagnostics.googleDriveProxyUsed) {
+    const proxyTarget = parseGoogleDriveProxyUrl(input.downloadUrl);
+    const driveStoreId = proxyTarget?.storeId || input.storeId;
+    const driveToken = proxyTarget ? await getGoogleDriveToken(driveStoreId) : null;
+    diagnostics.googleDriveAuthAttempted = true;
+
+    if (proxyTarget && driveToken?.accessToken) {
+      const driveMediaUrl = `${GOOGLE_DRIVE_BASE_URL}/files/${encodeURIComponent(
+        proxyTarget.fileId,
+      )}?alt=media&supportsAllDrives=true`;
+      const directDriveResponse = await fetch(driveMediaUrl, {
+        redirect: 'follow',
+        headers: { Authorization: `Bearer ${driveToken.accessToken}` },
+      });
+      diagnostics.authedStatus = directDriveResponse.status;
+      diagnostics.finalStatus = directDriveResponse.status;
+      diagnostics.finalHost = getSafeHost(directDriveResponse.url || driveMediaUrl);
+      if (directDriveResponse.ok) {
+        return { response: directDriveResponse, diagnostics };
+      }
+    }
+  }
 
   if (!diagnostics.clickupDetected) {
     const response = await fetch(input.downloadUrl, {
