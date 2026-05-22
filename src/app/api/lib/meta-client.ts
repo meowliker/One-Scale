@@ -497,6 +497,157 @@ function extractDestinationUrlFromCreative(creative: Record<string, unknown>): s
   return typeof link === 'string' ? link : '';
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function firstAssetFeedText(creative: Record<string, unknown>, key: 'bodies' | 'titles' | 'descriptions'): string {
+  const assetFeed = asRecord(creative.asset_feed_spec);
+  const values = assetFeed?.[key];
+  if (!Array.isArray(values)) return '';
+
+  for (const item of values) {
+    if (typeof item === 'string' && item.trim()) return item.trim();
+    const record = asRecord(item);
+    const text = typeof record?.text === 'string' ? record.text.trim() : '';
+    if (text) return text;
+  }
+
+  return '';
+}
+
+function assetFeedTexts(creative: Record<string, unknown>, key: 'bodies' | 'titles' | 'descriptions'): string[] {
+  const assetFeed = asRecord(creative.asset_feed_spec);
+  const values = assetFeed?.[key];
+  if (!Array.isArray(values)) return [];
+
+  const texts: string[] = [];
+  const seen = new Set<string>();
+  for (const item of values) {
+    const text =
+      typeof item === 'string'
+        ? item.trim()
+        : typeof asRecord(item)?.text === 'string'
+          ? String(asRecord(item)?.text).trim()
+          : '';
+    const keyValue = text.toLowerCase();
+    if (!text || seen.has(keyValue)) continue;
+    seen.add(keyValue);
+    texts.push(text);
+  }
+  return texts;
+}
+
+function uniqueCopyTexts(values: Array<string | undefined>): string[] {
+  const texts: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const text = typeof value === 'string' ? value.trim() : '';
+    const key = text.toLowerCase();
+    if (!text || seen.has(key)) continue;
+    seen.add(key);
+    texts.push(text);
+  }
+  return texts;
+}
+
+function extractPrimaryTextFromCreative(creative: Record<string, unknown>): string {
+  const story = asRecord(creative.object_story_spec);
+  const linkData = asRecord(story?.link_data);
+  const videoData = asRecord(story?.video_data);
+  const photoData = asRecord(story?.photo_data);
+  const templateData = asRecord(story?.template_data);
+
+  return (
+    firstAssetFeedText(creative, 'bodies') ||
+    (typeof linkData?.message === 'string' ? linkData.message.trim() : '') ||
+    (typeof videoData?.message === 'string' ? videoData.message.trim() : '') ||
+    (typeof photoData?.message === 'string' ? photoData.message.trim() : '') ||
+    (typeof templateData?.message === 'string' ? templateData.message.trim() : '') ||
+    (typeof creative.body === 'string' ? creative.body.trim() : '') ||
+    ''
+  );
+}
+
+function extractHeadlineFromCreative(creative: Record<string, unknown>): string {
+  const story = asRecord(creative.object_story_spec);
+  const linkData = asRecord(story?.link_data);
+  const videoData = asRecord(story?.video_data);
+  const photoData = asRecord(story?.photo_data);
+  const cta = asRecord(videoData?.call_to_action);
+
+  return (
+    firstAssetFeedText(creative, 'titles') ||
+    (typeof linkData?.name === 'string' ? linkData.name.trim() : '') ||
+    (typeof videoData?.title === 'string' ? videoData.title.trim() : '') ||
+    (typeof photoData?.name === 'string' ? photoData.name.trim() : '') ||
+    (typeof cta?.title === 'string' ? cta.title.trim() : '') ||
+    (typeof creative.title === 'string' ? creative.title.trim() : '') ||
+    ''
+  );
+}
+
+function getCreativeStoryId(creative: Record<string, unknown>): string {
+  const effectiveStoryId =
+    typeof creative.effective_object_story_id === 'string' ? creative.effective_object_story_id.trim() : '';
+  const objectStoryId =
+    typeof creative.object_story_id === 'string' ? creative.object_story_id.trim() : '';
+  return effectiveStoryId || objectStoryId;
+}
+
+function isLikelyPlaceholderCopy(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return true;
+  if (normalized.length < 48) return true;
+  return ['free today', 'learn more', 'shop now', 'sign up'].includes(normalized);
+}
+
+function extractPrimaryTextFromStoryPayload(payload: Record<string, unknown>): string {
+  const message = typeof payload.message === 'string' ? payload.message.trim() : '';
+  if (message) return message;
+
+  const story = typeof payload.story === 'string' ? payload.story.trim() : '';
+  return story;
+}
+
+function chooseRicherPrimaryText(primary: string, storyText: string): string {
+  const current = primary.trim();
+  const candidate = storyText.trim();
+  if (!current) return candidate;
+  if (!candidate) return current;
+  if (isLikelyPlaceholderCopy(current) && candidate.length > current.length) return candidate;
+  if (candidate.length >= current.length + 24) return candidate;
+  return current;
+}
+
+async function resolveStoryPrimaryText(
+  token: string,
+  creative: Record<string, unknown>,
+  cache: Map<string, Promise<string>>,
+): Promise<string> {
+  const storyId = getCreativeStoryId(creative);
+  if (!storyId) return '';
+
+  if (!cache.has(storyId)) {
+    cache.set(
+      storyId,
+      fetchFromMeta<Record<string, unknown>>(
+        token,
+        `/${storyId}`,
+        { fields: 'message,story,created_time,permalink_url' },
+        10000,
+        0,
+      )
+        .then(extractPrimaryTextFromStoryPayload)
+        .catch(() => ''),
+    );
+  }
+
+  return cache.get(storyId)!;
+}
+
 function extractStoryIdentifiersFromCreative(creative: Record<string, unknown>): {
   pageId: string | null;
   instagramUserId: string | null;
@@ -830,12 +981,12 @@ export async function fetchMetaAdsByAccount(
 ): Promise<Array<Ad & { campaign_id?: string; adset_id?: string }>> {
   const fields = options?.basicOnly
     ? [
-      'id', 'name', 'campaign_id', 'adset_id', 'status', 'effective_status', 'configured_status', 'ad_review_feedback', 'issues_info',
-      'creative{id,title,call_to_action_type,image_url,thumbnail_url,video_id,object_story_spec,url_tags}',
+      'id', 'name', 'campaign_id', 'adset_id', 'status', 'effective_status', 'configured_status', 'updated_time', 'created_time', 'ad_review_feedback', 'issues_info',
+      'creative{id,title,call_to_action_type,image_url,thumbnail_url,video_id,object_story_id,effective_object_story_id,object_story_spec,asset_feed_spec,url_tags}',
     ].join(',')
     : [
-      'id', 'name', 'campaign_id', 'adset_id', 'status', 'effective_status', 'configured_status', 'ad_review_feedback', 'issues_info',
-      'creative{id,title,body,call_to_action_type,image_url,thumbnail_url,video_id,object_story_spec,url_tags}',
+      'id', 'name', 'campaign_id', 'adset_id', 'status', 'effective_status', 'configured_status', 'updated_time', 'created_time', 'ad_review_feedback', 'issues_info',
+      'creative{id,title,body,call_to_action_type,image_url,thumbnail_url,video_id,object_story_id,effective_object_story_id,object_story_spec,asset_feed_spec,url_tags}',
     ].join(',');
 
   const listTimeoutMs = options?.preferLightweight ? 15000 : 30000;
@@ -900,13 +1051,21 @@ export async function fetchMetaAdsByAccount(
     }
   }
 
-  return listRows.map((raw) => {
+  const storyTextCache = new Map<string, Promise<string>>();
+
+  return Promise.all(listRows.map(async (raw) => {
     const insightsRow = insightsMap.get(raw.id);
     const metrics = insightsRow
       ? mapInsightsToMetrics(insightsRow)
       : getEmptyMetrics();
 
     const creative = raw.creative || {};
+    const extractedPrimaryText = extractPrimaryTextFromCreative(creative);
+    const storyPrimaryText = isLikelyPlaceholderCopy(extractedPrimaryText)
+      ? await resolveStoryPrimaryText(token, creative, storyTextCache)
+      : '';
+    const primaryText = chooseRicherPrimaryText(extractedPrimaryText, storyPrimaryText);
+    const headline = extractHeadlineFromCreative(creative);
     const storyIds = extractStoryIdentifiersFromCreative(creative);
     const isVideo = !!creative.video_id;
     return {
@@ -915,6 +1074,7 @@ export async function fetchMetaAdsByAccount(
       campaign_id: raw.campaign_id || '',
       adset_id: raw.adset_id || '',
       name: raw.name,
+      updatedAt: raw.updated_time || raw.created_time || undefined,
       status: mapStatus(raw.status || ''),
       page_id: storyIds.pageId,
       instagram_user_id: storyIds.instagramUserId,
@@ -927,8 +1087,11 @@ export async function fetchMetaAdsByAccount(
       creative: {
         id: creative.id || raw.id,
         type: isVideo ? 'video' : 'image',
-        headline: creative.title || '',
-        body: creative.body || '',
+        headline,
+        body: primaryText,
+        primaryTexts: uniqueCopyTexts([...assetFeedTexts(creative, 'bodies'), primaryText]),
+        headlines: uniqueCopyTexts([...assetFeedTexts(creative, 'titles'), headline]),
+        descriptions: uniqueCopyTexts(assetFeedTexts(creative, 'descriptions')),
         ctaType: mapCtaType(creative.call_to_action_type || ''),
         mediaUrl: isVideo ? '' : (creative.image_url || ''),
         thumbnailUrl: creative.thumbnail_url || creative.image_url || '',
@@ -938,7 +1101,7 @@ export async function fetchMetaAdsByAccount(
       },
       metrics,
     };
-  });
+  }));
 }
 
 export type MetaDailyEntityMetricRow = {
@@ -1041,11 +1204,13 @@ export async function fetchMetaAdSets(
 ): Promise<AdSet[]> {
   const fields = options?.basicOnly
     ? [
-        'id', 'name', 'status', 'daily_budget', 'bid_amount', 'updated_time',
+        'id', 'name', 'status', 'daily_budget', 'bid_strategy', 'bid_amount',
+        'optimization_goal', 'billing_event', 'attribution_spec', 'promoted_object', 'updated_time',
         'effective_status', 'configured_status', 'issues_info', 'ad_review_feedback',
       ].join(',')
     : [
-        'id', 'name', 'status', 'daily_budget', 'bid_amount', 'updated_time',
+        'id', 'name', 'status', 'daily_budget', 'bid_strategy', 'bid_amount',
+        'optimization_goal', 'billing_event', 'attribution_spec', 'promoted_object', 'updated_time',
         'targeting', 'start_time', 'end_time', 'effective_status', 'configured_status', 'issues_info', 'ad_review_feedback',
       ].join(',');
 
@@ -1142,7 +1307,15 @@ export async function fetchMetaAdSets(
         issuesInfo: mapIssuesInfo(raw.issues_info),
       },
       dailyBudget: raw.daily_budget ? parseInt(raw.daily_budget, 10) / 100 : 0,
+      bidStrategy: raw.bid_strategy || null,
       bidAmount: raw.bid_amount ? parseInt(raw.bid_amount, 10) / 100 : null,
+      optimizationGoal: raw.optimization_goal || null,
+      billingEvent: raw.billing_event || null,
+      attributionSpec: Array.isArray(raw.attribution_spec) ? raw.attribution_spec : null,
+      promotedObject:
+        raw.promoted_object && typeof raw.promoted_object === 'object'
+          ? raw.promoted_object
+          : null,
       targeting: {
         ageMin: targeting.age_min || 18,
         ageMax: targeting.age_max || 65,
@@ -1182,12 +1355,12 @@ export async function fetchMetaAds(
 ): Promise<Ad[]> {
   const fields = options?.basicOnly
     ? [
-        'id', 'name', 'status', 'effective_status', 'configured_status', 'ad_review_feedback', 'issues_info',
-        'creative{id,title,call_to_action_type,image_url,thumbnail_url,video_id,object_story_spec,url_tags}',
+        'id', 'name', 'status', 'effective_status', 'configured_status', 'updated_time', 'created_time', 'ad_review_feedback', 'issues_info',
+        'creative{id,title,body,call_to_action_type,image_url,thumbnail_url,video_id,object_story_id,effective_object_story_id,object_story_spec,asset_feed_spec,url_tags}',
       ].join(',')
     : [
-        'id', 'name', 'status', 'effective_status', 'configured_status', 'ad_review_feedback', 'issues_info',
-        'creative{id,title,body,call_to_action_type,image_url,thumbnail_url,video_id,object_story_spec,url_tags}',
+        'id', 'name', 'status', 'effective_status', 'configured_status', 'updated_time', 'created_time', 'ad_review_feedback', 'issues_info',
+        'creative{id,title,body,call_to_action_type,image_url,thumbnail_url,video_id,object_story_id,effective_object_story_id,object_story_spec,asset_feed_spec,url_tags}',
       ].join(',');
 
   const listTimeoutMs = options?.preferLightweight ? 7000 : 15000;
@@ -1202,14 +1375,23 @@ export async function fetchMetaAds(
 
   // Basic-only mode: skip insights + thumbnail expansion to minimize API calls.
   if (options?.basicOnly) {
-    return data.data.map((raw) => {
+    const storyTextCache = new Map<string, Promise<string>>();
+
+    return Promise.all(data.data.map(async (raw) => {
       const creative = raw.creative || {};
+      const extractedPrimaryText = extractPrimaryTextFromCreative(creative);
+      const storyPrimaryText = isLikelyPlaceholderCopy(extractedPrimaryText)
+        ? await resolveStoryPrimaryText(token, creative, storyTextCache)
+        : '';
+      const primaryText = chooseRicherPrimaryText(extractedPrimaryText, storyPrimaryText);
+      const headline = extractHeadlineFromCreative(creative);
       const storyIds = extractStoryIdentifiersFromCreative(creative);
       const isVideo = !!creative.video_id;
       return {
         id: raw.id,
         adSetId,
         name: raw.name,
+        updatedAt: raw.updated_time || raw.created_time || undefined,
         status: mapStatus(raw.status || ''),
         page_id: storyIds.pageId,
         instagram_user_id: storyIds.instagramUserId,
@@ -1222,8 +1404,11 @@ export async function fetchMetaAds(
         creative: {
           id: creative.id || raw.id,
           type: isVideo ? 'video' : 'image',
-          headline: creative.title || '',
-          body: '',
+          headline,
+          body: primaryText,
+          primaryTexts: uniqueCopyTexts([...assetFeedTexts(creative, 'bodies'), primaryText]),
+          headlines: uniqueCopyTexts([...assetFeedTexts(creative, 'titles'), headline]),
+          descriptions: uniqueCopyTexts(assetFeedTexts(creative, 'descriptions')),
           ctaType: mapCtaType(creative.call_to_action_type || ''),
           mediaUrl: isVideo ? '' : (creative.image_url || ''),
           thumbnailUrl: creative.thumbnail_url || creative.image_url || '',
@@ -1233,7 +1418,7 @@ export async function fetchMetaAds(
         },
         metrics: getEmptyMetrics(),
       };
-    });
+    }));
   }
 
   // --- OPTIMIZED: Single adset-level insights call with level=ad ---
@@ -1325,13 +1510,21 @@ export async function fetchMetaAds(
     }
   }
 
-  const ads: Ad[] = data.data.map((raw, i) => {
+  const storyTextCache = new Map<string, Promise<string>>();
+
+  const ads: Ad[] = await Promise.all(data.data.map(async (raw, i) => {
     const insightsRow = insightsMap.get(raw.id);
     const metrics = insightsRow
       ? mapInsightsToMetrics(insightsRow)
       : getEmptyMetrics();
 
     const creative = raw.creative || {};
+    const extractedPrimaryText = extractPrimaryTextFromCreative(creative);
+    const storyPrimaryText = isLikelyPlaceholderCopy(extractedPrimaryText)
+      ? await resolveStoryPrimaryText(token, creative, storyTextCache)
+      : '';
+    const primaryText = chooseRicherPrimaryText(extractedPrimaryText, storyPrimaryText);
+    const headline = extractHeadlineFromCreative(creative);
     const storyIds = extractStoryIdentifiersFromCreative(creative);
     const isVideo = !!creative.video_id;
     let videoThumbnailUrl = creative.thumbnail_url || '';
@@ -1346,6 +1539,7 @@ export async function fetchMetaAds(
       id: raw.id,
       adSetId,
       name: raw.name,
+      updatedAt: raw.updated_time || raw.created_time || undefined,
       status: mapStatus(raw.status || ''),
       page_id: storyIds.pageId,
       instagram_user_id: storyIds.instagramUserId,
@@ -1358,8 +1552,11 @@ export async function fetchMetaAds(
       creative: {
         id: creative.id || raw.id,
         type: isVideo ? 'video' : 'image',
-        headline: creative.title || '',
-        body: creative.body || '',
+        headline,
+        body: primaryText,
+        primaryTexts: uniqueCopyTexts([...assetFeedTexts(creative, 'bodies'), primaryText]),
+        headlines: uniqueCopyTexts([...assetFeedTexts(creative, 'titles'), headline]),
+        descriptions: uniqueCopyTexts(assetFeedTexts(creative, 'descriptions')),
         ctaType: mapCtaType(creative.call_to_action_type || ''),
         mediaUrl: isVideo ? '' : (creative.image_url || ''),
         thumbnailUrl: isVideo
@@ -1371,7 +1568,7 @@ export async function fetchMetaAds(
       },
       metrics,
     };
-  });
+  }));
 
   return ads;
 }

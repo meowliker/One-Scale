@@ -58,8 +58,10 @@ export function CreativePreviewModal({
     creative.driveDownloadUrl ||
     creative.drivePreviewUrl ||
     creative.driveUrl ||
+    creative.clickupAttachmentUrl ||
     '';
-  const imagePreviewUrl = creative.driveContentUrl || creative.drivePreviewUrl || creative.thumbnailUrl || '';
+  const imagePreviewUrl =
+    creative.driveContentUrl || creative.drivePreviewUrl || creative.thumbnailUrl || creative.clickupAttachmentUrl || '';
   const visibleFields = creative.clickupCustomFields?.filter((field) => (
     !['drive', 'asset', 'link', 'file', 'thumbnail', 'preview', 'cover'].some((token) =>
       field.name.toLowerCase().includes(token)
@@ -79,6 +81,8 @@ export function CreativePreviewModal({
               poster={creative.thumbnailUrl || undefined}
             />
           ) : imagePreviewUrl ? (
+            // Creative previews can be ClickUp attachment URLs or Drive proxy URLs, not static Next images.
+            // eslint-disable-next-line @next/next/no-img-element
             <img
               src={imagePreviewUrl}
               alt={creative.creativeName}

@@ -49,7 +49,7 @@ export function GridBuilderTab() {
 
   // Filter to ready creatives only
   const readyCreatives = useMemo(
-    () => inboxCreatives.filter((c) => c.uploadStatus === 'ready' || c.driveUrl),
+    () => inboxCreatives.filter((c) => c.uploadStatus === 'ready' || c.driveUrl || c.clickupAttachmentUrl),
     [inboxCreatives],
   );
 
@@ -94,6 +94,10 @@ export function GridBuilderTab() {
   const effectiveStructure = launchConfig.structure ?? selectedProfile?.defaultStructure ?? 'ABO';
   const effectiveDailyBudget = launchConfig.dailyBudget ?? selectedProfile?.defaultBudget ?? 0;
   const effectiveDuration = launchConfig.testDuration ?? selectedProfile?.defaultDuration ?? 0;
+  const effectiveDurationLabel =
+    launchConfig.useTestDuration === false
+      ? 'No fixed duration'
+      : `${effectiveDuration} day${effectiveDuration !== 1 ? 's' : ''}`;
   const launchStatus = launchConfig.launchStatus ?? 'ACTIVE';
   const launchTimingLabel =
     launchConfig.launchTime === 'scheduled'
@@ -423,7 +427,7 @@ export function GridBuilderTab() {
                   />
                   <OverviewMeta
                     label="Duration"
-                    value={`${effectiveDuration} day${effectiveDuration !== 1 ? 's' : ''}`}
+                    value={effectiveDurationLabel}
                   />
                 </div>
               </section>

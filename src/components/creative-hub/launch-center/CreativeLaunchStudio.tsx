@@ -798,15 +798,17 @@ function getPreviewUrl(creative: InboxCreative): string | undefined {
     creative.drivePreviewUrl ||
     creative.thumbnailUrl ||
     creative.driveUrl ||
+    creative.clickupAttachmentUrl ||
     undefined
   );
 }
 
 function getThumbnailUrl(creative: InboxCreative): string | undefined {
-  return creative.thumbnailUrl || creative.driveContentUrl || creative.drivePreviewUrl;
+  return creative.thumbnailUrl || creative.driveContentUrl || creative.drivePreviewUrl || creative.clickupAttachmentUrl;
 }
 
 function getCreativeSourceLabel(creative: InboxCreative): string {
+  if (creative.sourceType === 'clickup_attachment') return 'ClickUp attachment';
   if (creative.driveSourceType === 'folder_item') return 'Drive folder item';
   if (creative.driveSourceType === 'folder') return 'Drive folder';
   if (creative.driveSourceType === 'file') return 'Drive file';
@@ -1705,6 +1707,7 @@ function buildLaunchHealthKey(config: Partial<LaunchConfig>, creativeIds: string
     structure: config.structure || 'ABO',
     dailyBudget: config.dailyBudget ?? 0,
     testDuration: config.testDuration ?? 0,
+    useTestDuration: config.useTestDuration ?? true,
     launchStatus: config.launchStatus || 'ACTIVE',
     adLaunchStatus: config.adLaunchStatus || config.launchStatus || 'ACTIVE',
     launchTime: config.launchTime || 'immediately',
@@ -4377,7 +4380,7 @@ export function CreativeLaunchStudio({ storeId }: CreativeLaunchStudioProps) {
       inboxCreatives.filter(
         (creative) =>
           (!productId || creative.productProfileId === productId) &&
-          (creative.uploadStatus === 'ready' || creative.driveUrl),
+          (creative.uploadStatus === 'ready' || creative.driveUrl || creative.clickupAttachmentUrl),
       ),
     [inboxCreatives, productId],
   );
@@ -4900,6 +4903,7 @@ export function CreativeLaunchStudio({ storeId }: CreativeLaunchStudioProps) {
       destinationUrl: launchConfig.destinationUrl || profile?.destinationUrl,
       dailyBudget: launchConfig.dailyBudget ?? profile?.defaultBudget ?? 20,
       testDuration: launchConfig.testDuration ?? profile?.defaultDuration ?? 3,
+      useTestDuration: launchConfig.useTestDuration ?? true,
       bidStrategy:
         launchConfig.bidStrategy || 'LOWEST_COST_WITHOUT_CAP',
       bidAmount: launchConfig.bidAmount ?? profile?.defaultBidAmount,
@@ -5248,6 +5252,7 @@ export function CreativeLaunchStudio({ storeId }: CreativeLaunchStudioProps) {
     preparedLaunchConfig.dailyBudget,
     preparedLaunchConfig.structure,
     preparedLaunchConfig.launchStatus,
+    preparedLaunchConfig.useTestDuration,
     preparedLaunchConfig.launchTime,
     preparedLaunchConfig.scheduledDate,
     preparedLaunchConfig.scheduledTime,

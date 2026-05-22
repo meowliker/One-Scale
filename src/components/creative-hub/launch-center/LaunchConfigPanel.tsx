@@ -538,6 +538,7 @@ export function LaunchConfigPanel({
       : launchConfig.dailyBudget ?? selectedProfile?.defaultBudget ?? 20;
 
   const duration = launchConfig.testDuration ?? selectedProfile?.defaultDuration ?? 3;
+  const useTestDuration = launchConfig.useTestDuration ?? true;
   const launchTime = launchConfig.launchTime ?? 'immediately';
   const scheduledDate = launchConfig.scheduledDate ?? '';
   const scheduledTime = launchConfig.scheduledTime ?? '09:00';
@@ -727,6 +728,9 @@ export function LaunchConfigPanel({
     if (launchConfig.testDuration == null && selectedProfile?.defaultDuration != null) {
       patch.testDuration = selectedProfile.defaultDuration;
     }
+    if (launchConfig.useTestDuration == null) {
+      patch.useTestDuration = true;
+    }
     if (!launchConfig.launchStatus) {
       patch.launchStatus = 'ACTIVE';
     }
@@ -807,6 +811,7 @@ export function LaunchConfigPanel({
     launchConfig.scheduledTime,
     launchConfig.structure,
     launchConfig.testDuration,
+    launchConfig.useTestDuration,
     defaultIncludedCountries,
     inferredIncludedCountry,
     learnedIncludedCountries,
@@ -990,15 +995,13 @@ export function LaunchConfigPanel({
                   </div>
                 </div>
 
-                <FormField label="Test Duration" helper="Days to run before evaluation">
-                  <NumberWithSuffix
-                    min={1}
-                    max={90}
-                    suffix="days"
-                    value={duration}
-                    onChange={(value) => updateLaunchConfig({ testDuration: value || 3 })}
-                  />
-                </FormField>
+                <DurationControl
+                  label="Test Duration"
+                  enabled={useTestDuration}
+                  value={duration}
+                  onToggle={(enabled) => updateLaunchConfig({ useTestDuration: enabled })}
+                  onChange={(value) => updateLaunchConfig({ testDuration: value || 3 })}
+                />
 
                 {shouldShowBidAmount(derivedBidStrategy) && (
                   <FormField
@@ -1045,15 +1048,13 @@ export function LaunchConfigPanel({
                       onChange={(value) => updateLaunchConfig({ dailyBudget: value ? Math.round(value) : 20 })}
                     />
                   </FormField>
-                  <FormField label="Duration (days)">
-                    <NumberWithSuffix
-                      min={1}
-                      max={90}
-                      suffix="days"
-                      value={duration}
-                      onChange={(value) => updateLaunchConfig({ testDuration: value || 3 })}
-                    />
-                  </FormField>
+                  <DurationControl
+                    label="Duration (days)"
+                    enabled={useTestDuration}
+                    value={duration}
+                    onToggle={(enabled) => updateLaunchConfig({ useTestDuration: enabled })}
+                    onChange={(value) => updateLaunchConfig({ testDuration: value || 3 })}
+                  />
                 </div>
 
                 <FormField label="Ad Set Bid Strategy">
@@ -1309,15 +1310,13 @@ export function LaunchConfigPanel({
                   onChange={(value) => updateLaunchConfig({ dailyBudget: value ? Math.round(value) : 20 })}
                 />
               </FormField>
-              <FormField label="Duration (days)">
-                <NumberWithSuffix
-                  min={1}
-                  max={90}
-                  suffix="days"
-                  value={duration}
-                  onChange={(value) => updateLaunchConfig({ testDuration: value || 3 })}
-                />
-              </FormField>
+              <DurationControl
+                label="Duration (days)"
+                enabled={useTestDuration}
+                value={duration}
+                onToggle={(enabled) => updateLaunchConfig({ useTestDuration: enabled })}
+                onChange={(value) => updateLaunchConfig({ testDuration: value || 3 })}
+              />
             </div>
 
           </div>
@@ -1627,7 +1626,7 @@ export function LaunchConfigPanel({
               {' '}total | <span className="font-semibold">{totalAds}</span> ads
             </>
           )}
-          {' '}for {duration} days
+          {useTestDuration ? <> for {duration} days</> : <> with no fixed test duration</>}
         </div>
       )}
 
@@ -1747,6 +1746,60 @@ function FormField({
       <label className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">{label}</label>
       {children}
       {helper ? <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{helper}</p> : null}
+    </div>
+  );
+}
+
+function DurationControl({
+  label,
+  enabled,
+  value,
+  onToggle,
+  onChange,
+}: {
+  label: string;
+  enabled: boolean;
+  value?: number;
+  onToggle: (enabled: boolean) => void;
+  onChange: (value: number | undefined) => void;
+}) {
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="text-xs font-medium text-slate-600 dark:text-slate-300">{label}</span>
+        <button
+          type="button"
+          onClick={() => onToggle(!enabled)}
+          className={cn(
+            'inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-semibold transition',
+            enabled
+              ? 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200'
+              : 'border-slate-200 bg-white text-slate-500 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-300',
+          )}
+        >
+          <span
+            className={cn(
+              'h-1.5 w-1.5 rounded-full',
+              enabled ? 'bg-blue-500' : 'bg-slate-400',
+            )}
+          />
+          {enabled ? 'On' : 'Off'}
+        </button>
+      </div>
+      <NumberWithSuffix
+        min={1}
+        max={90}
+        suffix="days"
+        value={enabled ? value : undefined}
+        placeholder={enabled ? undefined : 'No fixed duration'}
+        onChange={(nextValue) => {
+          if (!enabled) onToggle(true);
+          onChange(nextValue);
+        }}
+      />
+      <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+        {enabled ? 'Days to run before evaluation.' : 'No end date will be sent to Meta.'}
+      </p>
     </div>
   );
 }

@@ -135,7 +135,7 @@ export interface ProductCampaignLink {
 export type UploadStatus = 'pending' | 'uploading' | 'ready' | 'failed' | 'no_link';
 export type CreativeFormat = 'video' | 'image' | 'carousel';
 export type DriveSourceType = 'file' | 'folder' | 'folder_item';
-export type CreativeSourceType = 'clickup_task' | 'drive_asset';
+export type CreativeSourceType = 'clickup_task' | 'drive_asset' | 'clickup_attachment';
 
 export interface ClickUpFieldValue {
   id: string;
@@ -234,6 +234,11 @@ export interface InboxCreative {
   driveParentFolderName?: string;
   driveParentFolderUrl?: string;
   driveSourceType?: DriveSourceType;
+  clickupAttachmentId?: string;
+  clickupAttachmentUrl?: string;
+  clickupAttachmentName?: string;
+  clickupAttachmentMimeType?: string;
+  clickupAttachmentSize?: number;
   sourceType?: CreativeSourceType;
   sourceParentId?: string;
   uploadedAt?: string;
@@ -294,10 +299,15 @@ export interface LaunchConfig {
   destinationUrl?: string;
   // Budget & Bid
   dailyBudget: number;
+  adSetDailyMinSpend?: number;
+  adSetDailyMaxSpend?: number;
   testDuration: number;
+  useTestDuration?: boolean;
   bidStrategy: BidStrategy;
   bidAmount?: number;
   roasFloor?: number;
+  optimizationGoal?: string;
+  billingEvent?: string;
   launchStatus: 'ACTIVE' | 'PAUSED';
   adLaunchStatus: 'ACTIVE' | 'PAUSED';
   // Targeting
@@ -312,6 +322,7 @@ export interface LaunchConfig {
   // Per-creative URL overrides
   perCreativeUrls?: Record<string, string>; // creativeId -> url
   usePerCreativeUrls: boolean;
+  videoThumbnails?: Record<string, VideoThumbnailSelection>;
   // Schedule
   launchTime: 'immediately' | 'scheduled';
   scheduledDate?: string;
@@ -342,6 +353,13 @@ export interface LaunchConfig {
   batchStrategy?: BatchStrategy;
   creativesPerBatch?: number;
   launchMode?: LaunchCenterTab;
+}
+
+export interface VideoThumbnailSelection {
+  source: 'video' | 'manual';
+  imageHash?: string;
+  imageUrl?: string;
+  fileName?: string;
 }
 
 export interface CopyItem {
@@ -799,6 +817,8 @@ export interface CreativeBatch {
   name: string;
   creativeIds: string[];
   dailyBudget?: number;
+  dailyMinSpend?: number;
+  dailyMaxSpend?: number;
   bidAmount?: number;
   primaryTexts?: string[];
   headlines?: string[];

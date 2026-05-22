@@ -468,6 +468,9 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
     if (launchConfig.testDuration == null) {
       patch.testDuration = selectedProfile.defaultDuration ?? 3;
     }
+    if (launchConfig.useTestDuration == null) {
+      patch.useTestDuration = true;
+    }
     if (!launchConfig.structure) {
       patch.structure = selectedProfile.defaultStructure ?? 'ABO';
     }
@@ -1084,6 +1087,10 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
   const effectiveStructure = launchConfig.structure ?? selectedProfile?.defaultStructure ?? 'ABO';
   const effectiveDailyBudget = launchConfig.dailyBudget ?? selectedProfile?.defaultBudget ?? 0;
   const effectiveDuration = launchConfig.testDuration ?? selectedProfile?.defaultDuration ?? 0;
+  const effectiveDurationLabel =
+    launchConfig.useTestDuration === false
+      ? 'No fixed duration'
+      : `${effectiveDuration} day${effectiveDuration !== 1 ? 's' : ''}`;
   const launchStatus = launchConfig.launchStatus ?? 'ACTIVE';
   const launchTimingLabel =
     launchConfig.launchTime === 'scheduled'
@@ -1586,7 +1593,7 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
                     label={effectiveStructure === 'CBO' ? 'Campaign Budget' : 'Daily / Ad Set'}
                     value={`${formatCurrency(effectiveDailyBudget)} / day`}
                   />
-                  <OverviewMeta label="Duration" value={`${effectiveDuration} day${effectiveDuration !== 1 ? 's' : ''}`} />
+                  <OverviewMeta label="Duration" value={effectiveDurationLabel} />
                 </div>
               </section>
 

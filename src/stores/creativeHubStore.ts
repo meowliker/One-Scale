@@ -23,8 +23,39 @@ export interface UnmappedCampaign {
   campaignId: string;
   campaignName: string;
   adAccountId: string;
+  destinationUrls?: string[];
   spend?: number;
   status?: string;
+}
+
+export interface AutoDiscoverProductSample {
+  title: string;
+  handle: string;
+}
+
+export interface AutoDiscoverCampaignProduct {
+  campaignId: string;
+  campaignName: string;
+  destinationUrl: string;
+  handle: string | null;
+}
+
+export interface AutoDiscoverStats {
+  totalCampaigns: number;
+  campaignsWithAdData?: number;
+  campaignsWithDestinationUrls?: number;
+  shopifyProducts?: number;
+  shopifyFetchStatus?: number;
+  urlMatchedCampaigns?: number;
+  metaApiMatchedCampaigns?: number;
+  nameMatchedCampaigns?: number;
+  accountMatchedCampaigns?: number;
+  matchedProducts: number;
+  unmappedCount: number;
+  source?: string;
+  diagnostics?: string[];
+  shopifyProductSamples?: AutoDiscoverProductSample[];
+  campaignUrlProducts?: AutoDiscoverCampaignProduct[];
 }
 
 interface CreativeHubState {
@@ -35,6 +66,8 @@ interface CreativeHubState {
   profiles: ProductProfile[];
   profilesLoading: boolean;
   unmappedCampaigns: UnmappedCampaign[];
+  autoDiscoverStats: AutoDiscoverStats | null;
+  autoDiscoverError: string | null;
   profileCreativeCounts: Record<string, number>;
   profileClickUpStatusCounts: Record<string, ClickUpProfileStatusCounts>;
   profileCreativeTotal: number;
@@ -220,18 +253,16 @@ function buildCreativeCounts(creatives: InboxCreative[]): Record<string, number>
   const counts: Record<string, number> = {};
   for (const creative of creatives) {
     if (!creative.productProfileId) continue;
-    if (creative.uploadStatus !== 'ready' && !creative.driveUrl) continue;
+    if (
+      creative.uploadStatus !== 'ready' &&
+      !creative.driveUrl &&
+      !creative.driveContentUrl &&
+      !creative.driveDownloadUrl &&
+      !creative.clickupAttachmentUrl
+    ) continue;
     counts[creative.productProfileId] = (counts[creative.productProfileId] ?? 0) + 1;
   }
   return counts;
-}
-
-function readyCountsFromClickUpStatus(
-  counts: Record<string, ClickUpProfileStatusCounts>
-): Record<string, number> {
-  return Object.fromEntries(
-    Object.entries(counts).map(([profileId, profileCounts]) => [profileId, profileCounts.ready])
-  );
 }
 
 async function fetchClickUpStatusCounts(storeId: string): Promise<Record<string, ClickUpProfileStatusCounts>> {
@@ -268,6 +299,7 @@ function buildBaseLaunchConfig(
     destinationUrl: profile?.destinationUrl,
     dailyBudget: profile?.defaultBudget ?? 20,
     testDuration: profile?.defaultDuration ?? 3,
+    useTestDuration: true,
     bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
     bidAmount: profile?.defaultBidAmount,
     roasFloor: profile?.defaultRoasFloor,
@@ -344,6 +376,7 @@ function buildPersistedLaunchConfig(launchConfig: Partial<LaunchConfig>): Partia
     destinationUrl,
     dailyBudget,
     testDuration,
+    useTestDuration,
     bidStrategy,
     bidAmount,
     roasFloor,
@@ -396,6 +429,7 @@ function buildPersistedLaunchConfig(launchConfig: Partial<LaunchConfig>): Partia
     destinationUrl,
     dailyBudget,
     testDuration,
+    useTestDuration,
     bidStrategy,
     bidAmount,
     roasFloor,
@@ -460,6 +494,8 @@ export const useCreativeHubStore = create<CreativeHubState>()(
   profiles: [],
   profilesLoading: false,
   unmappedCampaigns: [],
+  autoDiscoverStats: null,
+  autoDiscoverError: null,
   profileCreativeCounts: {},
   profileClickUpStatusCounts: {},
   profileCreativeTotal: 0,
@@ -516,7 +552,7 @@ export const useCreativeHubStore = create<CreativeHubState>()(
   // ── Product Profiles ──
 
   fetchProfiles: async (storeId: string) => {
-    set({ profilesLoading: true });
+    set({ profilesLoading: true, autoDiscoverError: null });
     try {
       const res = await fetch(`/api/creative-hub/product-profiles?storeId=${encodeURIComponent(storeId)}`);
       const data = await res.json();
@@ -551,9 +587,7 @@ export const useCreativeHubStore = create<CreativeHubState>()(
       const creatives: InboxCreative[] = data.creatives ?? [];
       const clickupCounts =
         clickupCountsResult.status === 'fulfilled' ? clickupCountsResult.value : {};
-      const counts = Object.keys(clickupCounts).length > 0
-        ? { ...buildCreativeCounts(creatives), ...readyCountsFromClickUpStatus(clickupCounts) }
-        : buildCreativeCounts(creatives);
+      const counts = buildCreativeCounts(creatives);
 
       set({
         profileCreativeCounts: counts,
@@ -578,7 +612,7 @@ export const useCreativeHubStore = create<CreativeHubState>()(
       console.error('[CreativeHub] autoDiscoverProfiles called without storeId');
       return;
     }
-    set({ profilesLoading: true });
+    set({ profilesLoading: true, autoDiscoverError: null });
     try {
       const res = await fetch('/api/creative-hub/product-profiles/auto-discover', {
         method: 'POST',
@@ -588,7 +622,7 @@ export const useCreativeHubStore = create<CreativeHubState>()(
       const data = await res.json();
       if (!res.ok) {
         console.error('[CreativeHub] Auto-discover failed:', data.error);
-        set({ profilesLoading: false });
+        set({ profilesLoading: false, autoDiscoverError: data.error || 'Auto-discover failed' });
         return;
       }
       console.log('[CreativeHub] Auto-discover result:', {
@@ -599,11 +633,16 @@ export const useCreativeHubStore = create<CreativeHubState>()(
       set({
         profiles: data.profiles ?? [],
         unmappedCampaigns: data.unmappedCampaigns ?? [],
+        autoDiscoverStats: data.stats ?? null,
+        autoDiscoverError: null,
         profilesLoading: false,
       });
     } catch (err) {
       console.error('[CreativeHub] Auto-discover error:', err);
-      set({ profilesLoading: false });
+      set({
+        profilesLoading: false,
+        autoDiscoverError: err instanceof Error ? err.message : 'Auto-discover failed',
+      });
     }
   },
 
@@ -710,9 +749,7 @@ export const useCreativeHubStore = create<CreativeHubState>()(
       const creatives: InboxCreative[] = data.creatives ?? [];
       const clickupCounts =
         clickupCountsResult.status === 'fulfilled' ? clickupCountsResult.value : {};
-      const readyCounts = Object.keys(clickupCounts).length > 0
-        ? { ...buildCreativeCounts(creatives), ...readyCountsFromClickUpStatus(clickupCounts) }
-        : buildCreativeCounts(creatives);
+      const readyCounts = buildCreativeCounts(creatives);
       set({
         inboxCreatives: creatives,
         inboxLoading: false,
@@ -865,6 +902,7 @@ export const useCreativeHubStore = create<CreativeHubState>()(
           existingLaunchConfig.destinationUrl || profile?.destinationUrl,
         dailyBudget: existingLaunchConfig.dailyBudget ?? profile?.defaultBudget ?? 20,
         testDuration: existingLaunchConfig.testDuration ?? profile?.defaultDuration ?? 3,
+        useTestDuration: existingLaunchConfig.useTestDuration ?? true,
         bidStrategy:
           existingLaunchConfig.bidStrategy ||
           'LOWEST_COST_WITHOUT_CAP',
@@ -1219,7 +1257,7 @@ export const useCreativeHubStore = create<CreativeHubState>()(
         context.winningAds = winningAds.winningAds.slice(0, 10);
       }
       const productCreatives = inboxCreatives.filter(
-        c => c.productProfileId === productProfileId && (c.uploadStatus === 'ready' || c.driveUrl)
+        c => c.productProfileId === productProfileId && (c.uploadStatus === 'ready' || c.driveUrl || c.clickupAttachmentUrl)
       );
       const selectedCreatives = productCreatives.filter((creative) =>
         selectedCreativeIds.has(creative.id),
@@ -1296,7 +1334,7 @@ export const useCreativeHubStore = create<CreativeHubState>()(
     const state = get();
     const profile = productId ? state.profiles.find(p => p.id === productId) : undefined;
     const readyCreatives = state.inboxCreatives.filter(
-      (creative) => creative.uploadStatus === 'ready' || !!creative.driveUrl,
+      (creative) => creative.uploadStatus === 'ready' || !!creative.driveUrl || !!creative.clickupAttachmentUrl,
     );
     const readyCreativesById = new Map(readyCreatives.map((creative) => [creative.id, creative]));
     const seedIds = creativeIds

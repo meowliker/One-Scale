@@ -49,6 +49,12 @@ interface UnmappedCampaign {
   destinationUrls: string[];
 }
 
+interface ShopifyProductsResult {
+  products: ShopifyProduct[];
+  error?: string;
+  status?: number;
+}
+
 const DEFAULT_UTM_TEMPLATE =
   'utm_source=FbAds&utm_medium={{adset.name}}&utm_campaign={{campaign.name}}&utm_content={{ad.name}}&campaign_id={{campaign.id}}&adset_id={{adset.id}}&ad_id={{ad.id}}';
 
@@ -441,7 +447,8 @@ export async function POST(request: NextRequest) {
     console.log(`[auto-discover] Name resolution: ${pageNameMap.size}/${uniquePageIds.size} pages, ${igUsernameMap.size}/${uniqueIgIds.size} IG, ${pixelNameMap.size}/${uniquePixelIds.size} pixels, ${accountBmMap.size}/${uniqueAdAccountIds.size} BM`);
 
     // ━━━ Step 4: Match URLs to Shopify products ━━━
-    const shopifyProducts = await getShopifyProducts(storeId!, request);
+    const shopifyResult = await getShopifyProducts(storeId!, request);
+    const shopifyProducts = shopifyResult.products;
     const handleMap = new Map<string, ShopifyProduct>();
     for (const product of shopifyProducts) {
       if (product.handle) handleMap.set(product.handle.toLowerCase(), product);
@@ -450,6 +457,27 @@ export async function POST(request: NextRequest) {
     const matchesByHandle = new Map<string, { shopifyProduct: ShopifyProduct; campaigns: CampaignMeta[] }>();
     const unmappedCampaigns: UnmappedCampaign[] = [];
     const mappedCampaignIds = new Set<string>();
+    const campaignUrlProducts = allCampaigns
+      .map((campaign) => {
+        const destinationUrl = campaignMetaMap.get(campaign.id)?.destinationUrl || '';
+        return destinationUrl
+          ? {
+              campaignId: campaign.id,
+              campaignName: campaign.name,
+              destinationUrl,
+              handle: extractProductHandle(destinationUrl),
+            }
+          : null;
+      })
+      .filter((item): item is { campaignId: string; campaignName: string; destinationUrl: string; handle: string | null } => item !== null);
+    const campaignsWithDestinationUrls = allCampaigns.filter((campaign) => {
+      const meta = campaignMetaMap.get(campaign.id);
+      return Boolean(meta?.destinationUrl);
+    }).length;
+    let urlMatchedCampaigns = 0;
+    let metaApiMatchedCampaigns = 0;
+    let nameMatchedCampaigns = 0;
+    let accountMatchedCampaigns = 0;
 
     for (const campaign of allCampaigns) {
       const meta = campaignMetaMap.get(campaign.id);
@@ -477,6 +505,7 @@ export async function POST(request: NextRequest) {
             matchesByHandle.set(handle, { shopifyProduct: handleMap.get(handle)!, campaigns: [fullMeta] });
           }
           mappedCampaignIds.add(campaign.id);
+          urlMatchedCampaigns += 1;
           continue;
         }
       }
@@ -558,6 +587,7 @@ export async function POST(request: NextRequest) {
                 if (existing) existing.campaigns.push(meta);
                 else matchesByHandle.set(handle, { shopifyProduct: handleMap.get(handle)!, campaigns: [meta] });
                 mappedCampaignIds.add(unmapped.campaignId);
+                metaApiMatchedCampaigns += 1;
                 console.log(`[auto-discover] Meta API matched "${unmapped.campaignName}" → ${handle}`);
                 continue;
               }
@@ -622,6 +652,7 @@ export async function POST(request: NextRequest) {
           if (existing) existing.campaigns.push(meta);
           else matchesByHandle.set(bestHandle, { shopifyProduct: handleMap.get(bestHandle)!, campaigns: [meta] });
           mappedCampaignIds.add(unmapped.campaignId);
+          nameMatchedCampaigns += 1;
           console.log(`[auto-discover] Name match: "${unmapped.campaignName}" → ${bestHandle} (${(bestRatio * 100).toFixed(0)}% confidence, ${bestMatchedWords} words)`);
         } else {
           if (bestHandle) {
@@ -671,6 +702,7 @@ export async function POST(request: NextRequest) {
             const existing = matchesByHandle.get(handle);
             if (existing) existing.campaigns.push(meta);
             mappedCampaignIds.add(unmapped.campaignId);
+            accountMatchedCampaigns += 1;
             console.log(`[auto-discover] Account-based match: "${unmapped.campaignName}" → ${handle} (same account + keyword overlap)`);
             continue;
           }
@@ -733,7 +765,6 @@ export async function POST(request: NextRequest) {
       const profileIgId = mostCommon(match.campaigns.map((c) => c.instagramActorId));
       const profileAdAccountId = mostCommon(match.campaigns.map((c) => c.adAccountId)) || match.campaigns[0].adAccountId;
       const account = accountLookup.get(profileAdAccountId);
-      const bm = accountBmMap.get(profileAdAccountId);
 
       const profilePageName = profilePageId ? (pageNameMap.get(profilePageId) || match.campaigns.find(c => c.pageName)?.pageName) : undefined;
       const profilePixelName = profilePixelId ? (pixelNameMap.get(profilePixelId) || match.campaigns.find(c => c.pixelName)?.pixelName) : undefined;
@@ -744,6 +775,7 @@ export async function POST(request: NextRequest) {
       if (existingProfile) {
         profileId = existingProfile.id;
         await upsertProductProfile({
+          ...existingProfile,
           id: profileId,
           storeId: storeId!,
           shopifyProductId: shopifyId,
@@ -835,43 +867,56 @@ export async function POST(request: NextRequest) {
       }
 
       savedProfiles.push({
+        ...existingProfile,
         id: profileId,
         storeId: storeId!,
         shopifyProductId: shopifyId,
-        productName: match.shopifyProduct.title,
-        productImage: match.shopifyProduct.image?.src ?? match.shopifyProduct.images?.[0]?.src,
+        productName: existingProfile?.productName ?? match.shopifyProduct.title,
+        productImage: match.shopifyProduct.image?.src ?? match.shopifyProduct.images?.[0]?.src ?? existingProfile?.productImage,
         adAccountId: profileAdAccountId,
-        adAccountCurrency: account?.currency ?? 'USD',
-        destinationUrl: match.campaigns[0]?.destinationUrl,
+        adAccountCurrency: account?.currency ?? existingProfile?.adAccountCurrency ?? 'USD',
+        destinationUrl: match.campaigns[0]?.destinationUrl || existingProfile?.destinationUrl,
         pageId: profilePageId || existingProfile?.pageId,
         pageName: profilePageName || existingProfile?.pageName,
         pixelId: profilePixelId || existingProfile?.pixelId,
         pixelName: profilePixelName || existingProfile?.pixelName,
         instagramActorId: profileIgId || existingProfile?.instagramActorId,
         instagramUsername: profileIgUsername || existingProfile?.instagramUsername,
-        conversionEvent: 'PURCHASE',
-        defaultBudget: 20,
-        defaultDuration: 3,
-        defaultBidStrategy: 'LOWEST_COST_WITHOUT_CAP',
-        defaultStructure: 'ABO' as const,
-        defaultLaunchStatus: 'ACTIVE' as const,
-        clickupSyncInterval: 30,
-        aiMinImpressions: 500,
-        aiMinHours: 24,
-        aiEvalFrequency: 'every_6h',
+        conversionEvent: existingProfile?.conversionEvent ?? 'PURCHASE',
+        defaultBudget: existingProfile?.defaultBudget ?? 20,
+        defaultDuration: existingProfile?.defaultDuration ?? 3,
+        defaultBidStrategy: existingProfile?.defaultBidStrategy ?? 'LOWEST_COST_WITHOUT_CAP',
+        defaultStructure: existingProfile?.defaultStructure ?? 'ABO' as const,
+        defaultLaunchStatus: existingProfile?.defaultLaunchStatus ?? 'ACTIVE' as const,
+        clickupListId: existingProfile?.clickupListId,
+        clickupListName: existingProfile?.clickupListName,
+        clickupSyncInterval: existingProfile?.clickupSyncInterval ?? 30,
+        aiMinImpressions: existingProfile?.aiMinImpressions ?? 500,
+        aiMinHours: existingProfile?.aiMinHours ?? 24,
+        aiEvalFrequency: existingProfile?.aiEvalFrequency ?? 'every_6h',
         createdAt: existingProfile?.createdAt ?? new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         campaignLinks,
       });
     }
 
-    // Create profiles for Shopify products that have PAUSED campaigns (inactive products)
-    // These are products that exist in Shopify and had campaigns before, but all campaigns are now paused
-    const allMatchedShopifyIds = new Set(savedProfiles.map(p => p.shopifyProductId));
-    const refreshedProfiles = await getProductProfiles(storeId!);
-    const existingShopifyIds = new Set(refreshedProfiles.filter(p => p.shopifyProductId).map(p => p.shopifyProductId!));
-
     // Note: Only products with active campaigns are shown. No inactive profiles created.
+
+    const diagnostics: string[] = [];
+    if (shopifyProducts.length === 0) {
+      diagnostics.push(
+        shopifyResult.error
+          ? `Shopify products could not be fetched: ${shopifyResult.error}`
+          : 'No Shopify products were returned for this store.',
+      );
+    }
+    if (allCampaigns.length === 0) {
+      diagnostics.push('No active Meta campaigns were found in the latest snapshots.');
+    } else if (campaignsWithDestinationUrls === 0 && savedProfiles.length === 0) {
+      diagnostics.push('Active Meta campaigns were found, but none had a destination product URL in the snapshots.');
+    } else if (savedProfiles.length === 0 && shopifyProducts.length > 0) {
+      diagnostics.push('Shopify products were fetched, but their handles did not match active campaign destination URLs or campaign names.');
+    }
 
     console.log(`[auto-discover] Complete: ${savedProfiles.length} active products, ${unmappedCampaigns.length} unmapped, ${Date.now() - startTime}ms total`);
 
@@ -880,9 +925,23 @@ export async function POST(request: NextRequest) {
       unmappedCampaigns,
       stats: {
         totalCampaigns: allCampaigns.length,
+        campaignsWithAdData: campaignMetaMap.size,
+        campaignsWithDestinationUrls,
+        shopifyProducts: shopifyProducts.length,
+        shopifyFetchStatus: shopifyResult.status,
+        urlMatchedCampaigns,
+        metaApiMatchedCampaigns,
+        nameMatchedCampaigns,
+        accountMatchedCampaigns,
         matchedProducts: savedProfiles.length,
         unmappedCount: unmappedCampaigns.length,
         source: 'supabase_snapshots',
+        diagnostics,
+        shopifyProductSamples: shopifyProducts.slice(0, 20).map((product) => ({
+          title: product.title,
+          handle: product.handle,
+        })),
+        campaignUrlProducts,
       },
     });
   } catch (err) {
@@ -897,7 +956,7 @@ export async function POST(request: NextRequest) {
 async function getShopifyProducts(
   storeId: string,
   request: NextRequest,
-): Promise<ShopifyProduct[]> {
+): Promise<ShopifyProductsResult> {
   try {
     const baseUrl = new URL(request.url).origin;
     const cookie = request.headers.get('cookie') ?? '';
@@ -908,16 +967,28 @@ async function getShopifyProducts(
     if (res.ok) {
       const data = await res.json();
       const products = data.data ?? data.products ?? [];
-      return products.map((p: Record<string, unknown>) => ({
-        id: p.id,
-        title: p.title,
-        handle: p.handle,
-        image: (p.images as Array<{ src: string }> | undefined)?.[0] ?? null,
-        images: p.images,
-      }));
+      return {
+        products: products.map((p: Record<string, unknown>) => ({
+          id: p.id,
+          title: p.title,
+          handle: p.handle,
+          image: (p.images as Array<{ src: string }> | undefined)?.[0] ?? null,
+          images: p.images,
+        })),
+        status: res.status,
+      };
     }
+    const data = await res.json().catch(() => null) as { error?: string } | null;
+    return {
+      products: [],
+      status: res.status,
+      error: data?.error || `Shopify products endpoint returned ${res.status}`,
+    };
   } catch (err) {
     console.warn('[auto-discover] Shopify API fetch failed:', err);
+    return {
+      products: [],
+      error: err instanceof Error ? err.message : 'Shopify API fetch failed',
+    };
   }
-  return [];
 }

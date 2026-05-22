@@ -29,6 +29,8 @@ interface SnapshotAd {
   campaignId?: string;
   adSetId?: string;
   status?: string;
+  updatedAt?: string;
+  sourceSyncedAt?: string;
   creative?: {
     headline?: string;
     title?: string;
@@ -78,6 +80,8 @@ interface WarehouseAdRow {
   destination_url?: string | null;
   metrics_json?: Record<string, unknown> | null;
   raw_json?: Record<string, unknown> | null;
+  source_synced_at?: string | null;
+  updated_at?: string | null;
 }
 
 interface SnapshotAdset {
@@ -248,6 +252,68 @@ function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function extractTextArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (typeof item === 'string') return item.trim();
+      const record = asRecord(item);
+      return asText(record?.text);
+    })
+    .filter(Boolean);
+}
+
+function extractAssetFeedTexts(creative: Record<string, unknown>, key: 'bodies' | 'titles' | 'descriptions'): string[] {
+  const assetFeed = asRecord(creative.asset_feed_spec);
+  return extractTextArray(assetFeed?.[key]);
+}
+
+function extractPrimaryTextFromStory(creative: Record<string, unknown>): string {
+  const story = asRecord(creative.object_story_spec);
+  const linkData = asRecord(story?.link_data);
+  const videoData = asRecord(story?.video_data);
+  const photoData = asRecord(story?.photo_data);
+  const templateData = asRecord(story?.template_data);
+
+  return (
+    asText(linkData?.message) ||
+    asText(videoData?.message) ||
+    asText(photoData?.message) ||
+    asText(templateData?.message) ||
+    ''
+  );
+}
+
+function extractHeadlineFromStory(creative: Record<string, unknown>): string {
+  const story = asRecord(creative.object_story_spec);
+  const linkData = asRecord(story?.link_data);
+  const videoData = asRecord(story?.video_data);
+  const photoData = asRecord(story?.photo_data);
+  const cta = asRecord(videoData?.call_to_action);
+
+  return (
+    asText(linkData?.name) ||
+    asText(videoData?.title) ||
+    asText(photoData?.name) ||
+    asText(cta?.title) ||
+    ''
+  );
+}
+
+function extractDescriptionFromStory(creative: Record<string, unknown>): string {
+  const story = asRecord(creative.object_story_spec);
+  const linkData = asRecord(story?.link_data);
+  const videoData = asRecord(story?.video_data);
+
+  return asText(linkData?.description) || asText(videoData?.link_description) || '';
+}
+
 function compactIdsForInFilter(ids: Iterable<string>): string {
   return Array.from(new Set(ids))
     .filter(Boolean)
@@ -284,10 +350,25 @@ function extractProductUrlNeedles(destinationUrl?: string | null): string[] {
 function mapWarehouseAd(row: WarehouseAdRow): SnapshotAd {
   const metrics = row.metrics_json || {};
   const raw = row.raw_json || {};
-  const rawCreative =
-    raw.creative && typeof raw.creative === 'object'
-      ? (raw.creative as Record<string, unknown>)
-      : {};
+  const rawCreative = asRecord(raw.creative) || {};
+  const assetFeedBodies = extractAssetFeedTexts(rawCreative, 'bodies');
+  const assetFeedTitles = extractAssetFeedTexts(rawCreative, 'titles');
+  const assetFeedDescriptions = extractAssetFeedTexts(rawCreative, 'descriptions');
+  const primaryText =
+    assetFeedBodies[0] ||
+    extractPrimaryTextFromStory(rawCreative) ||
+    row.primary_text ||
+    asText(rawCreative.body);
+  const headline =
+    assetFeedTitles[0] ||
+    extractHeadlineFromStory(rawCreative) ||
+    row.headline ||
+    asText(rawCreative.headline) ||
+    asText(rawCreative.title);
+  const description =
+    assetFeedDescriptions[0] ||
+    extractDescriptionFromStory(rawCreative) ||
+    asText(rawCreative.description);
 
   return {
     id: row.ad_id,
@@ -295,17 +376,27 @@ function mapWarehouseAd(row: WarehouseAdRow): SnapshotAd {
     campaign_id: row.campaign_id || undefined,
     campaignId: row.campaign_id || undefined,
     adSetId: row.adset_id || undefined,
-    status: row.status || undefined,
+    status: row.status || asText(raw.status) || undefined,
+    updatedAt: asText(raw.updatedAt) || asText(raw.updated_time) || row.updated_at || undefined,
+    sourceSyncedAt: row.source_synced_at || undefined,
     creative: {
-      headline: row.headline || asText(rawCreative.headline) || asText(rawCreative.title),
+      headline,
       title: asText(rawCreative.title),
-      body: row.primary_text || asText(rawCreative.body),
-      description: asText(rawCreative.description),
+      body: primaryText,
+      description,
       ctaType: row.cta_type || asText(rawCreative.ctaType),
       thumbnailUrl: row.thumbnail_url || asText(rawCreative.thumbnailUrl),
       destinationUrl: row.destination_url || asText(rawCreative.destinationUrl),
       type: row.creative_type || asText(rawCreative.type),
     },
+    asset_feed_spec:
+      assetFeedBodies.length || assetFeedTitles.length || assetFeedDescriptions.length
+        ? {
+            bodies: assetFeedBodies.map((text) => ({ text })),
+            titles: assetFeedTitles.map((text) => ({ text })),
+            descriptions: assetFeedDescriptions.map((text) => ({ text })),
+          }
+        : undefined,
     metrics: {
       spend: asNumber(metrics.spend),
       revenue: asNumber(metrics.revenue ?? metrics.purchaseValue),
@@ -321,15 +412,59 @@ function mapWarehouseAd(row: WarehouseAdRow): SnapshotAd {
   };
 }
 
+function mergeAssetFeedSpec(
+  primary?: SnapshotAd['asset_feed_spec'],
+  fallback?: SnapshotAd['asset_feed_spec'],
+): SnapshotAd['asset_feed_spec'] {
+  const mergeTextItems = (
+    primaryItems?: Array<{ text: string }>,
+    fallbackItems?: Array<{ text: string }>,
+  ): Array<{ text: string }> | undefined => {
+    const seen = new Set<string>();
+    const items: Array<{ text: string }> = [];
+
+    for (const item of [...(primaryItems || []), ...(fallbackItems || [])]) {
+      const text = item.text?.trim();
+      const key = normalizeCopyKey(text || '');
+      if (!text || seen.has(key)) continue;
+      seen.add(key);
+      items.push({ text });
+    }
+
+    return items.length > 0 ? items : undefined;
+  };
+
+  const bodies = mergeTextItems(primary?.bodies, fallback?.bodies);
+  const titles = mergeTextItems(primary?.titles, fallback?.titles);
+  const descriptions = mergeTextItems(primary?.descriptions, fallback?.descriptions);
+
+  return bodies || titles || descriptions
+    ? { bodies, titles, descriptions }
+    : undefined;
+}
+
+function chooseRicherCopy(primary?: string, fallback?: string): string | undefined {
+  const first = primary?.trim();
+  const second = fallback?.trim();
+  if (!first) return second || undefined;
+  if (!second) return first;
+
+  // Snapshot data can sometimes put a short headline/label in the body field.
+  // If the warehouse/raw Meta payload has the fuller message, prefer that.
+  if (second.length >= first.length + 24) return second;
+  return first;
+}
+
 async function fetchWarehouseAds(storeId: string, campaignIds: Set<string>): Promise<SnapshotAd[]> {
   if (campaignIds.size === 0) return [];
 
   try {
     const campaignFilter = compactIdsForInFilter(campaignIds);
     const rows = await supabaseRest<WarehouseAdRow[]>(
-      `/meta_ad_entities?store_id=eq.${encodeURIComponent(storeId)}` +
+        `/meta_ad_entities?store_id=eq.${encodeURIComponent(storeId)}` +
         `&campaign_id=in.(${encodeURIComponent(campaignFilter)})` +
-        '&select=ad_id,ad_name,adset_id,campaign_id,status,creative_type,primary_text,headline,cta_type,media_url,thumbnail_url,destination_url,metrics_json,raw_json' +
+        '&select=ad_id,ad_name,adset_id,campaign_id,status,creative_type,primary_text,headline,cta_type,media_url,thumbnail_url,destination_url,metrics_json,raw_json,source_synced_at,updated_at' +
+        '&order=updated_at.desc' +
         '&limit=1000',
     );
     return rows.map(mapWarehouseAd);
@@ -349,8 +484,8 @@ async function fetchWarehouseAdsByDestinationUrl(storeId: string, destinationUrl
       const rows = await supabaseRest<WarehouseAdRow[]>(
         `/meta_ad_entities?store_id=eq.${encodeURIComponent(storeId)}` +
           `&destination_url=ilike.*${encodeURIComponent(needle)}*` +
-          '&primary_text=not.is.null' +
-          '&select=ad_id,ad_name,adset_id,campaign_id,status,creative_type,primary_text,headline,cta_type,media_url,thumbnail_url,destination_url,metrics_json,raw_json' +
+          '&select=ad_id,ad_name,adset_id,campaign_id,status,creative_type,primary_text,headline,cta_type,media_url,thumbnail_url,destination_url,metrics_json,raw_json,source_synced_at,updated_at' +
+          '&order=updated_at.desc' +
           '&limit=1000',
       );
       for (const row of rows) {
@@ -382,12 +517,16 @@ function mergeAdsById(primary: SnapshotAd[], fallback: SnapshotAd[]): SnapshotAd
       campaign_id: existing.campaign_id || ad.campaign_id,
       campaignId: existing.campaignId || ad.campaignId,
       adSetId: existing.adSetId || ad.adSetId,
+      status: existing.status || ad.status,
+      updatedAt: existing.updatedAt || ad.updatedAt,
+      sourceSyncedAt: existing.sourceSyncedAt || ad.sourceSyncedAt,
+      asset_feed_spec: mergeAssetFeedSpec(existing.asset_feed_spec, ad.asset_feed_spec),
       creative: {
         ...existing.creative,
-        headline: existing.creative?.headline || ad.creative?.headline,
+        headline: chooseRicherCopy(existing.creative?.headline, ad.creative?.headline),
         title: existing.creative?.title || ad.creative?.title,
-        body: existing.creative?.body || ad.creative?.body,
-        description: existing.creative?.description || ad.creative?.description,
+        body: chooseRicherCopy(existing.creative?.body, ad.creative?.body),
+        description: chooseRicherCopy(existing.creative?.description, ad.creative?.description),
         ctaType: existing.creative?.ctaType || ad.creative?.ctaType,
         thumbnailUrl: existing.creative?.thumbnailUrl || ad.creative?.thumbnailUrl,
         destinationUrl: existing.creative?.destinationUrl || ad.creative?.destinationUrl,
@@ -567,6 +706,87 @@ function finalizeRankedItems(
     .map((item, index) => ({ ...item, rank: index + 1 }));
 }
 
+function isCurrentAdStatus(status?: string): boolean {
+  const normalized = status?.trim().toUpperCase();
+  return normalized === 'ACTIVE' || normalized === 'IN_PROCESS' || normalized === 'PENDING_REVIEW';
+}
+
+function adTimestamp(ad: SnapshotAd): number {
+  const timestamp = Date.parse(ad.updatedAt || ad.sourceSyncedAt || '');
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function extractCopyCandidates(ad: SnapshotAd, kind: 'primary' | 'headline' | 'description'): Array<string | undefined> {
+  if (kind === 'primary') {
+    return [
+      ad.creative?.body,
+      ...(ad.asset_feed_spec?.bodies || []).map((item) => item.text),
+    ];
+  }
+
+  if (kind === 'headline') {
+    return [
+      ad.creative?.headline,
+      ad.creative?.title,
+      ...(ad.asset_feed_spec?.titles || []).map((item) => item.text),
+    ];
+  }
+
+  return [
+    ad.creative?.description,
+    ...(ad.asset_feed_spec?.descriptions || []).map((item) => item.text),
+  ];
+}
+
+function collectCurrentCopyKeys(ads: SnapshotAd[], kind: 'primary' | 'headline' | 'description'): string[] {
+  const currentAds = ads.filter((ad) => isCurrentAdStatus(ad.status));
+  const sourceAds = (currentAds.length > 0 ? currentAds : ads)
+    .slice()
+    .sort((a, b) => {
+      const statusDelta = Number(isCurrentAdStatus(b.status)) - Number(isCurrentAdStatus(a.status));
+      if (statusDelta !== 0) return statusDelta;
+      const timeDelta = adTimestamp(b) - adTimestamp(a);
+      if (timeDelta !== 0) return timeDelta;
+      return (b.metrics?.spend ?? 0) - (a.metrics?.spend ?? 0);
+    });
+
+  const seen = new Set<string>();
+  const keys: string[] = [];
+
+  for (const ad of sourceAds) {
+    for (const candidate of collectUniqueCopyValues(extractCopyCandidates(ad, kind))) {
+      if (seen.has(candidate.key)) continue;
+      seen.add(candidate.key);
+      keys.push(candidate.key);
+    }
+  }
+
+  return keys;
+}
+
+function prioritizeCurrentCopy<T extends RankedCopyItem>(items: T[], currentKeys: string[]): T[] {
+  if (items.length === 0 || currentKeys.length === 0) return items;
+
+  const byKey = new Map(items.map((item) => [normalizeCopyKey(item.text), item]));
+  const prioritized: T[] = [];
+  const used = new Set<string>();
+
+  for (const key of currentKeys) {
+    const item = byKey.get(key);
+    if (!item || used.has(key)) continue;
+    prioritized.push(item);
+    used.add(key);
+  }
+
+  for (const item of items) {
+    const key = normalizeCopyKey(item.text);
+    if (used.has(key)) continue;
+    prioritized.push(item);
+  }
+
+  return prioritized.map((item, index) => ({ ...item, rank: index + 1 }));
+}
+
 async function fetchLatestSnapshots<T extends AdsSnapshotRow>(storeId: string, endpoint: string): Promise<T[]> {
   let snapshots: T[] = [];
 
@@ -612,6 +832,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = request.nextUrl;
     const storeId = searchParams.get('storeId');
     const productProfileId = searchParams.get('productProfileId');
+    const activeOnly = searchParams.get('activeOnly') === '1' || searchParams.get('activeCampaignsOnly') === '1';
 
     if (!storeId || !productProfileId) {
       return NextResponse.json(
@@ -627,7 +848,13 @@ export async function GET(request: NextRequest) {
       getProductCampaignLinks(productProfileId),
     ]);
 
-    const linkedCampaignIds = new Set(campaignLinks.map((l) => l.campaignId));
+    const campaignLinksForRanking = activeOnly
+      ? campaignLinks.filter((link) => {
+          const effectiveStatus = String(link.effectiveStatus || '').toUpperCase();
+          return link.isActive || effectiveStatus === 'ACTIVE';
+        })
+      : campaignLinks;
+    const linkedCampaignIds = new Set(campaignLinksForRanking.map((l) => l.campaignId));
 
     // 2. Fetch ads data from Supabase snapshots
     if (!SUPABASE_URL || !SUPABASE_KEY) {
@@ -640,7 +867,13 @@ export async function GET(request: NextRequest) {
       fetchWarehouseAds(storeId, linkedCampaignIds),
       fetchWarehouseAdsByDestinationUrl(storeId, profile?.destinationUrl),
     ]);
-    const warehouseAds = mergeAdsById(linkedWarehouseAds, productUrlWarehouseAds);
+    const productUrlAdsForRanking = activeOnly
+      ? productUrlWarehouseAds.filter((ad) => {
+          const campaignId = ad.campaign_id || ad.campaignId;
+          return campaignId ? linkedCampaignIds.has(campaignId) : false;
+        })
+      : productUrlWarehouseAds;
+    const warehouseAds = mergeAdsById(linkedWarehouseAds, productUrlAdsForRanking);
 
     if (adsSnapshots.length === 0 && warehouseAds.length === 0) {
       return NextResponse.json({
@@ -865,9 +1098,18 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const uniquePTs = finalizeRankedItems(Array.from(ptMap.values()), 'Primary text') as WinningPT[];
-    const uniqueHeadlines = finalizeRankedItems(Array.from(headlineMap.values()), 'Headline') as WinningHeadline[];
-    const uniqueDescriptions = finalizeRankedItems(Array.from(descriptionMap.values()), 'Description') as WinningDescription[];
+    const uniquePTs = prioritizeCurrentCopy(
+      finalizeRankedItems(Array.from(ptMap.values()), 'Primary text') as WinningPT[],
+      collectCurrentCopyKeys(adsForRanking, 'primary'),
+    );
+    const uniqueHeadlines = prioritizeCurrentCopy(
+      finalizeRankedItems(Array.from(headlineMap.values()), 'Headline') as WinningHeadline[],
+      collectCurrentCopyKeys(adsForRanking, 'headline'),
+    );
+    const uniqueDescriptions = prioritizeCurrentCopy(
+      finalizeRankedItems(Array.from(descriptionMap.values()), 'Description') as WinningDescription[],
+      collectCurrentCopyKeys(adsForRanking, 'description'),
+    );
     const uniqueCTAs = finalizeRankedItems(Array.from(ctaMap.values()), 'CTA', { ctaType: '' }) as WinningCTA[];
 
     const rankedPrimaryTexts = uniquePTs.slice(0, 15);

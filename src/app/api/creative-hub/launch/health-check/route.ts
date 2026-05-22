@@ -248,7 +248,7 @@ export async function POST(request: NextRequest) {
 
     const snapshotNotReadyItems = notReadyItems.length === 0
       ? getSnapshotSelections(launchConfig)
-          .filter((creative) => !creative.metaAssetId && !creative.driveUrl)
+          .filter((creative) => !creative.metaAssetId && !creative.driveUrl && !creative.clickupAttachmentUrl)
           .map((creative) => ({
             id: creative.id,
             creative_name: creative.creativeName,

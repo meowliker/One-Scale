@@ -64,6 +64,24 @@ interface ClickUpCustomField {
   };
 }
 
+interface ClickUpAttachment {
+  id?: string;
+  title?: string;
+  name?: string;
+  filename?: string;
+  url?: string;
+  thumbnail_small?: string;
+  thumbnail_medium?: string;
+  thumbnail_large?: string;
+  thumbnail_url?: string;
+  mimetype?: string;
+  mime_type?: string;
+  extension?: string;
+  size?: number | string;
+  date?: string;
+  date_created?: string;
+}
+
 interface ClickUpTask {
   id: string;
   name: string;
@@ -115,6 +133,7 @@ interface ClickUpTask {
     profilePicture?: string;
   }>;
   text_content?: string;
+  attachments?: ClickUpAttachment[];
 }
 
 interface GoogleDriveAsset {
@@ -306,6 +325,58 @@ function mapDriveFormat(asset: GoogleDriveAsset, fallbackName: string): Creative
   if (fallbackName.toLowerCase().includes('carousel')) return 'carousel';
 
   return null;
+}
+
+function getAttachmentName(attachment: ClickUpAttachment, fallbackName: string): string {
+  return (
+    attachment.title ||
+    attachment.name ||
+    attachment.filename ||
+    (attachment.url ? decodeURIComponent(attachment.url.split('/').pop() || '') : '') ||
+    fallbackName
+  ).trim();
+}
+
+function getAttachmentMimeType(attachment: ClickUpAttachment): string {
+  return (attachment.mimetype || attachment.mime_type || '').toLowerCase();
+}
+
+function getAttachmentThumbnail(attachment: ClickUpAttachment): string | undefined {
+  return (
+    attachment.thumbnail_large ||
+    attachment.thumbnail_medium ||
+    attachment.thumbnail_small ||
+    attachment.thumbnail_url ||
+    undefined
+  );
+}
+
+function getAttachmentSize(attachment: ClickUpAttachment): number | undefined {
+  if (typeof attachment.size === 'number') return attachment.size;
+  if (typeof attachment.size === 'string') {
+    const parsed = Number(attachment.size);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function mapAttachmentFormat(attachment: ClickUpAttachment, fallbackName: string): CreativeFormat | null {
+  const mime = getAttachmentMimeType(attachment);
+  const name = getAttachmentName(attachment, fallbackName).toLowerCase();
+  const extension = (attachment.extension || '').toLowerCase();
+
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('image/')) return 'image';
+  if (['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v'].includes(extension)) return 'video';
+  if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].includes(extension)) return 'image';
+  if (/\.(mp4|mov|avi|mkv|webm|m4v)(\?|$)/i.test(name)) return 'video';
+  if (/\.(jpg|jpeg|png|gif|bmp|webp)(\?|$)/i.test(name)) return 'image';
+
+  return null;
+}
+
+function getMediaAttachments(task: ClickUpTask): ClickUpAttachment[] {
+  return (task.attachments || []).filter((attachment) => attachment.url && mapAttachmentFormat(attachment, task.name));
 }
 
 function buildDriveOpenUrl(fileId: string): string {
@@ -684,6 +755,32 @@ async function expandTaskToInboxCreatives(
 ): Promise<InboxCreative[]> {
   const driveLink = extractFieldValue(task.custom_fields, 'drive', 'asset', 'link', 'file', 'url');
   const baseCreative = mapTaskToInboxCreative(task, profileId, profileName, testedMap, undefined, syncedAt);
+  const mediaAttachments = getMediaAttachments(task);
+
+  if (!driveLink && mediaAttachments.length > 0) {
+    return mediaAttachments.map((attachment, index) => {
+      const attachmentName = getAttachmentName(attachment, task.name);
+      const attachmentFormat = mapAttachmentFormat(attachment, task.name) || baseCreative.creativeFormat;
+      const attachmentId = attachment.id || `${task.id}_${index}`;
+      const attachmentCreatedAt = attachment.date_created || attachment.date || task.date_created;
+
+      return mapTaskToInboxCreative(task, profileId, profileName, testedMap, {
+        id: `inbox_${task.id}_attachment_${attachmentId}`,
+        creativeName: attachmentName,
+        creativeFormat: attachmentFormat,
+        clickupAttachmentId: attachment.id || attachmentId,
+        clickupAttachmentUrl: attachment.url,
+        clickupAttachmentName: attachmentName,
+        clickupAttachmentMimeType: getAttachmentMimeType(attachment) || undefined,
+        clickupAttachmentSize: getAttachmentSize(attachment),
+        thumbnailUrl: getAttachmentThumbnail(attachment) || attachment.url || baseCreative.thumbnailUrl,
+        sourceType: 'clickup_attachment',
+        sourceParentId: baseCreative.id,
+        uploadStatus: 'pending',
+        uploadedAt: attachmentCreatedAt,
+      }, syncedAt);
+    });
+  }
 
   if (!driveLink || !driveAccessToken) {
     return [baseCreative];

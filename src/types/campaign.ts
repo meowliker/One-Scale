@@ -32,6 +32,9 @@ export interface AdCreative {
   type: AdCreativeType;
   headline: string;
   body: string;
+  primaryTexts?: string[];
+  headlines?: string[];
+  descriptions?: string[];
   ctaType: CTAType;
   mediaUrl: string;
   thumbnailUrl: string;
@@ -151,7 +154,12 @@ export interface AdSet {
   campaign_bid_strategy?: string | null;
   policyInfo?: MetaPolicyInfo;
   dailyBudget: number;
+  bidStrategy?: string | null;
   bidAmount: number | null;
+  optimizationGoal?: string | null;
+  billingEvent?: string | null;
+  attributionSpec?: Array<{ event_type?: string; window_days?: number }> | null;
+  promotedObject?: Record<string, unknown> | null;
   targeting: TargetingSpec;
   startDate: string;
   endDate: string | null;

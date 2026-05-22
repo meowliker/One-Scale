@@ -185,6 +185,7 @@ export async function GET(request: NextRequest) {
   let adSetsSynced = 0;
   let adsSynced = 0;
   let prunedAds = 0;
+  const storeErrors: Array<{ storeId: string; error: string }> = [];
 
   try {
     const useSupabase = isSupabasePersistenceEnabled();
@@ -362,7 +363,10 @@ export async function GET(request: NextRequest) {
             activeAccounts.map((a) => a.ad_account_id)
           );
           prunedAds += cleanup.removedAds;
-        } catch {
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown store sync error';
+          console.error(`[sync/cron] Store ${store.id} failed:`, message);
+          storeErrors.push({ storeId: store.id, error: message });
           errors++;
         }
       }
@@ -375,6 +379,7 @@ export async function GET(request: NextRequest) {
         adSetsSynced,
         adsSynced,
         prunedAds,
+        storeErrors,
         mode: 'supabase' 
       });
     }
@@ -521,7 +526,10 @@ export async function GET(request: NextRequest) {
             }
           }
         }
-      } catch {
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown store sync error';
+        console.error(`[sync/cron] Store ${store.id} failed:`, message);
+        storeErrors.push({ storeId: store.id, error: message });
         errors++;
       }
     }
@@ -533,6 +541,7 @@ export async function GET(request: NextRequest) {
       requestedStoreId: requestedStoreId || null,
       adSetsSynced,
       adsSynced,
+      storeErrors,
       mode: 'sqlite' 
     });
   } catch (err) {

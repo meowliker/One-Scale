@@ -19,6 +19,7 @@ const GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 const DEFAULT_META_URL_TAGS =
   'utm_source=FbAds&utm_medium={{adset.name}}&utm_campaign={{campaign.name}}&utm_content={{ad.name}}&campaign_id={{campaign.id}}&adset_id={{adset.id}}&ad_id={{ad.id}}';
 const WORLDWIDE_COUNTRY_VALUE = 'WORLDWIDE';
+type VideoThumbnailOverride = NonNullable<LaunchConfig['videoThumbnails']>[string];
 
 // ── Helpers ──
 
@@ -84,6 +85,10 @@ function resolveStartTime(config: LaunchConfig, timezone: string): string {
 }
 
 function resolveEndTime(config: LaunchConfig, timezone: string): string | undefined {
+  if (config.useTestDuration === false) {
+    return undefined;
+  }
+
   if (config.endDate) {
     return fromZonedTime(`${config.endDate}T23:59:59`, timezone).toISOString();
   }
@@ -123,6 +128,10 @@ function bidStrategyRequiresBidAmount(strategy: string): boolean {
   );
 }
 
+function bidStrategyRequiresRoasFloor(strategy: string): boolean {
+  return strategy === 'LOWEST_COST_WITH_MIN_ROAS';
+}
+
 function normalizeBidStrategy(strategyInput: string | undefined): string {
   const value = (strategyInput || '').trim().toUpperCase();
   if (!value) return 'LOWEST_COST_WITHOUT_CAP';
@@ -158,17 +167,36 @@ function toBidAmountCents(amountInput?: number): number | undefined {
   return Math.max(1, Math.round(amount * 100));
 }
 
+function toRoasAverageFloor(amountInput?: number): number | undefined {
+  const amount = toPositiveNumber(amountInput);
+  if (!amount) {
+    return undefined;
+  }
+  return Math.max(1, Math.round(amount * 10000));
+}
+
 function resolveAdsetBidConfig(
   strategyInput: string | undefined,
   bidAmountInput?: number | null,
   dailyBudgetInput?: number | null,
-): { bidStrategy?: string; bidAmountCents?: number } {
+): { bidStrategy?: string; bidAmountCents?: number; bidConstraints?: string } {
   const strategy = normalizeBidStrategy(strategyInput);
   const explicitBidAmount = toPositiveNumber(bidAmountInput);
   const fallbackBidAmount = estimateBidAmountFromDailyBudget(dailyBudgetInput);
 
   if (strategy === 'LOWEST_COST_WITHOUT_CAP') {
     return {};
+  }
+
+  if (bidStrategyRequiresRoasFloor(strategy)) {
+    const roasAverageFloor = toRoasAverageFloor(explicitBidAmount);
+    if (!roasAverageFloor) {
+      return {};
+    }
+    return {
+      bidStrategy: strategy,
+      bidConstraints: JSON.stringify({ roas_average_floor: roasAverageFloor }),
+    };
   }
 
   if (!bidStrategyRequiresBidAmount(strategy)) {
@@ -192,8 +220,19 @@ function resolveCampaignBidConfig(
   strategyInput: string | undefined,
   bidAmountInput?: number | null,
   dailyBudgetInput?: number | null,
-): { bidStrategy: string; bidAmountCents?: number } {
+): { bidStrategy: string; bidAmountCents?: number; bidConstraints?: string } {
   const strategy = normalizeBidStrategy(strategyInput);
+
+  if (bidStrategyRequiresRoasFloor(strategy)) {
+    const roasAverageFloor = toRoasAverageFloor(bidAmountInput ?? undefined);
+    if (!roasAverageFloor) {
+      return { bidStrategy: 'LOWEST_COST_WITHOUT_CAP' };
+    }
+    return {
+      bidStrategy: strategy,
+      bidConstraints: JSON.stringify({ roas_average_floor: roasAverageFloor }),
+    };
+  }
 
   if (!bidStrategyRequiresBidAmount(strategy)) {
     return { bidStrategy: strategy };
@@ -863,13 +902,16 @@ async function createAdsetWithFallback(
   const seen = new Set<string>();
 
   const pushCandidate = (candidate: Record<string, string>) => {
-    const key = `${candidate.bid_strategy || '__none__'}|${candidate.bid_amount || '__none__'}|${candidate.daily_budget || '__none__'}`;
+    const key = `${candidate.bid_strategy || '__none__'}|${candidate.bid_amount || '__none__'}|${candidate.bid_constraints || '__none__'}|${candidate.daily_budget || '__none__'}`;
     if (seen.has(key)) return;
     seen.add(key);
     candidates.push(candidate);
   };
 
-  if (!normalizedStrategy || !bidStrategyRequiresBidAmount(normalizedStrategy)) {
+  if (!normalizedStrategy || (!bidStrategyRequiresBidAmount(normalizedStrategy) && !bidStrategyRequiresRoasFloor(normalizedStrategy))) {
+    delete baseCandidate.bid_amount;
+    delete baseCandidate.bid_constraints;
+  } else if (bidStrategyRequiresRoasFloor(normalizedStrategy)) {
     delete baseCandidate.bid_amount;
   } else if (
     (!baseCandidate.bid_amount ||
@@ -880,7 +922,12 @@ async function createAdsetWithFallback(
     baseCandidate.bid_amount = String(fallbackBidAmountCents);
   }
 
-  if (!normalizedStrategy || !bidStrategyRequiresBidAmount(normalizedStrategy) || baseCandidate.bid_amount) {
+  if (
+    !normalizedStrategy ||
+    (!bidStrategyRequiresBidAmount(normalizedStrategy) && !bidStrategyRequiresRoasFloor(normalizedStrategy)) ||
+    baseCandidate.bid_amount ||
+    baseCandidate.bid_constraints
+  ) {
     pushCandidate(baseCandidate);
   }
 
@@ -900,6 +947,7 @@ async function createAdsetWithFallback(
   const noBidFieldsCandidate: Record<string, string> = { ...adsetBody };
   delete noBidFieldsCandidate.bid_strategy;
   delete noBidFieldsCandidate.bid_amount;
+  delete noBidFieldsCandidate.bid_constraints;
   pushCandidate(noBidFieldsCandidate);
 
   const lowestCostCandidate: Record<string, string> = {
@@ -907,6 +955,7 @@ async function createAdsetWithFallback(
     bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
   };
   delete lowestCostCandidate.bid_amount;
+  delete lowestCostCandidate.bid_constraints;
   pushCandidate(lowestCostCandidate);
 
   let lastError: Error | null = null;
@@ -921,7 +970,7 @@ async function createAdsetWithFallback(
       const message = error.message || 'unknown';
       lastError = error;
       errors.push(
-        `attempt_${index + 1}[bid_strategy=${candidate.bid_strategy || 'omitted'},bid_amount=${candidate.bid_amount || 'omitted'}]:${message}`,
+        `attempt_${index + 1}[bid_strategy=${candidate.bid_strategy || 'omitted'},bid_amount=${candidate.bid_amount || 'omitted'},bid_constraints=${candidate.bid_constraints || 'omitted'}]:${message}`,
       );
 
       // Continue through all candidate payloads to maximize recovery chance.
@@ -982,6 +1031,9 @@ async function createCampaignWithFallback(
                 campaignBody.bid_strategy = campaignBidConfig.bidStrategy;
                 if (campaignBidConfig.bidAmountCents) {
                   campaignBody.bid_amount = String(campaignBidConfig.bidAmountCents);
+                }
+                if (campaignBidConfig.bidConstraints) {
+                  campaignBody.bid_constraints = campaignBidConfig.bidConstraints;
                 }
               }
 
@@ -1203,69 +1255,13 @@ function buildDegreesOfFreedomSpec(enabled?: boolean): Record<string, unknown> {
   };
 }
 
-function attachCreativeAssetToAssetFeedSpec(
-  assetFeedSpec: Record<string, unknown>,
-  assetId: string | null,
-  assetType?: string | null,
-): void {
-  if (!assetId) return;
-
-  const isVideo = assetType === 'VIDEO' || assetType === 'video';
-  if (isVideo) {
-    assetFeedSpec.videos = [{ video_id: assetId }];
-    assetFeedSpec.ad_formats = ['SINGLE_VIDEO'];
-    return;
-  }
-
-  assetFeedSpec.images = [{ hash: assetId }];
-  assetFeedSpec.ad_formats = ['SINGLE_IMAGE'];
-}
-
-function buildAssetFeedSpec(
-  config: LaunchConfig,
-  profile: { pageId?: string; instagramActorId?: string; destinationUrl?: string },
-  creativeUrl?: string
-): Record<string, unknown> {
-  const destinationUrl = creativeUrl || profile.destinationUrl || config.destinationUrl || '';
-
-  const spec: Record<string, unknown> = {};
-
-  // Bodies (primary texts)
-  if (config.primaryTexts.length > 0) {
-    spec.bodies = config.primaryTexts.map((pt) => ({ text: pt.text }));
-  }
-
-  // Titles (headlines)
-  if (config.headlines.length > 0) {
-    spec.titles = config.headlines.map((hl) => ({ text: hl.text }));
-  }
-
-  // Descriptions
-  if (config.descriptions.length > 0) {
-    spec.descriptions = config.descriptions.map((d) => ({ text: d.text }));
-  }
-
-  // Link URLs
-  if (destinationUrl) {
-    spec.link_urls = [{ website_url: destinationUrl }];
-  }
-
-  // CTA
-  if (config.ctaType) {
-    spec.call_to_action_types = [config.ctaType];
-  }
-
-  spec.optimization_type = config.advantageCreative ? 'DEGREES_OF_FREEDOM' : 'REGULAR';
-
-  return spec;
-}
-
 function buildObjectStorySpec(
   config: LaunchConfig,
   profile: { pageId?: string; instagramActorId?: string; destinationUrl?: string },
   assetId: string,
   assetType: string,
-  creativeUrl?: string
+  creativeUrl?: string,
+  thumbnailSelection?: VideoThumbnailOverride,
 ): Record<string, unknown> {
   const destinationUrl = creativeUrl || profile.destinationUrl || config.destinationUrl || '';
   const pageId = profile.pageId || config.pageId;
@@ -1287,6 +1283,13 @@ function buildObjectStorySpec(
       message: primaryText,
     };
     if (cta) videoData.call_to_action = cta;
+    if (thumbnailSelection?.source === 'manual') {
+      if (thumbnailSelection.imageHash) {
+        videoData.image_hash = thumbnailSelection.imageHash;
+      } else if (thumbnailSelection.imageUrl && isValidHttpUrl(thumbnailSelection.imageUrl)) {
+        videoData.image_url = thumbnailSelection.imageUrl;
+      }
+    }
     story.video_data = videoData;
   } else {
     const linkData: Record<string, unknown> = {
@@ -1301,14 +1304,6 @@ function buildObjectStorySpec(
   }
 
   return story;
-}
-
-function buildStoryIdentitySpec(
-  profile: { pageId?: string; instagramActorId?: string },
-  launchConfig: LaunchConfig,
-): Record<string, unknown> {
-  const pageId = profile.pageId || launchConfig.pageId;
-  return { page_id: pageId };
 }
 
 interface CreativeTestItemRow {
@@ -1339,12 +1334,17 @@ function mapSnapshotToLaunchItem(snapshot: InboxCreative): CreativeTestItemRow {
     clickup_task_name: snapshot.clickupTaskName,
     hook: snapshot.hook ?? null,
     angle: snapshot.angle ?? null,
-    drive_url: snapshot.driveDownloadUrl || snapshot.driveContentUrl || snapshot.driveUrl || null,
+    drive_url:
+      snapshot.driveDownloadUrl ||
+      snapshot.driveContentUrl ||
+      snapshot.driveUrl ||
+      snapshot.clickupAttachmentUrl ||
+      null,
     thumbnail_url: snapshot.thumbnailUrl ?? null,
     upload_status:
       snapshot.uploadStatus === 'ready' || !!snapshot.metaAssetId
         ? 'ready'
-        : snapshot.driveUrl
+        : snapshot.driveUrl || snapshot.clickupAttachmentUrl
           ? 'pending'
           : (snapshot.uploadStatus || 'no_link'),
   };
@@ -1604,6 +1604,7 @@ export async function POST(request: NextRequest) {
     // Build test payload
     const testId = generateId();
     const now = new Date().toISOString();
+    const effectiveLaunchTime = scheduledLaunchDate?.toISOString() || now;
 
     // Resolve targeting
     let targeting: TargetingSpec | undefined;
@@ -1632,7 +1633,7 @@ export async function POST(request: NextRequest) {
       bidAmount: launchConfig.bidAmount,
       roasFloor: launchConfig.roasFloor,
       dailyBudget: launchConfig.dailyBudget,
-      testDuration: launchConfig.testDuration,
+      testDuration: launchConfig.useTestDuration === false ? 0 : launchConfig.testDuration,
       launchStatus: entityLaunchStatus,
       launchedBy: 'user',
       items: selectedItems.map((item) => ({
@@ -1677,30 +1678,6 @@ export async function POST(request: NextRequest) {
       ],
     };
 
-    // Scheduled launch: save the test plan only, skip all Meta creation for now.
-    if (launchConfig.launchTime === 'scheduled' && scheduledLaunchDate) {
-      if (!campaignId) {
-        campaignId = `scheduled_${testId}`;
-      }
-
-      await createCreativeTest({
-        ...testPayloadBase,
-        campaignId,
-        campaignName,
-        status: 'scheduled',
-        launchedAt: scheduledLaunchDate.toISOString(),
-      });
-
-      const scheduledTest = await getCreativeTest(testId);
-      return NextResponse.json({
-        testId,
-        status: 'scheduled',
-        campaignId,
-        scheduledFor: scheduledLaunchDate.toISOString(),
-        items: scheduledTest?.items || [],
-      });
-    }
-
     // Step 1: Create campaign if new
     if (launchConfig.campaignMode === 'new') {
       if (!campaignName) {
@@ -1714,7 +1691,9 @@ export async function POST(request: NextRequest) {
         launchConfig.structure,
         launchConfig.dailyBudget,
         launchConfig.bidStrategy,
-        launchConfig.bidAmount,
+        launchConfig.bidStrategy === 'LOWEST_COST_WITH_MIN_ROAS'
+          ? launchConfig.roasFloor
+          : launchConfig.bidAmount,
       );
       campaignId = String(campaignRes.id || '');
 
@@ -1730,7 +1709,7 @@ export async function POST(request: NextRequest) {
       campaignId,
       campaignName,
       status: 'launching',
-      launchedAt: now,
+      launchedAt: effectiveLaunchTime,
     });
 
     // Step 2: Upload any creatives that don't have a Meta asset ID yet
@@ -1790,7 +1769,15 @@ export async function POST(request: NextRequest) {
     const createdAdsetIds: string[] = [];
     let hasFailure = false;
 
-    const batches = launchConfig.batches as Array<{ id: string; name: string; creativeIds: string[]; dailyBudget?: number; bidAmount?: number }> | undefined;
+    const batches = launchConfig.batches as Array<{
+      id: string;
+      name: string;
+      creativeIds: string[];
+      dailyBudget?: number;
+      dailyMinSpend?: number;
+      dailyMaxSpend?: number;
+      bidAmount?: number;
+    }> | undefined;
 
     if (launchConfig.adsetMode === 'existing_adsets' && existingAdsetAssignments.length > 0) {
       console.log(`[launch] Existing adset mode: ${existingAdsetAssignments.length} assigned adsets`);
@@ -1818,9 +1805,8 @@ export async function POST(request: NextRequest) {
               launchConfig.usePerCreativeUrls && launchConfig.perCreativeUrls
                 ? launchConfig.perCreativeUrls[item.sourceCreativeId || item.id]
                 : undefined;
+            const thumbnailSelection = launchConfig.videoThumbnails?.[item.sourceCreativeId || item.id];
 
-            const isFlexibleAd =
-              launchConfig.primaryTexts.length > 1 || launchConfig.headlines.length > 1;
             const creativeBody: Record<string, string> = {
               name: `${item.creative_name} Creative`,
               url_tags:
@@ -1832,30 +1818,18 @@ export async function POST(request: NextRequest) {
               item.meta_asset_id,
               item.meta_asset_type || 'IMAGE',
               creativeUrl,
+              thumbnailSelection,
             );
 
-            if (isFlexibleAd) {
-              const assetFeedSpec = buildAssetFeedSpec(launchConfig, launchProfileContext, creativeUrl);
-              attachCreativeAssetToAssetFeedSpec(assetFeedSpec, item.meta_asset_id, item.meta_asset_type);
-              creativeBody.asset_feed_spec = JSON.stringify(assetFeedSpec);
-              creativeBody.object_type = 'SHARE';
-              creativeBody.object_story_spec = JSON.stringify(
-                buildStoryIdentitySpec(launchProfileContext, launchConfig),
-              );
-
-              creativeBody.degrees_of_freedom_spec = JSON.stringify(
-                buildDegreesOfFreedomSpec(launchConfig.advantageCreative),
-              );
-            } else {
-              const objectStorySpec = buildObjectStorySpec(
-                launchConfig,
-                launchProfileContext,
-                item.meta_asset_id,
-                item.meta_asset_type || 'IMAGE',
-                creativeUrl,
-              );
-              creativeBody.object_story_spec = JSON.stringify(objectStorySpec);
-            }
+            const objectStorySpec = buildObjectStorySpec(
+              launchConfig,
+              launchProfileContext,
+              item.meta_asset_id,
+              item.meta_asset_type || 'IMAGE',
+              creativeUrl,
+              thumbnailSelection,
+            );
+            creativeBody.object_story_spec = JSON.stringify(objectStorySpec);
 
             creativeBody.degrees_of_freedom_spec = JSON.stringify(
               buildDegreesOfFreedomSpec(launchConfig.advantageCreative),
@@ -1935,21 +1909,28 @@ export async function POST(request: NextRequest) {
             name: adsetName,
             campaign_id: campaignId,
             status: entityLaunchStatus,
-            billing_event: 'IMPRESSIONS',
-            optimization_goal: 'OFFSITE_CONVERSIONS',
+            billing_event: launchConfig.billingEvent || 'IMPRESSIONS',
+            optimization_goal: launchConfig.optimizationGoal || 'OFFSITE_CONVERSIONS',
             targeting: JSON.stringify(targetingPayload),
             attribution_spec: JSON.stringify(buildAttributionSpec(launchConfig.attributionWindow)),
             start_time: resolveStartTime(launchConfig, storeTimezone),
           };
 
-          // Budget (ABO puts budget on adset, CBO on campaign)
+          // Budget (ABO puts budget on ad set, CBO can apply ad-set spending limits).
           if (launchConfig.structure === 'ABO') {
             const budgetCents = Math.round((batch.dailyBudget ?? launchConfig.dailyBudget) * 100);
             adsetBody.daily_budget = String(budgetCents);
+          } else {
+            const minSpendCents = toBidAmountCents(batch.dailyMinSpend ?? launchConfig.adSetDailyMinSpend);
+            const maxSpendCents = toBidAmountCents(batch.dailyMaxSpend ?? launchConfig.adSetDailyMaxSpend);
+            if (minSpendCents) adsetBody.daily_min_spend_target = String(minSpendCents);
+            if (maxSpendCents) adsetBody.daily_spend_cap = String(maxSpendCents);
           }
 
           // Bid strategy
-          const bidAmt = batch.bidAmount ?? launchConfig.bidAmount;
+          const bidAmt = launchConfig.bidStrategy === 'LOWEST_COST_WITH_MIN_ROAS'
+            ? launchConfig.roasFloor
+            : batch.bidAmount ?? launchConfig.bidAmount;
           const batchDailyBudget = batch.dailyBudget ?? launchConfig.dailyBudget;
           const bidConfig = resolveAdsetBidConfig(launchConfig.bidStrategy, bidAmt, batchDailyBudget);
           if (bidConfig.bidStrategy) {
@@ -1957,6 +1938,9 @@ export async function POST(request: NextRequest) {
           }
           if (bidConfig.bidAmountCents) {
             adsetBody.bid_amount = String(bidConfig.bidAmountCents);
+          }
+          if (bidConfig.bidConstraints) {
+            adsetBody.bid_constraints = bidConfig.bidConstraints;
           }
 
           // End date
@@ -2005,9 +1989,8 @@ export async function POST(request: NextRequest) {
               const creativeUrl = launchConfig.usePerCreativeUrls && launchConfig.perCreativeUrls
                 ? launchConfig.perCreativeUrls[item.sourceCreativeId || item.id]
                 : undefined;
+              const thumbnailSelection = launchConfig.videoThumbnails?.[item.sourceCreativeId || item.id];
 
-              // Create ad creative
-              const isFlexibleAd = launchConfig.primaryTexts.length > 1 || launchConfig.headlines.length > 1;
               const creativeBody: Record<string, string> = {
                 name: `${item.creative_name} Creative`,
                 url_tags: launchConfig.utmTemplate || profile.utmTemplate || DEFAULT_META_URL_TAGS,
@@ -2018,30 +2001,18 @@ export async function POST(request: NextRequest) {
                 item.meta_asset_id!,
                 item.meta_asset_type || 'IMAGE',
                 creativeUrl,
+                thumbnailSelection,
               );
 
-              if (isFlexibleAd) {
-                const assetFeedSpec = buildAssetFeedSpec(launchConfig, launchProfileContext, creativeUrl);
-                attachCreativeAssetToAssetFeedSpec(assetFeedSpec, item.meta_asset_id, item.meta_asset_type);
-                creativeBody.asset_feed_spec = JSON.stringify(assetFeedSpec);
-                creativeBody.object_type = 'SHARE';
-                creativeBody.object_story_spec = JSON.stringify(
-                  buildStoryIdentitySpec(launchProfileContext, launchConfig),
-                );
-
-                creativeBody.degrees_of_freedom_spec = JSON.stringify(
-                  buildDegreesOfFreedomSpec(launchConfig.advantageCreative),
-                );
-              } else {
-                const objectStorySpec = buildObjectStorySpec(
-                  launchConfig,
-                  launchProfileContext,
-                  item.meta_asset_id!,
-                  item.meta_asset_type || 'IMAGE',
-                  creativeUrl
-                );
-                creativeBody.object_story_spec = JSON.stringify(objectStorySpec);
-              }
+              const objectStorySpec = buildObjectStorySpec(
+                launchConfig,
+                launchProfileContext,
+                item.meta_asset_id!,
+                item.meta_asset_type || 'IMAGE',
+                creativeUrl,
+                thumbnailSelection,
+              );
+              creativeBody.object_story_spec = JSON.stringify(objectStorySpec);
 
               creativeBody.degrees_of_freedom_spec = JSON.stringify(
                 buildDegreesOfFreedomSpec(launchConfig.advantageCreative),
@@ -2137,8 +2108,8 @@ export async function POST(request: NextRequest) {
           name: adsetName,
           campaign_id: campaignId,
           status: entityLaunchStatus,
-          billing_event: 'IMPRESSIONS',
-          optimization_goal: 'OFFSITE_CONVERSIONS',
+          billing_event: launchConfig.billingEvent || 'IMPRESSIONS',
+          optimization_goal: launchConfig.optimizationGoal || 'OFFSITE_CONVERSIONS',
           targeting: JSON.stringify(targetingPayload),
           attribution_spec: JSON.stringify(buildAttributionSpec(launchConfig.attributionWindow)),
           start_time: resolveStartTime(launchConfig, storeTimezone),
@@ -2153,7 +2124,9 @@ export async function POST(request: NextRequest) {
         // Bid strategy
         const bidConfig = resolveAdsetBidConfig(
           launchConfig.bidStrategy,
-          launchConfig.bidAmount,
+          launchConfig.bidStrategy === 'LOWEST_COST_WITH_MIN_ROAS'
+            ? launchConfig.roasFloor
+            : launchConfig.bidAmount,
           launchConfig.dailyBudget,
         );
         if (bidConfig.bidStrategy) {
@@ -2161,6 +2134,9 @@ export async function POST(request: NextRequest) {
         }
         if (bidConfig.bidAmountCents) {
           adsetBody.bid_amount = String(bidConfig.bidAmountCents);
+        }
+        if (bidConfig.bidConstraints) {
+          adsetBody.bid_constraints = bidConfig.bidConstraints;
         }
 
         // End date
@@ -2196,45 +2172,31 @@ export async function POST(request: NextRequest) {
 
         createdAdsetIds.push(adsetId);
 
-        // Create ad creative
-        const isFlexibleAd = launchConfig.primaryTexts.length > 1 || launchConfig.headlines.length > 1;
+        // Create a standard non-dynamic ad creative. Multiple copy options are
+        // handled as launch inputs, not Meta asset_feed_spec dynamic creative.
         const creativeBody: Record<string, string> = {
           name: `${item.creative_name} Creative`,
           url_tags: launchConfig.utmTemplate || profile.utmTemplate || DEFAULT_META_URL_TAGS,
         };
+        const thumbnailSelection = launchConfig.videoThumbnails?.[item.sourceCreativeId || item.id];
         const fallbackObjectStorySpec = buildObjectStorySpec(
           launchConfig,
           launchProfileContext,
           item.meta_asset_id!,
           item.meta_asset_type || 'IMAGE',
           creativeUrl,
+          thumbnailSelection,
         );
 
-        if (isFlexibleAd) {
-          // Flexible Ads with asset_feed_spec
-          const assetFeedSpec = buildAssetFeedSpec(launchConfig, launchProfileContext, creativeUrl);
-          attachCreativeAssetToAssetFeedSpec(assetFeedSpec, item.meta_asset_id, item.meta_asset_type);
-
-          creativeBody.asset_feed_spec = JSON.stringify(assetFeedSpec);
-          creativeBody.object_type = 'SHARE';
-          creativeBody.object_story_spec = JSON.stringify(
-            buildStoryIdentitySpec(launchProfileContext, launchConfig),
-          );
-
-          creativeBody.degrees_of_freedom_spec = JSON.stringify(
-            buildDegreesOfFreedomSpec(launchConfig.advantageCreative),
-          );
-        } else {
-          // Single PT/HL -- use object_story_spec
-          const objectStorySpec = buildObjectStorySpec(
-            launchConfig,
-            launchProfileContext,
-            item.meta_asset_id!,
-            item.meta_asset_type || 'IMAGE',
-            creativeUrl
-          );
-          creativeBody.object_story_spec = JSON.stringify(objectStorySpec);
-        }
+        const objectStorySpec = buildObjectStorySpec(
+          launchConfig,
+          launchProfileContext,
+          item.meta_asset_id!,
+          item.meta_asset_type || 'IMAGE',
+          creativeUrl,
+          thumbnailSelection,
+        );
+        creativeBody.object_story_spec = JSON.stringify(objectStorySpec);
 
         creativeBody.degrees_of_freedom_spec = JSON.stringify(
           buildDegreesOfFreedomSpec(launchConfig.advantageCreative),
@@ -2320,7 +2282,10 @@ export async function POST(request: NextRequest) {
       if (launchConfig.campaignMode === 'new' && entityLaunchStatus === 'ACTIVE' && campaignId) {
         await postToMeta(token.accessToken, `/${campaignId}`, { status: 'ACTIVE' });
       }
-      await updateCreativeTestStatus(testId, 'active');
+      await updateCreativeTestStatus(
+        testId,
+        launchConfig.launchTime === 'scheduled' ? 'scheduled' : 'active',
+      );
     }
 
     // Fetch the updated test to return
@@ -2328,8 +2293,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       testId,
-      status: hasFailure ? 'partial' : 'active',
+      status: hasFailure ? 'partial' : launchConfig.launchTime === 'scheduled' ? 'scheduled' : 'active',
       campaignId,
+      scheduledFor: scheduledLaunchDate?.toISOString(),
       items: test?.items || [],
     });
   } catch (err) {

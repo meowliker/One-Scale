@@ -218,7 +218,7 @@ export function KanbanTab() {
 
   // Ready creatives
   const readyCreatives = useMemo(
-    () => inboxCreatives.filter((c) => c.uploadStatus === 'ready' || c.driveUrl),
+    () => inboxCreatives.filter((c) => c.uploadStatus === 'ready' || c.driveUrl || c.clickupAttachmentUrl),
     [inboxCreatives],
   );
 
@@ -267,6 +267,10 @@ export function KanbanTab() {
   const effectiveStructure = launchConfig.structure ?? selectedProfile?.defaultStructure ?? 'ABO';
   const effectiveDailyBudget = launchConfig.dailyBudget ?? selectedProfile?.defaultBudget ?? 0;
   const effectiveDuration = launchConfig.testDuration ?? selectedProfile?.defaultDuration ?? 0;
+  const effectiveDurationLabel =
+    launchConfig.useTestDuration === false
+      ? 'No fixed duration'
+      : `${effectiveDuration} day${effectiveDuration !== 1 ? 's' : ''}`;
   const launchStatus = launchConfig.launchStatus ?? 'ACTIVE';
   const launchTimingLabel =
     launchConfig.launchTime === 'scheduled'
@@ -604,7 +608,7 @@ export function KanbanTab() {
                     label={effectiveStructure === 'CBO' ? 'Campaign Budget' : 'Daily / Ad Set'}
                     value={`${formatCurrency(effectiveDailyBudget)} / day`}
                   />
-                  <OverviewMeta label="Duration" value={`${effectiveDuration} day${effectiveDuration !== 1 ? 's' : ''}`} />
+                  <OverviewMeta label="Duration" value={effectiveDurationLabel} />
                 </div>
               </section>
 

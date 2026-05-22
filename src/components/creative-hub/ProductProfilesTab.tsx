@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Sparkles,
   Plus,
@@ -57,9 +58,12 @@ function getLaunchPickerStatus(creative: InboxCreative): Exclude<LaunchPickerSta
 }
 
 export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
+  const router = useRouter();
   const profiles = useCreativeHubStore((s) => s.profiles);
   const profilesLoading = useCreativeHubStore((s) => s.profilesLoading);
   const unmappedCampaigns = useCreativeHubStore((s) => s.unmappedCampaigns);
+  const autoDiscoverStats = useCreativeHubStore((s) => s.autoDiscoverStats);
+  const autoDiscoverError = useCreativeHubStore((s) => s.autoDiscoverError);
   const inboxCreatives = useCreativeHubStore((s) => s.inboxCreatives);
   const profileCreativeCounts = useCreativeHubStore((s) => s.profileCreativeCounts);
   const profileClickUpStatusCounts = useCreativeHubStore((s) => s.profileClickUpStatusCounts);
@@ -71,7 +75,6 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
   const autoDiscoverProfiles = useCreativeHubStore((s) => s.autoDiscoverProfiles);
   const setActiveTab = useCreativeHubStore((s) => s.setActiveTab);
   const openLaunchCenter = useCreativeHubStore((s) => s.openLaunchCenter);
-  const fetchInbox = useCreativeHubStore((s) => s.fetchInbox);
   const syncInbox = useCreativeHubStore((s) => s.syncInbox);
   const activeTests = useCreativeHubStore((s) => s.activeTests);
   const completedTests = useCreativeHubStore((s) => s.completedTests);
@@ -168,6 +171,13 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
 
   const mappedCount = profiles.length;
   const unmappedCount = unmappedCampaigns.length;
+  const autoDiscoverDiagnostics = autoDiscoverStats?.diagnostics ?? [];
+  const shouldShowAutoDiscoverNotice =
+    !!autoDiscoverError ||
+    (
+      autoDiscoverDiagnostics.length > 0 &&
+      (mappedCount === 0 || unmappedCount > 0)
+    );
 
   const handleEdit = (profile: ProductProfile) => {
     setEditingProfile(profile);
@@ -234,40 +244,14 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
     launchPickerFormatFilter,
   ]);
 
-  const handleLaunch = async (profile: ProductProfile) => {
+  const handleLaunch = (profile: ProductProfile) => {
     setLaunchingProfileId(profile.id);
-    try {
-      const hasTargetCreativesLoaded = inboxCreatives.some(
-        (creative) => creative.productProfileId === profile.id,
-      );
-      let scopedCreatives = inboxCreatives;
-
-      if (!hasTargetCreativesLoaded) {
-        await fetchInbox(storeId, profile.id);
-        scopedCreatives = useCreativeHubStore.getState().inboxCreatives;
-      }
-
-      const readyCreatives = scopedCreatives
-        .filter(
-          (creative) =>
-            creative.productProfileId === profile.id &&
-            (creative.uploadStatus === 'ready' || !!creative.driveUrl),
-        );
-      const readyCreativeIds = readyCreatives.map((creative) => creative.id);
-
-      if (readyCreativeIds.length > 0) {
-        setLaunchPickerProfile(profile);
-        setLaunchPickerCreatives(readyCreatives);
-        setLaunchPickerSelectedIds(new Set(readyCreativeIds));
-        setLaunchPickerSearch('');
-        setLaunchPickerStatusFilter('all');
-        setLaunchPickerFormatFilter('all');
-      } else {
-        openLaunchCenter(profile.id);
-      }
-    } finally {
-      setLaunchingProfileId(null);
-    }
+    const params = new URLSearchParams({
+      productProfileId: profile.id,
+      storeId,
+    });
+    router.push(`/creative-hub/launch-creative?${params.toString()}`);
+    setLaunchingProfileId(null);
   };
 
   const toggleLaunchPickerCreative = (creativeId: string) => {
@@ -436,6 +420,68 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
               {inboxNotConnected ? 'ClickUp needs to be reconnected' : 'ClickUp sync needs attention'}
             </p>
             <p className="mt-0.5 text-amber-800">{inboxError}</p>
+          </div>
+        </div>
+      )}
+
+      {shouldShowAutoDiscoverNotice && (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <AlertTriangle className="mt-0.5 h-4 w-4 flex-none text-amber-600" />
+          <div>
+            <p className="font-medium">
+              {autoDiscoverError ? 'Auto-discover could not complete' : 'Auto-discover needs better source data'}
+            </p>
+            {autoDiscoverError ? (
+              <p className="mt-0.5 text-amber-800">{autoDiscoverError}</p>
+            ) : (
+              <div className="mt-1 space-y-1 text-amber-800">
+                {autoDiscoverDiagnostics.map((message) => (
+                  <p key={message}>{message}</p>
+                ))}
+                {autoDiscoverStats && (
+                  <div className="space-y-2 text-xs text-amber-700">
+                    <p>
+                      Checked {autoDiscoverStats.totalCampaigns} active campaign
+                      {autoDiscoverStats.totalCampaigns === 1 ? '' : 's'}, {autoDiscoverStats.campaignsWithDestinationUrls ?? 0} with product URLs,
+                      and {autoDiscoverStats.shopifyProducts ?? 0} Shopify product
+                      {(autoDiscoverStats.shopifyProducts ?? 0) === 1 ? '' : 's'}.
+                    </p>
+                    {autoDiscoverStats.campaignUrlProducts && autoDiscoverStats.campaignUrlProducts.length > 0 && (
+                      <div>
+                        <p className="font-medium text-amber-800">Campaign product handles found:</p>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          {autoDiscoverStats.campaignUrlProducts.map((item) => (
+                            <span
+                              key={`${item.campaignId}-${item.destinationUrl}`}
+                              className="rounded-md border border-amber-200 bg-white/70 px-2 py-1"
+                              title={item.destinationUrl}
+                            >
+                              {item.handle || 'No product handle'} · {item.campaignName}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {autoDiscoverStats.shopifyProductSamples && autoDiscoverStats.shopifyProductSamples.length > 0 && (
+                      <div>
+                        <p className="font-medium text-amber-800">Shopify products sampled from store:</p>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          {autoDiscoverStats.shopifyProductSamples.slice(0, 12).map((product) => (
+                            <span
+                              key={`${product.handle}-${product.title}`}
+                              className="rounded-md border border-amber-200 bg-white/70 px-2 py-1"
+                              title={product.title}
+                            >
+                              {product.handle || product.title}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

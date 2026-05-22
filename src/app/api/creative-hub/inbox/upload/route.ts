@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getGoogleDriveToken, getMetaToken } from '@/app/api/lib/tokens';
 import { listDriveChildren } from '@/app/api/google-drive/shared';
+import { getThirdPartyToken, upsertThirdPartyToken } from '@/app/api/lib/db';
+import {
+  getPersistentThirdPartyToken,
+  hydrateStoreFromSupabase,
+  isSupabasePersistenceEnabled,
+} from '@/app/api/lib/supabase-persistence';
 
 const GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 const GRAPH_VIDEO_BASE = 'https://graph-video.facebook.com/v21.0';
@@ -11,6 +17,31 @@ const MAX_VIDEO_SIZE = 4 * 1024 * 1024 * 1024; // 4 GB
 
 const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'];
 const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'];
+
+/** Resolve ClickUp token, hydrating from Supabase on Vercel if needed. */
+async function getClickUpAccessToken(storeId: string): Promise<string | null> {
+  if (isSupabasePersistenceEnabled()) {
+    await hydrateStoreFromSupabase(storeId);
+    const row = getThirdPartyToken(storeId, 'clickup');
+    if (row?.access_token) return row.access_token;
+
+    const persistent = await getPersistentThirdPartyToken(storeId, 'clickup');
+    if (persistent?.access_token) {
+      upsertThirdPartyToken({
+        storeId,
+        platform: 'clickup',
+        accessToken: persistent.access_token,
+        metadata: persistent.metadata
+          ? (JSON.parse(persistent.metadata) as Record<string, unknown>)
+          : undefined,
+      });
+      return persistent.access_token;
+    }
+    return null;
+  }
+
+  return getThirdPartyToken(storeId, 'clickup')?.access_token || null;
+}
 
 function normalizeAccountId(value: string): string {
   const id = value.trim();
@@ -282,6 +313,20 @@ function maybeProxyGoogleDriveUrl(url: string, storeId: string, requestUrl: stri
   }
 }
 
+function isClickUpAttachmentUrl(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return (
+      hostname === 'clickup.com' ||
+      hostname.endsWith('.clickup.com') ||
+      hostname.startsWith('clickup-') ||
+      hostname.includes('clickup-attachments')
+    );
+  } catch {
+    return false;
+  }
+}
+
 function toAbsoluteUrl(url: string, requestUrl: string): string {
   if (!url) return url;
   if (/^https?:\/\//i.test(url)) return url;
@@ -290,6 +335,26 @@ function toAbsoluteUrl(url: string, requestUrl: string): string {
   } catch {
     return url;
   }
+}
+
+async function fetchSourceFile(url: string, storeId: string): Promise<Response> {
+  if (!isClickUpAttachmentUrl(url)) {
+    return fetch(url, { redirect: 'follow' });
+  }
+
+  const clickupToken = await getClickUpAccessToken(storeId);
+  if (!clickupToken) {
+    return fetch(url, { redirect: 'follow' });
+  }
+
+  const authedRes = await fetch(url, {
+    redirect: 'follow',
+    headers: { Authorization: clickupToken },
+  });
+
+  // Some ClickUp attachment URLs are pre-signed and reject extra headers.
+  if (authedRes.ok) return authedRes;
+  return fetch(url, { redirect: 'follow' });
 }
 
 async function parseGraphError(response: Response): Promise<string> {
@@ -421,7 +486,7 @@ export async function POST(request: NextRequest) {
         request.url,
       ).toString();
     }
-    const fileRes = await fetch(downloadUrl, { redirect: 'follow' });
+    const fileRes = await fetchSourceFile(downloadUrl, storeId);
 
     if (!fileRes.ok) {
       return NextResponse.json(

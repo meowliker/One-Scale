@@ -45,7 +45,7 @@ export function LaunchCenter({ storeId }: LaunchCenterProps) {
   // Filter to ready creatives for the selected product
   const productId = launchConfig?.productProfileId;
   const readyCreatives = inboxCreatives.filter((c) =>
-    (c.uploadStatus === 'ready' || c.driveUrl) &&
+    (c.uploadStatus === 'ready' || c.driveUrl || c.clickupAttachmentUrl) &&
     (!productId || c.productProfileId === productId)
   );
 

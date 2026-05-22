@@ -111,7 +111,7 @@ export function EditProductProfileModal({
   const stores = useStoreStore((s) => s.stores);
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
   const activeStore = stores.find((s) => s.id === (storeId || activeStoreId));
-  const adAccounts = activeStore?.adAccounts ?? [];
+  const adAccounts = useMemo(() => activeStore?.adAccounts ?? [], [activeStore?.adAccounts]);
   const [form, setForm] = useState<Partial<ProductProfile>>(getDefaults());
   const [saving, setSaving] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Set<Section>>(
@@ -385,8 +385,7 @@ export function EditProductProfileModal({
   };
 
   const handleLinkAccount = (accountId: string, currency: string) => {
-    // Set as the primary ad account if none set yet
-    if (!form.adAccountId) {
+    if (form.adAccountId !== accountId) {
       updateField('adAccountId', accountId);
       updateField('adAccountCurrency', currency);
     }

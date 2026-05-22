@@ -71,15 +71,17 @@ export function getPreviewUrl(creative: InboxCreative): string | undefined {
     creative.drivePreviewUrl ||
     creative.thumbnailUrl ||
     creative.driveUrl ||
+    creative.clickupAttachmentUrl ||
     undefined
   );
 }
 
 function getThumbnailUrl(creative: InboxCreative): string | undefined {
-  return creative.thumbnailUrl || creative.driveContentUrl || creative.drivePreviewUrl;
+  return creative.thumbnailUrl || creative.driveContentUrl || creative.drivePreviewUrl || creative.clickupAttachmentUrl;
 }
 
 function getCreativeSourceLabel(creative: InboxCreative): string {
+  if (creative.sourceType === 'clickup_attachment') return 'ClickUp attachment';
   if (creative.driveSourceType === 'folder_item') return 'Drive folder item';
   if (creative.driveSourceType === 'folder') return 'Drive folder';
   if (creative.driveSourceType === 'file') return 'Drive file';

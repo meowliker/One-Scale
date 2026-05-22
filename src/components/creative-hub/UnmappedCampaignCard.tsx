@@ -22,6 +22,17 @@ interface UnmappedCampaignCardProps {
   onCreateNewProfile: (campaign: UnmappedCampaign) => void;
 }
 
+function extractProductHandle(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const match = parsed.pathname.match(/\/products\/([^/?#]+)/);
+    return match?.[1] ?? null;
+  } catch {
+    const match = url.match(/\/products\/([^/?#]+)/);
+    return match?.[1] ?? null;
+  }
+}
+
 export function UnmappedCampaignCard({
   campaign,
   profiles,
@@ -30,7 +41,6 @@ export function UnmappedCampaignCard({
   onCreateNewProfile,
 }: UnmappedCampaignCardProps) {
   const [selectedProfileId, setSelectedProfileId] = useState('');
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
   // Placeholder AI suggestion
   const aiSuggestion = profiles.length > 0
@@ -76,6 +86,22 @@ export function UnmappedCampaignCard({
                   </span>
                 )}
               </div>
+              {campaign.destinationUrls && campaign.destinationUrls.length > 0 && (
+                <div className="mt-2 space-y-1 rounded-lg border border-amber-200/70 bg-white/70 px-3 py-2 text-xs">
+                  {campaign.destinationUrls.map((url) => {
+                    const handle = extractProductHandle(url);
+                    return (
+                      <div key={url} className="space-y-0.5">
+                        <p className="text-text-secondary">
+                          Campaign product handle:{' '}
+                          <span className="font-semibold text-amber-700">{handle || 'No /products/ handle found'}</span>
+                        </p>
+                        <p className="break-all text-text-dimmed">{url}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
 
