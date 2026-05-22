@@ -660,7 +660,6 @@ function sanitizeDegreesOfFreedomSpecForMeta(
       ...parsed,
       ...(featureSpec ? { creative_features_spec: featureSpec } : {}),
     };
-    delete sanitizedSpec.contextual_multi_ads;
 
     const sanitizedFeatureSpec =
       sanitizedSpec.creative_features_spec && typeof sanitizedSpec.creative_features_spec === 'object'
@@ -1241,6 +1240,7 @@ const CREATIVE_FEATURE_OPT_OUTS = [
   'media_type_automation',
   'pac_relaxation',
   'description_automation',
+  'standard_enhancements',
   'inline_comment',
   'video_filtering',
   'text_overlay_translation',
@@ -1266,6 +1266,7 @@ function buildDegreesOfFreedomSpec(enabled?: boolean): Record<string, unknown> {
       creative_features_spec: {
         image_touchups: { enroll_status: 'OPT_IN' },
       },
+      contextual_multi_ads: { enroll_status: 'OPT_OUT' },
     };
   }
 
@@ -1273,7 +1274,125 @@ function buildDegreesOfFreedomSpec(enabled?: boolean): Record<string, unknown> {
     creative_features_spec: Object.fromEntries(
       CREATIVE_FEATURE_OPT_OUTS.map((feature) => [feature, { enroll_status: 'OPT_OUT' }]),
     ),
+    contextual_multi_ads: { enroll_status: 'OPT_OUT' },
   };
+}
+
+function attachCreativeAssetToAssetFeedSpec(
+  assetFeedSpec: Record<string, unknown>,
+  assetId: string | null,
+  assetType?: string | null,
+  thumbnailSelection?: VideoThumbnailOverride,
+): void {
+  if (!assetId) return;
+
+  const isVideo = assetType === 'VIDEO' || assetType === 'video';
+  if (isVideo) {
+    const videoAsset: Record<string, unknown> = { video_id: assetId };
+    if (thumbnailSelection?.source === 'manual') {
+      if (thumbnailSelection.imageHash) {
+        videoAsset.thumbnail_hash = thumbnailSelection.imageHash;
+      } else if (thumbnailSelection.imageUrl && isValidHttpUrl(thumbnailSelection.imageUrl)) {
+        videoAsset.thumbnail_url = thumbnailSelection.imageUrl;
+      }
+    }
+    assetFeedSpec.videos = [videoAsset];
+    assetFeedSpec.ad_formats = ['SINGLE_VIDEO'];
+    return;
+  }
+
+  assetFeedSpec.images = [{ hash: assetId }];
+  assetFeedSpec.ad_formats = ['SINGLE_IMAGE'];
+}
+
+function uniqueCopyItems(items: LaunchConfig['primaryTexts']): Array<{ text: string }> {
+  const seen = new Set<string>();
+  const result: Array<{ text: string }> = [];
+  for (const item of items) {
+    const text = item.text?.trim();
+    if (!text) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({ text });
+  }
+  return result.slice(0, 5);
+}
+
+function buildAssetFeedSpec(
+  config: LaunchConfig,
+  profile: { pageId?: string; instagramActorId?: string; destinationUrl?: string },
+  assetId: string,
+  assetType: string,
+  creativeUrl?: string,
+  thumbnailSelection?: VideoThumbnailOverride,
+): Record<string, unknown> {
+  const destinationUrl = creativeUrl || profile.destinationUrl || config.destinationUrl || '';
+
+  const spec: Record<string, unknown> = {};
+  const bodies = uniqueCopyItems(config.primaryTexts);
+  const titles = uniqueCopyItems(config.headlines);
+  const descriptions = uniqueCopyItems(config.descriptions);
+
+  if (bodies.length > 0) spec.bodies = bodies;
+  if (titles.length > 0) spec.titles = titles;
+  if (descriptions.length > 0) spec.descriptions = descriptions;
+  if (destinationUrl) spec.link_urls = [{ website_url: destinationUrl }];
+  if (config.ctaType) spec.call_to_action_types = [config.ctaType];
+
+  attachCreativeAssetToAssetFeedSpec(spec, assetId, assetType, thumbnailSelection);
+  spec.optimization_type = config.advantageCreative ? 'DEGREES_OF_FREEDOM' : 'REGULAR';
+
+  return spec;
+}
+
+function shouldUseFlexibleCreative(config: LaunchConfig, assetType: string): boolean {
+  const hasMultipleCopy =
+    uniqueCopyItems(config.primaryTexts).length > 1 ||
+    uniqueCopyItems(config.headlines).length > 1 ||
+    uniqueCopyItems(config.descriptions).length > 1;
+  const hasVideoDescription =
+    (assetType === 'VIDEO' || assetType === 'video') &&
+    uniqueCopyItems(config.descriptions).length > 0;
+
+  return hasMultipleCopy || hasVideoDescription;
+}
+
+function buildCreativeBody(
+  config: LaunchConfig,
+  profile: { pageId?: string; instagramActorId?: string; destinationUrl?: string; utmTemplate?: string },
+  item: Pick<CreativeTestItemRow, 'creative_name' | 'meta_asset_id' | 'meta_asset_type' | 'sourceCreativeId' | 'id'>,
+  creativeUrl?: string,
+): { creativeBody: Record<string, string>; fallbackObjectStorySpec: Record<string, unknown> } {
+  const assetId = item.meta_asset_id || '';
+  const assetType = item.meta_asset_type || 'IMAGE';
+  const thumbnailSelection = config.videoThumbnails?.[item.sourceCreativeId || item.id];
+  const fallbackObjectStorySpec = buildObjectStorySpec(
+    config,
+    profile,
+    assetId,
+    assetType,
+    creativeUrl,
+    thumbnailSelection,
+  );
+  const creativeBody: Record<string, string> = {
+    name: `${item.creative_name} Creative`,
+    url_tags: config.utmTemplate || profile.utmTemplate || DEFAULT_META_URL_TAGS,
+    object_story_spec: JSON.stringify(
+      shouldUseFlexibleCreative(config, assetType)
+        ? { page_id: profile.pageId || config.pageId }
+        : fallbackObjectStorySpec,
+    ),
+    degrees_of_freedom_spec: JSON.stringify(buildDegreesOfFreedomSpec(config.advantageCreative)),
+  };
+
+  if (shouldUseFlexibleCreative(config, assetType)) {
+    creativeBody.asset_feed_spec = JSON.stringify(
+      buildAssetFeedSpec(config, profile, assetId, assetType, creativeUrl, thumbnailSelection),
+    );
+  }
+
+  return { creativeBody, fallbackObjectStorySpec };
 }
 
 function buildObjectStorySpec(
@@ -1536,6 +1655,7 @@ export async function POST(request: NextRequest) {
       pageId: resolvedPageId || undefined,
       instagramActorId: resolvedInstagramActorId || undefined,
       destinationUrl: resolvedDestinationUrl,
+      utmTemplate: profile.utmTemplate || undefined,
     };
 
     // Fetch selected creative items from DB
@@ -1843,34 +1963,11 @@ export async function POST(request: NextRequest) {
               launchConfig.usePerCreativeUrls && launchConfig.perCreativeUrls
                 ? launchConfig.perCreativeUrls[item.sourceCreativeId || item.id]
                 : undefined;
-            const thumbnailSelection = launchConfig.videoThumbnails?.[item.sourceCreativeId || item.id];
-
-            const creativeBody: Record<string, string> = {
-              name: `${item.creative_name} Creative`,
-              url_tags:
-                launchConfig.utmTemplate || profile.utmTemplate || DEFAULT_META_URL_TAGS,
-            };
-            const fallbackObjectStorySpec = buildObjectStorySpec(
+            const { creativeBody, fallbackObjectStorySpec } = buildCreativeBody(
               launchConfig,
               launchProfileContext,
-              item.meta_asset_id,
-              item.meta_asset_type || 'IMAGE',
+              item,
               creativeUrl,
-              thumbnailSelection,
-            );
-
-            const objectStorySpec = buildObjectStorySpec(
-              launchConfig,
-              launchProfileContext,
-              item.meta_asset_id,
-              item.meta_asset_type || 'IMAGE',
-              creativeUrl,
-              thumbnailSelection,
-            );
-            creativeBody.object_story_spec = JSON.stringify(objectStorySpec);
-
-            creativeBody.degrees_of_freedom_spec = JSON.stringify(
-              buildDegreesOfFreedomSpec(launchConfig.advantageCreative),
             );
 
             const creativeRes = await createAdCreativeWithFallback(
@@ -2027,33 +2124,11 @@ export async function POST(request: NextRequest) {
               const creativeUrl = launchConfig.usePerCreativeUrls && launchConfig.perCreativeUrls
                 ? launchConfig.perCreativeUrls[item.sourceCreativeId || item.id]
                 : undefined;
-              const thumbnailSelection = launchConfig.videoThumbnails?.[item.sourceCreativeId || item.id];
-
-              const creativeBody: Record<string, string> = {
-                name: `${item.creative_name} Creative`,
-                url_tags: launchConfig.utmTemplate || profile.utmTemplate || DEFAULT_META_URL_TAGS,
-              };
-              const fallbackObjectStorySpec = buildObjectStorySpec(
+              const { creativeBody, fallbackObjectStorySpec } = buildCreativeBody(
                 launchConfig,
                 launchProfileContext,
-                item.meta_asset_id!,
-                item.meta_asset_type || 'IMAGE',
+                item,
                 creativeUrl,
-                thumbnailSelection,
-              );
-
-              const objectStorySpec = buildObjectStorySpec(
-                launchConfig,
-                launchProfileContext,
-                item.meta_asset_id!,
-                item.meta_asset_type || 'IMAGE',
-                creativeUrl,
-                thumbnailSelection,
-              );
-              creativeBody.object_story_spec = JSON.stringify(objectStorySpec);
-
-              creativeBody.degrees_of_freedom_spec = JSON.stringify(
-                buildDegreesOfFreedomSpec(launchConfig.advantageCreative),
               );
 
               const creativeRes = await createAdCreativeWithFallback(
@@ -2210,34 +2285,11 @@ export async function POST(request: NextRequest) {
 
         createdAdsetIds.push(adsetId);
 
-        // Create a standard non-dynamic ad creative. Multiple copy options are
-        // handled as launch inputs, not Meta asset_feed_spec dynamic creative.
-        const creativeBody: Record<string, string> = {
-          name: `${item.creative_name} Creative`,
-          url_tags: launchConfig.utmTemplate || profile.utmTemplate || DEFAULT_META_URL_TAGS,
-        };
-        const thumbnailSelection = launchConfig.videoThumbnails?.[item.sourceCreativeId || item.id];
-        const fallbackObjectStorySpec = buildObjectStorySpec(
+        const { creativeBody, fallbackObjectStorySpec } = buildCreativeBody(
           launchConfig,
           launchProfileContext,
-          item.meta_asset_id!,
-          item.meta_asset_type || 'IMAGE',
+          item,
           creativeUrl,
-          thumbnailSelection,
-        );
-
-        const objectStorySpec = buildObjectStorySpec(
-          launchConfig,
-          launchProfileContext,
-          item.meta_asset_id!,
-          item.meta_asset_type || 'IMAGE',
-          creativeUrl,
-          thumbnailSelection,
-        );
-        creativeBody.object_story_spec = JSON.stringify(objectStorySpec);
-
-        creativeBody.degrees_of_freedom_spec = JSON.stringify(
-          buildDegreesOfFreedomSpec(launchConfig.advantageCreative),
         );
 
         const creativeRes = await createAdCreativeWithFallback(
