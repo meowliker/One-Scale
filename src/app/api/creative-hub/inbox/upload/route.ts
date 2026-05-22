@@ -18,6 +18,29 @@ const MAX_VIDEO_SIZE = 4 * 1024 * 1024 * 1024; // 4 GB
 const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'];
 const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'];
 
+type SourceKind = 'clickup' | 'google_drive' | 'direct_url' | 'unknown';
+
+type SourceFetchDiagnostics = {
+  sourceKind: SourceKind;
+  sourceHost: string | null;
+  downloadHost: string | null;
+  finalHost: string | null;
+  clickupDetected: boolean;
+  clickupTokenFound: boolean;
+  clickupAuthAttempted: boolean;
+  googleDriveProxyUsed: boolean;
+  googleDriveFolderUsed: boolean;
+  googleDriveAuthAttempted: boolean;
+  authedStatus: number | null;
+  fallbackStatus: number | null;
+  finalStatus: number | null;
+};
+
+type SourceFetchResult = {
+  response: Response;
+  diagnostics: SourceFetchDiagnostics;
+};
+
 /** Resolve ClickUp token, hydrating from Supabase on Vercel if needed. */
 async function getClickUpAccessToken(storeId: string): Promise<string | null> {
   if (isSupabasePersistenceEnabled()) {
@@ -327,6 +350,32 @@ function isClickUpAttachmentUrl(url: string): boolean {
   }
 }
 
+function getSafeHost(url: string): string | null {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function getSourceKind(url: string): SourceKind {
+  if (!url) return 'unknown';
+  if (isClickUpAttachmentUrl(url)) return 'clickup';
+  const host = getSafeHost(url);
+  if (!host) return 'unknown';
+  if (host === 'drive.google.com' || host === 'docs.google.com') return 'google_drive';
+  return 'direct_url';
+}
+
+function usesGoogleDriveProxy(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.pathname === '/api/google-drive/content';
+  } catch {
+    return false;
+  }
+}
+
 function toAbsoluteUrl(url: string, requestUrl: string): string {
   if (!url) return url;
   if (/^https?:\/\//i.test(url)) return url;
@@ -337,24 +386,77 @@ function toAbsoluteUrl(url: string, requestUrl: string): string {
   }
 }
 
-async function fetchSourceFile(url: string, storeId: string): Promise<Response> {
-  if (!isClickUpAttachmentUrl(url)) {
-    return fetch(url, { redirect: 'follow' });
+function createFetchDiagnostics(input: {
+  sourceUrl: string;
+  downloadUrl: string;
+  googleDriveFolderUsed: boolean;
+  googleDriveAuthAttempted: boolean;
+}): SourceFetchDiagnostics {
+  const clickupDetected = isClickUpAttachmentUrl(input.downloadUrl);
+  return {
+    sourceKind: usesGoogleDriveProxy(input.downloadUrl)
+      ? 'google_drive'
+      : getSourceKind(input.sourceUrl),
+    sourceHost: getSafeHost(input.sourceUrl),
+    downloadHost: getSafeHost(input.downloadUrl),
+    finalHost: null,
+    clickupDetected,
+    clickupTokenFound: false,
+    clickupAuthAttempted: false,
+    googleDriveProxyUsed: usesGoogleDriveProxy(input.downloadUrl),
+    googleDriveFolderUsed: input.googleDriveFolderUsed,
+    googleDriveAuthAttempted: input.googleDriveAuthAttempted,
+    authedStatus: null,
+    fallbackStatus: null,
+    finalStatus: null,
+  };
+}
+
+async function fetchSourceFile(input: {
+  sourceUrl: string;
+  downloadUrl: string;
+  storeId: string;
+  googleDriveFolderUsed: boolean;
+  googleDriveAuthAttempted: boolean;
+}): Promise<SourceFetchResult> {
+  const diagnostics = createFetchDiagnostics(input);
+
+  if (!diagnostics.clickupDetected) {
+    const response = await fetch(input.downloadUrl, { redirect: 'follow' });
+    diagnostics.finalStatus = response.status;
+    diagnostics.finalHost = getSafeHost(response.url || input.downloadUrl);
+    return { response, diagnostics };
   }
 
-  const clickupToken = await getClickUpAccessToken(storeId);
+  const clickupToken = await getClickUpAccessToken(input.storeId);
+  diagnostics.clickupTokenFound = Boolean(clickupToken);
   if (!clickupToken) {
-    return fetch(url, { redirect: 'follow' });
+    const response = await fetch(input.downloadUrl, { redirect: 'follow' });
+    diagnostics.fallbackStatus = response.status;
+    diagnostics.finalStatus = response.status;
+    diagnostics.finalHost = getSafeHost(response.url || input.downloadUrl);
+    return { response, diagnostics };
   }
 
-  const authedRes = await fetch(url, {
+  diagnostics.clickupAuthAttempted = true;
+  const authedRes = await fetch(input.downloadUrl, {
     redirect: 'follow',
     headers: { Authorization: clickupToken },
   });
+  diagnostics.authedStatus = authedRes.status;
 
   // Some ClickUp attachment URLs are pre-signed and reject extra headers.
-  if (authedRes.ok) return authedRes;
-  return fetch(url, { redirect: 'follow' });
+  if (authedRes.ok) {
+    diagnostics.finalStatus = authedRes.status;
+    diagnostics.finalHost = getSafeHost(authedRes.url || input.downloadUrl);
+    return { response: authedRes, diagnostics };
+  }
+
+  const fallbackRes = await fetch(input.downloadUrl, { redirect: 'follow' });
+  diagnostics.fallbackStatus = fallbackRes.status;
+  diagnostics.finalStatus = fallbackRes.status;
+  diagnostics.finalHost = getSafeHost(fallbackRes.url || input.downloadUrl);
+  return { response: fallbackRes, diagnostics };
 }
 
 async function parseGraphError(response: Response): Promise<string> {
@@ -442,6 +544,8 @@ export async function POST(request: NextRequest) {
     // Download file from Drive URL
     const absoluteSourceUrl = toAbsoluteUrl(driveUrl, request.url);
 
+    let googleDriveFolderUsed = false;
+    let googleDriveAuthAttempted = false;
     let downloadUrl = maybeProxyGoogleDriveUrl(
       toDirectDriveUrl(absoluteSourceUrl),
       storeId,
@@ -449,6 +553,7 @@ export async function POST(request: NextRequest) {
     );
 
     if (isGoogleDriveFolderUrl(absoluteSourceUrl)) {
+      googleDriveFolderUsed = true;
       const folderId = extractGoogleDriveFolderId(absoluteSourceUrl);
       if (!folderId) {
         return NextResponse.json(
@@ -457,6 +562,7 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      googleDriveAuthAttempted = true;
       const driveToken = await getGoogleDriveToken(storeId);
       if (!driveToken) {
         return NextResponse.json(
@@ -486,11 +592,25 @@ export async function POST(request: NextRequest) {
         request.url,
       ).toString();
     }
-    const fileRes = await fetchSourceFile(downloadUrl, storeId);
+    const { response: fileRes, diagnostics } = await fetchSourceFile({
+      sourceUrl: absoluteSourceUrl,
+      downloadUrl,
+      storeId,
+      googleDriveFolderUsed,
+      googleDriveAuthAttempted: googleDriveAuthAttempted || usesGoogleDriveProxy(downloadUrl),
+    });
 
     if (!fileRes.ok) {
+      console.warn('[creative-hub] source media download failed', {
+        creativeId,
+        status: fileRes.status,
+        diagnostics,
+      });
       return NextResponse.json(
-        { error: `Failed to download file: HTTP ${fileRes.status}` },
+        {
+          error: `Failed to download file: HTTP ${fileRes.status}`,
+          diagnostics,
+        },
         { status: 422 }
       );
     }

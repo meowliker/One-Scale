@@ -135,25 +135,106 @@ function isClickUpAttachmentUrl(url: string): boolean {
   }
 }
 
-async function fetchVideoSource(url: string, storeId: string, rangeHeader: string | null): Promise<Response> {
+type VideoPreviewDiagnostics = {
+  sourceKind: 'clickup' | 'google_drive' | 'direct_url' | 'unknown';
+  sourceHost: string | null;
+  previewHost: string | null;
+  finalHost: string | null;
+  clickupDetected: boolean;
+  clickupTokenFound: boolean;
+  clickupAuthAttempted: boolean;
+  googleDriveProxyUsed: boolean;
+  googleDriveFolderUsed: boolean;
+  googleDriveAuthAttempted: boolean;
+  authedStatus: number | null;
+  fallbackStatus: number | null;
+  finalStatus: number | null;
+};
+
+function getSafeHost(url: string): string | null {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function usesGoogleDriveProxy(url: string): boolean {
+  try {
+    return new URL(url).pathname === '/api/google-drive/content';
+  } catch {
+    return false;
+  }
+}
+
+function getSourceKind(url: string): VideoPreviewDiagnostics['sourceKind'] {
+  if (isClickUpAttachmentUrl(url)) return 'clickup';
+  const host = getSafeHost(url);
+  if (!host) return 'unknown';
+  if (host === 'drive.google.com' || host === 'docs.google.com') return 'google_drive';
+  return 'direct_url';
+}
+
+async function fetchVideoSource(input: {
+  sourceUrl: string;
+  previewUrl: string;
+  storeId: string;
+  rangeHeader: string | null;
+  googleDriveFolderUsed: boolean;
+  googleDriveAuthAttempted: boolean;
+}): Promise<{ response: Response; diagnostics: VideoPreviewDiagnostics }> {
   const headers: HeadersInit = {};
-  if (rangeHeader) headers.Range = rangeHeader;
+  if (input.rangeHeader) headers.Range = input.rangeHeader;
+  const diagnostics: VideoPreviewDiagnostics = {
+    sourceKind: usesGoogleDriveProxy(input.previewUrl) ? 'google_drive' : getSourceKind(input.sourceUrl),
+    sourceHost: getSafeHost(input.sourceUrl),
+    previewHost: getSafeHost(input.previewUrl),
+    finalHost: null,
+    clickupDetected: isClickUpAttachmentUrl(input.previewUrl),
+    clickupTokenFound: false,
+    clickupAuthAttempted: false,
+    googleDriveProxyUsed: usesGoogleDriveProxy(input.previewUrl),
+    googleDriveFolderUsed: input.googleDriveFolderUsed,
+    googleDriveAuthAttempted: input.googleDriveAuthAttempted,
+    authedStatus: null,
+    fallbackStatus: null,
+    finalStatus: null,
+  };
 
-  if (!isClickUpAttachmentUrl(url)) {
-    return fetch(url, { redirect: 'follow', headers });
+  if (!diagnostics.clickupDetected) {
+    const response = await fetch(input.previewUrl, { redirect: 'follow', headers });
+    diagnostics.finalStatus = response.status;
+    diagnostics.finalHost = getSafeHost(response.url || input.previewUrl);
+    return { response, diagnostics };
   }
 
-  const clickupToken = await getClickUpAccessToken(storeId);
+  const clickupToken = await getClickUpAccessToken(input.storeId);
+  diagnostics.clickupTokenFound = Boolean(clickupToken);
   if (!clickupToken) {
-    return fetch(url, { redirect: 'follow', headers });
+    const response = await fetch(input.previewUrl, { redirect: 'follow', headers });
+    diagnostics.fallbackStatus = response.status;
+    diagnostics.finalStatus = response.status;
+    diagnostics.finalHost = getSafeHost(response.url || input.previewUrl);
+    return { response, diagnostics };
   }
 
-  const authedRes = await fetch(url, {
+  diagnostics.clickupAuthAttempted = true;
+  const authedRes = await fetch(input.previewUrl, {
     redirect: 'follow',
     headers: { ...headers, Authorization: clickupToken },
   });
-  if (authedRes.ok) return authedRes;
-  return fetch(url, { redirect: 'follow', headers });
+  diagnostics.authedStatus = authedRes.status;
+  if (authedRes.ok) {
+    diagnostics.finalStatus = authedRes.status;
+    diagnostics.finalHost = getSafeHost(authedRes.url || input.previewUrl);
+    return { response: authedRes, diagnostics };
+  }
+
+  const fallbackRes = await fetch(input.previewUrl, { redirect: 'follow', headers });
+  diagnostics.fallbackStatus = fallbackRes.status;
+  diagnostics.finalStatus = fallbackRes.status;
+  diagnostics.finalHost = getSafeHost(fallbackRes.url || input.previewUrl);
+  return { response: fallbackRes, diagnostics };
 }
 
 export async function GET(request: NextRequest) {
@@ -172,14 +253,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid sourceUrl' }, { status: 400 });
   }
 
+  let googleDriveFolderUsed = false;
+  let googleDriveAuthAttempted = false;
   let videoUrl = maybeProxyGoogleDriveUrl(toDirectDriveUrl(absoluteSourceUrl), storeId, request.url);
 
   if (isGoogleDriveFolderUrl(absoluteSourceUrl)) {
+    googleDriveFolderUsed = true;
     const folderId = extractGoogleDriveFolderId(absoluteSourceUrl);
     if (!folderId) {
       return NextResponse.json({ error: 'Invalid Google Drive folder URL.' }, { status: 422 });
     }
 
+    googleDriveAuthAttempted = true;
     const driveToken = await getGoogleDriveToken(storeId);
     if (!driveToken) {
       return NextResponse.json({ error: 'Google Drive is not connected for this store.' }, { status: 422 });
@@ -198,9 +283,26 @@ export async function GET(request: NextRequest) {
     ).toString();
   }
 
-  const upstream = await fetchVideoSource(videoUrl, storeId, request.headers.get('range'));
+  const { response: upstream, diagnostics } = await fetchVideoSource({
+    sourceUrl: absoluteSourceUrl,
+    previewUrl: videoUrl,
+    storeId,
+    rangeHeader: request.headers.get('range'),
+    googleDriveFolderUsed,
+    googleDriveAuthAttempted: googleDriveAuthAttempted || usesGoogleDriveProxy(videoUrl),
+  });
   if (!upstream.ok && upstream.status !== 206) {
-    return NextResponse.json({ error: `Could not prepare video preview (${upstream.status})` }, { status: 502 });
+    console.warn('[creative-hub] video preview source failed', {
+      status: upstream.status,
+      diagnostics,
+    });
+    return NextResponse.json(
+      {
+        error: `Could not prepare video preview (${upstream.status})`,
+        diagnostics,
+      },
+      { status: 502 },
+    );
   }
 
   const headers = new Headers();
