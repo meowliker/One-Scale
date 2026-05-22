@@ -416,13 +416,21 @@ async function fetchSourceFile(input: {
   sourceUrl: string;
   downloadUrl: string;
   storeId: string;
+  requestCookie: string | null;
   googleDriveFolderUsed: boolean;
   googleDriveAuthAttempted: boolean;
 }): Promise<SourceFetchResult> {
   const diagnostics = createFetchDiagnostics(input);
+  const sameOriginProxyHeaders: HeadersInit =
+    diagnostics.googleDriveProxyUsed && input.requestCookie
+      ? { Cookie: input.requestCookie }
+      : {};
 
   if (!diagnostics.clickupDetected) {
-    const response = await fetch(input.downloadUrl, { redirect: 'follow' });
+    const response = await fetch(input.downloadUrl, {
+      redirect: 'follow',
+      headers: sameOriginProxyHeaders,
+    });
     diagnostics.finalStatus = response.status;
     diagnostics.finalHost = getSafeHost(response.url || input.downloadUrl);
     return { response, diagnostics };
@@ -596,6 +604,7 @@ export async function POST(request: NextRequest) {
       sourceUrl: absoluteSourceUrl,
       downloadUrl,
       storeId,
+      requestCookie: request.headers.get('cookie'),
       googleDriveFolderUsed,
       googleDriveAuthAttempted: googleDriveAuthAttempted || usesGoogleDriveProxy(downloadUrl),
     });

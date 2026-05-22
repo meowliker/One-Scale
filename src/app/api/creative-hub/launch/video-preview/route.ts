@@ -180,6 +180,7 @@ async function fetchVideoSource(input: {
   previewUrl: string;
   storeId: string;
   rangeHeader: string | null;
+  requestCookie: string | null;
   googleDriveFolderUsed: boolean;
   googleDriveAuthAttempted: boolean;
 }): Promise<{ response: Response; diagnostics: VideoPreviewDiagnostics }> {
@@ -200,9 +201,16 @@ async function fetchVideoSource(input: {
     fallbackStatus: null,
     finalStatus: null,
   };
+  const sameOriginProxyHeaders: HeadersInit =
+    diagnostics.googleDriveProxyUsed && input.requestCookie
+      ? { ...headers, Cookie: input.requestCookie }
+      : headers;
 
   if (!diagnostics.clickupDetected) {
-    const response = await fetch(input.previewUrl, { redirect: 'follow', headers });
+    const response = await fetch(input.previewUrl, {
+      redirect: 'follow',
+      headers: sameOriginProxyHeaders,
+    });
     diagnostics.finalStatus = response.status;
     diagnostics.finalHost = getSafeHost(response.url || input.previewUrl);
     return { response, diagnostics };
@@ -288,6 +296,7 @@ export async function GET(request: NextRequest) {
     previewUrl: videoUrl,
     storeId,
     rangeHeader: request.headers.get('range'),
+    requestCookie: request.headers.get('cookie'),
     googleDriveFolderUsed,
     googleDriveAuthAttempted: googleDriveAuthAttempted || usesGoogleDriveProxy(videoUrl),
   });
