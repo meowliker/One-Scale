@@ -573,7 +573,7 @@ function normalizeCampaign(row: Record<string, unknown>, fallbackAccountId?: str
     campaignId,
     campaignName,
     campaignType: inferCampaignType(campaignName),
-    adAccountId: asString(row.ad_account_id) || asString(row.adAccountId) || fallbackAccountId,
+    adAccountId: normalizeMetaAdAccountId(asString(row.ad_account_id) || asString(row.adAccountId) || fallbackAccountId),
     objective: asString(row.objective),
     effectiveStatus,
     isActive: String(effectiveStatus || '').toUpperCase() === 'ACTIVE',
@@ -587,6 +587,12 @@ function normalizeCampaign(row: Record<string, unknown>, fallbackAccountId?: str
       asString(row.campaignBidStrategy) ||
       asString(row.campaign_bid_strategy),
   };
+}
+
+function normalizeMetaAdAccountId(value?: string | null): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return trimmed.startsWith('act_') ? trimmed : `act_${trimmed.replace(/^act_/, '')}`;
 }
 
 function normalizeAdSet(row: Record<string, unknown>): MetaAdSetOption | null {
@@ -1317,18 +1323,24 @@ export default function LaunchCreativeSelectionPage() {
   const selectedProfile = profiles.find((profile) => profile.id === launchProductId);
   const selectedCampaign = campaigns.find((campaign) => campaign.campaignId === selectedCampaignId);
   const selectedAdSet = adSets.find((adSet) => adSet.id === selectedAdSetId);
+  const selectedCampaignLink = selectedProfile?.campaignLinks?.find((link) => link.campaignId === selectedCampaignId);
+  const selectedCampaignAccountId = normalizeMetaAdAccountId(
+    selectedCampaign?.adAccountId || selectedCampaignLink?.adAccountId,
+  );
   const linkedAdAccountIds = useMemo(() => {
     const ids = new Set<string>();
-    if (selectedProfile?.adAccountId) ids.add(selectedProfile.adAccountId);
+    const primaryAccountId = normalizeMetaAdAccountId(selectedProfile?.adAccountId);
+    if (primaryAccountId) ids.add(primaryAccountId);
     for (const link of selectedProfile?.campaignLinks ?? []) {
-      if (link.adAccountId) ids.add(link.adAccountId);
+      const linkAccountId = normalizeMetaAdAccountId(link.adAccountId);
+      if (linkAccountId) ids.add(linkAccountId);
     }
     return Array.from(ids);
   }, [selectedProfile]);
   const launchAdAccountId =
     campaignMode === 'existing'
-      ? selectedCampaign?.adAccountId || selectedProfile?.adAccountId
-      : selectedProfile?.adAccountId;
+      ? selectedCampaignAccountId
+      : normalizeMetaAdAccountId(selectedProfile?.adAccountId);
   const latestTemplateCampaign = sortByLatest(
     campaigns.filter((campaign) => campaign.isActive),
     (campaign) => campaign.updatedTime || campaign.startDate || campaign.linkedAt,
@@ -1480,7 +1492,7 @@ export default function LaunchCreativeSelectionPage() {
           campaignId: link.campaignId,
           campaignName: link.campaignName || 'Untitled campaign',
           campaignType: link.campaignType || inferCampaignType(link.campaignName),
-          adAccountId: link.adAccountId || selectedProfile.adAccountId,
+          adAccountId: normalizeMetaAdAccountId(link.adAccountId || selectedProfile.adAccountId),
           effectiveStatus: link.effectiveStatus,
           isActive: link.effectiveStatus
             ? link.effectiveStatus.toUpperCase() === 'ACTIVE'
@@ -1492,46 +1504,46 @@ export default function LaunchCreativeSelectionPage() {
         });
       }
 
-      const cachedParams = new URLSearchParams({
-        storeId: resolvedStoreIdForView,
-        preferCache: '1',
-      });
-      if (linkedAdAccountIds.length > 1) {
-        cachedParams.set('accountIds', linkedAdAccountIds.join(','));
-      } else {
-        cachedParams.set('accountId', linkedAdAccountIds[0] || selectedProfile.adAccountId);
-      }
-      const cachedResponse = await fetch(`/api/meta/campaigns?${cachedParams.toString()}`);
-      const cachedData = await cachedResponse.json();
-      const cachedRows = Array.isArray(cachedData.data) ? cachedData.data : [];
+      const campaignAccountIds = linkedAdAccountIds.length > 0
+        ? linkedAdAccountIds
+        : ([normalizeMetaAdAccountId(selectedProfile.adAccountId)].filter(Boolean) as string[]);
 
-      for (const row of cachedRows) {
-        const record = asRecord(row);
-        const campaign = record ? normalizeCampaign(record, linkedAdAccountIds.length === 1 ? linkedAdAccountIds[0] : selectedProfile.adAccountId) : null;
-        if (!campaign) continue;
-        rowsById.set(campaign.campaignId, { ...rowsById.get(campaign.campaignId), ...campaign });
+      for (const accountId of campaignAccountIds) {
+        const cachedParams = new URLSearchParams({
+          storeId: resolvedStoreIdForView,
+          preferCache: '1',
+          accountId,
+        });
+        const cachedResponse = await fetch(`/api/meta/campaigns?${cachedParams.toString()}`);
+        const cachedData = await cachedResponse.json();
+        const cachedRows = Array.isArray(cachedData.data) ? cachedData.data : [];
+
+        for (const row of cachedRows) {
+          const record = asRecord(row);
+          const campaign = record ? normalizeCampaign(record, accountId) : null;
+          if (!campaign) continue;
+          rowsById.set(campaign.campaignId, { ...rowsById.get(campaign.campaignId), ...campaign });
+        }
       }
 
       // Use live campaigns as a freshness pass, matching the old Launch Config dropdown behavior.
       try {
-        const liveParams = new URLSearchParams({
-          storeId: resolvedStoreIdForView,
-          forceLive: '1',
-        });
-        if (linkedAdAccountIds.length > 1) {
-          liveParams.set('accountIds', linkedAdAccountIds.join(','));
-        } else {
-          liveParams.set('accountId', linkedAdAccountIds[0] || selectedProfile.adAccountId);
-        }
-        const liveResponse = await fetch(`/api/meta/campaigns?${liveParams.toString()}`);
-        const liveData = await liveResponse.json();
-        const liveRows = Array.isArray(liveData.data) ? liveData.data : [];
+        for (const accountId of campaignAccountIds) {
+          const liveParams = new URLSearchParams({
+            storeId: resolvedStoreIdForView,
+            forceLive: '1',
+            accountId,
+          });
+          const liveResponse = await fetch(`/api/meta/campaigns?${liveParams.toString()}`);
+          const liveData = await liveResponse.json();
+          const liveRows = Array.isArray(liveData.data) ? liveData.data : [];
 
-        for (const row of liveRows) {
-          const record = asRecord(row);
-          const campaign = record ? normalizeCampaign(record, linkedAdAccountIds.length === 1 ? linkedAdAccountIds[0] : selectedProfile.adAccountId) : null;
-          if (!campaign) continue;
-          rowsById.set(campaign.campaignId, { ...rowsById.get(campaign.campaignId), ...campaign });
+          for (const row of liveRows) {
+            const record = asRecord(row);
+            const campaign = record ? normalizeCampaign(record, accountId) : null;
+            if (!campaign) continue;
+            rowsById.set(campaign.campaignId, { ...rowsById.get(campaign.campaignId), ...campaign });
+          }
         }
       } catch {
         // Cached/linked campaigns are still useful if Meta live refresh is unavailable.
@@ -2482,6 +2494,9 @@ export default function LaunchCreativeSelectionPage() {
     if (campaignMode === 'existing' && !selectedCampaign) {
       throw new Error('Select an existing campaign before launching.');
     }
+    if (campaignMode === 'existing' && !selectedCampaignAccountId) {
+      throw new Error('The selected campaign is missing its owning ad account. Refresh campaigns and select it again before launching.');
+    }
     if (campaignMode === 'new' && !newCampaignName.trim()) {
       throw new Error('Enter a campaign name before launching.');
     }
@@ -3133,6 +3148,7 @@ export default function LaunchCreativeSelectionPage() {
         ) : currentStep === 'config' ? (
           <LaunchConfigStep
             adSetMode={adSetMode}
+            campaignMode={campaignMode}
             inheritedSettings={inheritedSettings}
             inheritedSettingsError={inheritedSettingsError}
             inheritedSettingsLoading={inheritedSettingsLoading}
@@ -4101,6 +4117,7 @@ function CopySelectionStep({
 
 function LaunchConfigStep({
   adSetMode,
+  campaignMode,
   campaignStructure,
   inheritedSettings,
   inheritedSettingsError,
@@ -4120,6 +4137,7 @@ function LaunchConfigStep({
   thumbnailDrafts,
 }: {
   adSetMode: AdSetMode;
+  campaignMode: CampaignMode;
   campaignStructure: CampaignStructure;
   inheritedSettings: InheritedAdSettings | null;
   inheritedSettingsError: string | null;
@@ -4138,8 +4156,10 @@ function LaunchConfigStep({
   setLaunchConfigDraft: Dispatch<SetStateAction<LaunchConfigDraft>>;
   thumbnailDrafts: Record<string, ThumbnailDraft>;
 }) {
-  const showBudgetField = adSetMode === 'new';
-  const showStrategyControls = adSetMode === 'new' && campaignStructure === 'CBO';
+  const showBudgetField =
+    adSetMode === 'new' &&
+    (campaignStructure === 'ABO' || campaignMode === 'new');
+  const showStrategyControls = campaignMode === 'new' && adSetMode === 'new' && campaignStructure === 'CBO';
   const showAdSetSpendLimits =
     adSetMode === 'new' &&
     campaignStructure === 'CBO' &&
@@ -4600,12 +4620,11 @@ function ReviewLaunchStep({
     campaignMode === 'new'
       ? launchConfigDraft.bidStrategy
       : selectedCampaign?.campaignBidStrategy || sourceAdSet?.bidStrategy;
+  const showReviewBudget =
+    adSetMode === 'new' &&
+    (campaignStructure === 'ABO' || campaignMode === 'new');
   const reviewBudgetLabel =
-    adSetMode === 'new'
-      ? campaignStructure === 'CBO'
-        ? 'Campaign budget'
-        : 'Ad set budget'
-      : 'Source ad set budget';
+    campaignStructure === 'CBO' ? 'Campaign budget' : 'Ad set budget';
   const manualThumbnailCount = selectedCreatives.filter((creative) =>
     isVideoCreative(creative) && thumbnailDrafts[creative.id]?.source === 'manual',
   ).length;
@@ -4761,11 +4780,13 @@ function ReviewLaunchStep({
               <SummaryTile label="Ad set mode" value={adSetMode === 'existing' ? 'Existing ad set' : 'New ad sets'} />
               <SummaryTile label="Source ad set" value={sourceAdSet?.name || 'Not found'} />
               <SummaryTile label="Template ad" value={inheritedSettings?.sourceAdName || 'Not found'} />
-              <SummaryTile label={reviewBudgetLabel} value={formatBudget(reviewDailyBudget, currency)} />
+              {showReviewBudget && (
+                <SummaryTile label={reviewBudgetLabel} value={formatBudget(reviewDailyBudget, currency)} />
+              )}
               {campaignStructure === 'CBO' && (
                 <SummaryTile label="Bid strategy" value={readableBidStrategy(reviewBidStrategy || undefined)} />
               )}
-              {campaignMode === 'new' && campaignStructure === 'CBO' && launchConfigDraft.bidStrategy === 'LOWEST_COST_WITH_BID_CAP' && (
+              {adSetMode === 'new' && campaignStructure === 'CBO' && launchConfigDraft.bidStrategy === 'LOWEST_COST_WITH_BID_CAP' && (
                 <SummaryTile
                   label="Ad set spend limit"
                   value={[

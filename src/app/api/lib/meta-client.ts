@@ -824,6 +824,7 @@ export async function fetchMetaCampaigns(
       name: raw.name,
       objective: mapObjective(raw.objective || ''),
       status: mapStatus(raw.status || ''),
+      ad_account_id: accountId,
       buying_type: typeof raw.buying_type === 'string' ? raw.buying_type : null,
       policyInfo: {
         effectiveStatus: raw.effective_status || undefined,

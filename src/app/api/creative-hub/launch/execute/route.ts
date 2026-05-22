@@ -30,6 +30,27 @@ function normalizeAccountNode(value: string): string {
   return `act_${node.replace(/^act_/, '')}`;
 }
 
+function sameAdAccount(left?: string | null, right?: string | null): boolean {
+  if (!left || !right) return false;
+  return normalizeAccountNode(left) === normalizeAccountNode(right);
+}
+
+async function resolveCampaignOwnerAccountId(
+  accessToken: string,
+  campaignId: string,
+): Promise<string | null> {
+  if (!campaignId) return null;
+  const campaign = await fetchFromMeta<Record<string, unknown>>(
+    accessToken,
+    `/${campaignId}`,
+    { fields: 'account_id' },
+    10000,
+    1,
+  );
+  const accountId = typeof campaign.account_id === 'string' ? campaign.account_id : '';
+  return accountId ? normalizeAccountNode(accountId) : null;
+}
+
 function generateId(): string {
   return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -1382,7 +1403,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Product profile not found' }, { status: 404 });
     }
 
-    const accountId = launchConfig.adAccountId || profile.adAccountId;
+    let accountId = launchConfig.adAccountId || profile.adAccountId;
+    if (launchConfig.campaignMode === 'existing' && launchConfig.existingCampaignId) {
+      const campaignOwnerAccountId = await resolveCampaignOwnerAccountId(
+        token.accessToken,
+        launchConfig.existingCampaignId,
+      );
+      if (campaignOwnerAccountId && !sameAdAccount(accountId, campaignOwnerAccountId)) {
+        console.warn('[launch] overriding ad account to match selected campaign owner', {
+          configuredAccountId: normalizeAccountNode(accountId),
+          campaignOwnerAccountId,
+          campaignId: launchConfig.existingCampaignId,
+        });
+        accountId = campaignOwnerAccountId;
+      }
+    }
     const accountNode = normalizeAccountNode(accountId);
     let resolvedPageId = launchConfig.pageId || profile.pageId || '';
     let resolvedInstagramActorId = launchConfig.instagramActorId || profile.instagramActorId || '';
@@ -1721,7 +1756,10 @@ export async function POST(request: NextRequest) {
             `${request.nextUrl.origin}/api/creative-hub/inbox/upload`,
             {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: {
+                'Content-Type': 'application/json',
+                ...(request.headers.get('cookie') ? { Cookie: request.headers.get('cookie') || '' } : {}),
+              },
               body: JSON.stringify({
                 creativeId: item.id,
                 driveUrl: item.drive_url,
