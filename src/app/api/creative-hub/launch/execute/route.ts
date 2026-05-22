@@ -326,6 +326,15 @@ function isAssetFeedFormatMetaError(message: string): boolean {
   );
 }
 
+function isDynamicCreativeAdsetMismatchMetaError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('subcode=1885998') ||
+    lower.includes('cannot create dynamic creative ad in non-dynamic creative ad set') ||
+    lower.includes('dynamic creative ads can only be created under dynamic creative ad sets')
+  );
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -843,6 +852,89 @@ async function createAdCreativeWithFallback(
       throw new Error(attemptErrors.join(' || '));
     }
     throw error;
+  }
+}
+
+async function createAdWithCreativeFallback(input: {
+  accessToken: string;
+  accountNode: string;
+  adsetId: string;
+  adName: string;
+  adStatus: string;
+  metaCreativeId: string;
+  creativeBody: Record<string, string>;
+  preferredThumbnailUrl?: string;
+  fallbackObjectStorySpec: Record<string, unknown>;
+}): Promise<{ adId: string; metaCreativeId: string }> {
+  const {
+    accessToken,
+    accountNode,
+    adsetId,
+    adName,
+    adStatus,
+    metaCreativeId,
+    creativeBody,
+    preferredThumbnailUrl,
+    fallbackObjectStorySpec,
+  } = input;
+
+  try {
+    const adRes = await postToMeta(accessToken, `/${accountNode}/ads`, {
+      name: adName,
+      adset_id: adsetId,
+      status: adStatus,
+      creative: JSON.stringify({ creative_id: metaCreativeId }),
+    });
+    const adId = String(adRes.id || '');
+    if (!adId) {
+      throw new Error('Meta ad creation did not return an ID');
+    }
+    return { adId, metaCreativeId };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!creativeBody.asset_feed_spec || !isDynamicCreativeAdsetMismatchMetaError(message)) {
+      throw err instanceof Error ? err : new Error(message);
+    }
+
+    const normalCreativeBody: Record<string, string> = {
+      ...creativeBody,
+      object_story_spec: JSON.stringify(fallbackObjectStorySpec),
+    };
+    delete normalCreativeBody.asset_feed_spec;
+    delete normalCreativeBody.object_type;
+    delete normalCreativeBody.degrees_of_freedom_spec;
+
+    const fallbackCreativeRes = await createAdCreativeWithFallback(
+      accessToken,
+      accountNode,
+      normalCreativeBody,
+      preferredThumbnailUrl,
+      fallbackObjectStorySpec,
+    );
+    const fallbackCreativeId = String(fallbackCreativeRes.id || '');
+    if (!fallbackCreativeId) {
+      throw new Error(`Dynamic creative fallback failed: Meta ad creative creation did not return an ID | original=${message}`);
+    }
+
+    const fallbackAdRes = await postToMeta(accessToken, `/${accountNode}/ads`, {
+      name: adName,
+      adset_id: adsetId,
+      status: adStatus,
+      creative: JSON.stringify({ creative_id: fallbackCreativeId }),
+    });
+    const fallbackAdId = String(fallbackAdRes.id || '');
+    if (!fallbackAdId) {
+      throw new Error(`Dynamic creative fallback failed: Meta ad creation did not return an ID | original=${message}`);
+    }
+
+    console.info('[launch] Downgraded flexible creative to normal ad creative for non-dynamic ad set', {
+      adsetId,
+      adName,
+      originalCreativeId: metaCreativeId,
+      fallbackCreativeId,
+    });
+
+    return { adId: fallbackAdId, metaCreativeId: fallbackCreativeId };
   }
 }
 
@@ -1983,22 +2075,22 @@ export async function POST(request: NextRequest) {
               throw new Error('Meta ad creative creation did not return an ID');
             }
 
-            const adRes = await postToMeta(token.accessToken, `/${accountNode}/ads`, {
-              name: item.creative_name,
-              adset_id: adsetId,
-              status: adLaunchStatus,
-              creative: JSON.stringify({ creative_id: metaCreativeId }),
+            const createdAd = await createAdWithCreativeFallback({
+              accessToken: token.accessToken,
+              accountNode,
+              adsetId,
+              adName: item.creative_name,
+              adStatus: adLaunchStatus,
+              metaCreativeId,
+              creativeBody,
+              preferredThumbnailUrl: item.thumbnail_url || undefined,
+              fallbackObjectStorySpec,
             });
-            const adId = String(adRes.id || '');
-
-            if (!adId) {
-              throw new Error('Meta ad creation did not return an ID');
-            }
 
             await updateCreativeTestItem(item.id, {
               metaAdsetId: adsetId,
-              metaAdId: adId,
-              metaCreativeId,
+              metaAdId: createdAd.adId,
+              metaCreativeId: createdAd.metaCreativeId,
               launchStatus: 'created',
             });
           } catch (err) {
@@ -2144,23 +2236,22 @@ export async function POST(request: NextRequest) {
                 throw new Error('Meta ad creative creation did not return an ID');
               }
 
-              // Create ad
-              const adRes = await postToMeta(token.accessToken, `/${accountNode}/ads`, {
-                name: item.creative_name,
-                adset_id: adsetId,
-                status: adLaunchStatus,
-                creative: JSON.stringify({ creative_id: metaCreativeId }),
+              const createdAd = await createAdWithCreativeFallback({
+                accessToken: token.accessToken,
+                accountNode,
+                adsetId,
+                adName: item.creative_name,
+                adStatus: adLaunchStatus,
+                metaCreativeId,
+                creativeBody,
+                preferredThumbnailUrl: item.thumbnail_url || undefined,
+                fallbackObjectStorySpec,
               });
-              const adId = String(adRes.id || '');
-
-              if (!adId) {
-                throw new Error('Meta ad creation did not return an ID');
-              }
 
               await updateCreativeTestItem(item.id, {
                 metaAdsetId: adsetId,
-                metaAdId: adId,
-                metaCreativeId: metaCreativeId,
+                metaAdId: createdAd.adId,
+                metaCreativeId: createdAd.metaCreativeId,
                 launchStatus: 'created',
               });
             } catch (err) {
@@ -2305,24 +2396,23 @@ export async function POST(request: NextRequest) {
           throw new Error('Meta ad creative creation did not return an ID');
         }
 
-        // Create ad
-        const adRes = await postToMeta(token.accessToken, `/${accountNode}/ads`, {
-          name: item.creative_name,
-          adset_id: adsetId,
-          status: adLaunchStatus,
-          creative: JSON.stringify({ creative_id: creativeId }),
+        const createdAd = await createAdWithCreativeFallback({
+          accessToken: token.accessToken,
+          accountNode,
+          adsetId,
+          adName: item.creative_name,
+          adStatus: adLaunchStatus,
+          metaCreativeId: creativeId,
+          creativeBody,
+          preferredThumbnailUrl: item.thumbnail_url || undefined,
+          fallbackObjectStorySpec,
         });
-        const adId = String(adRes.id || '');
-
-        if (!adId) {
-          throw new Error('Meta ad creation did not return an ID');
-        }
 
         // Update creative_test_item with Meta IDs
         await updateCreativeTestItem(item.id, {
           metaAdsetId: adsetId,
-          metaAdId: adId,
-          metaCreativeId: creativeId,
+          metaAdId: createdAd.adId,
+          metaCreativeId: createdAd.metaCreativeId,
           launchStatus: 'created',
         });
       } catch (err) {
