@@ -2,6 +2,9 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ['better-sqlite3'],
+  outputFileTracingIncludes: {
+    '/api/creative-hub/inbox/upload': ['./node_modules/ffmpeg-static/ffmpeg'],
+  },
   turbopack: {},
   webpack: (config, { isServer }) => {
     if (isServer) {
