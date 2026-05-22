@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getGoogleDriveToken, getMetaToken } from '@/app/api/lib/tokens';
 import { GOOGLE_DRIVE_BASE_URL, listDriveChildren } from '@/app/api/google-drive/shared';
 import { getThirdPartyToken, upsertThirdPartyToken } from '@/app/api/lib/db';
+import { getCachedInboxCreatives } from '@/app/api/lib/creative-hub-db';
 import {
   getPersistentThirdPartyToken,
   hydrateStoreFromSupabase,
@@ -40,6 +41,8 @@ type SourceFetchResult = {
   response: Response;
   diagnostics: SourceFetchDiagnostics;
 };
+
+const MEDIA_URL_RE = /https?:\/\/[^\s"'<>]+?\.(?:mp4|mov|avi|mkv|webm|m4v|jpg|jpeg|png|gif|bmp|webp)(?:\?[^\s"'<>]*)?/gi;
 
 /** Resolve ClickUp token, hydrating from Supabase on Vercel if needed. */
 async function getClickUpAccessToken(storeId: string): Promise<string | null> {
@@ -350,6 +353,28 @@ function isClickUpAttachmentUrl(url: string): boolean {
   }
 }
 
+function extractMediaUrlFromText(value?: string | null): string | null {
+  if (!value) return null;
+  const matches = value.match(MEDIA_URL_RE) || [];
+  return matches[0]?.trim() || null;
+}
+
+async function getInboxFallbackSourceUrl(storeId: string, creativeId: string): Promise<string | null> {
+  if (!creativeId) return null;
+  try {
+    const creatives = await getCachedInboxCreatives(storeId);
+    const creative = creatives.find((item) => item.id === creativeId);
+    if (!creative) return null;
+    return (
+      creative.clickupAttachmentUrl ||
+      extractMediaUrlFromText(creative.clickupDescription) ||
+      null
+    );
+  } catch {
+    return null;
+  }
+}
+
 function getSafeHost(url: string): string | null {
   try {
     return new URL(url).hostname.toLowerCase();
@@ -426,6 +451,7 @@ function createFetchDiagnostics(input: {
 }
 
 async function fetchSourceFile(input: {
+  creativeId: string;
   sourceUrl: string;
   downloadUrl: string;
   storeId: string;
@@ -458,6 +484,38 @@ async function fetchSourceFile(input: {
       diagnostics.finalHost = getSafeHost(directDriveResponse.url || driveMediaUrl);
       if (directDriveResponse.ok) {
         return { response: directDriveResponse, diagnostics };
+      }
+    }
+
+    const fallbackSourceUrl = await getInboxFallbackSourceUrl(input.storeId, input.creativeId);
+    if (fallbackSourceUrl) {
+      const fallbackIsClickUp = isClickUpAttachmentUrl(fallbackSourceUrl);
+      diagnostics.clickupDetected = fallbackIsClickUp;
+
+      if (fallbackIsClickUp) {
+        const clickupToken = await getClickUpAccessToken(input.storeId);
+        diagnostics.clickupTokenFound = Boolean(clickupToken);
+        if (clickupToken) {
+          diagnostics.clickupAuthAttempted = true;
+          const authedRes = await fetch(fallbackSourceUrl, {
+            redirect: 'follow',
+            headers: { Authorization: clickupToken },
+          });
+          diagnostics.fallbackStatus = authedRes.status;
+          diagnostics.finalStatus = authedRes.status;
+          diagnostics.finalHost = getSafeHost(authedRes.url || fallbackSourceUrl);
+          if (authedRes.ok) {
+            return { response: authedRes, diagnostics };
+          }
+        }
+      }
+
+      const fallbackRes = await fetch(fallbackSourceUrl, { redirect: 'follow' });
+      diagnostics.fallbackStatus = fallbackRes.status;
+      diagnostics.finalStatus = fallbackRes.status;
+      diagnostics.finalHost = getSafeHost(fallbackRes.url || fallbackSourceUrl);
+      if (fallbackRes.ok) {
+        return { response: fallbackRes, diagnostics };
       }
     }
   }
@@ -637,6 +695,7 @@ export async function POST(request: NextRequest) {
       ).toString();
     }
     const { response: fileRes, diagnostics } = await fetchSourceFile({
+      creativeId,
       sourceUrl: absoluteSourceUrl,
       downloadUrl,
       storeId,
