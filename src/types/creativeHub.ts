@@ -134,6 +134,11 @@ export interface ProductCampaignLink {
 
 export type UploadStatus = 'pending' | 'uploading' | 'ready' | 'failed' | 'no_link';
 export type CreativeFormat = 'video' | 'image' | 'carousel';
+export type CreativeFormatMode =
+  | 'single_per_creative'
+  | 'single_format_media_options'
+  | 'dynamic_creative'
+  | 'carousel';
 export type DriveSourceType = 'file' | 'folder' | 'folder_item';
 export type CreativeSourceType = 'clickup_task' | 'drive_asset' | 'clickup_attachment';
 
@@ -281,6 +286,7 @@ export interface LaunchConfig {
   productProfileId: string;
   selectedCreativeIds: string[];
   selectedCreativeSnapshots?: InboxCreative[];
+  mediaOptionCreativeSnapshots?: InboxCreative[];
   campaignMode: CampaignMode;
   // Existing campaign
   existingCampaignId?: string;
@@ -318,10 +324,12 @@ export interface LaunchConfig {
   headlines: CopyItem[];
   descriptions: CopyItem[];
   ctaType: string;
+  creativeFormatMode: CreativeFormatMode;
   advantageCreative: boolean;
   // Per-creative URL overrides
   perCreativeUrls?: Record<string, string>; // creativeId -> url
   usePerCreativeUrls: boolean;
+  mediaOptionCreativeIds?: Record<string, string[]>;
   videoThumbnails?: Record<string, VideoThumbnailSelection>;
   // Schedule
   launchTime: 'immediately' | 'scheduled';

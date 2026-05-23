@@ -23,12 +23,18 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { CreativePreviewModal } from '@/components/creative-hub/CreativePreviewModal';
+import {
+  formatModeLabel,
+  isLaunchCreativeFormatModeEnabled,
+  validateLaunchCreativeFormat,
+} from '@/lib/creative-hub/creativeFormatValidation';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
 import { useStoreStore } from '@/stores/storeStore';
 import type {
   BidStrategy,
   ClickUpFieldValue,
   CopyItem,
+  CreativeFormatMode,
   CreativeFormat,
   InboxCreative,
   LaunchConfig,
@@ -49,6 +55,42 @@ type BatchMode = 'single' | 'multiple';
 type SplitPreset = 'one_per_adset' | 'three_per_adset' | 'folder_split' | 'manual';
 type CopyDraftSource = 'winner' | 'inherited' | 'manual' | 'ai';
 type LaunchTiming = 'immediate' | 'scheduled';
+
+const creativeFormatModeOptions: Array<{
+  id: CreativeFormatMode;
+  title: string;
+  description: string;
+  status: string;
+  disabled?: boolean;
+}> = [
+  {
+    id: 'single_per_creative',
+    title: 'Single ad per creative',
+    description: 'Creates one Meta ad for each selected video or image. This keeps the current stable launch behavior.',
+    status: 'Current',
+  },
+  {
+    id: 'single_format_media_options',
+    title: 'Single ad with media options',
+    description: 'Matches an Ads Manager UI option, but Meta is rejecting this format through the public API on this account.',
+    status: 'API blocked',
+    disabled: true,
+  },
+  {
+    id: 'dynamic_creative',
+    title: 'Dynamic creative',
+    description: 'Combines multiple media, primary texts, headlines, and descriptions under a dynamic creative ad set.',
+    status: isLaunchCreativeFormatModeEnabled('dynamic_creative') ? 'Dynamic ad set' : 'Feature gated',
+    disabled: !isLaunchCreativeFormatModeEnabled('dynamic_creative'),
+  },
+  {
+    id: 'carousel',
+    title: 'Carousel',
+    description: 'Builds carousel cards from selected creatives. Deferred until card-level payload rules are added.',
+    status: 'Later',
+    disabled: true,
+  },
+];
 
 interface InboxResponse {
   creatives?: InboxCreative[];
@@ -153,6 +195,8 @@ interface LaunchConfigDraft {
   optimizationGoal: string;
   billingEvent: string;
   conversionEvent: string;
+  creativeFormatMode: CreativeFormatMode;
+  mediaOptionCreativeIds: Record<string, string[]>;
   advantageCreative: boolean;
   useTestDuration: boolean;
   testDuration: string;
@@ -196,7 +240,7 @@ interface AiCopyInsightsResponse {
   };
 }
 
-type LaunchUploadStage = 'queued' | 'downloading' | 'uploading' | 'ready' | 'skipped' | 'error';
+type LaunchUploadStage = 'queued' | 'downloading' | 'uploading' | 'ready' | 'processing' | 'skipped' | 'error';
 
 interface LaunchUploadProgress {
   creativeId: string;
@@ -214,6 +258,9 @@ interface LaunchSubmitResult {
   campaignId?: string;
   items?: Array<Record<string, unknown>>;
   error?: string;
+  message?: string;
+  processingVideos?: string[];
+  retryAfterMs?: number;
 }
 
 interface UploadResponse {
@@ -305,6 +352,10 @@ function formatShortDate(value?: string): string {
   const time = parseDateValue(value);
   if (!time) return '—';
   return new Intl.DateTimeFormat(undefined, { day: '2-digit', month: 'short', year: 'numeric' }).format(time);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function formatRelativeDays(value?: string): string {
@@ -936,6 +987,8 @@ function createInitialLaunchConfigDraft(
     optimizationGoal: sourceAdSet?.optimizationGoal || 'OFFSITE_CONVERSIONS',
     billingEvent: sourceAdSet?.billingEvent || 'IMPRESSIONS',
     conversionEvent: asString(sourceAdSet?.promotedObject?.custom_event_type) || profile?.conversionEvent || 'PURCHASE',
+    creativeFormatMode: 'single_per_creative',
+    mediaOptionCreativeIds: {},
     advantageCreative: false,
     useTestDuration: false,
     testDuration: '',
@@ -1122,6 +1175,19 @@ function copyDraftsToLaunchItems(items: CopyDraftItem[]): CopyItem[] {
       text: item.text.trim(),
       source: mapCopySourceToLaunch(item.source),
     }));
+}
+
+function getAdMediaOptionIds(
+  draft: LaunchConfigDraft,
+  adCreativeId: string,
+  mediaPoolCreatives: InboxCreative[],
+): string[] {
+  const explicit = draft.mediaOptionCreativeIds[adCreativeId];
+  const mediaPoolIdSet = new Set(mediaPoolCreatives.map((creative) => creative.id));
+  if (explicit && explicit.length > 0) {
+    return explicit.filter((creativeId) => mediaPoolIdSet.has(creativeId)).slice(0, 10);
+  }
+  return mediaPoolIdSet.has(adCreativeId) ? [adCreativeId] : mediaPoolCreatives.slice(0, 1).map((creative) => creative.id);
 }
 
 function parseScheduledAtForLaunch(scheduledAt: string): { scheduledDate?: string; scheduledTime?: string } {
@@ -2497,7 +2563,7 @@ export default function LaunchCreativeSelectionPage() {
       updateCreativeUploadProgress(creative, {
         stage: 'ready',
         progress: 100,
-        message: 'Ready in Meta',
+        message: 'Uploaded to Meta',
         error: undefined,
       });
 
@@ -2516,15 +2582,44 @@ export default function LaunchCreativeSelectionPage() {
     }
   };
 
-  const uploadSelectedCreatives = async (): Promise<InboxCreative[]> => {
-    const uploadedCreatives: InboxCreative[] = [];
-    for (const creative of selectedCreatives) {
-      uploadedCreatives.push(await uploadCreativeWithProgress(creative));
+  const getLaunchMediaCreatives = (adCreatives: InboxCreative[]): InboxCreative[] => {
+    if (
+      launchConfigDraft.creativeFormatMode !== 'single_format_media_options' &&
+      launchConfigDraft.creativeFormatMode !== 'dynamic_creative'
+    ) {
+      return adCreatives;
     }
-    return uploadedCreatives;
+
+    const ids = new Set<string>();
+    for (const adCreative of adCreatives) {
+      ids.add(adCreative.id);
+      for (const mediaId of getAdMediaOptionIds(launchConfigDraft, adCreative.id, creatives)) {
+        ids.add(mediaId);
+      }
+    }
+    return creatives.filter((creative) => ids.has(creative.id));
   };
 
-  const buildLaunchConfig = (uploadedCreatives: InboxCreative[]): LaunchConfig => {
+  const uploadLaunchCreatives = async (): Promise<{
+    uploadedAdCreatives: InboxCreative[];
+    uploadedMediaCreatives: InboxCreative[];
+  }> => {
+    const uploadPool = getLaunchMediaCreatives(selectedCreatives);
+    const uploadedById = new Map<string, InboxCreative>();
+    for (const creative of uploadPool) {
+      const uploaded = await uploadCreativeWithProgress(creative);
+      uploadedById.set(creative.id, uploaded);
+    }
+    return {
+      uploadedAdCreatives: selectedCreatives.map((creative) => uploadedById.get(creative.id) || creative),
+      uploadedMediaCreatives: uploadPool.map((creative) => uploadedById.get(creative.id) || creative),
+    };
+  };
+
+  const buildLaunchConfig = (
+    uploadedCreatives: InboxCreative[],
+    mediaPoolCreatives: InboxCreative[] = creatives,
+  ): LaunchConfig => {
     if (!selectedProfile) {
       throw new Error('Select a product profile before launching.');
     }
@@ -2664,7 +2759,7 @@ export default function LaunchCreativeSelectionPage() {
           }, {})
         : undefined;
 
-    return {
+    const launchConfig: LaunchConfig = {
       productProfileId: selectedProfile.id,
       selectedCreativeIds,
       selectedCreativeSnapshots: uploadedCreatives,
@@ -2698,8 +2793,31 @@ export default function LaunchCreativeSelectionPage() {
       headlines,
       descriptions,
       ctaType: ctaLabel(ctaDraft),
+      creativeFormatMode: launchConfigDraft.creativeFormatMode,
       advantageCreative: launchConfigDraft.advantageCreative,
       usePerCreativeUrls: false,
+      mediaOptionCreativeIds:
+        launchConfigDraft.creativeFormatMode === 'single_format_media_options' ||
+        launchConfigDraft.creativeFormatMode === 'dynamic_creative'
+          ? Object.fromEntries(
+              uploadedCreatives.map((creative) => [
+                creative.id,
+                getAdMediaOptionIds(launchConfigDraft, creative.id, mediaPoolCreatives),
+              ]),
+            )
+          : undefined,
+      mediaOptionCreativeSnapshots:
+        launchConfigDraft.creativeFormatMode === 'single_format_media_options' ||
+        launchConfigDraft.creativeFormatMode === 'dynamic_creative'
+          ? mediaPoolCreatives.filter((creative) => {
+              const mediaIds = new Set(
+                uploadedCreatives.flatMap((adCreative) =>
+                  getAdMediaOptionIds(launchConfigDraft, adCreative.id, mediaPoolCreatives),
+                ),
+              );
+              return mediaIds.has(creative.id);
+            })
+          : undefined,
       videoThumbnails: Object.keys(videoThumbnails).length > 0 ? videoThumbnails : undefined,
       launchTime: launchConfigDraft.launchTiming === 'scheduled' ? 'scheduled' : 'immediately',
       scheduledDate: scheduledParts.scheduledDate,
@@ -2710,6 +2828,55 @@ export default function LaunchCreativeSelectionPage() {
       batchStrategy: 'manual',
       launchMode: 'quick',
     };
+
+    const formatValidation = validateLaunchCreativeFormat(launchConfig);
+    if (formatValidation.errors.length > 0) {
+      throw new Error(formatValidation.errors.join(' '));
+    }
+
+    return launchConfig;
+  };
+
+  const submitLaunchWithProcessingRetries = async (launchConfig: LaunchConfig): Promise<LaunchSubmitResult> => {
+    const maxAttempts = 8;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const response = await fetch('/api/creative-hub/launch/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storeId: resolvedStoreIdForView,
+          launchConfig,
+        }),
+      });
+      const data = (await response.json().catch(() => ({}))) as LaunchSubmitResult;
+
+      if (response.status === 202 && data.status === 'processing') {
+        const processingNames = new Set(data.processingVideos || []);
+        setUploadProgress((current) => {
+          const next = { ...current };
+          for (const [creativeId, row] of Object.entries(next)) {
+            if (!processingNames.has(row.creativeName)) continue;
+            next[creativeId] = {
+              ...row,
+              stage: 'processing',
+              progress: 96,
+              message: `Meta is processing this video${attempt < maxAttempts ? ` · retry ${attempt}/${maxAttempts}` : ''}`,
+              error: undefined,
+            };
+          }
+          return next;
+        });
+        await sleep(Math.max(5_000, Math.min(30_000, data.retryAfterMs || 15_000)));
+        continue;
+      }
+
+      if (!response.ok) {
+        throw new Error(data.error || `Launch failed with HTTP ${response.status}`);
+      }
+      return data;
+    }
+
+    throw new Error('Meta is still processing the uploaded videos. Please wait a minute and click Launch again.');
   };
 
   const handleLaunch = async () => {
@@ -2722,21 +2889,9 @@ export default function LaunchCreativeSelectionPage() {
     try {
       // Validate the launch plan before starting any potentially slow media downloads.
       buildLaunchConfig(selectedCreatives);
-      const uploadedCreatives = await uploadSelectedCreatives();
-      const launchConfig = buildLaunchConfig(uploadedCreatives);
-      const response = await fetch('/api/creative-hub/launch/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          storeId: resolvedStoreIdForView,
-          launchConfig,
-        }),
-      });
-      const data = (await response.json().catch(() => ({}))) as LaunchSubmitResult;
-
-      if (!response.ok) {
-        throw new Error(data.error || `Launch failed with HTTP ${response.status}`);
-      }
+      const { uploadedAdCreatives, uploadedMediaCreatives } = await uploadLaunchCreatives();
+      const launchConfig = buildLaunchConfig(uploadedAdCreatives, uploadedMediaCreatives);
+      const data = await submitLaunchWithProcessingRetries(launchConfig);
       if (data.status === 'partial') {
         throw new Error(extractLaunchErrorFromResult(data));
       }
@@ -3188,6 +3343,7 @@ export default function LaunchCreativeSelectionPage() {
         ) : currentStep === 'config' ? (
           <LaunchConfigStep
             adSetMode={adSetMode}
+            availableMediaCreatives={creatives}
             campaignMode={campaignMode}
             inheritedSettings={inheritedSettings}
             inheritedSettingsError={inheritedSettingsError}
@@ -4157,6 +4313,7 @@ function CopySelectionStep({
 
 function LaunchConfigStep({
   adSetMode,
+  availableMediaCreatives,
   campaignMode,
   campaignStructure,
   inheritedSettings,
@@ -4177,6 +4334,7 @@ function LaunchConfigStep({
   thumbnailDrafts,
 }: {
   adSetMode: AdSetMode;
+  availableMediaCreatives: InboxCreative[];
   campaignMode: CampaignMode;
   campaignStructure: CampaignStructure;
   inheritedSettings: InheritedAdSettings | null;
@@ -4205,6 +4363,9 @@ function LaunchConfigStep({
     campaignStructure === 'CBO' &&
     launchConfigDraft.bidStrategy === 'LOWEST_COST_WITH_BID_CAP';
   const videoCreatives = selectedCreatives.filter(isVideoCreative);
+  const showAdMediaOptions =
+    launchConfigDraft.creativeFormatMode === 'single_format_media_options' ||
+    launchConfigDraft.creativeFormatMode === 'dynamic_creative';
   const sourceAdSet = adSetMode === 'existing' ? selectedAdSet : latestAdSet;
   const sourceDescription =
     adSetMode === 'existing'
@@ -4270,6 +4431,94 @@ function LaunchConfigStep({
             </p>
           ) : null}
         </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-950">Creative format</h3>
+              <p className="mt-1 text-sm text-slate-500">
+                Choose how selected media and copy should be packaged for Meta. Only the current stable format is launch-enabled in this step.
+              </p>
+            </div>
+            <span className="w-fit rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
+              {selectedCreativeCount} media selected
+            </span>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {creativeFormatModeOptions.map((option) => {
+              const selected = launchConfigDraft.creativeFormatMode === option.id;
+              const Icon =
+                option.id === 'single_per_creative'
+                  ? Film
+                  : option.id === 'single_format_media_options'
+                    ? LayoutGrid
+                    : option.id === 'dynamic_creative'
+                      ? Sparkles
+                      : ImageIcon;
+
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  disabled={option.disabled}
+                  onClick={() =>
+                    setLaunchConfigDraft((current) => ({
+                      ...current,
+                      creativeFormatMode: option.id,
+                    }))
+                  }
+                  className={cn(
+                    'flex min-h-28 items-start gap-3 rounded-2xl border p-3 text-left transition',
+                    selected
+                      ? 'border-blue-300 bg-blue-50 shadow-sm shadow-blue-100'
+                      : 'border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/40',
+                    option.disabled && 'cursor-not-allowed opacity-60 hover:border-slate-200 hover:bg-white',
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border',
+                      selected ? 'border-blue-200 bg-white text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-500',
+                    )}
+                  >
+                    <Icon className="h-4 w-4" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-semibold text-slate-950">{option.title}</span>
+                      <span
+                        className={cn(
+                          'rounded-full border px-2 py-0.5 text-[11px] font-semibold',
+                          selected
+                            ? 'border-blue-200 bg-white text-blue-700'
+                            : 'border-slate-200 bg-slate-50 text-slate-500',
+                        )}
+                      >
+                        {option.status}
+                      </span>
+                    </span>
+                    <span className="mt-1 block text-xs leading-5 text-slate-500">{option.description}</span>
+                  </span>
+                  <span
+                    className={cn(
+                      'mt-1 h-4 w-4 shrink-0 rounded-full border',
+                      selected ? 'border-blue-600 bg-blue-600 shadow-[inset_0_0_0_3px_white]' : 'border-slate-300 bg-white',
+                    )}
+                  />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {showAdMediaOptions && (
+          <AdMediaOptionsSelector
+            availableMediaCreatives={availableMediaCreatives}
+            launchConfigDraft={launchConfigDraft}
+            selectedCreatives={selectedCreatives}
+            setLaunchConfigDraft={setLaunchConfigDraft}
+          />
+        )}
 
         <div className="rounded-2xl border border-slate-200 bg-white p-4">
           <h3 className="text-sm font-semibold text-slate-950">Editable launch settings</h3>
@@ -4677,11 +4926,26 @@ function ReviewLaunchStep({
     selectedHeadlines[0] ||
     productName;
   const previewDescription = selectedDescriptions[0] || '';
+  const formatValidation = validateLaunchCreativeFormat({
+    creativeFormatMode: launchConfigDraft.creativeFormatMode,
+    adsetMode: adSetMode === 'existing' ? 'existing_adsets' : 'new_adsets',
+    selectedCreativeIds: selectedCreatives.map((creative) => creative.id),
+    mediaOptionCreativeIds: launchConfigDraft.mediaOptionCreativeIds,
+    batches: batchPlan.map((batch) => ({
+      id: batch.id,
+      name: batch.name,
+      creativeIds: batch.creativeIds,
+    })),
+    primaryTexts: copyDraftsToLaunchItems(primaryTextDrafts),
+    headlines: copyDraftsToLaunchItems(headlineDrafts),
+    descriptions: copyDraftsToLaunchItems(descriptionDrafts),
+  });
   const canLaunch =
     selectedCreatives.length > 0 &&
     batchPlan.some((batch) => batch.creativeIds.length > 0) &&
     selectedPrimaryTexts.length > 0 &&
     selectedHeadlines.length > 0 &&
+    formatValidation.errors.length === 0 &&
     !launching;
   const toggleBatchExpanded = (batchId: string) => {
     setExpandedBatchIds((current) => {
@@ -4816,6 +5080,22 @@ function ReviewLaunchStep({
             <h3 className="text-sm font-semibold text-slate-950">Launch overview</h3>
             <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <SummaryTile label="Campaign" value={campaignLabel} />
+              <SummaryTile label="Creative format" value={formatModeLabel(launchConfigDraft.creativeFormatMode)} />
+              {(launchConfigDraft.creativeFormatMode === 'single_format_media_options' ||
+                launchConfigDraft.creativeFormatMode === 'dynamic_creative') && (
+                <SummaryTile
+                  label="Ad media options"
+                  value={batchPlan
+                    .filter((batch) => batch.creativeIds.length > 0)
+                    .flatMap((batch) =>
+                      batch.creativeIds
+                        .map((creativeId) => creativeById.get(creativeId))
+                        .filter((creative): creative is InboxCreative => Boolean(creative))
+                        .map((creative) => `${getCreativeName(creative)}: ${(launchConfigDraft.mediaOptionCreativeIds[creative.id] || [creative.id]).length}`),
+                    )
+                    .join(' / ')}
+                />
+              )}
               <SummaryTile label="Structure" value={campaignStructure} />
               <SummaryTile label="Ad set mode" value={adSetMode === 'existing' ? 'Existing ad set' : 'New ad sets'} />
               <SummaryTile label="Source ad set" value={sourceAdSet?.name || 'Not found'} />
@@ -4846,6 +5126,25 @@ function ReviewLaunchStep({
               <SummaryTile label="Excluded countries" value={launchConfigDraft.excludeLocations.length ? `${launchConfigDraft.excludeLocations.length} selected` : 'None'} />
               <SummaryTile label="Publish status" value={launchConfigDraft.launchPaused ? 'Paused' : 'Active'} />
             </div>
+            {(formatValidation.errors.length > 0 || formatValidation.warnings.length > 0) && (
+              <div
+                className={cn(
+                  'mt-4 rounded-2xl border p-4 text-sm',
+                  formatValidation.errors.length > 0
+                    ? 'border-red-200 bg-red-50 text-red-800'
+                    : 'border-amber-200 bg-amber-50 text-amber-800',
+                )}
+              >
+                <p className="font-semibold">
+                  {formatValidation.errors.length > 0 ? 'Creative format needs attention' : 'Creative format warning'}
+                </p>
+                <ul className="mt-2 space-y-1 leading-6">
+                  {[...formatValidation.errors, ...formatValidation.warnings].map((message) => (
+                    <li key={message}>{message}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white">
@@ -5007,7 +5306,9 @@ function LaunchProgressPanel({ progress }: { progress: Record<string, LaunchUplo
                     ? 'bg-red-100 text-red-700'
                     : row.stage === 'ready' || row.stage === 'skipped'
                       ? 'bg-emerald-100 text-emerald-700'
-                      : 'bg-blue-100 text-blue-700',
+                      : row.stage === 'processing'
+                        ? 'bg-amber-100 text-amber-700'
+                        : 'bg-blue-100 text-blue-700',
                 )}
               >
                 {row.stage}
@@ -5021,7 +5322,9 @@ function LaunchProgressPanel({ progress }: { progress: Record<string, LaunchUplo
                     ? 'bg-red-500'
                     : row.stage === 'ready' || row.stage === 'skipped'
                       ? 'bg-emerald-500'
-                      : 'bg-blue-600',
+                      : row.stage === 'processing'
+                        ? 'bg-amber-500'
+                        : 'bg-blue-600',
                 )}
                 style={{ width: `${Math.max(0, Math.min(100, row.progress))}%` }}
               />
@@ -5033,6 +5336,160 @@ function LaunchProgressPanel({ progress }: { progress: Record<string, LaunchUplo
             )}
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function AdMediaOptionsSelector({
+  availableMediaCreatives,
+  launchConfigDraft,
+  selectedCreatives,
+  setLaunchConfigDraft,
+}: {
+  availableMediaCreatives: InboxCreative[];
+  launchConfigDraft: LaunchConfigDraft;
+  selectedCreatives: InboxCreative[];
+  setLaunchConfigDraft: Dispatch<SetStateAction<LaunchConfigDraft>>;
+}) {
+  const [openAdCreativeId, setOpenAdCreativeId] = useState<string>(selectedCreatives[0]?.id || '');
+  const [mediaSearch, setMediaSearch] = useState('');
+  const mediaPool = useMemo(() => {
+    const normalizedSearch = mediaSearch.trim().toLowerCase();
+    return availableMediaCreatives.filter((creative) => {
+      if (!normalizedSearch) return true;
+      return [
+        getCreativeName(creative),
+        creative.clickupTaskName,
+        creative.clickupListName,
+        getGroupName(creative),
+        getHook(creative),
+        getFunnel(creative),
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedSearch);
+    });
+  }, [availableMediaCreatives, mediaSearch]);
+
+  const toggleMedia = (adKey: string, creativeId: string) => {
+    setLaunchConfigDraft((current) => {
+      const currentIds = getAdMediaOptionIds(current, adKey, availableMediaCreatives);
+      const nextIds = currentIds.includes(creativeId)
+        ? currentIds.filter((id) => id !== creativeId)
+        : [...currentIds, creativeId].slice(0, 10);
+      return {
+        ...current,
+        mediaOptionCreativeIds: {
+          ...current.mediaOptionCreativeIds,
+          [adKey]: nextIds,
+        },
+      };
+    });
+  };
+
+  const selectedAdCreative = selectedCreatives.find((creative) => creative.id === openAdCreativeId) || selectedCreatives[0];
+  const selectedIds = selectedAdCreative
+    ? getAdMediaOptionIds(launchConfigDraft, selectedAdCreative.id, availableMediaCreatives)
+    : [];
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-950">Ad media options</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            Click a selected ad, then choose up to 10 Ready ClickUp media assets for that ad. Meta will mix those media with the selected copy options.
+          </p>
+        </div>
+        <span className="w-fit rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+          Up to 10 media per ad
+        </span>
+      </div>
+      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(220px,0.38fr)_1fr]">
+        <div className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Selected ads</p>
+          {selectedCreatives.map((creative) => {
+            const selected = creative.id === selectedAdCreative?.id;
+            const selectedCount = getAdMediaOptionIds(launchConfigDraft, creative.id, availableMediaCreatives).length;
+            return (
+              <button
+                key={creative.id}
+                type="button"
+                onClick={() => setOpenAdCreativeId(creative.id)}
+                className={cn(
+                  'flex w-full items-center gap-3 rounded-xl border p-2 text-left transition',
+                  selected ? 'border-blue-300 bg-white shadow-sm' : 'border-transparent bg-transparent hover:bg-white',
+                )}
+              >
+                <span className="h-11 w-11 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
+                  {creative.thumbnailUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={creative.thumbnailUrl} alt={creative.creativeName} className="h-full w-full object-cover" />
+                  ) : null}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-semibold text-slate-900">{getCreativeName(creative)}</span>
+                  <span className="block text-xs text-slate-500">{selectedCount} media selected</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-slate-950">
+                {selectedAdCreative ? getCreativeName(selectedAdCreative) : 'Select an ad'}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">{selectedIds.length} media selected for this Meta ad</p>
+            </div>
+            <input
+              value={mediaSearch}
+              onChange={(event) => setMediaSearch(event.target.value)}
+              placeholder="Search Ready creatives..."
+              className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+            />
+          </div>
+          <div className="mt-3 grid max-h-80 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
+            {mediaPool.map((creative) => {
+              const selected = selectedIds.includes(creative.id);
+              const disabled = !selected && selectedIds.length >= 10;
+              return (
+                <button
+                  key={creative.id}
+                  type="button"
+                  disabled={!selectedAdCreative || disabled}
+                  onClick={() => selectedAdCreative && toggleMedia(selectedAdCreative.id, creative.id)}
+                  className={cn(
+                    'flex min-h-16 items-center gap-3 rounded-xl border bg-white p-2 text-left transition',
+                    selected ? 'border-blue-300 bg-blue-50' : 'border-slate-200 hover:border-blue-200 hover:bg-blue-50/40',
+                    disabled && 'cursor-not-allowed opacity-50 hover:border-slate-200 hover:bg-white',
+                  )}
+                >
+                  <span className="h-11 w-11 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                    {creative.thumbnailUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={creative.thumbnailUrl} alt={creative.creativeName} className="h-full w-full object-cover" />
+                    ) : null}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold text-slate-900">{getCreativeName(creative)}</span>
+                    <span className="block text-xs text-slate-500">{formatLabels[creative.creativeFormat]}</span>
+                  </span>
+                  <span
+                    className={cn(
+                      'h-4 w-4 shrink-0 rounded-full border',
+                      selected ? 'border-blue-600 bg-blue-600 shadow-[inset_0_0_0_3px_white]' : 'border-slate-300 bg-white',
+                    )}
+                  />
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
     </div>
   );
