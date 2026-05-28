@@ -62,6 +62,7 @@ export function MetaConnectionDetails({
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(true);
   const [search, setSearch] = useState('');
+  const [showLinkedAccountsOnly, setShowLinkedAccountsOnly] = useState(false);
   const [expandedBMs, setExpandedBMs] = useState<Set<string>>(new Set());
   const [togglingAccounts, setTogglingAccounts] = useState<Set<string>>(new Set());
 
@@ -113,18 +114,26 @@ export function MetaConnectionDetails({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeId]);
 
+  // Check if an account is selected (linked to the store)
+  const selectedIds = useMemo(() => {
+    if (!details?.selectedAccounts) return new Set<string>();
+    return new Set(details.selectedAccounts.map((a) => a.id));
+  }, [details?.selectedAccounts]);
+
   // Group accounts by Business Manager
   const { bmGroups, personalAccounts } = useMemo(() => {
     if (!details) return { bmGroups: [] as BMGroup[], personalAccounts: [] as AdAccount[] };
 
     const searchLower = search.toLowerCase();
-    const filtered = details.adAccounts.filter(
-      (acc) =>
+    const filtered = details.adAccounts.filter((acc) => {
+      const matchesSearch =
         acc.name.toLowerCase().includes(searchLower) ||
         acc.id.toLowerCase().includes(searchLower) ||
         acc.accountId.toLowerCase().includes(searchLower) ||
-        (acc.business?.name.toLowerCase().includes(searchLower) ?? false)
-    );
+        (acc.business?.name.toLowerCase().includes(searchLower) ?? false);
+      const matchesLinkedFilter = !showLinkedAccountsOnly || selectedIds.has(acc.id);
+      return matchesSearch && matchesLinkedFilter;
+    });
 
     const bmMap = new Map<string, BMGroup>();
     const personal: AdAccount[] = [];
@@ -150,13 +159,7 @@ export function MetaConnectionDetails({
     );
 
     return { bmGroups: groups, personalAccounts: personal };
-  }, [details, search]);
-
-  // Check if an account is selected (linked to the store)
-  const selectedIds = useMemo(() => {
-    if (!details?.selectedAccounts) return new Set<string>();
-    return new Set(details.selectedAccounts.map((a) => a.id));
-  }, [details?.selectedAccounts]);
+  }, [details, search, selectedIds, showLinkedAccountsOnly]);
 
   const linkedCount = selectedIds.size;
 
@@ -283,6 +286,18 @@ export function MetaConnectionDetails({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <label
+            onClick={(e) => e.stopPropagation()}
+            className="flex items-center gap-2 rounded-md px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
+          >
+            <input
+              type="checkbox"
+              checked={showLinkedAccountsOnly}
+              onChange={(e) => setShowLinkedAccountsOnly(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            Show linked accounts
+          </label>
           {linkedCount > 0 && (
             <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
               {linkedCount} account{linkedCount !== 1 ? 's' : ''} linked
@@ -349,7 +364,11 @@ export function MetaConnectionDetails({
               <div className="px-5 py-8 text-center">
                 <BarChart3 className="mx-auto h-8 w-8 text-gray-300" />
                 <p className="mt-2 text-sm text-gray-500">
-                  {search ? 'No ad accounts match your search.' : 'No ad accounts found.'}
+                  {showLinkedAccountsOnly
+                    ? 'No linked ad accounts match this view.'
+                    : search
+                      ? 'No ad accounts match your search.'
+                      : 'No ad accounts found.'}
                 </p>
               </div>
             ) : (

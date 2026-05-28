@@ -17,6 +17,7 @@ import {
   LayoutGrid,
   Loader2,
   Plus,
+  RefreshCw,
   Search,
   SlidersHorizontal,
   Sparkles,
@@ -151,6 +152,14 @@ interface CopyDraftItem {
   source: CopyDraftSource;
 }
 
+interface AiCopyVariantsResponse {
+  primaryTexts?: string[];
+  headlines?: string[];
+  descriptions?: string[];
+  model?: string;
+  error?: string;
+}
+
 interface LaunchConfigDraft {
   launchStatus: 'ACTIVE' | 'PAUSED';
   launchPaused: boolean;
@@ -184,27 +193,6 @@ interface ThumbnailDraft extends VideoThumbnailSelection {
   framePickerOpen?: boolean;
   videoPreviewUrl?: string;
   error?: string;
-}
-
-interface AiCopyInsightsResponse {
-  source?: string;
-  meta?: {
-    mode?: string;
-    modelSource?: string;
-    fallbackReason?: string;
-  };
-  insights?: {
-    suggestedPTs?: Array<{ text?: string }>;
-    suggestedHeadlines?: Array<{ text?: string }>;
-    suggestedDescriptions?: Array<{ text?: string }>;
-  };
-  launchDraft?: {
-    copyPlan?: {
-      primaryTexts?: string[];
-      headlines?: string[];
-      descriptions?: string[];
-    };
-  };
 }
 
 type LaunchUploadStage = 'queued' | 'downloading' | 'uploading' | 'ready' | 'skipped' | 'error';
@@ -948,25 +936,27 @@ function copyDraftsFromTexts(texts: string[] | undefined, source: CopyDraftSourc
   return uniqueTexts(texts || []).map((text) => createCopyDraft(text, source, selected));
 }
 
-function appendCopyDrafts(
-  current: CopyDraftItem[],
-  texts: Array<string | undefined>,
-  source: CopyDraftSource,
-  selected = false,
-): CopyDraftItem[] {
-  const seen = new Set(current.map((item) => item.text.trim().toLowerCase()).filter(Boolean));
-  const next = [...current];
-  for (const text of uniqueTexts(texts)) {
-    const key = text.trim().toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    next.push(createCopyDraft(text, source, selected));
-  }
-  return next;
-}
-
 function selectedCopyTexts(items: CopyDraftItem[]): string[] {
   return uniqueTexts(items.filter((item) => item.selected).map((item) => item.text));
+}
+
+function visibleOurCopyTexts(items: CopyDraftItem[]): string[] {
+  return uniqueTexts(
+    items
+      .filter((item) => item.source === 'inherited' || item.source === 'manual')
+      .map((item) => item.text),
+  );
+}
+
+function replaceAiCopyDrafts(
+  current: CopyDraftItem[],
+  texts: Array<string | undefined>,
+  selected = false,
+): CopyDraftItem[] {
+  return [
+    ...current.filter((item) => item.source !== 'ai'),
+    ...uniqueTexts(texts).slice(0, 3).map((text) => createCopyDraft(text, 'ai', selected)),
+  ];
 }
 
 function arraysEqual(left: string[], right: string[]): boolean {
@@ -1054,33 +1044,6 @@ function shortCopyPreview(text: string, maxLength = 170): string {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (normalized.length <= maxLength) return normalized;
   return `${normalized.slice(0, maxLength).trim()}...`;
-}
-
-function creativeSelectionContext(creatives: InboxCreative[]): Array<Record<string, unknown>> {
-  return creatives.map((creative) => {
-    const taskContext = asRecord(creative.clickupTaskContext);
-    const tags = Array.isArray(taskContext?.tags)
-      ? taskContext.tags.map((tag) => asString(asRecord(tag)?.name)).filter(Boolean)
-      : undefined;
-
-    return {
-      id: creative.id,
-      creativeName: creative.creativeName,
-      clickupTaskName: creative.clickupTaskName,
-      clickupListName: creative.clickupListName,
-      clickupDescription: asString(taskContext?.description),
-      clickupTags: tags,
-      clickupCustomFields: creative.clickupCustomFields,
-      creativeFormat: creative.creativeFormat,
-      hook: getHook(creative),
-      angle: creative.angle,
-      creator: creative.creator,
-      driveParentFolderName: creative.driveParentFolderName,
-      uploadedAt: creative.uploadedAt,
-      alreadyTested: creative.alreadyTested,
-      pastTestResult: creative.pastTestResult,
-    };
-  });
 }
 
 function readableAdSetName(value: string): string {
@@ -1551,6 +1514,7 @@ export default function LaunchCreativeSelectionPage() {
   const [aiCopyLoading, setAiCopyLoading] = useState(false);
   const [aiCopyError, setAiCopyError] = useState<string | null>(null);
   const [aiCopyStatus, setAiCopyStatus] = useState<string | null>(null);
+  const [aiCopyGenerationKey, setAiCopyGenerationKey] = useState('');
   const [launchConfigDraft, setLaunchConfigDraft] = useState<LaunchConfigDraft>(() => createInitialLaunchConfigDraft(null));
   const [launchConfigInitKey, setLaunchConfigInitKey] = useState('');
   const [query, setQuery] = useState('');
@@ -1573,6 +1537,8 @@ export default function LaunchCreativeSelectionPage() {
   const [clockTick, setClockTick] = useState(0);
   const campaignsRequestIdRef = useRef(0);
   const inheritedSettingsRequestIdRef = useRef(0);
+  const aiCopyRequestKeyRef = useRef('');
+  const aiCopyRequestIdRef = useRef(0);
 
   const selectedProductId = productFilter === 'all' ? undefined : productFilter;
   const resolvedStoreIdForView = storeIdFromUrl || activeStoreId;
@@ -2313,8 +2279,12 @@ export default function LaunchCreativeSelectionPage() {
       setHeadlineDrafts([]);
       setDescriptionDrafts([]);
       setCtaDraft('LEARN_MORE');
+      setAiCopyLoading(false);
       setAiCopyError(null);
       setAiCopyStatus(null);
+      setAiCopyGenerationKey('');
+      aiCopyRequestKeyRef.current = '';
+      aiCopyRequestIdRef.current += 1;
       setCopyInitKey(noSourceKey);
       return;
     }
@@ -2338,8 +2308,12 @@ export default function LaunchCreativeSelectionPage() {
       return copyDraftsFromTexts(inheritedSettings?.descriptions, 'inherited', true);
     });
     setCtaDraft(ctaLabel(inheritedSettings?.ctaType));
+    setAiCopyLoading(false);
     setAiCopyError(null);
     setAiCopyStatus(null);
+    setAiCopyGenerationKey('');
+    aiCopyRequestKeyRef.current = '';
+    aiCopyRequestIdRef.current += 1;
     setCopyInitKey(sourceKey);
   }, [
     copyInitKey,
@@ -2949,63 +2923,174 @@ export default function LaunchCreativeSelectionPage() {
     }
   };
 
-  const generateAiCopy = async () => {
-    if (!resolvedStoreIdForView || !launchProductId) {
-      setAiCopyError('Select a product and store before generating AI copy.');
+  const generateAiCopy = useCallback(async (
+    generationKey: string,
+    seeds: {
+      primaryTexts: string[];
+      headlines: string[];
+      descriptions: string[];
+      avoidPrimaryTexts?: string[];
+      avoidHeadlines?: string[];
+      avoidDescriptions?: string[];
+      variationSeed?: string;
+    },
+  ) => {
+    const primaryTextSeeds = uniqueTexts(seeds.primaryTexts);
+    const headlineSeeds = uniqueTexts(seeds.headlines);
+    const descriptionSeeds = uniqueTexts(seeds.descriptions);
+    const avoidPrimaryTextSeeds = uniqueTexts(seeds.avoidPrimaryTexts || []);
+    const avoidHeadlineSeeds = uniqueTexts(seeds.avoidHeadlines || []);
+    const avoidDescriptionSeeds = uniqueTexts(seeds.avoidDescriptions || []);
+    if (primaryTextSeeds.length === 0 && headlineSeeds.length === 0 && descriptionSeeds.length === 0) {
+      aiCopyRequestIdRef.current += 1;
+      setAiCopyLoading(false);
+      setAiCopyError('AI Copy Lab needs fetched Meta copy before Claude can generate variants.');
+      setAiCopyStatus(null);
+      setAiCopyGenerationKey(generationKey);
+      aiCopyRequestKeyRef.current = generationKey;
       return;
     }
 
+    const requestId = aiCopyRequestIdRef.current + 1;
+    aiCopyRequestIdRef.current = requestId;
+    setAiCopyGenerationKey(generationKey);
+    aiCopyRequestKeyRef.current = generationKey;
     setAiCopyLoading(true);
     setAiCopyError(null);
-    setAiCopyStatus(null);
+    setAiCopyStatus('Claude is generating up to 3 primary texts, headlines, and descriptions...');
+    setPrimaryTextDrafts((items) => items.filter((item) => item.source !== 'ai'));
+    setHeadlineDrafts((items) => items.filter((item) => item.source !== 'ai'));
+    setDescriptionDrafts((items) => items.filter((item) => item.source !== 'ai'));
 
     try {
-      const response = await fetch('/api/creative-hub/ai-insights', {
+      const response = await fetch('/api/creative-hub/launch/ai-copy-variants', {
         method: 'POST',
+        cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          storeId: resolvedStoreIdForView,
-          productProfileId: launchProductId,
-          refresh: true,
-          selectedCreativeIds: selectedCreatives.map((creative) => creative.id),
-          selectedCreatives: creativeSelectionContext(selectedCreatives),
+          productName: selectedProfile?.productName || productNameById(profiles, launchProductId),
+          sourceAdName: inheritedSettings?.sourceAdName,
+          sourceAdSetName: inheritedSettings?.sourceAdSetName,
+          primaryTexts: primaryTextSeeds,
+          headlines: headlineSeeds,
+          descriptions: descriptionSeeds,
+          avoidPrimaryTexts: avoidPrimaryTextSeeds,
+          avoidHeadlines: avoidHeadlineSeeds,
+          avoidDescriptions: avoidDescriptionSeeds,
+          variationSeed: seeds.variationSeed || `${generationKey}:${Date.now()}`,
         }),
       });
-      const data = (await response.json()) as AiCopyInsightsResponse & { error?: string };
+      const data = (await response.json()) as AiCopyVariantsResponse;
       if (!response.ok) {
         throw new Error(data.error || `Failed to generate AI copy (${response.status})`);
       }
 
-      const primarySuggestions = uniqueTexts([
-        ...(data.launchDraft?.copyPlan?.primaryTexts || []),
-        ...(data.insights?.suggestedPTs || []).map((item) => item.text),
-      ]);
-      const headlineSuggestions = uniqueTexts([
-        ...(data.launchDraft?.copyPlan?.headlines || []),
-        ...(data.insights?.suggestedHeadlines || []).map((item) => item.text),
-      ]);
-      const descriptionSuggestions = uniqueTexts([
-        ...(data.launchDraft?.copyPlan?.descriptions || []),
-        ...(data.insights?.suggestedDescriptions || []).map((item) => item.text),
-      ]);
-
-      setPrimaryTextDrafts((items) => appendCopyDrafts(items, primarySuggestions, 'ai', false));
-      setHeadlineDrafts((items) => appendCopyDrafts(items, headlineSuggestions, 'ai', false));
-      setDescriptionDrafts((items) => appendCopyDrafts(items, descriptionSuggestions, 'ai', false));
+      const primarySuggestions = uniqueTexts(data.primaryTexts || []);
+      const headlineSuggestions = uniqueTexts(data.headlines || []);
+      const descriptionSuggestions = uniqueTexts(data.descriptions || []);
 
       const addedCount = primarySuggestions.length + headlineSuggestions.length + descriptionSuggestions.length;
-      const usedClaude = data.source === 'ai' || data.meta?.mode?.includes('claude');
-      setAiCopyStatus(
-        addedCount > 0
-          ? `${usedClaude ? 'Claude' : 'AI fallback'} added ${addedCount} suggestion${addedCount !== 1 ? 's' : ''}. Select the ones you want to launch.`
-          : 'No new AI suggestions were returned.',
-      );
+      if (addedCount === 0) {
+        throw new Error('Claude did not return any usable AI copy variants.');
+      }
+
+      if (aiCopyRequestIdRef.current !== requestId) return;
+
+      setPrimaryTextDrafts((items) => replaceAiCopyDrafts(items, primarySuggestions, false));
+      setHeadlineDrafts((items) => replaceAiCopyDrafts(items, headlineSuggestions, false));
+      setDescriptionDrafts((items) => replaceAiCopyDrafts(items, descriptionSuggestions, false));
+
+      setAiCopyStatus(`Claude added ${addedCount} suggestion${addedCount !== 1 ? 's' : ''}. Select the ones you want to launch.`);
     } catch (err) {
+      if (aiCopyRequestIdRef.current !== requestId) return;
       setAiCopyError(err instanceof Error ? err.message : 'Failed to generate AI copy');
+      setAiCopyStatus(null);
     } finally {
-      setAiCopyLoading(false);
+      if (aiCopyRequestIdRef.current === requestId) {
+        setAiCopyLoading(false);
+      }
     }
-  };
+  }, [inheritedSettings, launchProductId, profiles, selectedProfile]);
+
+  const regenerateAiCopy = useCallback(() => {
+    const primaryTextSeeds = visibleOurCopyTexts(primaryTextDrafts);
+    const headlineSeeds = visibleOurCopyTexts(headlineDrafts);
+    const descriptionSeeds = visibleOurCopyTexts(descriptionDrafts);
+    const avoidPrimaryTextSeeds = uniqueTexts(
+      primaryTextDrafts.filter((item) => item.source === 'ai').map((item) => item.text),
+    );
+    const avoidHeadlineSeeds = uniqueTexts(
+      headlineDrafts.filter((item) => item.source === 'ai').map((item) => item.text),
+    );
+    const avoidDescriptionSeeds = uniqueTexts(
+      descriptionDrafts.filter((item) => item.source === 'ai').map((item) => item.text),
+    );
+    const variationSeed = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const generationKey = [
+      copyInitKey,
+      inheritedSettings?.sourceAdId || 'no-source-ad',
+      primaryTextSeeds.join('|'),
+      headlineSeeds.join('|'),
+      descriptionSeeds.join('|'),
+      variationSeed,
+    ].join('::');
+
+    void generateAiCopy(
+      generationKey,
+      {
+        primaryTexts: primaryTextSeeds,
+        headlines: headlineSeeds,
+        descriptions: descriptionSeeds,
+        avoidPrimaryTexts: avoidPrimaryTextSeeds,
+        avoidHeadlines: avoidHeadlineSeeds,
+        avoidDescriptions: avoidDescriptionSeeds,
+        variationSeed,
+      },
+    );
+  }, [
+    copyInitKey,
+    descriptionDrafts,
+    generateAiCopy,
+    headlineDrafts,
+    inheritedSettings?.sourceAdId,
+    primaryTextDrafts,
+  ]);
+
+  useEffect(() => {
+    if (currentStep !== 'copy') return;
+    if (inheritedSettingsLoading) return;
+    if (aiCopyLoading) return;
+    if (!inheritedSettings) return;
+
+    const primaryTextSeeds = visibleOurCopyTexts(primaryTextDrafts);
+    const headlineSeeds = visibleOurCopyTexts(headlineDrafts);
+    const descriptionSeeds = visibleOurCopyTexts(descriptionDrafts);
+    const generationKey = [
+      copyInitKey,
+      inheritedSettings.sourceAdId || 'no-source-ad',
+      primaryTextSeeds.join('|'),
+      headlineSeeds.join('|'),
+      descriptionSeeds.join('|'),
+    ].join('::');
+
+    if (!generationKey || aiCopyGenerationKey === generationKey) return;
+    void generateAiCopy(generationKey, {
+      primaryTexts: primaryTextSeeds,
+      headlines: headlineSeeds,
+      descriptions: descriptionSeeds,
+    });
+  }, [
+    aiCopyGenerationKey,
+    aiCopyLoading,
+    copyInitKey,
+    currentStep,
+    descriptionDrafts,
+    generateAiCopy,
+    headlineDrafts,
+    inheritedSettings,
+    inheritedSettingsLoading,
+    primaryTextDrafts,
+  ]);
 
   const updateCreativeUploadProgress = (
     creative: InboxCreative,
@@ -3854,7 +3939,7 @@ export default function LaunchCreativeSelectionPage() {
             inheritedSettingsLoading={inheritedSettingsLoading}
             onBack={() => setCurrentStep('batching')}
             onContinue={() => setCurrentStep('config')}
-            onGenerateAiCopy={generateAiCopy}
+            onRegenerateAiCopy={regenerateAiCopy}
             primaryTextDrafts={primaryTextDrafts}
             previewCreative={selectedCreatives[0]}
             productName={selectedProfile?.productName || productNameById(profiles, launchProductId)}
@@ -4687,7 +4772,7 @@ function CopySelectionStep({
   inheritedSettingsLoading,
   onBack,
   onContinue,
-  onGenerateAiCopy,
+  onRegenerateAiCopy,
   primaryTextDrafts,
   previewCreative,
   productName,
@@ -4710,7 +4795,7 @@ function CopySelectionStep({
   inheritedSettingsLoading: boolean;
   onBack: () => void;
   onContinue: () => void;
-  onGenerateAiCopy: () => void;
+  onRegenerateAiCopy: () => void;
   primaryTextDrafts: CopyDraftItem[];
   previewCreative?: InboxCreative;
   productName: string;
@@ -4737,6 +4822,38 @@ function CopySelectionStep({
     headlineDrafts.find((item) => item.text.trim())?.text ||
     productName;
   const previewDescription = selectedCopyTexts(descriptionDrafts)[0] || descriptionDrafts.find((item) => item.text.trim())?.text || '';
+  const setSelectionForSources = (
+    setItems: Dispatch<SetStateAction<CopyDraftItem[]>>,
+    sources: CopyDraftSource[],
+    selected: boolean,
+  ) => {
+    setItems((current) =>
+      current.map((item) =>
+        sources.includes(item.source) && item.text.trim() ? { ...item, selected } : item,
+      ),
+    );
+  };
+  const setCopyPanelSelection = (sources: CopyDraftSource[], selected: boolean) => {
+    setSelectionForSources(setPrimaryTextDrafts, sources, selected);
+    setSelectionForSources(setHeadlineDrafts, sources, selected);
+    setSelectionForSources(setDescriptionDrafts, sources, selected);
+  };
+  const getCopyPanelSelectionState = (sources: CopyDraftSource[]) => {
+    const panelItems = [...primaryTextDrafts, ...headlineDrafts, ...descriptionDrafts].filter(
+      (item) => sources.includes(item.source) && item.text.trim(),
+    );
+    const selectedCount = panelItems.filter((item) => item.selected).length;
+    return {
+      allSelected: panelItems.length > 0 && selectedCount === panelItems.length,
+      totalCount: panelItems.length,
+    };
+  };
+  const ourCopySelection = getCopyPanelSelectionState(['inherited', 'manual']);
+  const aiCopySelection = getCopyPanelSelectionState(['ai']);
+  const aiSuggestionCount =
+    primaryTextDrafts.filter((item) => item.source === 'ai').length +
+    headlineDrafts.filter((item) => item.source === 'ai').length +
+    descriptionDrafts.filter((item) => item.source === 'ai').length;
   const destinationUrl = inheritedSettings?.destinationUrl || 'https://example.com';
   const showInitialCopyLoading =
     inheritedSettingsLoading && primaryTextDrafts.length === 0 && headlineDrafts.length === 0 && descriptionDrafts.length === 0;
@@ -4813,9 +4930,12 @@ function CopySelectionStep({
                   Merged from inherited ads and your custom launch copy.
                 </p>
               </div>
-              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-500">
-                Deduped options
-              </span>
+              <CopyPanelActions
+                allSelected={ourCopySelection.allSelected}
+                badgeLabel="Deduped options"
+                disabled={ourCopySelection.totalCount === 0}
+                onToggleSelection={() => setCopyPanelSelection(['inherited', 'manual'], !ourCopySelection.allSelected)}
+              />
             </div>
             {showCopyRefreshing && (
               <div className="mt-4 flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700">
@@ -4862,38 +4982,58 @@ function CopySelectionStep({
                   Claude suggestions based on product context and the latest inherited ad copy.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={onGenerateAiCopy}
-                disabled={aiCopyLoading}
-                className={cn(
-                  'inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold transition',
-                  aiCopyLoading
-                    ? 'cursor-not-allowed bg-slate-100 text-slate-400'
-                    : 'border border-blue-100 bg-blue-50 text-blue-700 hover:bg-blue-100',
+              <div className="flex flex-wrap items-center gap-1.5">
+                {aiCopyLoading ? (
+                  <span className="inline-flex items-center justify-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-500">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Generating...
+                  </span>
+                ) : aiCopyError ? (
+                  <span className="inline-flex items-center justify-center gap-1.5 rounded-full border border-red-100 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-700">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Needs attention
+                  </span>
+                ) : aiSuggestionCount > 0 ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={onRegenerateAiCopy}
+                      className="inline-flex items-center justify-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      Regenerate
+                    </button>
+                    <CopyPanelActions
+                      allSelected={aiCopySelection.allSelected}
+                      disabled={aiCopySelection.totalCount === 0}
+                      onToggleSelection={() => setCopyPanelSelection(['ai'], !aiCopySelection.allSelected)}
+                    />
+                  </>
+                ) : (
+                  <span className="inline-flex items-center justify-center gap-1.5 rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Waiting
+                  </span>
                 )}
-              >
-                {aiCopyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                {aiCopyLoading ? 'Generating...' : 'Generate AI copy'}
-              </button>
+              </div>
             </div>
             <div className="mt-4 max-h-[520px] space-y-4 overflow-y-auto pr-1">
               <CopyChoiceSection
-                emptyLabel="Generate AI copy to see primary text ideas here."
+                emptyLabel={aiCopyLoading ? 'Generating primary text ideas...' : 'AI primary text ideas will appear automatically.'}
                 items={primaryTextDrafts}
                 setItems={setPrimaryTextDrafts}
                 sources={['ai']}
                 title="Primary text"
               />
               <CopyChoiceSection
-                emptyLabel="Generate AI copy to see headline ideas here."
+                emptyLabel={aiCopyLoading ? 'Generating headline ideas...' : 'AI headline ideas will appear automatically.'}
                 items={headlineDrafts}
                 setItems={setHeadlineDrafts}
                 sources={['ai']}
                 title="Headlines"
               />
               <CopyChoiceSection
-                emptyLabel="Generate AI copy to see description ideas here."
+                emptyLabel={aiCopyLoading ? 'Generating description ideas...' : 'AI description ideas will appear automatically.'}
                 items={descriptionDrafts}
                 setItems={setDescriptionDrafts}
                 sources={['ai']}
@@ -6557,6 +6697,43 @@ function CopyLoadingState() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function CopyPanelActions({
+  allSelected,
+  badgeLabel,
+  disabled,
+  onToggleSelection,
+}: {
+  allSelected: boolean;
+  badgeLabel?: string;
+  disabled: boolean;
+  onToggleSelection: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {badgeLabel && (
+        <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-500">
+          {badgeLabel}
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={onToggleSelection}
+        disabled={disabled}
+        className={cn(
+          'rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 transition',
+          disabled
+            ? 'cursor-not-allowed opacity-50'
+            : allSelected
+              ? 'hover:border-slate-300 hover:bg-slate-100'
+              : 'hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700',
+        )}
+      >
+        {allSelected ? 'Clear all' : 'Select all'}
+      </button>
     </div>
   );
 }
