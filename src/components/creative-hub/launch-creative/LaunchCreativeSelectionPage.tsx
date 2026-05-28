@@ -27,6 +27,10 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { CreativePreviewModal } from '@/components/creative-hub/CreativePreviewModal';
+import {
+  ExternalLaunchErrorPage,
+  type ExternalLaunchIssue,
+} from '@/components/creative-hub/launch-creative/ExternalLaunchErrorPage';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
 import { useStoreStore } from '@/stores/storeStore';
 import type {
@@ -212,6 +216,12 @@ interface LaunchSubmitResult {
   scheduledFor?: string;
   campaignId?: string;
   items?: Array<Record<string, unknown>>;
+  clickupSync?: {
+    attempted: number;
+    updated: number;
+    failed: number;
+    errors?: string[];
+  };
   error?: string;
 }
 
@@ -228,6 +238,16 @@ interface LaunchAdAccountOption {
   name: string;
   currency: string;
   campaignCount: number;
+}
+
+interface ExternalLaunchContext {
+  source: string;
+  storeId: string;
+  productId: string;
+  clickupTaskIds: string[];
+  launchId: string;
+  returnUrl: string;
+  callbackUrl: string;
 }
 
 const formatIcons: Record<CreativeFormat, typeof ImageIcon> = {
@@ -619,6 +639,77 @@ function normalizeMetaAdAccountId(value?: string | null): string | undefined {
   return trimmed.startsWith('act_') ? trimmed : `act_${trimmed.replace(/^act_/, '')}`;
 }
 
+function normalizeExternalId(value?: string | null): string {
+  return String(value || '').trim().toLowerCase();
+}
+
+function parseExternalTaskIds(searchParams: ReturnType<typeof useSearchParams>): string[] {
+  const rawValues = [
+    searchParams.get('clickupTaskIds'),
+    searchParams.get('taskIds'),
+    searchParams.get('clickupTaskId'),
+    searchParams.get('taskId'),
+  ];
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const raw of rawValues) {
+    for (const part of String(raw || '').split(',')) {
+      const id = part.trim();
+      const key = normalizeExternalId(id);
+      if (!id || seen.has(key)) continue;
+      seen.add(key);
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
+function buildExternalLaunchContext(searchParams: ReturnType<typeof useSearchParams>): ExternalLaunchContext | null {
+  const source = searchParams.get('source') || '';
+  const clickupTaskIds = parseExternalTaskIds(searchParams);
+  const hasExternalSignal = source.toLowerCase() === 'immuvi' || clickupTaskIds.length > 0;
+  if (!hasExternalSignal) return null;
+
+  return {
+    source: source || 'external',
+    storeId: searchParams.get('storeId') || '',
+    productId:
+      searchParams.get('productProfileId') ||
+      searchParams.get('productId') ||
+      searchParams.get('immuviProductId') ||
+      searchParams.get('shopifyProductId') ||
+      '',
+    clickupTaskIds,
+    launchId: searchParams.get('launchId') || '',
+    returnUrl: searchParams.get('returnUrl') || '',
+    callbackUrl: searchParams.get('callbackUrl') || '',
+  };
+}
+
+function findProfileForExternalProduct(profiles: ProductProfile[], productId: string): ProductProfile | undefined {
+  const normalizedProductId = normalizeExternalId(productId);
+  if (!normalizedProductId) return undefined;
+  return profiles.find((profile) =>
+    normalizeExternalId(profile.id) === normalizedProductId ||
+    normalizeExternalId(profile.shopifyProductId) === normalizedProductId ||
+    normalizeExternalId(profile.productName) === normalizedProductId
+  );
+}
+
+function findCreativesForExternalTasks(creatives: InboxCreative[], taskIds: string[]): InboxCreative[] {
+  const taskSet = new Set(taskIds.map(normalizeExternalId));
+  if (taskSet.size === 0) return [];
+  return creatives.filter((creative) => {
+    const taskId = normalizeExternalId(creative.clickupTaskId);
+    return taskId && taskSet.has(taskId);
+  });
+}
+
+function formatExternalTaskList(taskIds: string[]): string {
+  if (taskIds.length === 0) return 'None provided';
+  return taskIds.join(', ');
+}
+
 function isRawMetaAdAccountLabel(value?: string | null): boolean {
   const text = value?.trim();
   if (!text) return false;
@@ -934,6 +1025,16 @@ function createCopyDraft(text: string, source: CopyDraftSource, selected = true)
 
 function copyDraftsFromTexts(texts: string[] | undefined, source: CopyDraftSource, selected = true): CopyDraftItem[] {
   return uniqueTexts(texts || []).map((text) => createCopyDraft(text, source, selected));
+}
+
+function preserveVisibleSelectedIds(current: Set<string>, creatives: InboxCreative[]): Set<string> {
+  if (current.size === 0) return current;
+  const availableIds = new Set(creatives.map((creative) => creative.id));
+  const next = new Set<string>();
+  for (const id of current) {
+    if (availableIds.has(id)) next.add(id);
+  }
+  return next;
 }
 
 function selectedCopyTexts(items: CopyDraftItem[]): string[] {
@@ -1470,10 +1571,16 @@ function extractLaunchErrorFromResult(data: LaunchSubmitResult): string {
 export default function LaunchCreativeSelectionPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const initialProductId = searchParams.get('productProfileId') || searchParams.get('productId') || 'all';
+  const externalLaunchContext = useMemo(() => buildExternalLaunchContext(searchParams), [searchParams]);
+  const isImmuviLaunch = externalLaunchContext?.source.toLowerCase() === 'immuvi';
+  const initialProductId =
+    searchParams.get('productProfileId') ||
+    searchParams.get('productId') ||
+    externalLaunchContext?.productId ||
+    'all';
   const storeIdFromUrl = searchParams.get('storeId') || '';
 
-  const { activeStoreId, stores, error: storesError, fetchStores } = useStoreStore();
+  const { activeStoreId, stores, error: storesError, fetchStores, setActiveStore } = useStoreStore();
   const profiles = useCreativeHubStore((state) => state.profiles);
   const fetchProfiles = useCreativeHubStore((state) => state.fetchProfiles);
 
@@ -1522,6 +1629,7 @@ export default function LaunchCreativeSelectionPage() {
   const [statusFilter, setStatusFilter] = useState<FilterValue>('all');
   const [formatFilter, setFormatFilter] = useState<FilterValue>('all');
   const [funnelFilter, setFunnelFilter] = useState<FilterValue>('all');
+  const [showSelectedTasksOnly, setShowSelectedTasksOnly] = useState(() => Boolean(isImmuviLaunch));
   const [sortKey, setSortKey] = useState<SortKey>('created');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [loading, setLoading] = useState(true);
@@ -1533,12 +1641,15 @@ export default function LaunchCreativeSelectionPage() {
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [launchSuccess, setLaunchSuccess] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<Record<string, LaunchUploadProgress>>({});
+  const [externalLaunchIssue, setExternalLaunchIssue] = useState<ExternalLaunchIssue | null>(null);
+  const [externalLaunchNotice, setExternalLaunchNotice] = useState<string | null>(null);
   const [thumbnailDrafts, setThumbnailDrafts] = useState<Record<string, ThumbnailDraft>>({});
   const [clockTick, setClockTick] = useState(0);
   const campaignsRequestIdRef = useRef(0);
   const inheritedSettingsRequestIdRef = useRef(0);
   const aiCopyRequestKeyRef = useRef('');
   const aiCopyRequestIdRef = useRef(0);
+  const externalSelectionAppliedKeyRef = useRef('');
 
   const selectedProductId = productFilter === 'all' ? undefined : productFilter;
   const resolvedStoreIdForView = storeIdFromUrl || activeStoreId;
@@ -1546,6 +1657,26 @@ export default function LaunchCreativeSelectionPage() {
   const selectedCreatives = useMemo(
     () => creatives.filter((creative) => selectedIds.has(creative.id)),
     [creatives, selectedIds],
+  );
+  const selectedClickUpTaskIds = useMemo(() => {
+    const taskIds = new Set<string>();
+    for (const creative of selectedCreatives) {
+      const taskId = normalizeExternalId(creative.clickupTaskId);
+      if (taskId) taskIds.add(taskId);
+    }
+    return taskIds;
+  }, [selectedCreatives]);
+  const externalLaunchKey = useMemo(
+    () => externalLaunchContext
+      ? [
+          externalLaunchContext.source,
+          externalLaunchContext.storeId,
+          externalLaunchContext.productId,
+          externalLaunchContext.clickupTaskIds.join(','),
+          externalLaunchContext.launchId,
+        ].join('|')
+      : '',
+    [externalLaunchContext],
   );
   const launchProductId =
     selectedProductId ||
@@ -1742,6 +1873,7 @@ export default function LaunchCreativeSelectionPage() {
   }, [linkedAdAccountIds, selectedProfile?.adAccountId]);
 
   const loadCreatives = useCallback(async (forceRefresh = false) => {
+    const externalTaskIds = externalLaunchContext?.clickupTaskIds ?? [];
     const cachedReadyCreatives = getReadyCreatives(
       useCreativeHubStore.getState().inboxCreatives,
       selectedProductId,
@@ -1751,7 +1883,7 @@ export default function LaunchCreativeSelectionPage() {
 
     if (hasInstantCreatives) {
       setCreatives(cachedReadyCreatives);
-      setSelectedIds(new Set());
+      setSelectedIds((current) => preserveVisibleSelectedIds(current, cachedReadyCreatives));
       setCollapsedGroups(new Set(cachedReadyCreatives.map(getGroupName)));
       setLastSyncedAt(useCreativeHubStore.getState().inboxLastSyncedAt);
       setLoading(false);
@@ -1759,9 +1891,52 @@ export default function LaunchCreativeSelectionPage() {
       setLoading(true);
     }
     setError(null);
+    setExternalLaunchIssue(null);
 
     try {
-      if (!activeStoreId && !storeIdFromUrl) {
+      if (storeIdFromUrl) {
+        await fetchStores();
+        const availableStores = useStoreStore.getState().stores;
+        const requestedStore = availableStores.find((store) => store.id === storeIdFromUrl);
+        if (!requestedStore) {
+          setCreatives([]);
+          setSelectedIds(new Set());
+          setLoading(false);
+          setExternalLaunchIssue({
+            title: 'Store Not Found',
+            message:
+              'The requested store was not found in this workspace, or it is not linked to your OneScale login.',
+            details: [
+              { label: 'Requested store ID', value: storeIdFromUrl },
+              { label: 'Source', value: externalLaunchContext?.source || 'direct link' },
+              { label: 'ClickUp tasks', value: formatExternalTaskList(externalTaskIds) },
+            ],
+          });
+          return;
+        }
+
+        if (useStoreStore.getState().activeStoreId !== storeIdFromUrl) {
+          setActiveStore(storeIdFromUrl);
+        }
+
+        const metaAccounts = (requestedStore.adAccounts || []).filter((account) => account.platform === 'meta');
+        if (metaAccounts.length === 0) {
+          setCreatives([]);
+          setSelectedIds(new Set());
+          setLoading(false);
+          setExternalLaunchIssue({
+            title: 'Meta is not linked for this store',
+            message:
+              'The store exists in OneScale, but no Meta ad account is linked to it. Link a Meta ad account before launching creatives from Immuvi.',
+            details: [
+              { label: 'Store', value: requestedStore.name || storeIdFromUrl },
+              { label: 'Store ID', value: storeIdFromUrl },
+              { label: 'ClickUp tasks', value: formatExternalTaskList(externalTaskIds) },
+            ],
+          });
+          return;
+        }
+      } else if (!activeStoreId) {
         await fetchStores();
       }
 
@@ -1775,10 +1950,60 @@ export default function LaunchCreativeSelectionPage() {
       }
 
       await fetchProfiles(resolvedStoreId);
+      const latestProfiles = useCreativeHubStore.getState().profiles;
+      let effectiveProductId = selectedProductId;
+
+      if (externalLaunchContext) {
+        if (!externalLaunchContext.productId) {
+          setCreatives([]);
+          setSelectedIds(new Set());
+          setLoading(false);
+          setExternalLaunchIssue({
+            title: 'Product link is missing',
+            message:
+              'The Immuvi launch link did not include a OneScale product id, so OneScale cannot safely choose the product to launch from.',
+            details: [
+              { label: 'Store ID', value: resolvedStoreId },
+              { label: 'Expected parameter', value: 'productProfileId' },
+              { label: 'ClickUp tasks', value: formatExternalTaskList(externalTaskIds) },
+            ],
+          });
+          return;
+        }
+
+        const requestedProfile = findProfileForExternalProduct(latestProfiles, externalLaunchContext.productId);
+        if (!requestedProfile) {
+          setCreatives([]);
+          setSelectedIds(new Set());
+          setLoading(false);
+          setExternalLaunchIssue({
+            title: 'Product link is wrong',
+            message:
+              'The product id in the Immuvi launch link does not match any product profile linked to this OneScale store.',
+            details: [
+              { label: 'Requested product ID', value: externalLaunchContext.productId },
+              { label: 'Store ID', value: resolvedStoreId },
+              {
+                label: 'Available products',
+                value: latestProfiles.length > 0
+                  ? latestProfiles.slice(0, 6).map((profile) => `${profile.productName} (${profile.id})`)
+                  : 'No product profiles found',
+              },
+              { label: 'ClickUp tasks', value: formatExternalTaskList(externalTaskIds) },
+            ],
+          });
+          return;
+        }
+
+        effectiveProductId = requestedProfile.id;
+        if (productFilter !== requestedProfile.id) {
+          setProductFilter(requestedProfile.id);
+        }
+      }
 
       const params = new URLSearchParams({ storeId: resolvedStoreId });
       if (forceRefresh) params.set('refresh', '1');
-      if (selectedProductId) params.set('productId', selectedProductId);
+      if (effectiveProductId) params.set('productId', effectiveProductId);
 
       const res = await fetch(`/api/creative-hub/inbox?${params.toString()}`);
       const data = (await res.json()) as InboxResponse;
@@ -1787,13 +2012,67 @@ export default function LaunchCreativeSelectionPage() {
       }
 
       const allProductReadyTasks = (data.creatives || []).filter((creative) =>
-        !selectedProductId || creative.productProfileId === selectedProductId
+        !effectiveProductId || creative.productProfileId === effectiveProductId
       );
-      const readyCreatives = getReadyCreatives(data.creatives || [], selectedProductId);
+      const readyCreatives = getReadyCreatives(data.creatives || [], effectiveProductId);
+
+      if (externalLaunchContext && externalTaskIds.length > 0) {
+        const foundTaskIds = new Set(
+          allProductReadyTasks
+            .map((creative) => normalizeExternalId(creative.clickupTaskId))
+            .filter(Boolean),
+        );
+        const missingTaskIds = externalTaskIds.filter((taskId) => !foundTaskIds.has(normalizeExternalId(taskId)));
+        if (missingTaskIds.length > 0) {
+          const foundTaskNames = uniqueTexts(
+            allProductReadyTasks.map((creative) => creative.clickupTaskName || creative.clickupTaskId),
+          );
+          const requestedProfile = effectiveProductId
+            ? latestProfiles.find((profile) => profile.id === effectiveProductId)
+            : undefined;
+          setCreatives([]);
+          setSelectedIds(new Set());
+          setLoading(false);
+          setExternalLaunchIssue({
+            title: 'ClickUp tasks were not found',
+            message:
+              'OneScale found the store and product, but one or more ClickUp tasks from the Immuvi link do not exist in that product launch queue.',
+            details: [
+              { label: 'Product', value: requestedProfile ? `${requestedProfile.productName} (${requestedProfile.id})` : effectiveProductId || 'Unknown' },
+              { label: 'Requested tasks', value: formatExternalTaskList(externalTaskIds) },
+              { label: 'Missing tasks', value: formatExternalTaskList(missingTaskIds) },
+              { label: 'Found tasks in product', value: foundTaskNames.length > 0 ? foundTaskNames.join(', ') : 'None' },
+            ],
+          });
+          return;
+        }
+      }
 
       setCreatives(readyCreatives);
       setReadyTasksWithoutAssets(Math.max(0, allProductReadyTasks.length - readyCreatives.length));
-      setSelectedIds(new Set());
+      if (externalTaskIds.length > 0 && externalSelectionAppliedKeyRef.current !== externalLaunchKey) {
+        const matchedCreatives = findCreativesForExternalTasks(readyCreatives, externalTaskIds);
+        if (matchedCreatives.length > 0) {
+          setSelectedIds(new Set(matchedCreatives.map((creative) => creative.id)));
+          externalSelectionAppliedKeyRef.current = externalLaunchKey;
+          const matchedTaskCount = new Set(matchedCreatives.map((creative) => normalizeExternalId(creative.clickupTaskId))).size;
+          setExternalLaunchNotice(
+            `Selected ${matchedCreatives.length} creative${matchedCreatives.length !== 1 ? 's' : ''} from ${matchedTaskCount} ClickUp task${matchedTaskCount !== 1 ? 's' : ''}.`,
+          );
+          const matchedProductIds = uniqueTexts(matchedCreatives.map((creative) => creative.productProfileId));
+          if (productFilter === 'all' && matchedProductIds.length === 1) {
+            setProductFilter(matchedProductIds[0]);
+          }
+        } else {
+          setSelectedIds(new Set());
+          externalSelectionAppliedKeyRef.current = externalLaunchKey;
+          setExternalLaunchNotice(
+            `No ready creative media was found for ClickUp task${externalTaskIds.length !== 1 ? 's' : ''}: ${formatExternalTaskList(externalTaskIds)}. Refresh from ClickUp after the task is ready and has media attached.`,
+          );
+        }
+      } else {
+        setSelectedIds((current) => preserveVisibleSelectedIds(current, readyCreatives));
+      }
       setCollapsedGroups(new Set(readyCreatives.map(getGroupName)));
       setLastSyncedAt(data.lastSyncedAt || data.syncedAt || data.cacheMeta?.lastSyncedAt || null);
       useCreativeHubStore.setState({
@@ -1813,11 +2092,27 @@ export default function LaunchCreativeSelectionPage() {
     } finally {
       setLoading(false);
     }
-  }, [activeStoreId, fetchProfiles, fetchStores, selectedProductId, storeIdFromUrl]);
+  }, [
+    activeStoreId,
+    externalLaunchContext,
+    externalLaunchKey,
+    fetchProfiles,
+    fetchStores,
+    productFilter,
+    selectedProductId,
+    setActiveStore,
+    storeIdFromUrl,
+  ]);
 
   useEffect(() => {
     void loadCreatives();
   }, [loadCreatives]);
+
+  useEffect(() => {
+    if (isImmuviLaunch) {
+      setShowSelectedTasksOnly(true);
+    }
+  }, [isImmuviLaunch]);
 
   useEffect(() => {
     if (campaignMode !== 'new') return;
@@ -2454,6 +2749,10 @@ export default function LaunchCreativeSelectionPage() {
   const filteredCreatives = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     const filtered = creatives.filter((creative) => {
+      if (showSelectedTasksOnly) {
+        const taskId = normalizeExternalId(creative.clickupTaskId);
+        if (!taskId || !selectedClickUpTaskIds.has(taskId)) return false;
+      }
       if (productFilter !== 'all' && creative.productProfileId !== productFilter) return false;
       if (statusFilter !== 'all' && getStatusLabel(creative) !== statusFilter) return false;
       if (formatFilter !== 'all' && creative.creativeFormat !== formatFilter) return false;
@@ -2487,7 +2786,18 @@ export default function LaunchCreativeSelectionPage() {
         : compareText(String(aValue), String(bValue));
       return sortDirection === 'asc' ? result : -result;
     });
-  }, [creatives, formatFilter, funnelFilter, productFilter, query, sortDirection, sortKey, statusFilter]);
+  }, [
+    creatives,
+    formatFilter,
+    funnelFilter,
+    productFilter,
+    query,
+    selectedClickUpTaskIds,
+    showSelectedTasksOnly,
+    sortDirection,
+    sortKey,
+    statusFilter,
+  ]);
 
   const groupedCreatives = useMemo(() => {
     const groups = new Map<string, InboxCreative[]>();
@@ -3498,13 +3808,20 @@ export default function LaunchCreativeSelectionPage() {
       const successMessage = data.status === 'scheduled' || launchConfig.launchTime === 'scheduled'
         ? `Launch scheduled for ${formatScheduledLabel(data.scheduledFor || launchConfigDraft.scheduledAt)}. Meta ad sets were created with the future start time.`
         : `Launch created successfully for ${selectedCreatives.length} creative${selectedCreatives.length !== 1 ? 's' : ''}.`;
-      setLaunchSuccess(successMessage);
+      const clickupWarning = data.clickupSync && data.clickupSync.failed > 0
+        ? ` ClickUp status sync had ${data.clickupSync.failed} warning${data.clickupSync.failed !== 1 ? 's' : ''}; the Meta launch was still created.`
+        : '';
+      setLaunchSuccess(`${successMessage}${clickupWarning}`);
     } catch (err) {
       setLaunchError(err instanceof Error ? err.message : 'Launch failed');
     } finally {
       setLaunching(false);
     }
   };
+
+  if (externalLaunchIssue) {
+    return <ExternalLaunchErrorPage issue={externalLaunchIssue} />;
+  }
 
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-6 text-slate-950 sm:px-6 lg:px-8">
@@ -3539,6 +3856,33 @@ export default function LaunchCreativeSelectionPage() {
             </div>
           </div>
         </section>
+
+        {externalLaunchContext && (
+          <section
+            className={cn(
+              'rounded-2xl border px-5 py-4 text-sm shadow-sm',
+              externalLaunchNotice?.startsWith('No ready creative')
+                ? 'border-amber-200 bg-amber-50 text-amber-900'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-900',
+            )}
+          >
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="font-semibold">
+                  Opened from {externalLaunchContext.source === 'immuvi' ? 'Immuvi' : externalLaunchContext.source}
+                </p>
+                <p className="mt-1 leading-6">
+                  {externalLaunchNotice || 'Resolving the requested store and ClickUp task selection...'}
+                </p>
+              </div>
+              {externalLaunchContext.clickupTaskIds.length > 0 && (
+                <span className="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold ring-1 ring-current/10">
+                  {externalLaunchContext.clickupTaskIds.length} task{externalLaunchContext.clickupTaskIds.length !== 1 ? 's' : ''}
+                </span>
+              )}
+            </div>
+          </section>
+        )}
 
         <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
           <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
@@ -3697,9 +4041,20 @@ export default function LaunchCreativeSelectionPage() {
               >
                 Refresh from ClickUp
               </button>
-              <span className="ml-auto rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white">
-                {selectedIds.size} selected
-              </span>
+              <div className="ml-auto flex items-center gap-3">
+                <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-semibold text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={showSelectedTasksOnly}
+                    onChange={(event) => setShowSelectedTasksOnly(event.target.checked)}
+                    className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  Show selected tasks
+                </label>
+                <span className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white">
+                  {selectedIds.size} selected
+                </span>
+              </div>
             </div>
           </div>
 

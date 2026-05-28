@@ -10,7 +10,12 @@ import {
   updateCreativeTestItem,
   getCreativeTest,
 } from '@/app/api/lib/creative-hub-db';
-import { getDb } from '@/app/api/lib/db';
+import { getDb, getThirdPartyToken, upsertThirdPartyToken } from '@/app/api/lib/db';
+import {
+  getPersistentThirdPartyToken,
+  hydrateStoreFromSupabase,
+  isSupabasePersistenceEnabled,
+} from '@/app/api/lib/supabase-persistence';
 import { validateLaunchPlanAssignments } from '@/lib/creative-hub/launchPlanValidation';
 import { getStoreCurrencyFromConfig, getStoreTimezoneFromConfig } from '@/lib/onboarding/stages/detectStoreConfig';
 import type { CreativeAdGroup, InboxCreative, LaunchConfig, TargetingSpec } from '@/types/creativeHub';
@@ -2072,6 +2077,85 @@ function mapSnapshotToLaunchItem(snapshot: InboxCreative): CreativeTestItemRow {
   };
 }
 
+async function getClickUpTokenForLaunch(storeId: string): Promise<string | null> {
+  if (isSupabasePersistenceEnabled()) {
+    await hydrateStoreFromSupabase(storeId);
+    const hydrated = getThirdPartyToken(storeId, 'clickup');
+    if (hydrated?.access_token) return hydrated.access_token;
+
+    const persistent = await getPersistentThirdPartyToken(storeId, 'clickup');
+    if (persistent?.access_token) {
+      upsertThirdPartyToken({
+        storeId,
+        platform: 'clickup',
+        accessToken: persistent.access_token,
+        metadata: persistent.metadata ? JSON.parse(persistent.metadata) as Record<string, unknown> : undefined,
+      });
+      const row = getThirdPartyToken(storeId, 'clickup');
+      return row?.access_token || persistent.access_token;
+    }
+    return null;
+  }
+
+  return getThirdPartyToken(storeId, 'clickup')?.access_token || null;
+}
+
+async function updateLaunchedClickUpTasksToTesting(
+  storeId: string,
+  items: CreativeTestItemRow[],
+): Promise<{ attempted: number; updated: number; failed: number; errors: string[] }> {
+  const uniqueTaskIds = Array.from(
+    new Set(
+      items
+        .map((item) => item.clickup_task_id?.trim())
+        .filter((taskId): taskId is string => Boolean(taskId)),
+    ),
+  );
+  if (uniqueTaskIds.length === 0) {
+    return { attempted: 0, updated: 0, failed: 0, errors: [] };
+  }
+
+  const token = await getClickUpTokenForLaunch(storeId);
+  if (!token) {
+    return {
+      attempted: uniqueTaskIds.length,
+      updated: 0,
+      failed: uniqueTaskIds.length,
+      errors: ['ClickUp is not connected for this OneScale store.'],
+    };
+  }
+
+  const errors: string[] = [];
+  let updated = 0;
+  for (const taskId of uniqueTaskIds) {
+    try {
+      const response = await fetch(`https://api.clickup.com/api/v2/task/${encodeURIComponent(taskId)}`, {
+        method: 'PUT',
+        headers: {
+          Authorization: token,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ status: 'testing' }),
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(`ClickUp ${response.status}${text ? `: ${text}` : ''}`);
+      }
+      updated += 1;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      errors.push(`${taskId}: ${message}`);
+    }
+  }
+
+  return {
+    attempted: uniqueTaskIds.length,
+    updated,
+    failed: uniqueTaskIds.length - updated,
+    errors,
+  };
+}
+
 function normalizeAdGroupsForCreativeIds(
   containerName: string,
   creativeIds: string[],
@@ -2669,6 +2753,7 @@ export async function POST(request: NextRequest) {
     // Step 3: Create adsets + ad creatives + ads
     const createdAdsetIds: string[] = [];
     let hasFailure = false;
+    let clickupSync: Awaited<ReturnType<typeof updateLaunchedClickUpTasksToTesting>> | undefined;
 
     const batches = launchConfig.batches as Array<{
       id: string;
@@ -3204,6 +3289,12 @@ export async function POST(request: NextRequest) {
         testId,
         launchConfig.launchTime === 'scheduled' ? 'scheduled' : 'active',
       );
+      if (launchConfig.launchTime !== 'scheduled') {
+        clickupSync = await updateLaunchedClickUpTasksToTesting(storeId, selectedItems);
+        if (clickupSync.failed > 0) {
+          console.warn('[launch] ClickUp testing-status sync had warnings', clickupSync);
+        }
+      }
     }
 
     // Fetch the updated test to return
@@ -3215,6 +3306,7 @@ export async function POST(request: NextRequest) {
       campaignId,
       scheduledFor: scheduledLaunchDate?.toISOString(),
       items: test?.items || [],
+      clickupSync,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Launch execution failed';
