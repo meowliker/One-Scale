@@ -589,6 +589,25 @@ function extractHeadlineFromCreative(creative: Record<string, unknown>): string 
   );
 }
 
+function extractDescriptionFromCreative(creative: Record<string, unknown>): string {
+  const story = asRecord(creative.object_story_spec);
+  const linkData = asRecord(story?.link_data);
+  const videoData = asRecord(story?.video_data);
+  const photoData = asRecord(story?.photo_data);
+  const templateData = asRecord(story?.template_data);
+
+  return (
+    firstAssetFeedText(creative, 'descriptions') ||
+    (typeof linkData?.description === 'string' ? linkData.description.trim() : '') ||
+    (typeof linkData?.link_description === 'string' ? linkData.link_description.trim() : '') ||
+    (typeof videoData?.link_description === 'string' ? videoData.link_description.trim() : '') ||
+    (typeof videoData?.description === 'string' ? videoData.description.trim() : '') ||
+    (typeof photoData?.caption === 'string' ? photoData.caption.trim() : '') ||
+    (typeof templateData?.description === 'string' ? templateData.description.trim() : '') ||
+    ''
+  );
+}
+
 function getCreativeStoryId(creative: Record<string, unknown>): string {
   const effectiveStoryId =
     typeof creative.effective_object_story_id === 'string' ? creative.effective_object_story_id.trim() : '';
@@ -1067,6 +1086,7 @@ export async function fetchMetaAdsByAccount(
       : '';
     const primaryText = chooseRicherPrimaryText(extractedPrimaryText, storyPrimaryText);
     const headline = extractHeadlineFromCreative(creative);
+    const description = extractDescriptionFromCreative(creative);
     const storyIds = extractStoryIdentifiersFromCreative(creative);
     const isVideo = !!creative.video_id;
     return {
@@ -1092,7 +1112,7 @@ export async function fetchMetaAdsByAccount(
         body: primaryText,
         primaryTexts: uniqueCopyTexts([...assetFeedTexts(creative, 'bodies'), primaryText]),
         headlines: uniqueCopyTexts([...assetFeedTexts(creative, 'titles'), headline]),
-        descriptions: uniqueCopyTexts(assetFeedTexts(creative, 'descriptions')),
+        descriptions: uniqueCopyTexts([...assetFeedTexts(creative, 'descriptions'), description]),
         ctaType: mapCtaType(creative.call_to_action_type || ''),
         mediaUrl: isVideo ? '' : (creative.image_url || ''),
         thumbnailUrl: creative.thumbnail_url || creative.image_url || '',
@@ -1386,6 +1406,7 @@ export async function fetchMetaAds(
         : '';
       const primaryText = chooseRicherPrimaryText(extractedPrimaryText, storyPrimaryText);
       const headline = extractHeadlineFromCreative(creative);
+      const description = extractDescriptionFromCreative(creative);
       const storyIds = extractStoryIdentifiersFromCreative(creative);
       const isVideo = !!creative.video_id;
       return {
@@ -1409,7 +1430,7 @@ export async function fetchMetaAds(
           body: primaryText,
           primaryTexts: uniqueCopyTexts([...assetFeedTexts(creative, 'bodies'), primaryText]),
           headlines: uniqueCopyTexts([...assetFeedTexts(creative, 'titles'), headline]),
-          descriptions: uniqueCopyTexts(assetFeedTexts(creative, 'descriptions')),
+          descriptions: uniqueCopyTexts([...assetFeedTexts(creative, 'descriptions'), description]),
           ctaType: mapCtaType(creative.call_to_action_type || ''),
           mediaUrl: isVideo ? '' : (creative.image_url || ''),
           thumbnailUrl: creative.thumbnail_url || creative.image_url || '',
@@ -1526,6 +1547,7 @@ export async function fetchMetaAds(
       : '';
     const primaryText = chooseRicherPrimaryText(extractedPrimaryText, storyPrimaryText);
     const headline = extractHeadlineFromCreative(creative);
+    const description = extractDescriptionFromCreative(creative);
     const storyIds = extractStoryIdentifiersFromCreative(creative);
     const isVideo = !!creative.video_id;
     let videoThumbnailUrl = creative.thumbnail_url || '';
@@ -1557,7 +1579,7 @@ export async function fetchMetaAds(
         body: primaryText,
         primaryTexts: uniqueCopyTexts([...assetFeedTexts(creative, 'bodies'), primaryText]),
         headlines: uniqueCopyTexts([...assetFeedTexts(creative, 'titles'), headline]),
-        descriptions: uniqueCopyTexts(assetFeedTexts(creative, 'descriptions')),
+        descriptions: uniqueCopyTexts([...assetFeedTexts(creative, 'descriptions'), description]),
         ctaType: mapCtaType(creative.call_to_action_type || ''),
         mediaUrl: isVideo ? '' : (creative.image_url || ''),
         thumbnailUrl: isVideo

@@ -315,9 +315,7 @@ function buildBaseLaunchConfig(
     headlines: [],
     descriptions: [],
     ctaType: 'SHOP_NOW',
-    creativeFormatMode: 'single_per_creative',
     advantageCreative: false,
-    mediaOptionCreativeIds: {},
     batches: [],
     batchStrategy: 'manual',
     creativesPerBatch: 3,
@@ -359,6 +357,27 @@ function trimExistingAdsetAssignments(
   return Object.fromEntries(entries.map(([adsetId, ids]) => [adsetId, ids.slice(0, idsPerAdsetLimit)]));
 }
 
+function trimExistingAdsetAdGroups(
+  groups?: LaunchConfig['existingAdsetAdGroups'],
+  adsetLimit = 12,
+  adLimit = 20,
+  idsPerAdLimit = 10,
+): LaunchConfig['existingAdsetAdGroups'] | undefined {
+  if (!groups) return undefined;
+  const entries = Object.entries(groups).slice(0, adsetLimit);
+  if (entries.length === 0) return undefined;
+  return Object.fromEntries(
+    entries.map(([adsetId, ads]) => [
+      adsetId,
+      ads.slice(0, adLimit).map((ad) => ({
+        id: ad.id,
+        name: ad.name,
+        creativeIds: ad.creativeIds.slice(0, idsPerAdLimit),
+      })),
+    ]),
+  );
+}
+
 function buildPersistedLaunchConfig(launchConfig: Partial<LaunchConfig>): Partial<LaunchConfig> {
   const {
     productProfileId,
@@ -368,6 +387,7 @@ function buildPersistedLaunchConfig(launchConfig: Partial<LaunchConfig>): Partia
     adsetMode,
     adsetDistribution,
     existingAdsetAssignments,
+    existingAdsetAdGroups,
     newCampaignName,
     structure,
     adAccountId,
@@ -389,9 +409,7 @@ function buildPersistedLaunchConfig(launchConfig: Partial<LaunchConfig>): Partia
     headlines,
     descriptions,
     ctaType,
-    creativeFormatMode,
     advantageCreative,
-    mediaOptionCreativeIds,
     launchTime,
     scheduledDate,
     scheduledTime,
@@ -423,6 +441,7 @@ function buildPersistedLaunchConfig(launchConfig: Partial<LaunchConfig>): Partia
     adsetMode,
     adsetDistribution,
     existingAdsetAssignments: trimExistingAdsetAssignments(existingAdsetAssignments),
+    existingAdsetAdGroups: trimExistingAdsetAdGroups(existingAdsetAdGroups),
     newCampaignName,
     structure,
     adAccountId,
@@ -444,9 +463,7 @@ function buildPersistedLaunchConfig(launchConfig: Partial<LaunchConfig>): Partia
     headlines: trimCopyItems(headlines as PersistedCopyItem[] | undefined),
     descriptions: trimCopyItems(descriptions as PersistedCopyItem[] | undefined),
     ctaType,
-    creativeFormatMode,
     advantageCreative,
-    mediaOptionCreativeIds,
     launchTime,
     scheduledDate,
     scheduledTime,
@@ -931,9 +948,7 @@ export const useCreativeHubStore = create<CreativeHubState>()(
         headlines: existingLaunchConfig.headlines || [],
         descriptions: existingLaunchConfig.descriptions || [],
         ctaType: existingLaunchConfig.ctaType || 'SHOP_NOW',
-        creativeFormatMode: existingLaunchConfig.creativeFormatMode || 'single_per_creative',
         advantageCreative: existingLaunchConfig.advantageCreative ?? false,
-        mediaOptionCreativeIds: existingLaunchConfig.mediaOptionCreativeIds || {},
         batches: batches.length > 0 ? batches : existingLaunchConfig.batches,
         batchStrategy:
           batches.length > 0 ? batchStrategy : existingLaunchConfig.batchStrategy,

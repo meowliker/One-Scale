@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, DragEvent, ReactNode, SetStateAction } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { fromZonedTime } from 'date-fns-tz';
 import {
   ArrowUpDown,
   CheckCircle2,
@@ -15,26 +16,22 @@ import {
   Image as ImageIcon,
   LayoutGrid,
   Loader2,
+  Plus,
   Search,
   SlidersHorizontal,
   Sparkles,
   Table2,
+  Trash2,
   Upload,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { CreativePreviewModal } from '@/components/creative-hub/CreativePreviewModal';
-import {
-  formatModeLabel,
-  isLaunchCreativeFormatModeEnabled,
-  validateLaunchCreativeFormat,
-} from '@/lib/creative-hub/creativeFormatValidation';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
 import { useStoreStore } from '@/stores/storeStore';
 import type {
   BidStrategy,
   ClickUpFieldValue,
   CopyItem,
-  CreativeFormatMode,
   CreativeFormat,
   InboxCreative,
   LaunchConfig,
@@ -55,42 +52,7 @@ type BatchMode = 'single' | 'multiple';
 type SplitPreset = 'one_per_adset' | 'three_per_adset' | 'folder_split' | 'manual';
 type CopyDraftSource = 'winner' | 'inherited' | 'manual' | 'ai';
 type LaunchTiming = 'immediate' | 'scheduled';
-
-const creativeFormatModeOptions: Array<{
-  id: CreativeFormatMode;
-  title: string;
-  description: string;
-  status: string;
-  disabled?: boolean;
-}> = [
-  {
-    id: 'single_per_creative',
-    title: 'Single ad per creative',
-    description: 'Creates one Meta ad for each selected video or image. This keeps the current stable launch behavior.',
-    status: 'Current',
-  },
-  {
-    id: 'single_format_media_options',
-    title: 'Single ad with media options',
-    description: 'Matches an Ads Manager UI option, but Meta is rejecting this format through the public API on this account.',
-    status: 'API blocked',
-    disabled: true,
-  },
-  {
-    id: 'dynamic_creative',
-    title: 'Dynamic creative',
-    description: 'Combines multiple media, primary texts, headlines, and descriptions under a dynamic creative ad set.',
-    status: isLaunchCreativeFormatModeEnabled('dynamic_creative') ? 'Dynamic ad set' : 'Feature gated',
-    disabled: !isLaunchCreativeFormatModeEnabled('dynamic_creative'),
-  },
-  {
-    id: 'carousel',
-    title: 'Carousel',
-    description: 'Builds carousel cards from selected creatives. Deferred until card-level payload rules are added.',
-    status: 'Later',
-    disabled: true,
-  },
-];
+type LaunchProgressDisplayStage = LaunchUploadStage | 'waiting';
 
 interface InboxResponse {
   creatives?: InboxCreative[];
@@ -171,8 +133,15 @@ interface BatchPlanItem {
   id: string;
   name: string;
   creativeIds: string[];
+  ads?: AdPlanItem[];
   existingAdSetId?: string;
   existingAdSetName?: string;
+}
+
+interface AdPlanItem {
+  id: string;
+  name: string;
+  creativeIds: string[];
 }
 
 interface CopyDraftItem {
@@ -195,8 +164,6 @@ interface LaunchConfigDraft {
   optimizationGoal: string;
   billingEvent: string;
   conversionEvent: string;
-  creativeFormatMode: CreativeFormatMode;
-  mediaOptionCreativeIds: Record<string, string[]>;
   advantageCreative: boolean;
   useTestDuration: boolean;
   testDuration: string;
@@ -240,7 +207,7 @@ interface AiCopyInsightsResponse {
   };
 }
 
-type LaunchUploadStage = 'queued' | 'downloading' | 'uploading' | 'ready' | 'processing' | 'skipped' | 'error';
+type LaunchUploadStage = 'queued' | 'downloading' | 'uploading' | 'ready' | 'skipped' | 'error';
 
 interface LaunchUploadProgress {
   creativeId: string;
@@ -258,9 +225,6 @@ interface LaunchSubmitResult {
   campaignId?: string;
   items?: Array<Record<string, unknown>>;
   error?: string;
-  message?: string;
-  processingVideos?: string[];
-  retryAfterMs?: number;
 }
 
 interface UploadResponse {
@@ -269,6 +233,13 @@ interface UploadResponse {
   metaAssetType?: 'IMAGE' | 'VIDEO' | string;
   thumbnailUrl?: string;
   error?: string;
+}
+
+interface LaunchAdAccountOption {
+  accountId: string;
+  name: string;
+  currency: string;
+  campaignCount: number;
 }
 
 const formatIcons: Record<CreativeFormat, typeof ImageIcon> = {
@@ -352,10 +323,6 @@ function formatShortDate(value?: string): string {
   const time = parseDateValue(value);
   if (!time) return '—';
   return new Intl.DateTimeFormat(undefined, { day: '2-digit', month: 'short', year: 'numeric' }).format(time);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function formatRelativeDays(value?: string): string {
@@ -552,6 +519,23 @@ function getStatusText(status?: string, isActive?: boolean): string {
   return isActive ? 'ACTIVE' : 'PAUSED';
 }
 
+function campaignMatchesSearch(campaign: MetaCampaignOption, search: string): boolean {
+  const normalizedSearch = search.trim().toLowerCase();
+  if (!normalizedSearch) return true;
+  return [
+    campaign.campaignName,
+    campaign.campaignId,
+    campaign.adAccountId,
+    campaign.effectiveStatus,
+    campaign.objective,
+    campaign.campaignBidStrategy,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+    .includes(normalizedSearch);
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
 }
@@ -647,6 +631,18 @@ function normalizeMetaAdAccountId(value?: string | null): string | undefined {
   return trimmed.startsWith('act_') ? trimmed : `act_${trimmed.replace(/^act_/, '')}`;
 }
 
+function isRawMetaAdAccountLabel(value?: string | null): boolean {
+  const text = value?.trim();
+  if (!text) return false;
+  return /^act_\d+$/i.test(text) || /^\d{8,}$/.test(text);
+}
+
+function readableAdAccountName(value?: string | null, fallback = 'Meta ad account'): string {
+  const text = value?.trim();
+  if (!text || isRawMetaAdAccountLabel(text)) return fallback;
+  return text;
+}
+
 function normalizeAdSet(row: Record<string, unknown>): MetaAdSetOption | null {
   const id = asString(row.id) || asString(row.adset_id) || asString(row.adsetId);
   if (!id) return null;
@@ -740,7 +736,24 @@ function getAdUpdatedAt(row: Record<string, unknown>): string | undefined {
 
 function normalizeStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return uniqueTexts(value.map((item) => (typeof item === 'string' ? item : undefined)));
+  return uniqueTexts(value.map((item) => {
+    if (typeof item === 'string') return item;
+    const record = asRecord(item);
+    return asString(record?.text) || asString(record?.value) || asString(record?.name);
+  }));
+}
+
+function normalizeNestedCreativeStrings(parent: Record<string, unknown> | null | undefined, key: string): string[] {
+  if (!parent) return [];
+  const direct = normalizeStringArray(parent[key]);
+  if (direct.length) return direct;
+
+  const snakeCase = key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+  if (snakeCase !== key) {
+    return normalizeStringArray(parent[snakeCase]);
+  }
+
+  return [];
 }
 
 function normalizeLocationArray(value: unknown): string[] {
@@ -832,9 +845,33 @@ function normalizeInheritedAdSettings(
   const sourceAdId = asString(row.id) || asString(row.ad_id);
   if (!sourceAdId) return null;
   const creative = asRecord(row.creative);
-  const primaryText = asString(creative?.body) || asString(row.primaryText);
-  const headline = asString(creative?.headline) || asString(row.headline);
-  const descriptions = normalizeStringArray(creative?.descriptions);
+  const assetFeedSpec = asRecord(creative?.assetFeedSpec) || asRecord(creative?.asset_feed_spec);
+  const objectStorySpec = asRecord(creative?.objectStorySpec) || asRecord(creative?.object_story_spec);
+  const linkData = asRecord(objectStorySpec?.linkData) || asRecord(objectStorySpec?.link_data);
+  const videoData = asRecord(objectStorySpec?.videoData) || asRecord(objectStorySpec?.video_data);
+  const primaryText =
+    asString(creative?.body) ||
+    asString(linkData?.message) ||
+    asString(videoData?.message) ||
+    asString(row.primaryText) ||
+    asString(row.primary_text);
+  const headline =
+    asString(creative?.headline) ||
+    asString(creative?.title) ||
+    asString(linkData?.name) ||
+    asString(videoData?.title) ||
+    asString(row.headline);
+  const description =
+    asString(creative?.description) ||
+    asString(creative?.linkDescription) ||
+    asString(creative?.link_description) ||
+    asString(linkData?.description) ||
+    asString(row.description);
+  const descriptions = uniqueTexts([
+    ...normalizeNestedCreativeStrings(creative, 'descriptions'),
+    ...normalizeNestedCreativeStrings(assetFeedSpec, 'descriptions'),
+    description,
+  ]);
 
   return {
     sourceAdId,
@@ -843,8 +880,16 @@ function normalizeInheritedAdSettings(
     sourceAdSetName: sourceAdSet.name,
     sourceMode,
     updatedAt: getAdUpdatedAt(row),
-    primaryTexts: uniqueTexts([...normalizeStringArray(creative?.primaryTexts), primaryText]),
-    headlines: uniqueTexts([...normalizeStringArray(creative?.headlines), headline]),
+    primaryTexts: uniqueTexts([
+      ...normalizeNestedCreativeStrings(creative, 'primaryTexts'),
+      ...normalizeNestedCreativeStrings(assetFeedSpec, 'bodies'),
+      primaryText,
+    ]),
+    headlines: uniqueTexts([
+      ...normalizeNestedCreativeStrings(creative, 'headlines'),
+      ...normalizeNestedCreativeStrings(assetFeedSpec, 'titles'),
+      headline,
+    ]),
     descriptions,
     ctaType: asString(creative?.ctaType),
     destinationUrl: asString(creative?.destinationUrl),
@@ -987,8 +1032,6 @@ function createInitialLaunchConfigDraft(
     optimizationGoal: sourceAdSet?.optimizationGoal || 'OFFSITE_CONVERSIONS',
     billingEvent: sourceAdSet?.billingEvent || 'IMPRESSIONS',
     conversionEvent: asString(sourceAdSet?.promotedObject?.custom_event_type) || profile?.conversionEvent || 'PURCHASE',
-    creativeFormatMode: 'single_per_creative',
-    mediaOptionCreativeIds: {},
     advantageCreative: false,
     useTestDuration: false,
     testDuration: '',
@@ -1063,6 +1106,96 @@ function chunkCreatives<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
+function createSingleMediaAds(creatives: InboxCreative[], prefix = 'ad'): AdPlanItem[] {
+  return creatives.map((creative, index) => ({
+    id: uniqueStableId(`${prefix}-${index + 1}`),
+    name: readableAdSetName(getCreativeName(creative)) || `Ad ${index + 1}`,
+    creativeIds: [creative.id],
+  }));
+}
+
+function createMultiMediaAdsFromIds(creativeIds: string[], baseName = 'Ad'): AdPlanItem[] {
+  return chunkCreatives(creativeIds, 10).map((chunk, index) => ({
+    id: uniqueStableId('multi-media-ad'),
+    name: index === 0 ? baseName : `${baseName} ${index + 1}`,
+    creativeIds: chunk,
+  }));
+}
+
+function flattenAdCreativeIds(ads?: AdPlanItem[]): string[] {
+  return [...new Set((ads || []).flatMap((ad) => ad.creativeIds).filter(Boolean))];
+}
+
+function hasDynamicCreativeMultiAdConflict(ads: Array<Pick<AdPlanItem, 'creativeIds'>>): boolean {
+  const activeAds = ads.filter((ad) => (ad.creativeIds || []).length > 0);
+  return activeAds.length > 1 && activeAds.some((ad) => (ad.creativeIds || []).length > 1);
+}
+
+function getAdMediaFormat(creative: InboxCreative): 'image' | 'video' | 'carousel' | string {
+  return creative.creativeFormat || 'image';
+}
+
+function findBatchPlanValidationErrors(
+  batchPlan: BatchPlanItem[],
+  creativeById: Map<string, InboxCreative>,
+): string[] {
+  const errors: string[] = [];
+
+  for (const batch of batchPlan) {
+    const activeAds = (batch.ads || [])
+      .map((ad) => ({
+        ...ad,
+        creatives: ad.creativeIds
+          .map((creativeId) => creativeById.get(creativeId))
+          .filter((creative): creative is InboxCreative => Boolean(creative)),
+      }))
+      .filter((ad) => ad.creatives.length > 0);
+
+    if (hasDynamicCreativeMultiAdConflict(activeAds)) {
+      errors.push(
+        `${batch.name}: dynamic ad sets can only have one ad. Move the extra ad into another ad set.`,
+      );
+    }
+
+    for (const ad of activeAds) {
+      const formats = [...new Set(ad.creatives.map(getAdMediaFormat))];
+      if (formats.length > 1) {
+        errors.push(
+          `${batch.name} / ${ad.name}: an ad can only have same-format media.`,
+        );
+      }
+    }
+  }
+
+  return errors;
+}
+
+function normalizeBatchAds(batch: BatchPlanItem, creativeById: Map<string, InboxCreative>): AdPlanItem[] {
+  const allowedIds = new Set(batch.creativeIds);
+  const normalizedAds = (batch.ads || [])
+    .map((ad, index) => ({
+      ...ad,
+      name: ad.name?.trim() || `Ad ${index + 1}`,
+      creativeIds: ad.creativeIds.filter((creativeId) => allowedIds.has(creativeId)).slice(0, 10),
+    }))
+    .filter((ad) => ad.creativeIds.length > 0);
+
+  const assignedIds = new Set(flattenAdCreativeIds(normalizedAds));
+  const missingCreatives = batch.creativeIds
+    .filter((creativeId) => !assignedIds.has(creativeId))
+    .map((creativeId) => creativeById.get(creativeId))
+    .filter((creative): creative is InboxCreative => Boolean(creative));
+
+  if (normalizedAds.length === 0) {
+    return createSingleMediaAds(missingCreatives, batch.id);
+  }
+
+  return [
+    ...normalizedAds,
+    ...createSingleMediaAds(missingCreatives, batch.id),
+  ];
+}
+
 function createBatchPlan(args: {
   adSetMode: AdSetMode;
   batchMode: BatchMode;
@@ -1079,6 +1212,7 @@ function createBatchPlan(args: {
       id: selectedAdSet?.id ? `existing-${selectedAdSet.id}` : uniqueStableId('existing-adset'),
       name: selectedAdSet?.name || inferAdSetName(creatives, productName),
       creativeIds: creatives.map((creative) => creative.id),
+      ads: createSingleMediaAds(creatives, 'existing-ad'),
       existingAdSetId: selectedAdSet?.id,
       existingAdSetName: selectedAdSet?.name,
     }];
@@ -1089,6 +1223,7 @@ function createBatchPlan(args: {
       id: 'new-single-adset',
       name: inferAdSetName(creatives, productName),
       creativeIds: creatives.map((creative) => creative.id),
+      ads: createSingleMediaAds(creatives, 'single-adset-ad'),
     }];
   }
 
@@ -1104,6 +1239,7 @@ function createBatchPlan(args: {
       id: `folder-${index}-${groupName.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 32)}`,
       name: readableAdSetName(groupName) || `${productName || 'Product'} Ad Set ${index + 1}`,
       creativeIds: groupCreatives.map((creative) => creative.id),
+      ads: createSingleMediaAds(groupCreatives, `folder-${index}-ad`),
     }));
   }
 
@@ -1114,6 +1250,7 @@ function createBatchPlan(args: {
       ? readableAdSetName(getCreativeName(chunk[0]))
       : `${inferAdSetName(chunk, productName, 'Ad Set')} ${index + 1}`,
     creativeIds: chunk.map((creative) => creative.id),
+    ads: createSingleMediaAds(chunk, `${preset}-${index + 1}-ad`),
   }));
 }
 
@@ -1177,19 +1314,6 @@ function copyDraftsToLaunchItems(items: CopyDraftItem[]): CopyItem[] {
     }));
 }
 
-function getAdMediaOptionIds(
-  draft: LaunchConfigDraft,
-  adCreativeId: string,
-  mediaPoolCreatives: InboxCreative[],
-): string[] {
-  const explicit = draft.mediaOptionCreativeIds[adCreativeId];
-  const mediaPoolIdSet = new Set(mediaPoolCreatives.map((creative) => creative.id));
-  if (explicit && explicit.length > 0) {
-    return explicit.filter((creativeId) => mediaPoolIdSet.has(creativeId)).slice(0, 10);
-  }
-  return mediaPoolIdSet.has(adCreativeId) ? [adCreativeId] : mediaPoolCreatives.slice(0, 1).map((creative) => creative.id);
-}
-
 function parseScheduledAtForLaunch(scheduledAt: string): { scheduledDate?: string; scheduledTime?: string } {
   if (!scheduledAt) return {};
   const [date, rawTime] = scheduledAt.split('T');
@@ -1198,6 +1322,43 @@ function parseScheduledAtForLaunch(scheduledAt: string): { scheduledDate?: strin
     scheduledDate: date,
     scheduledTime: rawTime ? rawTime.slice(0, 5) : '00:00',
   };
+}
+
+function parseScheduledAtInTimezone(scheduledAt: string, timezone: string): Date | null {
+  const { scheduledDate, scheduledTime } = parseScheduledAtForLaunch(scheduledAt);
+  if (!scheduledDate) return null;
+
+  try {
+    const scheduledDateTime = fromZonedTime(
+      `${scheduledDate}T${scheduledTime || '00:00'}:00`,
+      timezone,
+    );
+    return Number.isNaN(scheduledDateTime.getTime()) ? null : scheduledDateTime;
+  } catch {
+    return null;
+  }
+}
+
+function formatCurrentTimeInTimezone(timezone: string): string {
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: timezone,
+      timeZoneName: 'short',
+    }).format(new Date());
+  } catch {
+    return new Intl.DateTimeFormat('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }).format(new Date());
+  }
 }
 
 function attributionToLaunchValue(value: string): string {
@@ -1363,11 +1524,15 @@ export default function LaunchCreativeSelectionPage() {
   const [newCampaignNameTouched, setNewCampaignNameTouched] = useState(false);
   const [adSetMode, setAdSetMode] = useState<AdSetMode>('new');
   const [campaigns, setCampaigns] = useState<MetaCampaignOption[]>([]);
+  const [campaignsScopeKey, setCampaignsScopeKey] = useState('');
   const [campaignsLoading, setCampaignsLoading] = useState(false);
   const [campaignsError, setCampaignsError] = useState<string | null>(null);
+  const [selectedAdAccountId, setSelectedAdAccountId] = useState('');
+  const [storeAdAccountOptions, setStoreAdAccountOptions] = useState<Array<{ accountId: string; name: string; currency: string }>>([]);
   const [selectedCampaignId, setSelectedCampaignId] = useState('');
   const [campaignSearch, setCampaignSearch] = useState('');
   const [adSets, setAdSets] = useState<MetaAdSetOption[]>([]);
+  const [adSetsCampaignId, setAdSetsCampaignId] = useState('');
   const [adSetsLoading, setAdSetsLoading] = useState(false);
   const [adSetsError, setAdSetsError] = useState<string | null>(null);
   const [selectedAdSetId, setSelectedAdSetId] = useState('');
@@ -1405,6 +1570,9 @@ export default function LaunchCreativeSelectionPage() {
   const [launchSuccess, setLaunchSuccess] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<Record<string, LaunchUploadProgress>>({});
   const [thumbnailDrafts, setThumbnailDrafts] = useState<Record<string, ThumbnailDraft>>({});
+  const [clockTick, setClockTick] = useState(0);
+  const campaignsRequestIdRef = useRef(0);
+  const inheritedSettingsRequestIdRef = useRef(0);
 
   const selectedProductId = productFilter === 'all' ? undefined : productFilter;
   const resolvedStoreIdForView = storeIdFromUrl || activeStoreId;
@@ -1419,31 +1587,101 @@ export default function LaunchCreativeSelectionPage() {
     (initialProductId !== 'all' ? initialProductId : undefined);
   const selectedProfile = profiles.find((profile) => profile.id === launchProductId);
   const selectedCampaign = campaigns.find((campaign) => campaign.campaignId === selectedCampaignId);
-  const selectedAdSet = adSets.find((adSet) => adSet.id === selectedAdSetId);
   const selectedCampaignLink = selectedProfile?.campaignLinks?.find((link) => link.campaignId === selectedCampaignId);
   const selectedCampaignAccountId = normalizeMetaAdAccountId(
     selectedCampaign?.adAccountId || selectedCampaignLink?.adAccountId,
   );
-  const linkedAdAccountIds = useMemo(() => {
-    const ids = new Set<string>();
+  const linkedAdAccounts = useMemo(() => {
+    const accountMap = new Map<string, LaunchAdAccountOption>();
+    const addAccount = (accountId?: string | null, campaignCount = 0, currency?: string | null) => {
+      const normalizedId = normalizeMetaAdAccountId(accountId);
+      if (!normalizedId) return;
+      const hydratedAccount =
+        storeAdAccountOptions.find((account) => normalizeMetaAdAccountId(account.accountId) === normalizedId) ||
+        activeStore?.adAccounts?.find((account) => normalizeMetaAdAccountId(account.accountId) === normalizedId);
+      const existing = accountMap.get(normalizedId);
+      const fallbackName = existing?.name || `Meta ad account ${accountMap.size + 1}`;
+      accountMap.set(normalizedId, {
+        accountId: normalizedId,
+        name: readableAdAccountName(hydratedAccount?.name || existing?.name, fallbackName),
+        currency: hydratedAccount?.currency || existing?.currency || currency || selectedProfile?.adAccountCurrency || 'USD',
+        campaignCount: (existing?.campaignCount || 0) + campaignCount,
+      });
+    };
+
     const primaryAccountId = normalizeMetaAdAccountId(selectedProfile?.adAccountId);
-    if (primaryAccountId) ids.add(primaryAccountId);
+    addAccount(primaryAccountId, 0, selectedProfile?.adAccountCurrency);
     for (const link of selectedProfile?.campaignLinks ?? []) {
-      const linkAccountId = normalizeMetaAdAccountId(link.adAccountId);
-      if (linkAccountId) ids.add(linkAccountId);
+      addAccount(link.adAccountId, 1);
     }
-    return Array.from(ids);
-  }, [selectedProfile]);
+    return Array.from(accountMap.values());
+  }, [activeStore?.adAccounts, selectedProfile, storeAdAccountOptions]);
+  const linkedAdAccountIds = useMemo(
+    () => linkedAdAccounts.map((account) => account.accountId),
+    [linkedAdAccounts],
+  );
+  const expectedCampaignScopeAccountIds = useMemo(
+    () => campaignMode === 'new'
+      ? ([selectedAdAccountId].filter(Boolean) as string[])
+      : linkedAdAccountIds.length > 0
+        ? linkedAdAccountIds
+        : ([normalizeMetaAdAccountId(selectedProfile?.adAccountId)].filter(Boolean) as string[]),
+    [campaignMode, linkedAdAccountIds, selectedAdAccountId, selectedProfile?.adAccountId],
+  );
+  const expectedCampaignScopeKey = `${campaignMode}:${expectedCampaignScopeAccountIds.join(',')}`;
+  const campaignsReadyForScope = campaignsScopeKey === expectedCampaignScopeKey;
+  const selectedLaunchAdAccount = linkedAdAccounts.find((account) => account.accountId === selectedAdAccountId);
   const launchAdAccountId =
     campaignMode === 'existing'
       ? selectedCampaignAccountId
-      : normalizeMetaAdAccountId(selectedProfile?.adAccountId);
-  const latestTemplateCampaign = sortByLatest(
-    campaigns.filter((campaign) => campaign.isActive),
-    (campaign) => campaign.updatedTime || campaign.startDate || campaign.linkedAt,
-  )[0] || sortByLatest(campaigns, (campaign) => campaign.updatedTime || campaign.startDate || campaign.linkedAt)[0];
-  const adSetSourceCampaignId = campaignMode === 'existing' ? selectedCampaignId : latestTemplateCampaign?.campaignId || '';
-  const latestAdSet = sortByLatest(adSets, (adSet) => adSet.updatedTime || adSet.startDate)[0];
+      : normalizeMetaAdAccountId(selectedAdAccountId || selectedProfile?.adAccountId);
+  const launchCurrency = selectedLaunchAdAccount?.currency || selectedProfile?.adAccountCurrency || 'USD';
+  const launchTimezone = useMemo(() => {
+    const matchingAccount = activeStore?.adAccounts?.find((account) => {
+      const accountId = normalizeMetaAdAccountId(account.accountId);
+      return accountId && launchAdAccountId && accountId === launchAdAccountId;
+    });
+    if (matchingAccount?.timezone) return matchingAccount.timezone;
+
+    const activeAccount = activeStore?.adAccounts?.find((account) => account.isActive && account.timezone);
+    if (activeAccount?.timezone) return activeAccount.timezone;
+    return activeStore?.adAccounts?.[0]?.timezone || 'America/New_York';
+  }, [activeStore, launchAdAccountId]);
+  const currentLaunchTimeLabel = useMemo(() => {
+    void clockTick;
+    return formatCurrentTimeInTimezone(launchTimezone);
+  }, [clockTick, launchTimezone]);
+  const templateCampaigns = useMemo(() => {
+    if (!campaignsReadyForScope) return [];
+    if (campaignMode !== 'new' || !selectedAdAccountId) return campaigns;
+    return campaigns.filter(
+      (campaign) => normalizeMetaAdAccountId(campaign.adAccountId) === selectedAdAccountId,
+    );
+  }, [campaignMode, campaigns, campaignsReadyForScope, selectedAdAccountId]);
+  const latestTemplateCampaign =
+    sortByLatest(templateCampaigns, (campaign) => campaign.updatedTime || campaign.startDate || campaign.linkedAt)[0];
+  const sourceCampaignForAdSets = campaignMode === 'existing' ? selectedCampaign : latestTemplateCampaign;
+  const sourceCampaignAccountId = normalizeMetaAdAccountId(sourceCampaignForAdSets?.adAccountId);
+  const sourceCampaignMatchesLaunchAccount =
+    campaignMode !== 'new' ||
+    !selectedAdAccountId ||
+    (!!sourceCampaignAccountId && sourceCampaignAccountId === selectedAdAccountId);
+  const adSetSourceCampaignId =
+    sourceCampaignMatchesLaunchAccount
+      ? campaignMode === 'existing' ? selectedCampaignId : latestTemplateCampaign?.campaignId || ''
+      : '';
+  const adSetsReadyForSource = Boolean(adSetSourceCampaignId) && adSetsCampaignId === adSetSourceCampaignId;
+  const selectedAdSet = adSetsReadyForSource
+    ? adSets.find((adSet) => adSet.id === selectedAdSetId)
+    : undefined;
+  const latestAdSet =
+    adSetsReadyForSource
+      ? sortByLatest(adSets, (adSet) => adSet.updatedTime || adSet.startDate)[0]
+      : undefined;
+  const inheritedCopySourceAdSet =
+    campaignMode === 'existing' && adSetMode === 'existing'
+        ? selectedAdSet
+        : latestAdSet;
   const productNameForFlow = selectedProfile?.productName || productNameById(profiles, launchProductId);
   const campaignStructure: CampaignStructure =
     campaignMode === 'new' ? newCampaignStructure : isCboCampaign(selectedCampaign) ? 'CBO' : 'ABO';
@@ -1485,6 +1723,57 @@ export default function LaunchCreativeSelectionPage() {
 
     return () => window.cancelAnimationFrame(frame);
   }, [currentStep]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockTick((tick) => tick + 1), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!resolvedStoreIdForView) {
+      setStoreAdAccountOptions([]);
+      return;
+    }
+
+    let active = true;
+    const loadStoreAdAccounts = async () => {
+      try {
+        const response = await fetch(
+          `/api/settings/stores/ad-accounts?storeId=${encodeURIComponent(resolvedStoreIdForView)}`,
+        );
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `Failed to load ad accounts (${response.status})`);
+        if (!active) return;
+        const accounts = Array.isArray(data.accounts) ? data.accounts : [];
+        setStoreAdAccountOptions(accounts.map((account: unknown) => {
+          const record = asRecord(account);
+          return {
+            accountId: normalizeMetaAdAccountId(asString(record?.accountId) || asString(record?.id)) || '',
+            name: readableAdAccountName(asString(record?.name)),
+            currency: asString(record?.currency) || 'USD',
+          };
+        }).filter((account: { accountId: string }) => Boolean(account.accountId)));
+      } catch {
+        if (active) setStoreAdAccountOptions([]);
+      }
+    };
+
+    void loadStoreAdAccounts();
+
+    return () => {
+      active = false;
+    };
+  }, [resolvedStoreIdForView]);
+
+  useEffect(() => {
+    const preferredAccountId = normalizeMetaAdAccountId(selectedProfile?.adAccountId);
+    const fallbackAccountId = preferredAccountId || linkedAdAccountIds[0] || '';
+
+    setSelectedAdAccountId((current) => {
+      if (current && linkedAdAccountIds.includes(current)) return current;
+      return fallbackAccountId;
+    });
+  }, [linkedAdAccountIds, selectedProfile?.adAccountId]);
 
   const loadCreatives = useCallback(async (forceRefresh = false) => {
     const cachedReadyCreatives = getReadyCreatives(
@@ -1578,10 +1867,22 @@ export default function LaunchCreativeSelectionPage() {
   ]);
 
   const loadCampaigns = useCallback(async () => {
+    const requestId = campaignsRequestIdRef.current + 1;
+    campaignsRequestIdRef.current = requestId;
+    const isCurrentRequest = () => campaignsRequestIdRef.current === requestId;
+
     if (!resolvedStoreIdForView || !selectedProfile?.adAccountId) {
       setCampaigns([]);
+      setCampaignsScopeKey('');
       setSelectedCampaignId('');
       setCampaignsError(selectedProfile ? 'This product profile has no Meta ad account configured.' : null);
+      return;
+    }
+    if (campaignMode === 'new' && !selectedAdAccountId) {
+      setCampaigns([]);
+      setCampaignsScopeKey('');
+      setSelectedCampaignId('');
+      setCampaignsError('Choose an ad account before loading campaigns.');
       return;
     }
 
@@ -1590,28 +1891,32 @@ export default function LaunchCreativeSelectionPage() {
 
     try {
       const rowsById = new Map<string, MetaCampaignOption>();
-
-      for (const link of selectedProfile.campaignLinks || []) {
-        if (!link.campaignId) continue;
-        rowsById.set(link.campaignId, {
-          campaignId: link.campaignId,
-          campaignName: link.campaignName || 'Untitled campaign',
-          campaignType: link.campaignType || inferCampaignType(link.campaignName),
-          adAccountId: normalizeMetaAdAccountId(link.adAccountId || selectedProfile.adAccountId),
-          effectiveStatus: link.effectiveStatus,
-          isActive: link.effectiveStatus
-            ? link.effectiveStatus.toUpperCase() === 'ACTIVE'
-            : link.isActive,
-          linkedAt: link.linkedAt,
-          campaignDailyBudget: link.campaignDailyBudget,
-          campaignLifetimeBudget: link.campaignLifetimeBudget,
-          campaignBidStrategy: link.campaignBidStrategy,
-        });
+      const campaignAccountIds = campaignMode === 'new'
+        ? ([selectedAdAccountId].filter(Boolean) as string[])
+        : linkedAdAccountIds.length > 0
+          ? linkedAdAccountIds
+          : ([normalizeMetaAdAccountId(selectedProfile.adAccountId)].filter(Boolean) as string[]);
+      const requestScopeKey = `${campaignMode}:${campaignAccountIds.join(',')}`;
+      if (campaignMode !== 'new') {
+        for (const link of selectedProfile.campaignLinks || []) {
+          if (!link.campaignId) continue;
+          const linkAccountId = normalizeMetaAdAccountId(link.adAccountId || selectedProfile.adAccountId);
+          rowsById.set(link.campaignId, {
+            campaignId: link.campaignId,
+            campaignName: link.campaignName || 'Untitled campaign',
+            campaignType: link.campaignType || inferCampaignType(link.campaignName),
+            adAccountId: linkAccountId,
+            effectiveStatus: link.effectiveStatus,
+            isActive: link.effectiveStatus
+              ? link.effectiveStatus.toUpperCase() === 'ACTIVE'
+              : link.isActive,
+            linkedAt: link.linkedAt,
+            campaignDailyBudget: link.campaignDailyBudget,
+            campaignLifetimeBudget: link.campaignLifetimeBudget,
+            campaignBidStrategy: link.campaignBidStrategy,
+          });
+        }
       }
-
-      const campaignAccountIds = linkedAdAccountIds.length > 0
-        ? linkedAdAccountIds
-        : ([normalizeMetaAdAccountId(selectedProfile.adAccountId)].filter(Boolean) as string[]);
 
       for (const accountId of campaignAccountIds) {
         const cachedParams = new URLSearchParams({
@@ -1654,24 +1959,37 @@ export default function LaunchCreativeSelectionPage() {
         // Cached/linked campaigns are still useful if Meta live refresh is unavailable.
       }
 
-      const nextCampaigns = Array.from(rowsById.values()).sort((a, b) => {
+      const allowedAccountIds = new Set(
+        campaignAccountIds
+          .map((accountId) => normalizeMetaAdAccountId(accountId))
+          .filter((accountId): accountId is string => Boolean(accountId)),
+      );
+      const nextCampaigns = Array.from(rowsById.values()).filter((campaign) => {
+        if (campaignMode !== 'new' || allowedAccountIds.size === 0) return true;
+        const accountId = normalizeMetaAdAccountId(campaign.adAccountId);
+        return !!accountId && allowedAccountIds.has(accountId);
+      }).sort((a, b) => {
         if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
         return compareText(a.campaignName, b.campaignName);
       });
 
+      if (!isCurrentRequest()) return;
       setCampaigns(nextCampaigns);
+      setCampaignsScopeKey(requestScopeKey);
       setSelectedCampaignId((current) => {
         if (current && nextCampaigns.some((campaign) => campaign.campaignId === current)) return current;
         return nextCampaigns[0]?.campaignId || '';
       });
     } catch (err) {
+      if (!isCurrentRequest()) return;
       setCampaigns([]);
+      setCampaignsScopeKey('');
       setSelectedCampaignId('');
       setCampaignsError(err instanceof Error ? err.message : 'Failed to load campaigns');
     } finally {
-      setCampaignsLoading(false);
+      if (isCurrentRequest()) setCampaignsLoading(false);
     }
-  }, [linkedAdAccountIds, resolvedStoreIdForView, selectedProfile]);
+  }, [campaignMode, linkedAdAccountIds, resolvedStoreIdForView, selectedAdAccountId, selectedProfile]);
 
   useEffect(() => {
     if (['campaign', 'batching', 'copy', 'config', 'review'].includes(currentStep)) {
@@ -1682,6 +2000,7 @@ export default function LaunchCreativeSelectionPage() {
   useEffect(() => {
     if (!selectedCampaignId) {
       setAdSets([]);
+      setAdSetsCampaignId('');
       setSelectedAdSetId('');
       return;
     }
@@ -1700,6 +2019,7 @@ export default function LaunchCreativeSelectionPage() {
     if (!shouldLoadAdSets) {
       if (!adSetSourceCampaignId) {
         setAdSets([]);
+        setAdSetsCampaignId('');
         setAdSetsError(null);
       }
       return;
@@ -1731,6 +2051,7 @@ export default function LaunchCreativeSelectionPage() {
 
         if (!active) return;
         setAdSets(nextAdSets);
+        setAdSetsCampaignId(adSetSourceCampaignId);
         setSelectedAdSetId((current) => {
           if (current && nextAdSets.some((adSet) => adSet.id === current)) return current;
           return nextAdSets[0]?.id || '';
@@ -1738,6 +2059,7 @@ export default function LaunchCreativeSelectionPage() {
       } catch (err) {
         if (!active) return;
         setAdSets([]);
+        setAdSetsCampaignId('');
         setSelectedAdSetId('');
         setAdSetsError(err instanceof Error ? err.message : 'Failed to load ad sets');
       } finally {
@@ -1753,11 +2075,17 @@ export default function LaunchCreativeSelectionPage() {
   }, [adSetSourceCampaignId, campaignMode, currentStep, resolvedStoreIdForView]);
 
   useEffect(() => {
-    const sourceAdSet = campaignMode === 'existing' && adSetMode === 'existing' ? selectedAdSet : latestAdSet;
+    const sourceAdSet = inheritedCopySourceAdSet;
     const sourceMode: InheritedAdSettings['sourceMode'] =
       campaignMode === 'existing' && adSetMode === 'existing' ? 'selected_adset' : 'latest_adset';
+    const requestId = inheritedSettingsRequestIdRef.current + 1;
+    inheritedSettingsRequestIdRef.current = requestId;
+    const isCurrentRequest = () => inheritedSettingsRequestIdRef.current === requestId;
 
-    if (!resolvedStoreIdForView || !sourceAdSet?.id) {
+    if (
+      !resolvedStoreIdForView ||
+      !sourceAdSet?.id
+    ) {
       setInheritedSettings(null);
       setInheritedSettingsError(null);
       setInheritedSettingsLoading(false);
@@ -1766,27 +2094,38 @@ export default function LaunchCreativeSelectionPage() {
 
     let active = true;
     const loadInheritedSettings = async () => {
+      setInheritedSettings(null);
       setInheritedSettingsLoading(true);
       setInheritedSettingsError(null);
+      if (currentStep === 'copy') {
+        setPrimaryTextDrafts([]);
+        setHeadlineDrafts([]);
+        setDescriptionDrafts([]);
+        setCopyInitKey('');
+      }
 
       try {
-        const sourceAdSets =
-          sourceMode === 'selected_adset'
-            ? [sourceAdSet]
-            : sortByLatest(adSets, (adSet) => adSet.updatedTime || adSet.startDate).slice(0, 4);
+        if (!sourceAdSet) {
+          setInheritedSettings(null);
+          setInheritedSettingsError('No ad set was found for the selected source campaign.');
+          return;
+        }
+
+        const sourceAdSets: MetaAdSetOption[] = [sourceAdSet];
         const inheritedCandidates: InheritedAdSettings[] = [];
+        const sourceErrors: string[] = [];
 
         for (const candidateAdSet of sourceAdSets) {
           const params = new URLSearchParams({
             storeId: resolvedStoreIdForView,
             adsetId: candidateAdSet.id,
             mode: 'basic',
-            forceLive: '1',
           });
           const response = await fetch(`/api/meta/ads?${params.toString()}`);
           const data = await response.json();
           if (!response.ok) {
-            throw new Error(data.error || `Failed to load latest ad (${response.status})`);
+            sourceErrors.push(data.error || `Failed to load latest ad (${response.status})`);
+            continue;
           }
 
           const rows = Array.isArray(data.data) ? data.data : [];
@@ -1800,17 +2139,21 @@ export default function LaunchCreativeSelectionPage() {
         }
 
         const mergedSettings = mergeInheritedAdSettings(inheritedCandidates);
-        if (!active) return;
+        if (!active || !isCurrentRequest()) return;
         setInheritedSettings(mergedSettings);
         if (!mergedSettings) {
-          setInheritedSettingsError('No ads found in the available source ad sets yet.');
+          setInheritedSettingsError(
+            sourceErrors.length > 0
+              ? `${sourceErrors[0]}. No cached ad copy was found in the selected campaign ad sets.`
+              : 'No ads found in the selected campaign ad sets yet.',
+          );
         }
       } catch (err) {
-        if (!active) return;
+        if (!active || !isCurrentRequest()) return;
         setInheritedSettings(null);
         setInheritedSettingsError(err instanceof Error ? err.message : 'Failed to inherit latest ad settings');
       } finally {
-        if (active) setInheritedSettingsLoading(false);
+        if (active && isCurrentRequest()) setInheritedSettingsLoading(false);
       }
     };
 
@@ -1819,7 +2162,13 @@ export default function LaunchCreativeSelectionPage() {
     return () => {
       active = false;
     };
-  }, [adSetMode, adSets, campaignMode, latestAdSet, resolvedStoreIdForView, selectedAdSet]);
+  }, [
+    adSetMode,
+    campaignMode,
+    currentStep,
+    inheritedCopySourceAdSet,
+    resolvedStoreIdForView,
+  ]);
 
   // Keep the inherited Meta template available for the future batching/review steps
   // without showing the debug-style settings panel in the current selection flow.
@@ -1873,10 +2222,15 @@ export default function LaunchCreativeSelectionPage() {
       }
 
       const selectedIdSet = new Set(selectedCreatives.map((creative) => creative.id));
+      const creativeById = new Map(selectedCreatives.map((creative) => [creative.id, creative]));
       const cleanedPlan = previousPlan
         .map((batch) => ({
           ...batch,
           creativeIds: batch.creativeIds.filter((creativeId) => selectedIdSet.has(creativeId)),
+        }))
+        .map((batch) => ({
+          ...batch,
+          ads: normalizeBatchAds(batch, creativeById),
         }))
         .filter((batch) => batch.creativeIds.length > 0 || adSetMode === 'new');
 
@@ -1900,6 +2254,15 @@ export default function LaunchCreativeSelectionPage() {
         cleanedPlan[0] = {
           ...cleanedPlan[0],
           creativeIds: [...cleanedPlan[0].creativeIds, ...missingIds],
+          ads: [
+            ...(cleanedPlan[0].ads || []),
+            ...createSingleMediaAds(
+              missingIds
+                .map((creativeId) => creativeById.get(creativeId))
+                .filter((creative): creative is InboxCreative => Boolean(creative)),
+              cleanedPlan[0].id,
+            ),
+          ],
         };
       }
 
@@ -1938,23 +2301,41 @@ export default function LaunchCreativeSelectionPage() {
   useEffect(() => {
     if (currentStep !== 'copy' || inheritedSettingsLoading) return;
 
+    const sourceAdSetId = inheritedSettings?.sourceAdSetId || selectedAdSet?.id || latestAdSet?.id || '';
+    if (!sourceAdSetId) {
+      const noSourceKey = [
+        'manual-copy',
+        campaignMode === 'new' ? selectedAdAccountId || 'no-launch-account' : selectedCampaignId || 'no-campaign',
+        'no-adset',
+      ].join(':');
+      if (copyInitKey === noSourceKey) return;
+      setPrimaryTextDrafts([]);
+      setHeadlineDrafts([]);
+      setDescriptionDrafts([]);
+      setCtaDraft('LEARN_MORE');
+      setAiCopyError(null);
+      setAiCopyStatus(null);
+      setCopyInitKey(noSourceKey);
+      return;
+    }
+
     const sourceKey = [
       inheritedSettings?.sourceAdId || 'manual-copy',
-      selectedCampaignId || 'no-campaign',
-      selectedAdSet?.id || latestAdSet?.id || 'no-adset',
+      campaignMode === 'new' ? selectedAdAccountId || 'no-launch-account' : selectedCampaignId || 'no-campaign',
+      sourceAdSetId,
     ].join(':');
     if (copyInitKey === sourceKey) return;
 
     setPrimaryTextDrafts(() => {
       const inherited = copyDraftsFromTexts(inheritedSettings?.primaryTexts, 'inherited', true);
-      return inherited.length > 0 ? inherited : [createCopyDraft('', 'manual', true)];
+      return inherited;
     });
     setHeadlineDrafts(() => {
       const inherited = copyDraftsFromTexts(inheritedSettings?.headlines, 'inherited', true);
-      return inherited.length > 0 ? inherited : [createCopyDraft('', 'manual', true)];
+      return inherited;
     });
     setDescriptionDrafts(() => {
-      return copyDraftsFromTexts(inheritedSettings?.descriptions, 'inherited', false);
+      return copyDraftsFromTexts(inheritedSettings?.descriptions, 'inherited', true);
     });
     setCtaDraft(ctaLabel(inheritedSettings?.ctaType));
     setAiCopyError(null);
@@ -1965,15 +2346,18 @@ export default function LaunchCreativeSelectionPage() {
     currentStep,
     inheritedSettings,
     inheritedSettingsLoading,
+    campaignMode,
     latestAdSet?.id,
+    selectedAdAccountId,
     selectedAdSet?.id,
     selectedCampaignId,
   ]);
 
   useEffect(() => {
     if (currentStep !== 'config' || inheritedSettingsLoading) return;
-    const sourceAdSet = adSetMode === 'existing' ? selectedAdSet : latestAdSet;
+    const sourceAdSet = adSetMode === 'existing' && campaignMode === 'existing' ? selectedAdSet : latestAdSet;
     const sourceCampaign = campaignMode === 'existing' ? selectedCampaign : latestTemplateCampaign;
+    const settingsForConfig = sourceAdSet ? inheritedSettings : null;
     const targetingSignature = [
       sourceCampaign?.campaignDailyBudget || '',
       sourceCampaign?.campaignBidStrategy || '',
@@ -1988,14 +2372,14 @@ export default function LaunchCreativeSelectionPage() {
       sourceAdSet?.billingEvent || '',
     ].join('|');
     const sourceKey = [
-      inheritedSettings?.sourceAdId || 'manual-config',
-      selectedCampaignId || 'no-campaign',
+      settingsForConfig?.sourceAdId || 'manual-config',
+      campaignMode === 'new' ? selectedAdAccountId || 'no-launch-account' : selectedCampaignId || 'no-campaign',
       sourceAdSet?.id || 'no-adset',
       targetingSignature,
     ].join(':');
     if (launchConfigInitKey === sourceKey) return;
 
-    setLaunchConfigDraft(createInitialLaunchConfigDraft(inheritedSettings, sourceAdSet, sourceCampaign, selectedProfile));
+    setLaunchConfigDraft(createInitialLaunchConfigDraft(settingsForConfig, sourceAdSet, sourceCampaign, selectedProfile));
     setLaunchConfigInitKey(sourceKey);
   }, [
     adSetMode,
@@ -2006,6 +2390,7 @@ export default function LaunchCreativeSelectionPage() {
     latestAdSet,
     latestTemplateCampaign,
     launchConfigInitKey,
+    selectedAdAccountId,
     selectedAdSet,
     selectedCampaign,
     selectedCampaignId,
@@ -2192,6 +2577,55 @@ export default function LaunchCreativeSelectionPage() {
     setCurrentStep('campaign');
   };
 
+  const handleAdAccountChange = (accountId: string) => {
+    const normalizedAccountId = normalizeMetaAdAccountId(accountId);
+    setSelectedAdAccountId(normalizedAccountId || '');
+    setCampaigns([]);
+    setCampaignsScopeKey('');
+    setSelectedCampaignId('');
+    setAdSets([]);
+    setAdSetsCampaignId('');
+    setSelectedAdSetId('');
+    setInheritedSettings(null);
+    setInheritedSettingsError(null);
+    setPrimaryTextDrafts([]);
+    setHeadlineDrafts([]);
+    setDescriptionDrafts([]);
+    setCopyInitKey('');
+    setLaunchConfigInitKey('');
+    setCampaignSearch('');
+  };
+
+  const resetCampaignDependentState = () => {
+    setAdSets([]);
+    setAdSetsCampaignId('');
+    setSelectedAdSetId('');
+    setInheritedSettings(null);
+    setInheritedSettingsError(null);
+    setPrimaryTextDrafts([]);
+    setHeadlineDrafts([]);
+    setDescriptionDrafts([]);
+    setCopyInitKey('');
+    setLaunchConfigInitKey('');
+  };
+
+  const handleSelectedCampaignChange = (campaignId: string) => {
+    setSelectedCampaignId(campaignId);
+    const campaign = campaigns.find((item) => item.campaignId === campaignId);
+    setCampaignSearch(campaign?.campaignName || '');
+    resetCampaignDependentState();
+  };
+
+  const handleCampaignSearchChange = (value: string) => {
+    setCampaignSearch(value);
+    if (campaignMode !== 'existing') return;
+
+    const matches = campaigns.filter((campaign) => campaignMatchesSearch(campaign, value));
+    if (matches.length === 1 && matches[0].campaignId !== selectedCampaignId) {
+      handleSelectedCampaignChange(matches[0].campaignId);
+    }
+  };
+
   const continueToBatching = () => {
     if (campaignMode === 'new') {
       if (!newCampaignName.trim()) return;
@@ -2219,8 +2653,124 @@ export default function LaunchCreativeSelectionPage() {
     setSplitPreset('manual');
     setBatchPlan((plan) => plan.map((batch) => {
       const withoutCreative = batch.creativeIds.filter((id) => id !== creativeId);
-      if (batch.id !== targetBatchId) return { ...batch, creativeIds: withoutCreative };
-      return { ...batch, creativeIds: [...withoutCreative, creativeId] };
+      const adsWithoutCreative = (batch.ads || []).map((ad) => ({
+        ...ad,
+        creativeIds: ad.creativeIds.filter((id) => id !== creativeId),
+      }));
+      if (batch.id !== targetBatchId) return { ...batch, creativeIds: withoutCreative, ads: adsWithoutCreative };
+
+      const targetAds = adsWithoutCreative.length > 0
+        ? adsWithoutCreative
+        : [{ id: uniqueStableId('ad'), name: 'Ad 1', creativeIds: [] }];
+      targetAds[0] = {
+        ...targetAds[0],
+        creativeIds: [...targetAds[0].creativeIds, creativeId].slice(0, 10),
+      };
+      return { ...batch, creativeIds: [...withoutCreative, creativeId], ads: targetAds };
+    }));
+  };
+
+  const addAdToBatch = (batchId: string) => {
+    setSplitPreset('manual');
+    setBatchPlan((plan) => plan.map((batch) => {
+      if (batch.id !== batchId) return batch;
+      const nextAds = batch.ads || [];
+      return {
+        ...batch,
+        ads: [
+          ...nextAds,
+          {
+            id: uniqueStableId('ad'),
+            name: `Ad ${nextAds.length + 1}`,
+            creativeIds: [],
+          },
+        ],
+      };
+    }));
+  };
+
+  const renameAd = (batchId: string, adId: string, name: string) => {
+    setSplitPreset('manual');
+    setBatchPlan((plan) => plan.map((batch) => (
+      batch.id === batchId
+        ? {
+            ...batch,
+            ads: (batch.ads || []).map((ad) => (ad.id === adId ? { ...ad, name } : ad)),
+          }
+        : batch
+    )));
+  };
+
+  const deleteAdFromBatch = (batchId: string, adId: string) => {
+    setSplitPreset('manual');
+    setBatchPlan((plan) => plan.map((batch) => {
+      if (batch.id !== batchId || (batch.ads || []).length <= 1) return batch;
+      const deletedAd = batch.ads?.find((ad) => ad.id === adId);
+      const remainingAds = (batch.ads || []).filter((ad) => ad.id !== adId);
+      if (!deletedAd || remainingAds.length === 0) return batch;
+      const [fallbackAd, ...restAds] = remainingAds;
+      return {
+        ...batch,
+        ads: [
+          {
+            ...fallbackAd,
+            creativeIds: [...fallbackAd.creativeIds, ...deletedAd.creativeIds].slice(0, 10),
+          },
+          ...restAds,
+        ],
+      };
+    }));
+  };
+
+  const moveCreativeToAd = (batchId: string, adId: string, creativeId: string) => {
+    setSplitPreset('manual');
+    setBatchPlan((plan) => plan.map((batch) => {
+      if (batch.id !== batchId) return batch;
+      const ads = batch.ads?.length
+        ? batch.ads
+        : batch.creativeIds.map((id, index) => ({ id: uniqueStableId('ad'), name: `Ad ${index + 1}`, creativeIds: [id] }));
+      const targetAd = ads.find((ad) => ad.id === adId);
+      const alreadyInTargetAd = Boolean(targetAd?.creativeIds.includes(creativeId));
+      if (!targetAd || (!alreadyInTargetAd && targetAd.creativeIds.length >= 10)) return batch;
+      return {
+        ...batch,
+        ads: ads.map((ad) => {
+          const withoutCreative = ad.creativeIds.filter((id) => id !== creativeId);
+          if (ad.id !== adId) return { ...ad, creativeIds: withoutCreative };
+          return {
+            ...ad,
+            creativeIds: [...withoutCreative, creativeId].slice(0, 10),
+          };
+        }),
+      };
+    }));
+  };
+
+  const groupBatchCreativesIntoOneAd = (batchId: string) => {
+    setSplitPreset('manual');
+    setBatchPlan((plan) => plan.map((batch) => {
+      if (batch.id !== batchId) return batch;
+      return {
+        ...batch,
+        ads: createMultiMediaAdsFromIds(batch.creativeIds, batch.ads?.[0]?.name || 'Ad 1'),
+      };
+    }));
+  };
+
+  const splitBatchCreativesIntoAds = (batchId: string) => {
+    setSplitPreset('manual');
+    const selectedCreativeById = new Map(selectedCreatives.map((creative) => [creative.id, creative]));
+    setBatchPlan((plan) => plan.map((batch) => {
+      if (batch.id !== batchId) return batch;
+      return {
+        ...batch,
+        ads: createSingleMediaAds(
+          batch.creativeIds
+            .map((creativeId) => selectedCreativeById.get(creativeId))
+            .filter((creative): creative is InboxCreative => Boolean(creative)),
+          batch.id,
+        ),
+      };
     }));
   };
 
@@ -2252,6 +2802,7 @@ export default function LaunchCreativeSelectionPage() {
         {
           ...fallbackBatch,
           creativeIds: [...fallbackBatch.creativeIds, ...deletedBatch.creativeIds],
+          ads: [...(fallbackBatch.ads || []), ...(deletedBatch.ads || [])],
         },
         ...restBatches,
       ];
@@ -2317,7 +2868,7 @@ export default function LaunchCreativeSelectionPage() {
   };
 
   const uploadManualThumbnail = async (creative: InboxCreative, file: File) => {
-    if (!selectedProfile?.adAccountId || !resolvedStoreIdForView) {
+    if (!launchAdAccountId || !resolvedStoreIdForView) {
       setThumbnailDrafts((current) => ({
         ...current,
         [creative.id]: {
@@ -2348,7 +2899,7 @@ export default function LaunchCreativeSelectionPage() {
     try {
       const form = new FormData();
       form.set('storeId', resolvedStoreIdForView);
-      form.set('adAccountId', selectedProfile.adAccountId);
+      form.set('adAccountId', launchAdAccountId);
       form.set('creativeId', creative.id);
       form.set('file', file);
 
@@ -2532,6 +3083,7 @@ export default function LaunchCreativeSelectionPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           creativeId: creative.id,
+          creativeName: getCreativeName(creative),
           driveUrl: sourceUrl,
           adAccountId: launchAdAccountId,
           storeId: resolvedStoreIdForView,
@@ -2563,7 +3115,7 @@ export default function LaunchCreativeSelectionPage() {
       updateCreativeUploadProgress(creative, {
         stage: 'ready',
         progress: 100,
-        message: 'Uploaded to Meta',
+        message: 'Ready in Meta',
         error: undefined,
       });
 
@@ -2582,44 +3134,15 @@ export default function LaunchCreativeSelectionPage() {
     }
   };
 
-  const getLaunchMediaCreatives = (adCreatives: InboxCreative[]): InboxCreative[] => {
-    if (
-      launchConfigDraft.creativeFormatMode !== 'single_format_media_options' &&
-      launchConfigDraft.creativeFormatMode !== 'dynamic_creative'
-    ) {
-      return adCreatives;
+  const uploadSelectedCreatives = async (): Promise<InboxCreative[]> => {
+    const uploadedCreatives: InboxCreative[] = [];
+    for (const creative of selectedCreatives) {
+      uploadedCreatives.push(await uploadCreativeWithProgress(creative));
     }
-
-    const ids = new Set<string>();
-    for (const adCreative of adCreatives) {
-      ids.add(adCreative.id);
-      for (const mediaId of getAdMediaOptionIds(launchConfigDraft, adCreative.id, creatives)) {
-        ids.add(mediaId);
-      }
-    }
-    return creatives.filter((creative) => ids.has(creative.id));
+    return uploadedCreatives;
   };
 
-  const uploadLaunchCreatives = async (): Promise<{
-    uploadedAdCreatives: InboxCreative[];
-    uploadedMediaCreatives: InboxCreative[];
-  }> => {
-    const uploadPool = getLaunchMediaCreatives(selectedCreatives);
-    const uploadedById = new Map<string, InboxCreative>();
-    for (const creative of uploadPool) {
-      const uploaded = await uploadCreativeWithProgress(creative);
-      uploadedById.set(creative.id, uploaded);
-    }
-    return {
-      uploadedAdCreatives: selectedCreatives.map((creative) => uploadedById.get(creative.id) || creative),
-      uploadedMediaCreatives: uploadPool.map((creative) => uploadedById.get(creative.id) || creative),
-    };
-  };
-
-  const buildLaunchConfig = (
-    uploadedCreatives: InboxCreative[],
-    mediaPoolCreatives: InboxCreative[] = creatives,
-  ): LaunchConfig => {
+  const buildLaunchConfig = (uploadedCreatives: InboxCreative[]): LaunchConfig => {
     if (!selectedProfile) {
       throw new Error('Select a product profile before launching.');
     }
@@ -2646,9 +3169,9 @@ export default function LaunchCreativeSelectionPage() {
       if (!launchConfigDraft.scheduledAt) {
         throw new Error('Choose a future scheduled launch time before launching.');
       }
-      const scheduledDate = new Date(launchConfigDraft.scheduledAt);
-      if (Number.isNaN(scheduledDate.getTime()) || scheduledDate.getTime() <= Date.now()) {
-        throw new Error('Scheduled launch time must be in the future.');
+      const scheduledDate = parseScheduledAtInTimezone(launchConfigDraft.scheduledAt, launchTimezone);
+      if (!scheduledDate || scheduledDate.getTime() <= Date.now()) {
+        throw new Error(`Scheduled launch time must be in the future for ${launchTimezone}.`);
       }
       if (adSetMode === 'existing') {
         throw new Error(
@@ -2681,6 +3204,13 @@ export default function LaunchCreativeSelectionPage() {
     const unassignedIds = selectedCreativeIds.filter((creativeId) => !assignedIds.has(creativeId));
     if (unassignedIds.length > 0) {
       throw new Error(`${unassignedIds.length} selected creative${unassignedIds.length === 1 ? ' is' : 's are'} not assigned to any ad set.`);
+    }
+    const launchPlanErrors = findBatchPlanValidationErrors(
+      batchPlan,
+      new Map(uploadedCreatives.map((creative) => [creative.id, creative])),
+    );
+    if (launchPlanErrors.length > 0) {
+      throw new Error(launchPlanErrors.join('\n'));
     }
 
     const dailyBudget =
@@ -2738,14 +3268,23 @@ export default function LaunchCreativeSelectionPage() {
       adSetMode === 'new'
         ? batchPlan
             .filter((batch) => batch.creativeIds.length > 0)
-            .map((batch) => ({
-              id: batch.id,
-              name: batch.name,
-              creativeIds: batch.creativeIds,
-              dailyBudget: campaignStructure === 'ABO' ? dailyBudget : undefined,
-              dailyMinSpend: campaignStructure === 'CBO' ? adSetDailyMinSpend : undefined,
-              dailyMaxSpend: campaignStructure === 'CBO' ? adSetDailyMaxSpend : undefined,
-            }))
+            .map((batch) => {
+              const creativeById = new Map(uploadedCreatives.map((creative) => [creative.id, creative]));
+              const normalizedAds = normalizeBatchAds(batch, creativeById);
+              return {
+                id: batch.id,
+                name: batch.name,
+                creativeIds: batch.creativeIds,
+                ads: normalizedAds.map((ad) => ({
+                  id: ad.id,
+                  name: ad.name,
+                  creativeIds: ad.creativeIds,
+                })),
+                dailyBudget: campaignStructure === 'ABO' ? dailyBudget : undefined,
+                dailyMinSpend: campaignStructure === 'CBO' ? adSetDailyMinSpend : undefined,
+                dailyMaxSpend: campaignStructure === 'CBO' ? adSetDailyMaxSpend : undefined,
+              };
+            })
         : undefined;
 
     const existingAdsetAssignments =
@@ -2759,7 +3298,41 @@ export default function LaunchCreativeSelectionPage() {
           }, {})
         : undefined;
 
-    const launchConfig: LaunchConfig = {
+    const existingAdsetAdGroups =
+      adSetMode === 'existing'
+        ? batchPlan.reduce<Record<string, AdPlanItem[]>>((acc, batch) => {
+            const adSetId = batch.existingAdSetId || selectedAdSet?.id;
+            const creativeById = new Map(uploadedCreatives.map((creative) => [creative.id, creative]));
+            const ads = normalizeBatchAds(batch, creativeById)
+              .map((ad) => ({
+                id: ad.id,
+                name: ad.name,
+                creativeIds: ad.creativeIds.filter((creativeId) => batch.creativeIds.includes(creativeId)),
+              }))
+              .filter((ad) => ad.creativeIds.length > 0);
+            if (adSetId && ads.length > 0) {
+              acc[adSetId] = [...(acc[adSetId] || []), ...ads];
+            }
+            return acc;
+          }, {})
+        : undefined;
+
+    const dynamicCreativeConflicts =
+      adSetMode === 'new'
+        ? (launchBatches || [])
+            .filter((batch) => hasDynamicCreativeMultiAdConflict(batch.ads || []))
+            .map((batch) => batch.name)
+        : Object.entries(existingAdsetAdGroups || {})
+            .filter(([, ads]) => hasDynamicCreativeMultiAdConflict(ads))
+            .map(([adSetId]) => selectedAdSet?.id === adSetId ? selectedAdSet.name : `ad set ${adSetId}`);
+
+    if (dynamicCreativeConflicts.length > 0) {
+      throw new Error(
+        `Dynamic adsets can only have one ad. Create another ad set for: ${dynamicCreativeConflicts.join(', ')}.`,
+      );
+    }
+
+    return {
       productProfileId: selectedProfile.id,
       selectedCreativeIds,
       selectedCreativeSnapshots: uploadedCreatives,
@@ -2769,6 +3342,7 @@ export default function LaunchCreativeSelectionPage() {
       adsetMode: adSetMode === 'existing' ? 'existing_adsets' : 'new_adsets',
       adsetDistribution: adSetMode === 'new' && (launchBatches?.length || 0) > 1 ? 'distribute' : 'all_to_one',
       existingAdsetAssignments,
+      existingAdsetAdGroups,
       structure: campaignStructure,
       adAccountId: launchAdAccountId || selectedProfile.adAccountId,
       pageId: selectedProfile.pageId,
@@ -2793,31 +3367,8 @@ export default function LaunchCreativeSelectionPage() {
       headlines,
       descriptions,
       ctaType: ctaLabel(ctaDraft),
-      creativeFormatMode: launchConfigDraft.creativeFormatMode,
       advantageCreative: launchConfigDraft.advantageCreative,
       usePerCreativeUrls: false,
-      mediaOptionCreativeIds:
-        launchConfigDraft.creativeFormatMode === 'single_format_media_options' ||
-        launchConfigDraft.creativeFormatMode === 'dynamic_creative'
-          ? Object.fromEntries(
-              uploadedCreatives.map((creative) => [
-                creative.id,
-                getAdMediaOptionIds(launchConfigDraft, creative.id, mediaPoolCreatives),
-              ]),
-            )
-          : undefined,
-      mediaOptionCreativeSnapshots:
-        launchConfigDraft.creativeFormatMode === 'single_format_media_options' ||
-        launchConfigDraft.creativeFormatMode === 'dynamic_creative'
-          ? mediaPoolCreatives.filter((creative) => {
-              const mediaIds = new Set(
-                uploadedCreatives.flatMap((adCreative) =>
-                  getAdMediaOptionIds(launchConfigDraft, adCreative.id, mediaPoolCreatives),
-                ),
-              );
-              return mediaIds.has(creative.id);
-            })
-          : undefined,
       videoThumbnails: Object.keys(videoThumbnails).length > 0 ? videoThumbnails : undefined,
       launchTime: launchConfigDraft.launchTiming === 'scheduled' ? 'scheduled' : 'immediately',
       scheduledDate: scheduledParts.scheduledDate,
@@ -2828,55 +3379,6 @@ export default function LaunchCreativeSelectionPage() {
       batchStrategy: 'manual',
       launchMode: 'quick',
     };
-
-    const formatValidation = validateLaunchCreativeFormat(launchConfig);
-    if (formatValidation.errors.length > 0) {
-      throw new Error(formatValidation.errors.join(' '));
-    }
-
-    return launchConfig;
-  };
-
-  const submitLaunchWithProcessingRetries = async (launchConfig: LaunchConfig): Promise<LaunchSubmitResult> => {
-    const maxAttempts = 8;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const response = await fetch('/api/creative-hub/launch/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          storeId: resolvedStoreIdForView,
-          launchConfig,
-        }),
-      });
-      const data = (await response.json().catch(() => ({}))) as LaunchSubmitResult;
-
-      if (response.status === 202 && data.status === 'processing') {
-        const processingNames = new Set(data.processingVideos || []);
-        setUploadProgress((current) => {
-          const next = { ...current };
-          for (const [creativeId, row] of Object.entries(next)) {
-            if (!processingNames.has(row.creativeName)) continue;
-            next[creativeId] = {
-              ...row,
-              stage: 'processing',
-              progress: 96,
-              message: `Meta is processing this video${attempt < maxAttempts ? ` · retry ${attempt}/${maxAttempts}` : ''}`,
-              error: undefined,
-            };
-          }
-          return next;
-        });
-        await sleep(Math.max(5_000, Math.min(30_000, data.retryAfterMs || 15_000)));
-        continue;
-      }
-
-      if (!response.ok) {
-        throw new Error(data.error || `Launch failed with HTTP ${response.status}`);
-      }
-      return data;
-    }
-
-    throw new Error('Meta is still processing the uploaded videos. Please wait a minute and click Launch again.');
   };
 
   const handleLaunch = async () => {
@@ -2889,9 +3391,21 @@ export default function LaunchCreativeSelectionPage() {
     try {
       // Validate the launch plan before starting any potentially slow media downloads.
       buildLaunchConfig(selectedCreatives);
-      const { uploadedAdCreatives, uploadedMediaCreatives } = await uploadLaunchCreatives();
-      const launchConfig = buildLaunchConfig(uploadedAdCreatives, uploadedMediaCreatives);
-      const data = await submitLaunchWithProcessingRetries(launchConfig);
+      const uploadedCreatives = await uploadSelectedCreatives();
+      const launchConfig = buildLaunchConfig(uploadedCreatives);
+      const response = await fetch('/api/creative-hub/launch/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storeId: resolvedStoreIdForView,
+          launchConfig,
+        }),
+      });
+      const data = (await response.json().catch(() => ({}))) as LaunchSubmitResult;
+
+      if (!response.ok) {
+        throw new Error(data.error || `Launch failed with HTTP ${response.status}`);
+      }
       if (data.status === 'partial') {
         throw new Error(extractLaunchErrorFromResult(data));
       }
@@ -3257,19 +3771,24 @@ export default function LaunchCreativeSelectionPage() {
             campaignsError={campaignsError}
             campaignsLoading={campaignsLoading}
             campaignSearch={campaignSearch}
-            currency={selectedProfile?.adAccountCurrency || 'USD'}
+            currency={launchCurrency}
+            linkedAdAccounts={linkedAdAccounts}
             newCampaignName={newCampaignName}
             newCampaignStructure={newCampaignStructure}
             onAdSetModeChange={setAdSetMode}
+            onAdAccountChange={handleAdAccountChange}
             onBack={() => setCurrentStep('creatives')}
             onCampaignModeChange={(mode) => {
               setCampaignMode(mode);
+              setCampaigns([]);
+              setCampaignsScopeKey('');
+              setSelectedCampaignId('');
+              resetCampaignDependentState();
               if (mode === 'new') {
                 setAdSetMode('new');
-                setSelectedAdSetId('');
               }
             }}
-            onCampaignSearchChange={setCampaignSearch}
+            onCampaignSearchChange={handleCampaignSearchChange}
             onContinue={continueToBatching}
             onNewCampaignNameChange={(value) => {
               setNewCampaignNameTouched(true);
@@ -3281,10 +3800,11 @@ export default function LaunchCreativeSelectionPage() {
             }}
             onRefreshCampaigns={() => void loadCampaigns()}
             onSelectedAdSetChange={setSelectedAdSetId}
-            onSelectedCampaignChange={setSelectedCampaignId}
+            onSelectedCampaignChange={handleSelectedCampaignChange}
             productName={productNameForFlow}
             selectedAdSet={selectedAdSet}
             selectedAdSetId={selectedAdSetId}
+            selectedAdAccountId={selectedAdAccountId}
             selectedCampaign={selectedCampaign}
             selectedCampaignId={selectedCampaignId}
             selectedCreativeCount={selectedIds.size}
@@ -3306,8 +3826,14 @@ export default function LaunchCreativeSelectionPage() {
             onDragEnd={() => setDraggedCreativeId(null)}
             onDragStart={setDraggedCreativeId}
             onDeleteBatch={deleteBatch}
+            onAddAdToBatch={addAdToBatch}
+            onDeleteAdFromBatch={deleteAdFromBatch}
+            onGroupBatchCreatives={groupBatchCreativesIntoOneAd}
+            onMoveCreativeToAd={moveCreativeToAd}
             onMoveCreative={moveCreativeToBatch}
+            onRenameAd={renameAd}
             onRenameBatch={renameBatch}
+            onSplitBatchCreatives={splitBatchCreativesIntoAds}
             campaignDisplayName={campaignMode === 'new' ? newCampaignName : selectedCampaign?.campaignName}
             productName={selectedProfile?.productName || productNameById(profiles, launchProductId)}
             selectedAdSet={selectedAdSet}
@@ -3343,7 +3869,6 @@ export default function LaunchCreativeSelectionPage() {
         ) : currentStep === 'config' ? (
           <LaunchConfigStep
             adSetMode={adSetMode}
-            availableMediaCreatives={creatives}
             campaignMode={campaignMode}
             inheritedSettings={inheritedSettings}
             inheritedSettingsError={inheritedSettingsError}
@@ -3368,7 +3893,7 @@ export default function LaunchCreativeSelectionPage() {
             adSetMode={adSetMode}
             batchPlan={batchPlan}
             ctaDraft={ctaDraft}
-            currency={selectedProfile?.adAccountCurrency || 'USD'}
+            currency={launchCurrency}
             descriptionDrafts={descriptionDrafts}
             headlineDrafts={headlineDrafts}
             inheritedSettings={inheritedSettings}
@@ -3378,6 +3903,7 @@ export default function LaunchCreativeSelectionPage() {
             launching={launching}
             campaignMode={campaignMode}
             campaignStructure={campaignStructure}
+            currentLaunchTimeLabel={currentLaunchTimeLabel}
             newCampaignName={newCampaignName}
             onBack={() => setCurrentStep('config')}
             onLaunch={() => void handleLaunch()}
@@ -3435,9 +3961,11 @@ function CampaignAdSetSelectionStep({
   campaignsLoading,
   campaignSearch,
   currency,
+  linkedAdAccounts,
   newCampaignName,
   newCampaignStructure,
   onAdSetModeChange,
+  onAdAccountChange,
   onBack,
   onCampaignModeChange,
   onCampaignSearchChange,
@@ -3450,6 +3978,7 @@ function CampaignAdSetSelectionStep({
   productName,
   selectedAdSet,
   selectedAdSetId,
+  selectedAdAccountId,
   selectedCampaign,
   selectedCampaignId,
   selectedCreativeCount,
@@ -3464,9 +3993,11 @@ function CampaignAdSetSelectionStep({
   campaignsLoading: boolean;
   campaignSearch: string;
   currency: string;
+  linkedAdAccounts: Array<{ accountId: string; name: string; currency: string; campaignCount: number }>;
   newCampaignName: string;
   newCampaignStructure: CampaignStructure;
   onAdSetModeChange: (mode: AdSetMode) => void;
+  onAdAccountChange: (accountId: string) => void;
   onBack: () => void;
   onCampaignModeChange: (mode: CampaignMode) => void;
   onCampaignSearchChange: (value: string) => void;
@@ -3479,30 +4010,46 @@ function CampaignAdSetSelectionStep({
   productName: string;
   selectedAdSet?: MetaAdSetOption;
   selectedAdSetId: string;
+  selectedAdAccountId: string;
   selectedCampaign?: MetaCampaignOption;
   selectedCampaignId: string;
   selectedCreativeCount: number;
 }) {
-  const normalizedCampaignSearch = campaignSearch.trim().toLowerCase();
-  const visibleCampaigns = campaigns.filter((campaign) => {
-    if (!normalizedCampaignSearch) return true;
-    return [
-      campaign.campaignName,
-      campaign.campaignId,
-      campaign.adAccountId,
-      campaign.effectiveStatus,
-      campaign.objective,
-      campaign.campaignBidStrategy,
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase()
-      .includes(normalizedCampaignSearch);
-  });
+  const campaignComboboxRef = useRef<HTMLDivElement | null>(null);
+  const [campaignDropdownOpen, setCampaignDropdownOpen] = useState(false);
+  const visibleCampaigns = campaigns.filter((campaign) => campaignMatchesSearch(campaign, campaignSearch));
+  const selectedCampaignVisible = Boolean(
+    selectedCampaign && visibleCampaigns.some((campaign) => campaign.campaignId === selectedCampaign.campaignId),
+  );
+  const campaignOptions =
+    selectedCampaign && !selectedCampaignVisible
+      ? [selectedCampaign, ...visibleCampaigns]
+      : visibleCampaigns;
   const canContinue =
     campaignMode === 'new'
-      ? Boolean(newCampaignName.trim())
+      ? Boolean(newCampaignName.trim()) && Boolean(selectedAdAccountId)
       : Boolean(selectedCampaignId) && (adSetMode === 'new' || Boolean(selectedAdSetId));
+  const campaignPlaceholder = campaignsLoading
+    ? 'Loading campaigns...'
+    : campaigns.length === 0
+      ? 'No campaigns found'
+      : 'Search or select a campaign';
+
+  useEffect(() => {
+    if (!campaignDropdownOpen) return undefined;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!campaignComboboxRef.current?.contains(event.target as Node)) {
+        setCampaignDropdownOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [campaignDropdownOpen]);
+
+  const selectCampaignFromCombobox = (campaign: MetaCampaignOption) => {
+    onSelectedCampaignChange(campaign.campaignId);
+    setCampaignDropdownOpen(false);
+  };
 
   return (
     <section className="rounded-[1.5rem] border border-slate-200 bg-white shadow-sm">
@@ -3540,7 +4087,7 @@ function CampaignAdSetSelectionStep({
             <button
               type="button"
               onClick={onRefreshCampaigns}
-              disabled={campaignsLoading || campaignMode !== 'existing'}
+              disabled={campaignsLoading || campaignMode !== 'existing' || linkedAdAccounts.length === 0}
               className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {campaignsLoading ? 'Refreshing...' : 'Refresh campaigns'}
@@ -3567,6 +4114,59 @@ function CampaignAdSetSelectionStep({
 
         {campaignMode === 'new' ? (
           <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            {linkedAdAccounts.length > 1 ? (
+              <div>
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-sm font-semibold text-slate-950">Launch ad account</h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Choose which linked Meta ad account should receive this new campaign.
+                    </p>
+                  </div>
+                  <label className="block w-full lg:w-[360px]">
+                    <span className="sr-only">Select launch ad account</span>
+                    <select
+                      value={selectedAdAccountId}
+                      onChange={(event) => onAdAccountChange(event.target.value)}
+                      className="h-12 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-50"
+                    >
+                      {linkedAdAccounts.map((account) => (
+                        <option key={account.accountId} value={account.accountId}>
+                          {account.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {linkedAdAccounts.map((account) => (
+                    <span
+                      key={account.accountId}
+                      className={cn(
+                        'rounded-full border px-2.5 py-1 text-xs font-semibold',
+                        account.accountId === selectedAdAccountId
+                          ? 'border-blue-200 bg-blue-50 text-blue-700'
+                          : 'border-slate-200 bg-white text-slate-500',
+                      )}
+                    >
+                      {account.name}
+                      {account.campaignCount > 0 ? ` · ${account.campaignCount} campaign${account.campaignCount !== 1 ? 's' : ''}` : ''}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-950">Launch ad account</p>
+                  <p className="mt-1 text-xs text-slate-500">This new campaign will use the linked product ad account.</p>
+                </div>
+                <span className="w-fit rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-600">
+                  {linkedAdAccounts[0]?.name || 'No ad account'}
+                </span>
+              </div>
+            )}
+
             <label className="block">
               <span className="text-sm font-semibold text-slate-900">Campaign name</span>
               <input
@@ -3610,37 +4210,79 @@ function CampaignAdSetSelectionStep({
           </div>
         ) : (
           <div className="space-y-4">
-            <label className="block">
-              <span className="text-sm font-semibold text-slate-900">Search campaigns</span>
-              <div className="relative mt-2">
+            <div ref={campaignComboboxRef} className="relative">
+              <label className="block">
+                <span className="text-sm font-semibold text-slate-900">Campaign</span>
+                <div className="relative mt-2">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <input
                   value={campaignSearch}
-                  onChange={(event) => onCampaignSearchChange(event.target.value)}
-                  placeholder="Search by campaign name, account, status..."
-                  className="h-12 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-50"
+                  onChange={(event) => {
+                    onCampaignSearchChange(event.target.value);
+                    setCampaignDropdownOpen(true);
+                  }}
+                  onFocus={() => setCampaignDropdownOpen(true)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && campaignOptions[0]) {
+                      event.preventDefault();
+                      selectCampaignFromCombobox(campaignOptions[0]);
+                    }
+                    if (event.key === 'ArrowDown') {
+                      setCampaignDropdownOpen(true);
+                    }
+                    if (event.key === 'Escape') {
+                      setCampaignDropdownOpen(false);
+                    }
+                  }}
+                  placeholder={campaignPlaceholder}
+                  disabled={campaignsLoading || campaigns.length === 0}
+                  className="h-12 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-12 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-50 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
                 />
-              </div>
-            </label>
-            <label className="block">
-              <span className="text-sm font-semibold text-slate-900">Select campaign</span>
-              <select
-                value={selectedCampaignId}
-                onChange={(event) => onSelectedCampaignChange(event.target.value)}
-                disabled={campaignsLoading || visibleCampaigns.length === 0}
-                className="mt-2 h-12 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-50 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
-              >
-                {visibleCampaigns.length === 0 ? (
-                  <option value="">{campaignsLoading ? 'Loading campaigns...' : campaigns.length === 0 ? 'No campaigns found' : 'No campaigns match search'}</option>
-                ) : (
-                  visibleCampaigns.map((campaign) => (
-                    <option key={campaign.campaignId} value={campaign.campaignId}>
-                      {campaign.campaignName} · {isCboCampaign(campaign) ? 'CBO' : 'ABO'} · {getStatusText(campaign.effectiveStatus, campaign.isActive)}{campaign.adAccountId ? ` · ${campaign.adAccountId}` : ''}
-                    </option>
-                  ))
-                )}
-              </select>
-            </label>
+                  <button
+                    type="button"
+                    onClick={() => setCampaignDropdownOpen((open) => !open)}
+                    disabled={campaignsLoading || campaigns.length === 0}
+                    className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                    aria-label="Show campaigns"
+                  >
+                    <ChevronDown className={cn('h-4 w-4 transition', campaignDropdownOpen && 'rotate-180')} />
+                  </button>
+                </div>
+              </label>
+              {campaignDropdownOpen && (
+                <div className="absolute z-20 mt-2 max-h-80 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-xl shadow-slate-900/10">
+                  {campaignOptions.length === 0 ? (
+                    <div className="px-3 py-3 text-sm text-slate-500">
+                      {campaignsLoading ? 'Loading campaigns...' : 'No campaigns match this search.'}
+                    </div>
+                  ) : (
+                    campaignOptions.map((campaign) => {
+                      const isSelected = campaign.campaignId === selectedCampaignId;
+                      return (
+                        <button
+                          key={campaign.campaignId}
+                          type="button"
+                          onClick={() => selectCampaignFromCombobox(campaign)}
+                          className={cn(
+                            'flex w-full items-start justify-between gap-3 rounded-lg px-3 py-2 text-left transition',
+                            isSelected ? 'bg-blue-50 text-blue-900' : 'text-slate-800 hover:bg-slate-50',
+                          )}
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-semibold">{campaign.campaignName}</span>
+                            <span className="mt-0.5 block truncate text-xs text-slate-500">
+                              {isCboCampaign(campaign) ? 'CBO' : 'ABO'} · {getStatusText(campaign.effectiveStatus, campaign.isActive)}
+                              {campaign.adAccountId ? ` · ${campaign.adAccountId}` : ''}
+                            </span>
+                          </span>
+                          {isSelected && <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />}
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+            </div>
 
             {campaignsError && (
               <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -3793,16 +4435,22 @@ function BatchingStep({
   batchPlan,
   campaignDisplayName,
   draggedCreativeId,
+  onAddAdToBatch,
   onAddManualBatch,
   onApplySplitPreset,
   onBack,
   onBatchModeChange,
   onContinue,
+  onDeleteAdFromBatch,
   onDeleteBatch,
   onDragEnd,
   onDragStart,
+  onGroupBatchCreatives,
+  onMoveCreativeToAd,
   onMoveCreative,
+  onRenameAd,
   onRenameBatch,
+  onSplitBatchCreatives,
   productName,
   selectedAdSet,
   selectedCampaign,
@@ -3814,16 +4462,22 @@ function BatchingStep({
   batchPlan: BatchPlanItem[];
   campaignDisplayName?: string;
   draggedCreativeId: string | null;
+  onAddAdToBatch: (batchId: string) => void;
   onAddManualBatch: () => void;
   onApplySplitPreset: (preset: SplitPreset) => void;
   onBack: () => void;
   onBatchModeChange: (mode: BatchMode) => void;
   onContinue: () => void;
+  onDeleteAdFromBatch: (batchId: string, adId: string) => void;
   onDeleteBatch: (batchId: string) => void;
   onDragEnd: () => void;
   onDragStart: (creativeId: string) => void;
+  onGroupBatchCreatives: (batchId: string) => void;
+  onMoveCreativeToAd: (batchId: string, adId: string, creativeId: string) => void;
   onMoveCreative: (creativeId: string, targetBatchId: string) => void;
+  onRenameAd: (batchId: string, adId: string, name: string) => void;
   onRenameBatch: (batchId: string, name: string) => void;
+  onSplitBatchCreatives: (batchId: string) => void;
   productName: string;
   selectedAdSet?: MetaAdSetOption;
   selectedCampaign?: MetaCampaignOption;
@@ -3835,8 +4489,14 @@ function BatchingStep({
     for (const creative of selectedCreatives) map.set(creative.id, creative);
     return map;
   }, [selectedCreatives]);
-  const totalPlannedAds = batchPlan.reduce((sum, batch) => sum + batch.creativeIds.length, 0);
+  const totalMediaOptions = batchPlan.reduce((sum, batch) => sum + batch.creativeIds.length, 0);
+  const totalPlannedAds = batchPlan.reduce(
+    (sum, batch) => sum + (batch.ads?.filter((ad) => ad.creativeIds.length > 0).length || batch.creativeIds.length),
+    0,
+  );
   const selectedCampaignName = campaignDisplayName || selectedCampaign?.campaignName || 'Selected campaign';
+  const validationErrors = findBatchPlanValidationErrors(batchPlan, creativeById);
+  const canContinue = validationErrors.length === 0;
 
   return (
     <section className="rounded-[1.5rem] border border-slate-200 bg-white shadow-sm">
@@ -3861,7 +4521,7 @@ function BatchingStep({
               {selectedCampaignName}
             </span>
             <span className="rounded-full border border-blue-100 bg-blue-50 px-3 py-1.5 font-semibold text-blue-700">
-              {totalPlannedAds} ad{totalPlannedAds !== 1 ? 's' : ''}
+              {totalPlannedAds} ad{totalPlannedAds !== 1 ? 's' : ''} · {totalMediaOptions} media
             </span>
           </div>
         </div>
@@ -3932,7 +4592,7 @@ function BatchingStep({
             <div>
               <h3 className="text-sm font-semibold text-slate-950">Batch plan</h3>
               <p className="mt-1 text-sm text-slate-500">
-                {batchPlan.length} ad set{batchPlan.length !== 1 ? 's' : ''} · {totalPlannedAds} creative{totalPlannedAds !== 1 ? 's' : ''} assigned
+                {batchPlan.length} ad set{batchPlan.length !== 1 ? 's' : ''} · {totalPlannedAds} ad{totalPlannedAds !== 1 ? 's' : ''} · {totalMediaOptions} media assigned
               </p>
             </div>
             {draggedCreativeId && (
@@ -3941,6 +4601,17 @@ function BatchingStep({
               </span>
             )}
           </div>
+
+          {validationErrors.length > 0 && (
+            <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+              <p className="font-semibold">Fix batching before continuing</p>
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {validationErrors.map((error) => (
+                  <li key={error}>{error}</li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           <div className="grid gap-4 lg:grid-cols-2">
             {batchPlan.map((batch, index) => {
@@ -3956,10 +4627,16 @@ function BatchingStep({
                   canDelete={adSetMode === 'new' && batchPlan.length > 1}
                   index={index}
                   onDelete={() => onDeleteBatch(batch.id)}
+                  onAddAd={() => onAddAdToBatch(batch.id)}
+                  onDeleteAd={(adId) => onDeleteAdFromBatch(batch.id, adId)}
                   onDragEnd={onDragEnd}
                   onDragStart={onDragStart}
                   onDropCreative={(creativeId) => onMoveCreative(creativeId, batch.id)}
+                  onGroupCreatives={() => onGroupBatchCreatives(batch.id)}
+                  onMoveCreativeToAd={(adId, creativeId) => onMoveCreativeToAd(batch.id, adId, creativeId)}
+                  onRenameAd={(adId, name) => onRenameAd(batch.id, adId, name)}
                   onRename={(name) => onRenameBatch(batch.id, name)}
+                  onSplitCreatives={() => onSplitBatchCreatives(batch.id)}
                 />
               );
             })}
@@ -3982,7 +4659,13 @@ function BatchingStep({
           <button
             type="button"
             onClick={onContinue}
-            className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-blue-500/20 transition hover:bg-blue-700"
+            disabled={!canContinue}
+            className={cn(
+              'rounded-xl px-4 py-2 text-sm font-semibold transition',
+              canContinue
+                ? 'bg-blue-600 text-white shadow-sm shadow-blue-500/20 hover:bg-blue-700'
+                : 'cursor-not-allowed bg-slate-100 text-slate-400',
+            )}
           >
             Continue to copy
           </button>
@@ -4313,7 +4996,6 @@ function CopySelectionStep({
 
 function LaunchConfigStep({
   adSetMode,
-  availableMediaCreatives,
   campaignMode,
   campaignStructure,
   inheritedSettings,
@@ -4334,7 +5016,6 @@ function LaunchConfigStep({
   thumbnailDrafts,
 }: {
   adSetMode: AdSetMode;
-  availableMediaCreatives: InboxCreative[];
   campaignMode: CampaignMode;
   campaignStructure: CampaignStructure;
   inheritedSettings: InheritedAdSettings | null;
@@ -4363,12 +5044,15 @@ function LaunchConfigStep({
     campaignStructure === 'CBO' &&
     launchConfigDraft.bidStrategy === 'LOWEST_COST_WITH_BID_CAP';
   const videoCreatives = selectedCreatives.filter(isVideoCreative);
-  const showAdMediaOptions =
-    launchConfigDraft.creativeFormatMode === 'single_format_media_options' ||
-    launchConfigDraft.creativeFormatMode === 'dynamic_creative';
-  const sourceAdSet = adSetMode === 'existing' ? selectedAdSet : latestAdSet;
+  const sourceAdSet =
+    adSetMode === 'existing' && campaignMode === 'existing'
+      ? selectedAdSet
+      : latestAdSet;
+  const sourceAdSetName = sourceAdSet?.name || inheritedSettings?.sourceAdSetName;
   const sourceDescription =
-    adSetMode === 'existing'
+    campaignMode === 'new'
+      ? 'Using the latest ad from the selected launch ad account.'
+      : adSetMode === 'existing'
       ? 'Using the latest ad from the selected existing ad set.'
       : 'Using the latest ad from the latest ad set in the latest available campaign.';
 
@@ -4406,7 +5090,7 @@ function LaunchConfigStep({
               <p className="mt-1 text-sm leading-6 text-slate-600">{sourceDescription}</p>
               <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
                 <span className="rounded-xl border border-blue-100 bg-white px-3 py-2">
-                  Ad set: <span className="font-semibold text-slate-900">{sourceAdSet?.name || 'Not found'}</span>
+                  Ad set: <span className="font-semibold text-slate-900">{sourceAdSetName || 'Not found'}</span>
                 </span>
                 <span className="rounded-xl border border-blue-100 bg-white px-3 py-2">
                   Ad: <span className="font-semibold text-slate-900">{inheritedSettings?.sourceAdName || 'Not found'}</span>
@@ -4433,94 +5117,6 @@ function LaunchConfigStep({
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-4">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <h3 className="text-sm font-semibold text-slate-950">Creative format</h3>
-              <p className="mt-1 text-sm text-slate-500">
-                Choose how selected media and copy should be packaged for Meta. Only the current stable format is launch-enabled in this step.
-              </p>
-            </div>
-            <span className="w-fit rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
-              {selectedCreativeCount} media selected
-            </span>
-          </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            {creativeFormatModeOptions.map((option) => {
-              const selected = launchConfigDraft.creativeFormatMode === option.id;
-              const Icon =
-                option.id === 'single_per_creative'
-                  ? Film
-                  : option.id === 'single_format_media_options'
-                    ? LayoutGrid
-                    : option.id === 'dynamic_creative'
-                      ? Sparkles
-                      : ImageIcon;
-
-              return (
-                <button
-                  key={option.id}
-                  type="button"
-                  disabled={option.disabled}
-                  onClick={() =>
-                    setLaunchConfigDraft((current) => ({
-                      ...current,
-                      creativeFormatMode: option.id,
-                    }))
-                  }
-                  className={cn(
-                    'flex min-h-28 items-start gap-3 rounded-2xl border p-3 text-left transition',
-                    selected
-                      ? 'border-blue-300 bg-blue-50 shadow-sm shadow-blue-100'
-                      : 'border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/40',
-                    option.disabled && 'cursor-not-allowed opacity-60 hover:border-slate-200 hover:bg-white',
-                  )}
-                >
-                  <span
-                    className={cn(
-                      'mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border',
-                      selected ? 'border-blue-200 bg-white text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-500',
-                    )}
-                  >
-                    <Icon className="h-4 w-4" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-semibold text-slate-950">{option.title}</span>
-                      <span
-                        className={cn(
-                          'rounded-full border px-2 py-0.5 text-[11px] font-semibold',
-                          selected
-                            ? 'border-blue-200 bg-white text-blue-700'
-                            : 'border-slate-200 bg-slate-50 text-slate-500',
-                        )}
-                      >
-                        {option.status}
-                      </span>
-                    </span>
-                    <span className="mt-1 block text-xs leading-5 text-slate-500">{option.description}</span>
-                  </span>
-                  <span
-                    className={cn(
-                      'mt-1 h-4 w-4 shrink-0 rounded-full border',
-                      selected ? 'border-blue-600 bg-blue-600 shadow-[inset_0_0_0_3px_white]' : 'border-slate-300 bg-white',
-                    )}
-                  />
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {showAdMediaOptions && (
-          <AdMediaOptionsSelector
-            availableMediaCreatives={availableMediaCreatives}
-            launchConfigDraft={launchConfigDraft}
-            selectedCreatives={selectedCreatives}
-            setLaunchConfigDraft={setLaunchConfigDraft}
-          />
-        )}
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-4">
           <h3 className="text-sm font-semibold text-slate-950">Editable launch settings</h3>
           <p className="mt-1 text-sm text-slate-500">
             Auto-filled from the latest source ad set/ad. Change only what should differ for this launch.
@@ -4531,15 +5127,20 @@ function LaunchConfigStep({
                 <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
                   {campaignStructure === 'CBO' ? 'Campaign daily budget' : 'Ad set daily budget'}
                 </span>
-                <input
-                  value={launchConfigDraft.dailyBudget}
-                  onChange={(event) =>
-                    setLaunchConfigDraft((current) => ({ ...current, dailyBudget: event.target.value }))
-                  }
-                  placeholder="Use inherited budget"
-                  inputMode="decimal"
-                  className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-50"
-                />
+                <div className="relative mt-2">
+                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-500">
+                    $
+                  </span>
+                  <input
+                    value={launchConfigDraft.dailyBudget}
+                    onChange={(event) =>
+                      setLaunchConfigDraft((current) => ({ ...current, dailyBudget: event.target.value }))
+                    }
+                    placeholder="Use inherited budget"
+                    inputMode="decimal"
+                    className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 pl-7 text-sm font-semibold text-slate-900 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-50"
+                  />
+                </div>
               </label>
             )}
 
@@ -4848,6 +5449,7 @@ function ReviewLaunchStep({
   campaignStructure,
   ctaDraft,
   currency,
+  currentLaunchTimeLabel,
   descriptionDrafts,
   headlineDrafts,
   inheritedSettings,
@@ -4874,6 +5476,7 @@ function ReviewLaunchStep({
   campaignStructure: CampaignStructure;
   ctaDraft: string;
   currency: string;
+  currentLaunchTimeLabel: string;
   descriptionDrafts: CopyDraftItem[];
   headlineDrafts: CopyDraftItem[];
   inheritedSettings: InheritedAdSettings | null;
@@ -4894,8 +5497,11 @@ function ReviewLaunchStep({
   thumbnailDrafts: Record<string, ThumbnailDraft>;
   uploadProgress: Record<string, LaunchUploadProgress>;
 }) {
-  const [expandedBatchIds, setExpandedBatchIds] = useState<Set<string>>(new Set());
   const creativeById = useMemo(() => new Map(selectedCreatives.map((creative) => [creative.id, creative])), [selectedCreatives]);
+  const adCount = useMemo(
+    () => batchPlan.reduce((sum, batch) => sum + (batch.ads?.filter((ad) => ad.creativeIds.length > 0).length || batch.creativeIds.length), 0),
+    [batchPlan],
+  );
   const selectedPrimaryTexts = selectedCopyTexts(primaryTextDrafts);
   const selectedHeadlines = selectedCopyTexts(headlineDrafts);
   const selectedDescriptions = selectedCopyTexts(descriptionDrafts);
@@ -4917,6 +5523,7 @@ function ReviewLaunchStep({
   const manualThumbnailCount = selectedCreatives.filter((creative) =>
     isVideoCreative(creative) && thumbnailDrafts[creative.id]?.source === 'manual',
   ).length;
+  const reviewValidationErrors = findBatchPlanValidationErrors(batchPlan, creativeById);
   const previewPrimaryText =
     selectedPrimaryTexts.find((text) => text.trim().length > 40) ||
     selectedPrimaryTexts[0] ||
@@ -4926,38 +5533,13 @@ function ReviewLaunchStep({
     selectedHeadlines[0] ||
     productName;
   const previewDescription = selectedDescriptions[0] || '';
-  const formatValidation = validateLaunchCreativeFormat({
-    creativeFormatMode: launchConfigDraft.creativeFormatMode,
-    adsetMode: adSetMode === 'existing' ? 'existing_adsets' : 'new_adsets',
-    selectedCreativeIds: selectedCreatives.map((creative) => creative.id),
-    mediaOptionCreativeIds: launchConfigDraft.mediaOptionCreativeIds,
-    batches: batchPlan.map((batch) => ({
-      id: batch.id,
-      name: batch.name,
-      creativeIds: batch.creativeIds,
-    })),
-    primaryTexts: copyDraftsToLaunchItems(primaryTextDrafts),
-    headlines: copyDraftsToLaunchItems(headlineDrafts),
-    descriptions: copyDraftsToLaunchItems(descriptionDrafts),
-  });
   const canLaunch =
     selectedCreatives.length > 0 &&
     batchPlan.some((batch) => batch.creativeIds.length > 0) &&
     selectedPrimaryTexts.length > 0 &&
     selectedHeadlines.length > 0 &&
-    formatValidation.errors.length === 0 &&
+    reviewValidationErrors.length === 0 &&
     !launching;
-  const toggleBatchExpanded = (batchId: string) => {
-    setExpandedBatchIds((current) => {
-      const next = new Set(current);
-      if (next.has(batchId)) {
-        next.delete(batchId);
-      } else {
-        next.add(batchId);
-      }
-      return next;
-    });
-  };
 
   return (
     <section className="rounded-[1.5rem] border border-slate-200 bg-white shadow-sm">
@@ -4975,7 +5557,7 @@ function ReviewLaunchStep({
             </p>
           </div>
           <span className="w-fit rounded-full border border-blue-100 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700">
-            {selectedCreatives.length} creative{selectedCreatives.length !== 1 ? 's' : ''} · {batchPlan.length} ad set{batchPlan.length !== 1 ? 's' : ''}
+            {selectedCreatives.length} media · {adCount} ad{adCount !== 1 ? 's' : ''} · {batchPlan.length} ad set{batchPlan.length !== 1 ? 's' : ''}
           </span>
         </div>
       </div>
@@ -5063,7 +5645,12 @@ function ReviewLaunchStep({
 
             {launchConfigDraft.launchTiming === 'scheduled' && (
               <label className="mt-4 block">
-                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Scheduled time</span>
+                <span className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Scheduled time</span>
+                  <span className="text-xs font-medium text-slate-500">
+                    Store time: {currentLaunchTimeLabel}
+                  </span>
+                </span>
                 <input
                   type="datetime-local"
                   value={launchConfigDraft.scheduledAt}
@@ -5080,22 +5667,6 @@ function ReviewLaunchStep({
             <h3 className="text-sm font-semibold text-slate-950">Launch overview</h3>
             <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <SummaryTile label="Campaign" value={campaignLabel} />
-              <SummaryTile label="Creative format" value={formatModeLabel(launchConfigDraft.creativeFormatMode)} />
-              {(launchConfigDraft.creativeFormatMode === 'single_format_media_options' ||
-                launchConfigDraft.creativeFormatMode === 'dynamic_creative') && (
-                <SummaryTile
-                  label="Ad media options"
-                  value={batchPlan
-                    .filter((batch) => batch.creativeIds.length > 0)
-                    .flatMap((batch) =>
-                      batch.creativeIds
-                        .map((creativeId) => creativeById.get(creativeId))
-                        .filter((creative): creative is InboxCreative => Boolean(creative))
-                        .map((creative) => `${getCreativeName(creative)}: ${(launchConfigDraft.mediaOptionCreativeIds[creative.id] || [creative.id]).length}`),
-                    )
-                    .join(' / ')}
-                />
-              )}
               <SummaryTile label="Structure" value={campaignStructure} />
               <SummaryTile label="Ad set mode" value={adSetMode === 'existing' ? 'Existing ad set' : 'New ad sets'} />
               <SummaryTile label="Source ad set" value={sourceAdSet?.name || 'Not found'} />
@@ -5126,86 +5697,25 @@ function ReviewLaunchStep({
               <SummaryTile label="Excluded countries" value={launchConfigDraft.excludeLocations.length ? `${launchConfigDraft.excludeLocations.length} selected` : 'None'} />
               <SummaryTile label="Publish status" value={launchConfigDraft.launchPaused ? 'Paused' : 'Active'} />
             </div>
-            {(formatValidation.errors.length > 0 || formatValidation.warnings.length > 0) && (
-              <div
-                className={cn(
-                  'mt-4 rounded-2xl border p-4 text-sm',
-                  formatValidation.errors.length > 0
-                    ? 'border-red-200 bg-red-50 text-red-800'
-                    : 'border-amber-200 bg-amber-50 text-amber-800',
-                )}
-              >
-                <p className="font-semibold">
-                  {formatValidation.errors.length > 0 ? 'Creative format needs attention' : 'Creative format warning'}
-                </p>
-                <ul className="mt-2 space-y-1 leading-6">
-                  {[...formatValidation.errors, ...formatValidation.warnings].map((message) => (
-                    <li key={message}>{message}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
           </div>
 
-          <div className="rounded-2xl border border-slate-200 bg-white">
-            <div className="px-4 py-4">
-              <div>
-                <h3 className="text-sm font-semibold text-slate-950">Batch snapshot</h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  Ad sets are collapsed by default. Open one to see the creatives inside it.
-                </p>
-              </div>
-            </div>
-            <div className="space-y-3 border-t border-slate-200 p-4">
-              {batchPlan.map((batch) => {
-                const batchCreatives = batch.creativeIds
-                  .map((creativeId) => creativeById.get(creativeId))
-                  .filter((creative): creative is InboxCreative => Boolean(creative));
-                const isExpanded = expandedBatchIds.has(batch.id);
-                return (
-                  <div key={batch.id} className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
-                    <button
-                      type="button"
-                      onClick={() => toggleBatchExpanded(batch.id)}
-                      className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left transition hover:bg-slate-100"
-                    >
-                      <span className="flex min-w-0 items-center gap-2">
-                        {isExpanded ? (
-                          <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
-                        ) : (
-                          <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-                        )}
-                        <span className="truncate text-sm font-semibold text-slate-950">{batch.name}</span>
-                      </span>
-                      <span className="shrink-0 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-500">
-                        {batchCreatives.length} ad{batchCreatives.length !== 1 ? 's' : ''}
-                      </span>
-                    </button>
-                    {isExpanded && (
-                      <div className="grid gap-2 border-t border-slate-200 p-3 md:grid-cols-2">
-                        {batchCreatives.map((creative) => (
-                          <div key={creative.id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2">
-                            <div className="h-9 w-9 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-                              {creative.thumbnailUrl ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img src={creative.thumbnailUrl} alt={creative.creativeName} className="h-full w-full object-cover" />
-                              ) : null}
-                            </div>
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold text-slate-900">{getCreativeName(creative)}</p>
-                              <p className="text-xs text-slate-500">{formatLabels[creative.creativeFormat]}</p>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+          <LaunchProgressPanel
+            batchPlan={batchPlan}
+            launching={launching}
+            progress={uploadProgress}
+            selectedCreatives={selectedCreatives}
+          />
 
-          <LaunchProgressPanel progress={uploadProgress} />
+          {reviewValidationErrors.length > 0 && (
+            <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+              <p className="font-semibold">Launch plan needs attention</p>
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {reviewValidationErrors.map((error) => (
+                  <li key={error}>{error}</li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {launchError && (
             <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
@@ -5271,225 +5781,255 @@ function ReviewLaunchStep({
   );
 }
 
-function LaunchProgressPanel({ progress }: { progress: Record<string, LaunchUploadProgress> }) {
-  const rows = Object.values(progress);
+function LaunchProgressPanel({
+  batchPlan,
+  launching,
+  progress,
+  selectedCreatives,
+}: {
+  batchPlan: BatchPlanItem[];
+  launching: boolean;
+  progress: Record<string, LaunchUploadProgress>;
+  selectedCreatives: InboxCreative[];
+}) {
+  const creativeById = useMemo(() => new Map(selectedCreatives.map((creative) => [creative.id, creative])), [selectedCreatives]);
+  const plannedBatches = useMemo(() => batchPlan.map((batch) => {
+    const batchCreatives = batch.creativeIds
+      .map((creativeId) => creativeById.get(creativeId))
+      .filter((creative): creative is InboxCreative => Boolean(creative));
+    const ads = (batch.ads?.length
+      ? batch.ads
+      : batchCreatives.map((creative, index) => ({
+          id: `${batch.id}-${creative.id}`,
+          name: readableAdSetName(getCreativeName(creative)) || `Ad ${index + 1}`,
+          creativeIds: [creative.id],
+        }))
+    ).map((ad, index) => ({
+      ...ad,
+      name: ad.name?.trim() || `Ad ${index + 1}`,
+      creatives: ad.creativeIds
+        .map((creativeId) => creativeById.get(creativeId))
+        .filter((creative): creative is InboxCreative => Boolean(creative)),
+    })).filter((ad) => ad.creatives.length > 0);
+    return { ...batch, ads };
+  }).filter((batch) => batch.ads.length > 0), [batchPlan, creativeById]);
+
+  const [expandedBatchIds, setExpandedBatchIds] = useState<Set<string>>(new Set());
+  const [expandedAdIds, setExpandedAdIds] = useState<Set<string>>(new Set());
+  const [collapsedLaunchBatchIds, setCollapsedLaunchBatchIds] = useState<Set<string>>(new Set());
+  const [collapsedLaunchAdIds, setCollapsedLaunchAdIds] = useState<Set<string>>(new Set());
+  const rows = plannedBatches.flatMap((batch) =>
+    batch.ads.flatMap((ad) =>
+      ad.creatives.map((creative) => {
+        const existing = progress[creative.id];
+        return existing || {
+          creativeId: creative.id,
+          creativeName: getCreativeName(creative),
+          stage: creative.metaAssetId ? 'skipped' : 'waiting',
+          progress: creative.metaAssetId ? 100 : 0,
+          message: creative.metaAssetId ? 'Ready in Meta' : 'Waiting to upload',
+        };
+      }),
+    ),
+  );
+  const hasProgress = Object.keys(progress).length > 0;
+  const isLaunchingView = launching || hasProgress;
+
   if (rows.length === 0) return null;
 
   const completed = rows.filter((row) => row.stage === 'ready' || row.stage === 'skipped').length;
   const failed = rows.filter((row) => row.stage === 'error').length;
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-950">Creative upload progress</h3>
-          <p className="mt-1 text-sm text-slate-500">
-            {completed}/{rows.length} ready{failed ? ` · ${failed} failed` : ''}
-          </p>
-        </div>
-      </div>
-
-      <div className="mt-4 space-y-3">
-        {rows.map((row) => (
-          <div key={row.creativeId} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-slate-900">{row.creativeName}</p>
-                <p className={cn('mt-0.5 text-xs', row.stage === 'error' ? 'text-red-600' : 'text-slate-500')}>
-                  {row.message}
-                </p>
-              </div>
-              <span
-                className={cn(
-                  'shrink-0 rounded-full px-2 py-1 text-xs font-semibold',
-                  row.stage === 'error'
-                    ? 'bg-red-100 text-red-700'
-                    : row.stage === 'ready' || row.stage === 'skipped'
-                      ? 'bg-emerald-100 text-emerald-700'
-                      : row.stage === 'processing'
-                        ? 'bg-amber-100 text-amber-700'
-                        : 'bg-blue-100 text-blue-700',
-                )}
-              >
-                {row.stage}
-              </span>
-            </div>
-            <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
-              <div
-                className={cn(
-                  'h-full rounded-full transition-all',
-                  row.stage === 'error'
-                    ? 'bg-red-500'
-                    : row.stage === 'ready' || row.stage === 'skipped'
-                      ? 'bg-emerald-500'
-                      : row.stage === 'processing'
-                        ? 'bg-amber-500'
-                        : 'bg-blue-600',
-                )}
-                style={{ width: `${Math.max(0, Math.min(100, row.progress))}%` }}
-              />
-            </div>
-            {row.error && (
-              <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-red-700">
-                {row.error}
-              </p>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function AdMediaOptionsSelector({
-  availableMediaCreatives,
-  launchConfigDraft,
-  selectedCreatives,
-  setLaunchConfigDraft,
-}: {
-  availableMediaCreatives: InboxCreative[];
-  launchConfigDraft: LaunchConfigDraft;
-  selectedCreatives: InboxCreative[];
-  setLaunchConfigDraft: Dispatch<SetStateAction<LaunchConfigDraft>>;
-}) {
-  const [openAdCreativeId, setOpenAdCreativeId] = useState<string>(selectedCreatives[0]?.id || '');
-  const [mediaSearch, setMediaSearch] = useState('');
-  const mediaPool = useMemo(() => {
-    const normalizedSearch = mediaSearch.trim().toLowerCase();
-    return availableMediaCreatives.filter((creative) => {
-      if (!normalizedSearch) return true;
-      return [
-        getCreativeName(creative),
-        creative.clickupTaskName,
-        creative.clickupListName,
-        getGroupName(creative),
-        getHook(creative),
-        getFunnel(creative),
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase()
-        .includes(normalizedSearch);
+  const toggleBatchExpanded = (batchId: string) => {
+    const setter = isLaunchingView ? setCollapsedLaunchBatchIds : setExpandedBatchIds;
+    setter((current) => {
+      const next = new Set(current);
+      if (next.has(batchId)) {
+        next.delete(batchId);
+      } else {
+        next.add(batchId);
+      }
+      return next;
     });
-  }, [availableMediaCreatives, mediaSearch]);
-
-  const toggleMedia = (adKey: string, creativeId: string) => {
-    setLaunchConfigDraft((current) => {
-      const currentIds = getAdMediaOptionIds(current, adKey, availableMediaCreatives);
-      const nextIds = currentIds.includes(creativeId)
-        ? currentIds.filter((id) => id !== creativeId)
-        : [...currentIds, creativeId].slice(0, 10);
-      return {
-        ...current,
-        mediaOptionCreativeIds: {
-          ...current.mediaOptionCreativeIds,
-          [adKey]: nextIds,
-        },
-      };
+  };
+  const toggleAdExpanded = (adId: string) => {
+    const setter = isLaunchingView ? setCollapsedLaunchAdIds : setExpandedAdIds;
+    setter((current) => {
+      const next = new Set(current);
+      if (next.has(adId)) {
+        next.delete(adId);
+      } else {
+        next.add(adId);
+      }
+      return next;
     });
   };
 
-  const selectedAdCreative = selectedCreatives.find((creative) => creative.id === openAdCreativeId) || selectedCreatives[0];
-  const selectedIds = selectedAdCreative
-    ? getAdMediaOptionIds(launchConfigDraft, selectedAdCreative.id, availableMediaCreatives)
-    : [];
-
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+    <div className="rounded-2xl border border-slate-200 bg-white">
+      <div className="px-4 py-4">
         <div>
-          <h3 className="text-sm font-semibold text-slate-950">Ad media options</h3>
+          <h3 className="text-sm font-semibold text-slate-950">
+            {isLaunchingView ? 'Launching Creatives' : 'Batch snapshot'}
+          </h3>
           <p className="mt-1 text-sm text-slate-500">
-            Click a selected ad, then choose up to 10 Ready ClickUp media assets for that ad. Meta will mix those media with the selected copy options.
+            {isLaunchingView
+              ? `${completed}/${rows.length} ready${failed ? ` · ${failed} failed` : ''}`
+              : 'Ad sets are collapsed by default. Open one to see the ads and media options inside it.'}
           </p>
         </div>
-        <span className="w-fit rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-          Up to 10 media per ad
-        </span>
       </div>
-      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(220px,0.38fr)_1fr]">
-        <div className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50 p-3">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Selected ads</p>
-          {selectedCreatives.map((creative) => {
-            const selected = creative.id === selectedAdCreative?.id;
-            const selectedCount = getAdMediaOptionIds(launchConfigDraft, creative.id, availableMediaCreatives).length;
-            return (
+
+      <div className="space-y-3 border-t border-slate-200 p-4">
+        {plannedBatches.map((batch) => {
+          const isBatchExpanded = isLaunchingView
+            ? !collapsedLaunchBatchIds.has(batch.id)
+            : expandedBatchIds.has(batch.id);
+          return (
+            <div key={batch.id} className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
               <button
-                key={creative.id}
                 type="button"
-                onClick={() => setOpenAdCreativeId(creative.id)}
-                className={cn(
-                  'flex w-full items-center gap-3 rounded-xl border p-2 text-left transition',
-                  selected ? 'border-blue-300 bg-white shadow-sm' : 'border-transparent bg-transparent hover:bg-white',
-                )}
+                onClick={() => toggleBatchExpanded(batch.id)}
+                className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left transition hover:bg-slate-100"
               >
-                <span className="h-11 w-11 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
-                  {creative.thumbnailUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={creative.thumbnailUrl} alt={creative.creativeName} className="h-full w-full object-cover" />
-                  ) : null}
+                <span className="flex min-w-0 items-center gap-2">
+                  {isBatchExpanded ? (
+                    <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  )}
+                  <span className="truncate text-sm font-semibold text-slate-950">{batch.name}</span>
                 </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-semibold text-slate-900">{getCreativeName(creative)}</span>
-                  <span className="block text-xs text-slate-500">{selectedCount} media selected</span>
+                <span className="shrink-0 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-500">
+                  {batch.ads.length} ad{batch.ads.length !== 1 ? 's' : ''}
                 </span>
               </button>
-            );
-          })}
-        </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-sm font-semibold text-slate-950">
-                {selectedAdCreative ? getCreativeName(selectedAdCreative) : 'Select an ad'}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">{selectedIds.length} media selected for this Meta ad</p>
+              {isBatchExpanded && (
+                <div className="space-y-3 border-t border-slate-200 p-3">
+                  {batch.ads.map((ad) => {
+                    const adKey = `${batch.id}:${ad.id}`;
+                    const isAdExpanded = isLaunchingView
+                      ? !collapsedLaunchAdIds.has(adKey)
+                      : expandedAdIds.has(adKey);
+                    return (
+                      <div key={ad.id} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                        <button
+                          type="button"
+                          onClick={() => toggleAdExpanded(adKey)}
+                          className="w-full px-3 py-3 text-left transition hover:bg-slate-50"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="flex min-w-0 items-center gap-2">
+                              {isAdExpanded ? (
+                                <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
+                              ) : (
+                                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                              )}
+                              <span className="truncate text-sm font-semibold text-slate-900">{ad.name}</span>
+                            </span>
+                            <span className="shrink-0 rounded-full bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700">
+                              {ad.creatives.length}/10 media
+                            </span>
+                          </div>
+                          {!isAdExpanded && (
+                            <div className="mt-3 flex flex-wrap gap-x-6 gap-y-3 pl-6">
+                              {ad.creatives.map((creative) => (
+                                <div key={creative.id} className="flex min-w-0 max-w-[220px] items-center gap-2">
+                                  <div className="h-9 w-9 shrink-0 overflow-hidden rounded-full border border-slate-200 bg-slate-50">
+                                    {creative.thumbnailUrl ? (
+                                      // eslint-disable-next-line @next/next/no-img-element
+                                      <img src={creative.thumbnailUrl} alt={creative.creativeName} className="h-full w-full object-cover" />
+                                    ) : null}
+                                  </div>
+                                  <span className="truncate text-xs font-semibold text-slate-700">{getCreativeName(creative)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </button>
+
+                        {isAdExpanded && (
+                          <div className="space-y-2 border-t border-slate-100 p-3">
+                            {ad.creatives.map((creative) => {
+                              const row: {
+                                creativeId: string;
+                                creativeName: string;
+                                stage: LaunchProgressDisplayStage;
+                                progress: number;
+                                message: string;
+                                error?: string;
+                              } = progress[creative.id] || {
+                                creativeId: creative.id,
+                                creativeName: getCreativeName(creative),
+                                stage: creative.metaAssetId ? 'skipped' : 'waiting',
+                                progress: creative.metaAssetId ? 100 : 0,
+                                message: creative.metaAssetId ? 'Ready in Meta' : 'Waiting to upload',
+                              };
+                              return (
+                                <div key={creative.id} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div className="flex min-w-0 items-center gap-3">
+                                      <div className="h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                                        {creative.thumbnailUrl ? (
+                                          // eslint-disable-next-line @next/next/no-img-element
+                                          <img src={creative.thumbnailUrl} alt={creative.creativeName} className="h-full w-full object-cover" />
+                                        ) : null}
+                                      </div>
+                                      <div className="min-w-0">
+                                        <p className="truncate text-sm font-semibold text-slate-900">{row.creativeName}</p>
+                                        <p className={cn('mt-0.5 text-xs', row.stage === 'error' ? 'text-red-600' : 'text-slate-500')}>
+                                          {row.message}
+                                        </p>
+                                      </div>
+                                    </div>
+                                    <span
+                                      className={cn(
+                                        'shrink-0 rounded-full px-2 py-1 text-xs font-semibold',
+                                        row.stage === 'error'
+                                          ? 'bg-red-100 text-red-700'
+                                          : row.stage === 'ready' || row.stage === 'skipped'
+                                            ? 'bg-emerald-100 text-emerald-700'
+                                            : row.stage === 'waiting'
+                                              ? 'bg-slate-200 text-slate-600'
+                                              : 'bg-blue-100 text-blue-700',
+                                      )}
+                                    >
+                                      {row.stage === 'skipped' ? 'ready' : row.stage}
+                                    </span>
+                                  </div>
+                                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
+                                    <div
+                                      className={cn(
+                                        'h-full rounded-full transition-all',
+                                        row.stage === 'error'
+                                          ? 'bg-red-500'
+                                          : row.stage === 'ready' || row.stage === 'skipped'
+                                            ? 'bg-emerald-500'
+                                            : row.stage === 'waiting'
+                                              ? 'bg-slate-300'
+                                              : 'bg-blue-600',
+                                      )}
+                                      style={{ width: `${Math.max(0, Math.min(100, row.progress))}%` }}
+                                    />
+                                  </div>
+                                  {row.error && (
+                                    <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-red-700">
+                                      {row.error}
+                                    </p>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-            <input
-              value={mediaSearch}
-              onChange={(event) => setMediaSearch(event.target.value)}
-              placeholder="Search Ready creatives..."
-              className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
-            />
-          </div>
-          <div className="mt-3 grid max-h-80 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
-            {mediaPool.map((creative) => {
-              const selected = selectedIds.includes(creative.id);
-              const disabled = !selected && selectedIds.length >= 10;
-              return (
-                <button
-                  key={creative.id}
-                  type="button"
-                  disabled={!selectedAdCreative || disabled}
-                  onClick={() => selectedAdCreative && toggleMedia(selectedAdCreative.id, creative.id)}
-                  className={cn(
-                    'flex min-h-16 items-center gap-3 rounded-xl border bg-white p-2 text-left transition',
-                    selected ? 'border-blue-300 bg-blue-50' : 'border-slate-200 hover:border-blue-200 hover:bg-blue-50/40',
-                    disabled && 'cursor-not-allowed opacity-50 hover:border-slate-200 hover:bg-white',
-                  )}
-                >
-                  <span className="h-11 w-11 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-                    {creative.thumbnailUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={creative.thumbnailUrl} alt={creative.creativeName} className="h-full w-full object-cover" />
-                    ) : null}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-semibold text-slate-900">{getCreativeName(creative)}</span>
-                    <span className="block text-xs text-slate-500">{formatLabels[creative.creativeFormat]}</span>
-                  </span>
-                  <span
-                    className={cn(
-                      'h-4 w-4 shrink-0 rounded-full border',
-                      selected ? 'border-blue-600 bg-blue-600 shadow-[inset_0_0_0_3px_white]' : 'border-slate-300 bg-white',
-                    )}
-                  />
-                </button>
-              );
-            })}
-          </div>
-        </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -5999,7 +6539,7 @@ function CopyLoadingState() {
         <div>
           <p className="text-sm font-semibold text-slate-950">Loading latest ad copy</p>
           <p className="mt-1 text-sm leading-6 text-slate-500">
-            Fetching the latest ads from up to 4 recent ad sets, then pulling their primary texts, headlines, descriptions, and CTA.
+            Fetching the latest ads from the selected campaign ad sets, then pulling their primary texts, headlines, descriptions, and CTA.
           </p>
         </div>
       </div>
@@ -6034,7 +6574,7 @@ function CopyChoiceSection({
   sources: CopyDraftSource[];
   title: string;
 }) {
-  const visibleItems = items.filter((item) => sources.includes(item.source));
+  const visibleItems = items.filter((item) => sources.includes(item.source) && item.text.trim());
   const selectedCount = visibleItems.filter((item) => item.selected && item.text.trim()).length;
 
   const toggleItem = (id: string) => {
@@ -6082,19 +6622,14 @@ function CopyChoiceSection({
                   {item.selected ? '✓' : ''}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-semibold text-slate-950">
-                      {shortCopyPreview(item.text || 'Untitled copy', 54)}
+                  <span className="flex items-start justify-between gap-3">
+                    <span className="text-sm leading-5 text-slate-700">
+                      {shortCopyPreview(item.text || 'Untitled copy', 180)}
                     </span>
                     <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-500">
                       {sourceLabel(item.source)}
                     </span>
                   </span>
-                  {item.text && (
-                    <span className="mt-1.5 block text-sm leading-5 text-slate-600">
-                      {shortCopyPreview(item.text, 150)}
-                    </span>
-                  )}
                 </span>
               </span>
             </button>
@@ -6353,28 +6888,63 @@ function BatchCard({
   batchCreatives,
   canDelete,
   index,
+  onAddAd,
   onDelete,
+  onDeleteAd,
   onDragEnd,
   onDragStart,
   onDropCreative,
+  onGroupCreatives,
+  onMoveCreativeToAd,
+  onRenameAd,
   onRename,
+  onSplitCreatives,
 }: {
   adSetMode: AdSetMode;
   batch: BatchPlanItem;
   batchCreatives: InboxCreative[];
   canDelete: boolean;
   index: number;
+  onAddAd: () => void;
   onDelete: () => void;
+  onDeleteAd: (adId: string) => void;
   onDragEnd: () => void;
   onDragStart: (creativeId: string) => void;
   onDropCreative: (creativeId: string) => void;
+  onGroupCreatives: () => void;
+  onMoveCreativeToAd: (adId: string, creativeId: string) => void;
+  onRenameAd: (adId: string, name: string) => void;
   onRename: (name: string) => void;
+  onSplitCreatives: () => void;
 }) {
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     const creativeId = event.dataTransfer.getData('text/plain');
     if (creativeId) onDropCreative(creativeId);
   };
+  const handleAdDrop = (event: DragEvent<HTMLDivElement>, adId: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const creativeId = event.dataTransfer.getData('text/plain');
+    if (creativeId) onMoveCreativeToAd(adId, creativeId);
+  };
+  const creativeById = useMemo(() => new Map(batchCreatives.map((creative) => [creative.id, creative])), [batchCreatives]);
+  const ads = useMemo(() => {
+    const normalizedAds = batch.ads?.length
+      ? batch.ads
+      : batchCreatives.map((creative, adIndex) => ({
+          id: `${batch.id}-ad-${creative.id}`,
+          name: readableAdSetName(getCreativeName(creative)) || `Ad ${adIndex + 1}`,
+          creativeIds: [creative.id],
+        }));
+    return normalizedAds.map((ad, adIndex) => ({
+      ...ad,
+      name: ad.name || `Ad ${adIndex + 1}`,
+      creatives: ad.creativeIds
+        .map((creativeId) => creativeById.get(creativeId))
+        .filter((creative): creative is InboxCreative => Boolean(creative)),
+    }));
+  }, [batch.ads, batch.id, batchCreatives, creativeById]);
 
   return (
     <div
@@ -6397,7 +6967,7 @@ function BatchCard({
             className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-50 disabled:bg-slate-100 disabled:text-slate-500"
           />
           <p className="mt-1 text-xs text-slate-500">
-            {batchCreatives.length} creative{batchCreatives.length !== 1 ? 's' : ''} assigned
+            {ads.filter((ad) => ad.creatives.length > 0).length} ad{ads.filter((ad) => ad.creatives.length > 0).length !== 1 ? 's' : ''} · {batchCreatives.length} media option{batchCreatives.length !== 1 ? 's' : ''}
           </p>
         </div>
         {canDelete && (
@@ -6411,19 +6981,91 @@ function BatchCard({
         )}
       </div>
 
-      <div className="mt-4 space-y-2">
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={onGroupCreatives}
+          className="rounded-full border border-blue-100 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-50"
+        >
+          Group into 1 ad
+        </button>
+        <button
+          type="button"
+          onClick={onSplitCreatives}
+          className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+        >
+          Split into ads
+        </button>
+        <button
+          type="button"
+          onClick={onAddAd}
+          className="ml-auto inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Add ad
+        </button>
+      </div>
+
+      <div className="mt-4 space-y-3">
         {batchCreatives.length === 0 ? (
           <div className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-8 text-center text-sm text-slate-500">
             Drop creatives here.
           </div>
         ) : (
-          batchCreatives.map((creative) => (
-            <BatchCreativeCard
-              key={creative.id}
-              creative={creative}
-              onDragEnd={onDragEnd}
-              onDragStart={() => onDragStart(creative.id)}
-            />
+          ads.map((ad, adIndex) => (
+            <div
+              key={ad.id}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              onDrop={(event) => handleAdDrop(event, ad.id)}
+              className="rounded-xl border border-slate-200 bg-white p-3"
+            >
+              <div className="flex items-center gap-2">
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-600">
+                  {adIndex + 1}
+                </div>
+                <input
+                  value={ad.name}
+                  onChange={(event) => onRenameAd(ad.id, event.target.value)}
+                  className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 text-sm font-semibold text-slate-900 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-50"
+                />
+                <span className="shrink-0 rounded-full bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700">
+                  {ad.creatives.length}/10 media
+                </span>
+                {ads.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => onDeleteAd(ad.id)}
+                    className="rounded-lg p-2 text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                    aria-label="Delete ad"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+
+              <div className="mt-3 space-y-2">
+                {ad.creatives.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-slate-200 px-3 py-4 text-center text-xs text-slate-500">
+                    Empty ad. Move media here from another ad.
+                  </div>
+                ) : (
+                  ad.creatives.map((creative) => (
+                    <BatchCreativeCard
+                      key={creative.id}
+                      ads={ads.map((option) => ({ id: option.id, name: option.name }))}
+                      currentAdId={ad.id}
+                      creative={creative}
+                      onDragEnd={onDragEnd}
+                      onDragStart={() => onDragStart(creative.id)}
+                      onMoveToAd={(targetAdId) => onMoveCreativeToAd(targetAdId, creative.id)}
+                    />
+                  ))
+                )}
+              </div>
+            </div>
           ))
         )}
       </div>
@@ -6432,13 +7074,19 @@ function BatchCard({
 }
 
 function BatchCreativeCard({
+  ads,
+  currentAdId,
   creative,
   onDragEnd,
   onDragStart,
+  onMoveToAd,
 }: {
+  ads: Array<{ id: string; name: string }>;
+  currentAdId: string;
   creative: InboxCreative;
   onDragEnd: () => void;
   onDragStart: () => void;
+  onMoveToAd: (adId: string) => void;
 }) {
   const FormatIcon = formatIcons[creative.creativeFormat] || ImageIcon;
   return (
@@ -6465,6 +7113,19 @@ function BatchCreativeCard({
           {getGroupName(creative)} · {formatLabels[creative.creativeFormat]}
         </p>
       </div>
+      {ads.length > 1 && (
+        <select
+          value={currentAdId}
+          onChange={(event) => onMoveToAd(event.target.value)}
+          className="h-8 max-w-[120px] rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-600 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-50"
+          onClick={(event) => event.stopPropagation()}
+          aria-label="Move media to ad"
+        >
+          {ads.map((ad) => (
+            <option key={ad.id} value={ad.id}>{ad.name}</option>
+          ))}
+        </select>
+      )}
     </div>
   );
 }

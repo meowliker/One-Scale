@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { randomUUID } from 'crypto';
-import { upsertProductCampaignLink } from '@/app/api/lib/creative-hub-db';
+import {
+  deleteCampaignLinksForProfileAccount,
+  upsertProductCampaignLink,
+} from '@/app/api/lib/creative-hub-db';
 
 export async function POST(request: NextRequest) {
   try {
@@ -41,6 +44,32 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to link campaign';
     console.error('[campaign-links] Error:', err);
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const { productProfileId, adAccountId } = body;
+
+    if (!productProfileId || !adAccountId) {
+      return NextResponse.json(
+        { error: 'Missing required fields: productProfileId, adAccountId' },
+        { status: 400 },
+      );
+    }
+
+    await deleteCampaignLinksForProfileAccount(productProfileId, adAccountId);
+
+    return NextResponse.json({
+      success: true,
+      productProfileId,
+      adAccountId,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to unlink ad account';
+    console.error('[campaign-links] Delete error:', err);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

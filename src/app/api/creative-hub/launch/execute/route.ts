@@ -11,12 +11,9 @@ import {
   getCreativeTest,
 } from '@/app/api/lib/creative-hub-db';
 import { getDb } from '@/app/api/lib/db';
-import { validateLaunchCreativeFormat } from '@/lib/creative-hub/creativeFormatValidation';
 import { validateLaunchPlanAssignments } from '@/lib/creative-hub/launchPlanValidation';
 import { getStoreCurrencyFromConfig, getStoreTimezoneFromConfig } from '@/lib/onboarding/stages/detectStoreConfig';
-import type { InboxCreative, LaunchConfig, TargetingSpec } from '@/types/creativeHub';
-
-export const maxDuration = 300;
+import type { CreativeAdGroup, InboxCreative, LaunchConfig, TargetingSpec } from '@/types/creativeHub';
 
 const GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 const DEFAULT_META_URL_TAGS =
@@ -286,8 +283,17 @@ function isBidAmountRequiredMetaError(message: string): boolean {
 function isInvalidInstagramActorMetaError(message: string): boolean {
   const lower = message.toLowerCase();
   return (
-    lower.includes('instagram_actor_id') &&
+    (lower.includes('instagram_actor_id') || lower.includes('instagram_user_id')) &&
     (lower.includes('valid instagram account id') || lower.includes('invalid parameter'))
+  );
+}
+
+function isLinkRequiredMetaError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('link field is required') ||
+    lower.includes('required field is missing') ||
+    lower.includes('field is required')
   );
 }
 
@@ -397,8 +403,8 @@ function classifyVideoProcessingState(raw: Record<string, unknown>): 'ready' | '
 async function waitForVideoReady(
   accessToken: string,
   videoId: string,
-  timeoutMs = 60_000,
-  pollMs = 3_000,
+  timeoutMs = 12_000,
+  pollMs = 2_000,
 ): Promise<'ready' | 'processing' | 'failed'> {
   const startedAt = Date.now();
 
@@ -424,77 +430,7 @@ async function waitForVideoReady(
   return 'processing';
 }
 
-async function runMetaLaunchPreflight(input: {
-  accessToken: string;
-  accountNode: string;
-  launchConfig: LaunchConfig;
-  selectedItems: CreativeTestItemRow[];
-  existingAdsetAssignments: Array<[string, string[]]>;
-}): Promise<{ errors: string[]; processingVideos: string[] }> {
-  const { accessToken, accountNode, launchConfig, selectedItems, existingAdsetAssignments } = input;
-  const errors: string[] = [];
-  const processingVideos: string[] = [];
-
-  if (launchConfig.adsetMode === 'existing_adsets') {
-    for (const [adsetId] of existingAdsetAssignments) {
-      try {
-        const adsetMeta = await fetchFromMeta<Record<string, unknown>>(
-          accessToken,
-          `/${adsetId}`,
-          { fields: 'id,name,campaign_id,account_id,is_dynamic_creative' },
-          10_000,
-          1,
-        );
-        const adsetAccountId = normalizeAccountNode(asString(adsetMeta.account_id) || '');
-        if (adsetAccountId && !sameAdAccount(accountNode, adsetAccountId)) {
-          errors.push(
-            `Ad set "${asString(adsetMeta.name) || adsetId}" belongs to ${adsetAccountId}, but launch is using ${accountNode}.`,
-          );
-        }
-        if (
-          launchConfig.existingCampaignId &&
-          asString(adsetMeta.campaign_id) &&
-          asString(adsetMeta.campaign_id) !== launchConfig.existingCampaignId
-        ) {
-          errors.push(
-            `Ad set "${asString(adsetMeta.name) || adsetId}" is not inside the selected campaign.`,
-          );
-        }
-        if (
-          launchConfig.creativeFormatMode === 'dynamic_creative' &&
-          adsetMeta.is_dynamic_creative !== true &&
-          adsetMeta.is_dynamic_creative !== 'true'
-        ) {
-          errors.push(
-            `Ad set "${asString(adsetMeta.name) || adsetId}" is not a dynamic creative ad set.`,
-          );
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        errors.push(`Could not preflight ad set ${adsetId}: ${message}`);
-      }
-    }
-  }
-
-  const modesThatRequireAllMetaAssets = new Set<LaunchConfig['creativeFormatMode']>([
-    'single_format_media_options',
-    'dynamic_creative',
-  ]);
-  if (modesThatRequireAllMetaAssets.has(launchConfig.creativeFormatMode)) {
-    const missingMetaAssets = selectedItems.filter((item) => !item.meta_asset_id);
-    if (missingMetaAssets.length > 0) {
-      errors.push(
-        `${missingMetaAssets.length} creative${missingMetaAssets.length === 1 ? '' : 's'} still missing Meta asset IDs after upload.`,
-      );
-    }
-  }
-
-  return { errors, processingVideos };
-}
-
-function extractVideoIdsFromCreativeBody(creativeBody: Record<string, string>): string[] {
-  const videoIds = new Set<string>();
-
+function extractVideoIdFromCreativeBody(creativeBody: Record<string, string>): string | undefined {
   if (creativeBody.object_story_spec) {
     try {
       const parsed = JSON.parse(creativeBody.object_story_spec) as Record<string, unknown>;
@@ -503,7 +439,7 @@ function extractVideoIdsFromCreativeBody(creativeBody: Record<string, string>): 
           ? ((parsed.video_data as Record<string, unknown> | undefined) ?? undefined)
           : undefined;
       const videoId = asString(videoData?.video_id);
-      if (videoId) videoIds.add(videoId);
+      if (videoId) return videoId;
     } catch {
       // Ignore parse errors and continue.
     }
@@ -515,32 +451,81 @@ function extractVideoIdsFromCreativeBody(creativeBody: Record<string, string>): 
       const videos = Array.isArray(parsed.videos)
         ? (parsed.videos as Array<Record<string, unknown>>)
         : [];
-      for (const video of videos) {
-        const videoId = asString(video.video_id);
-        if (videoId) videoIds.add(videoId);
-      }
+      const firstVideoId = asString(videos[0]?.video_id);
+      if (firstVideoId) return firstVideoId;
     } catch {
       // Ignore parse errors.
     }
   }
 
-  return Array.from(videoIds);
+  return undefined;
 }
 
-async function waitForCreativeBodyVideosReady(
-  accessToken: string,
-  creativeBody: Record<string, string>,
-  timeoutMs = 75_000,
-): Promise<'ready' | 'processing' | 'failed' | 'none'> {
-  const videoIds = extractVideoIdsFromCreativeBody(creativeBody);
-  if (videoIds.length === 0) return 'none';
+function getAssetFeedMediaCount(creativeBody: Record<string, string>): number {
+  if (!creativeBody.asset_feed_spec) return 0;
+  try {
+    const parsed = JSON.parse(creativeBody.asset_feed_spec) as Record<string, unknown>;
+    const videos = Array.isArray(parsed.videos) ? parsed.videos : [];
+    const images = Array.isArray(parsed.images) ? parsed.images : [];
+    return videos.length + images.length;
+  } catch {
+    return 0;
+  }
+}
 
-  const states = await Promise.all(
-    videoIds.map((videoId) => waitForVideoReady(accessToken, videoId, timeoutMs, 3_000)),
-  );
-  if (states.some((state) => state === 'failed')) return 'failed';
-  if (states.every((state) => state === 'ready')) return 'ready';
-  return 'processing';
+function isMultiMediaAssetFeedCreative(creativeBody: Record<string, string>): boolean {
+  return getAssetFeedMediaCount(creativeBody) > 1;
+}
+
+function summarizeCreativeBodyForLaunch(creativeBody: Record<string, string>): Record<string, unknown> {
+  let assetFeedSpec: Record<string, unknown> = {};
+  let objectStorySpec: Record<string, unknown> = {};
+
+  try {
+    assetFeedSpec = creativeBody.asset_feed_spec
+      ? (JSON.parse(creativeBody.asset_feed_spec) as Record<string, unknown>)
+      : {};
+  } catch {
+    assetFeedSpec = { parse_error: true };
+  }
+
+  try {
+    objectStorySpec = creativeBody.object_story_spec
+      ? (JSON.parse(creativeBody.object_story_spec) as Record<string, unknown>)
+      : {};
+  } catch {
+    objectStorySpec = { parse_error: true };
+  }
+
+  const videos = Array.isArray(assetFeedSpec.videos) ? assetFeedSpec.videos : [];
+  const images = Array.isArray(assetFeedSpec.images) ? assetFeedSpec.images : [];
+
+  return {
+    objectType: creativeBody.object_type || null,
+    hasTopLevelLinkUrl: Boolean(creativeBody.link_url),
+    hasTopLevelInstagramActor: Boolean(creativeBody.instagram_actor_id),
+    objectStoryKeys: Object.keys(objectStorySpec),
+    objectStoryHasVideoData: Boolean(objectStorySpec.video_data),
+    objectStoryHasLinkData: Boolean(objectStorySpec.link_data),
+    assetFeedVideos: videos.length,
+    assetFeedVideoThumbnailHashes: videos.filter((item) => {
+      const videoItem = item as Record<string, unknown>;
+      return Boolean(asString(videoItem.thumbnail_hash));
+    }).length,
+    assetFeedImages: images.length,
+    assetFeedAdFormats: assetFeedSpec.ad_formats || null,
+    assetFeedLinkUrls: Array.isArray(assetFeedSpec.link_urls) ? assetFeedSpec.link_urls.length : 0,
+    assetFeedDisplayUrls: Array.isArray(assetFeedSpec.link_urls)
+      ? assetFeedSpec.link_urls.filter((item) => {
+          const linkItem = item as Record<string, unknown>;
+          return Boolean(asString(linkItem.display_url));
+        }).length
+      : 0,
+    assetFeedCallToActions: assetFeedSpec.call_to_action_types || null,
+    assetFeedCallToActionObjects: Array.isArray(assetFeedSpec.call_to_actions)
+      ? assetFeedSpec.call_to_actions.length
+      : 0,
+  };
 }
 
 function isValidHttpUrl(value: string | null | undefined): value is string {
@@ -553,29 +538,150 @@ function isValidHttpUrl(value: string | null | undefined): value is string {
   }
 }
 
+function normalizeMetaDestinationUrl(value: string): string {
+  if (!isValidHttpUrl(value)) return value;
+  const parsed = new URL(value);
+  if (parsed.protocol === 'http:') {
+    parsed.protocol = 'https:';
+  }
+  return parsed.toString();
+}
+
 function removeInstagramActorFromCreativeBody(
   creativeBody: Record<string, string>,
 ): Record<string, string> | null {
-  if (!creativeBody.object_story_spec) {
-    return null;
+  let changed = false;
+  const sanitizedBody = { ...creativeBody };
+  if (sanitizedBody.instagram_actor_id) {
+    delete sanitizedBody.instagram_actor_id;
+    changed = true;
+  }
+  if (sanitizedBody.instagram_user_id) {
+    delete sanitizedBody.instagram_user_id;
+    changed = true;
   }
 
   try {
+    if (!creativeBody.object_story_spec) {
+      return changed ? sanitizedBody : null;
+    }
     const parsed = JSON.parse(creativeBody.object_story_spec) as Record<string, unknown>;
-    if (!parsed || typeof parsed !== 'object' || !('instagram_actor_id' in parsed)) {
-      return null;
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      ('instagram_actor_id' in parsed || 'instagram_user_id' in parsed)
+    ) {
+      const sanitizedSpec = { ...parsed };
+      delete sanitizedSpec.instagram_actor_id;
+      delete sanitizedSpec.instagram_user_id;
+      sanitizedBody.object_story_spec = JSON.stringify(sanitizedSpec);
+      changed = true;
+    }
+  } catch {
+    // Ignore parse errors and still return a top-level sanitization if one happened.
+  }
+
+  return changed ? sanitizedBody : null;
+}
+
+function removeInstagramActorFromObjectStorySpec(
+  objectStorySpec: Record<string, unknown>,
+): Record<string, unknown> {
+  const sanitized = { ...objectStorySpec };
+  delete sanitized.instagram_actor_id;
+  delete sanitized.instagram_user_id;
+  return sanitized;
+}
+
+function extractDestinationUrlFromCreativeBody(
+  creativeBody: Record<string, string>,
+  fallbackObjectStorySpec?: Record<string, unknown>,
+): string | null {
+  const topLevelUrl = asString(creativeBody.link_url);
+  if (topLevelUrl && isValidHttpUrl(topLevelUrl)) {
+    return topLevelUrl;
+  }
+
+  try {
+    const assetFeedSpec = creativeBody.asset_feed_spec
+      ? (JSON.parse(creativeBody.asset_feed_spec) as Record<string, unknown>)
+      : undefined;
+    const linkUrls = Array.isArray(assetFeedSpec?.link_urls)
+      ? (assetFeedSpec?.link_urls as Array<Record<string, unknown>>)
+      : [];
+    const assetFeedUrl = asString(linkUrls[0]?.website_url);
+    if (assetFeedUrl && isValidHttpUrl(assetFeedUrl)) {
+      return assetFeedUrl;
+    }
+  } catch {
+    // Continue to object story fallback.
+  }
+
+  const storySpecs: Record<string, unknown>[] = [];
+  try {
+    if (creativeBody.object_story_spec) {
+      storySpecs.push(JSON.parse(creativeBody.object_story_spec) as Record<string, unknown>);
+    }
+  } catch {
+    // Continue to supplied fallback story.
+  }
+  if (fallbackObjectStorySpec) {
+    storySpecs.push(fallbackObjectStorySpec);
+  }
+
+  for (const storySpec of storySpecs) {
+    const linkData = storySpec.link_data as Record<string, unknown> | undefined;
+    const link = asString(linkData?.link);
+    if (link && isValidHttpUrl(link)) {
+      return link;
     }
 
-    const sanitizedSpec = { ...parsed };
-    delete sanitizedSpec.instagram_actor_id;
+    const videoData = storySpec.video_data as Record<string, unknown> | undefined;
+    const callToAction = videoData?.call_to_action as Record<string, unknown> | undefined;
+    const value = callToAction?.value as Record<string, unknown> | undefined;
+    const videoLink = asString(value?.link);
+    if (videoLink && isValidHttpUrl(videoLink)) {
+      return videoLink;
+    }
+  }
 
-    return {
-      ...creativeBody,
-      object_story_spec: JSON.stringify(sanitizedSpec),
-    };
-  } catch {
+  return null;
+}
+
+function addDestinationLinkToCreativeBody(
+  creativeBody: Record<string, string>,
+  fallbackObjectStorySpec?: Record<string, unknown>,
+): Record<string, string> | null {
+  const destinationUrl = extractDestinationUrlFromCreativeBody(creativeBody, fallbackObjectStorySpec);
+  if (!destinationUrl) {
     return null;
   }
+
+  const linkedBody: Record<string, string> = {
+    ...creativeBody,
+    link_url: destinationUrl,
+  };
+
+  if (creativeBody.asset_feed_spec) {
+    try {
+      const assetFeedSpec = JSON.parse(creativeBody.asset_feed_spec) as Record<string, unknown>;
+      const linkUrls = Array.isArray(assetFeedSpec.link_urls)
+        ? (assetFeedSpec.link_urls as Array<Record<string, unknown>>)
+        : [];
+      const hasValidAssetFeedUrl = linkUrls.some((item) => {
+        const websiteUrl = asString(item.website_url);
+        return Boolean(websiteUrl && isValidHttpUrl(websiteUrl));
+      });
+      linkedBody.asset_feed_spec = JSON.stringify({
+        ...assetFeedSpec,
+        link_urls: hasValidAssetFeedUrl ? linkUrls : [buildAssetFeedLinkUrl(destinationUrl)],
+      });
+    } catch {
+      // Keep the top-level link_url repair even if the asset feed is malformed.
+    }
+  }
+
+  return linkedBody;
 }
 
 async function uploadAdImageFromUrl(
@@ -737,6 +843,38 @@ async function addVideoThumbnailToCreativeBody(
   }
 }
 
+function collectVideoThumbnailUrls(raw: Record<string, unknown>): string[] {
+  const urls: string[] = [];
+  const thumbnails = raw.thumbnails;
+  const thumbnailItems = Array.isArray(thumbnails)
+    ? thumbnails
+    : thumbnails && typeof thumbnails === 'object' && Array.isArray((thumbnails as Record<string, unknown>).data)
+      ? ((thumbnails as Record<string, unknown>).data as unknown[])
+      : [];
+
+  for (const thumb of thumbnailItems) {
+    const uri = asString((thumb as Record<string, unknown> | undefined)?.uri);
+    if (uri && isValidHttpUrl(uri)) {
+      urls.push(uri);
+    }
+  }
+
+  const picture = asString(raw.picture);
+  if (picture && isValidHttpUrl(picture)) {
+    urls.push(picture);
+  }
+
+  return Array.from(new Set(urls));
+}
+
+function toFetchableThumbnailUrl(value: string | null | undefined, origin: string): string | null {
+  const thumbnailUrl = typeof value === 'string' ? value.trim() : '';
+  if (!thumbnailUrl) return null;
+  if (thumbnailUrl.startsWith('/')) return `${origin}${thumbnailUrl}`;
+  if (isValidHttpUrl(thumbnailUrl)) return thumbnailUrl;
+  return null;
+}
+
 function removeDegreesOfFreedomFromCreativeBody(
   creativeBody: Record<string, string>,
 ): Record<string, string> | null {
@@ -819,7 +957,6 @@ async function createAdCreativeWithFallback(
   creativeBody: Record<string, string>,
   preferredThumbnailUrl?: string,
   fallbackObjectStorySpec?: Record<string, unknown>,
-  allowAssetFeedDowngrade = true,
 ): Promise<Record<string, unknown>> {
   const attemptErrors: string[] = [];
   const initialBody = sanitizeDegreesOfFreedomSpecForMeta(creativeBody);
@@ -832,12 +969,13 @@ async function createAdCreativeWithFallback(
     attemptErrors.push(`attempt_1:${message}`);
 
     let workingBody = initialBody;
-    const videoIds = extractVideoIdsFromCreativeBody(workingBody);
+    let effectiveFallbackObjectStorySpec = fallbackObjectStorySpec;
+    const videoId = extractVideoIdFromCreativeBody(workingBody);
     const firstErrorWasGeneric = isGenericAdCreativeMetaError(message);
     let currentMessage = message;
 
-    if (firstErrorWasGeneric && videoIds.length > 0) {
-      const videoState = await waitForCreativeBodyVideosReady(accessToken, workingBody);
+    if (firstErrorWasGeneric && videoId) {
+      const videoState = await waitForVideoReady(accessToken, videoId);
       if (videoState === 'failed') {
         attemptErrors.push('video_processing_failed');
       }
@@ -861,7 +999,7 @@ async function createAdCreativeWithFallback(
       }
     }
 
-    if (firstErrorWasGeneric && videoIds.length === 0) {
+    if (firstErrorWasGeneric && !videoId) {
       await sleep(1_500);
       try {
         return await postToMeta(accessToken, `/${accountNode}/adcreatives`, workingBody);
@@ -876,23 +1014,73 @@ async function createAdCreativeWithFallback(
       const withoutInstagramActor = removeInstagramActorFromCreativeBody(workingBody);
       if (withoutInstagramActor) {
         workingBody = withoutInstagramActor;
+        if (effectiveFallbackObjectStorySpec) {
+          effectiveFallbackObjectStorySpec = removeInstagramActorFromObjectStorySpec(
+            effectiveFallbackObjectStorySpec,
+          );
+        }
         try {
           return await postToMeta(accessToken, `/${accountNode}/adcreatives`, workingBody);
         } catch (fallbackErr) {
           const fallbackMessage =
             fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
           attemptErrors.push(`attempt_2_without_instagram_actor:${fallbackMessage}`);
-          if (!isVideoThumbnailRequiredMetaError(fallbackMessage)) {
-            throw new Error(attemptErrors.join(' || '));
-          }
+          currentMessage = fallbackMessage;
         }
       }
     }
 
-    if (allowAssetFeedDowngrade && fallbackObjectStorySpec && workingBody.asset_feed_spec && isGenericAdCreativeMetaError(currentMessage)) {
+    if (workingBody.asset_feed_spec && isLinkRequiredMetaError(currentMessage)) {
+      const linkedBody = addDestinationLinkToCreativeBody(workingBody, effectiveFallbackObjectStorySpec);
+      if (linkedBody) {
+        workingBody = linkedBody;
+        try {
+          return await postToMeta(accessToken, `/${accountNode}/adcreatives`, workingBody);
+        } catch (linkErr) {
+          const linkMessage = linkErr instanceof Error ? linkErr.message : String(linkErr);
+          attemptErrors.push(`attempt_with_asset_feed_link:${linkMessage}`);
+          currentMessage = linkMessage;
+        }
+      }
+    }
+
+    if (
+      effectiveFallbackObjectStorySpec &&
+      workingBody.asset_feed_spec &&
+      !isMultiMediaAssetFeedCreative(workingBody) &&
+      isLinkRequiredMetaError(currentMessage)
+    ) {
       const downgradedBody: Record<string, string> = {
         ...workingBody,
-        object_story_spec: JSON.stringify(fallbackObjectStorySpec),
+        object_story_spec: JSON.stringify(effectiveFallbackObjectStorySpec),
+      };
+      delete downgradedBody.asset_feed_spec;
+      delete downgradedBody.object_type;
+
+      const linkedDowngradedBody =
+        addDestinationLinkToCreativeBody(downgradedBody, effectiveFallbackObjectStorySpec) ??
+        downgradedBody;
+
+      workingBody = linkedDowngradedBody;
+      try {
+        return await postToMeta(accessToken, `/${accountNode}/adcreatives`, workingBody);
+      } catch (downgradeErr) {
+        const downgradeMessage =
+          downgradeErr instanceof Error ? downgradeErr.message : String(downgradeErr);
+        attemptErrors.push(`attempt_downgrade_after_link_required:${downgradeMessage}`);
+        currentMessage = downgradeMessage;
+      }
+    }
+
+    if (
+      effectiveFallbackObjectStorySpec &&
+      workingBody.asset_feed_spec &&
+      !isMultiMediaAssetFeedCreative(workingBody) &&
+      isGenericAdCreativeMetaError(currentMessage)
+    ) {
+      const downgradedBody: Record<string, string> = {
+        ...workingBody,
+        object_story_spec: JSON.stringify(effectiveFallbackObjectStorySpec),
       };
       delete downgradedBody.asset_feed_spec;
       delete downgradedBody.object_type;
@@ -934,10 +1122,15 @@ async function createAdCreativeWithFallback(
       }
     }
 
-    if (allowAssetFeedDowngrade && fallbackObjectStorySpec && workingBody.asset_feed_spec && isAssetFeedFormatMetaError(currentMessage)) {
+    if (
+      effectiveFallbackObjectStorySpec &&
+      workingBody.asset_feed_spec &&
+      !isMultiMediaAssetFeedCreative(workingBody) &&
+      isAssetFeedFormatMetaError(currentMessage)
+    ) {
       const downgradedBody: Record<string, string> = {
         ...workingBody,
-        object_story_spec: JSON.stringify(fallbackObjectStorySpec),
+        object_story_spec: JSON.stringify(effectiveFallbackObjectStorySpec),
       };
       delete downgradedBody.asset_feed_spec;
       delete downgradedBody.object_type;
@@ -980,9 +1173,9 @@ async function createAdCreativeWithFallback(
     }
 
     if (isVideoNotReadyMetaError(currentMessage)) {
-      const videoIds = extractVideoIdsFromCreativeBody(workingBody);
-      if (videoIds.length > 0) {
-        const videoState = await waitForCreativeBodyVideosReady(accessToken, workingBody);
+      const videoId = extractVideoIdFromCreativeBody(workingBody);
+      if (videoId) {
+        const videoState = await waitForVideoReady(accessToken, videoId);
         if (videoState === 'ready') {
           try {
             return await postToMeta(accessToken, `/${accountNode}/adcreatives`, workingBody);
@@ -1017,7 +1210,6 @@ async function createAdWithCreativeFallback(input: {
   creativeBody: Record<string, string>;
   preferredThumbnailUrl?: string;
   fallbackObjectStorySpec: Record<string, unknown>;
-  allowAssetFeedDowngrade?: boolean;
 }): Promise<{ adId: string; metaCreativeId: string }> {
   const {
     accessToken,
@@ -1029,7 +1221,6 @@ async function createAdWithCreativeFallback(input: {
     creativeBody,
     preferredThumbnailUrl,
     fallbackObjectStorySpec,
-    allowAssetFeedDowngrade = true,
   } = input;
 
   try {
@@ -1046,12 +1237,13 @@ async function createAdWithCreativeFallback(input: {
     return { adId, metaCreativeId };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    if (
-      !allowAssetFeedDowngrade ||
-      !creativeBody.asset_feed_spec ||
-      !isDynamicCreativeAdsetMismatchMetaError(message)
-    ) {
+    if (!creativeBody.asset_feed_spec || !isDynamicCreativeAdsetMismatchMetaError(message)) {
       throw err instanceof Error ? err : new Error(message);
+    }
+    if (isMultiMediaAssetFeedCreative(creativeBody)) {
+      throw new Error(
+        `Meta rejected the multi-media creative for this ad set, so launch was stopped instead of silently creating a one-video ad. ${message}`,
+      );
     }
 
     const normalCreativeBody: Record<string, string> = {
@@ -1067,7 +1259,6 @@ async function createAdWithCreativeFallback(input: {
       normalCreativeBody,
       preferredThumbnailUrl,
       fallbackObjectStorySpec,
-      allowAssetFeedDowngrade,
     );
     const fallbackCreativeId = String(fallbackCreativeRes.id || '');
     if (!fallbackCreativeId) {
@@ -1320,10 +1511,10 @@ async function createCampaignWithFallback(
               const response = await postToMeta(accessToken, `/${accountNode}/campaigns`, campaignBody);
               if (structure === 'CBO') {
                 console.log(
-                  `[launch] Created CBO campaign ${response.id || 'unknown'} with bid_strategy=${
-                    campaignBody.bid_strategy || 'omitted'
-                  }, bid_amount=${campaignBody.bid_amount || 'omitted'}`,
-                );
+	                  `[launch] Created CBO campaign ${response.id || 'unknown'} with bid_strategy=${
+	                    campaignBody.bid_strategy || 'omitted'
+	                  }, bid_amount=${campaignBody.bid_amount || 'omitted'}`,
+	                );
               }
               return response;
             } catch (err) {
@@ -1335,8 +1526,8 @@ async function createCampaignWithFallback(
                   structure === 'CBO'
                     ? resolveCampaignBidConfig(bidStrategyInput, bidAmountInput, dailyBudget).bidStrategy
                     : 'adset_level'
-                }: ${message}`,
-              );
+	                }: ${message}`,
+	              );
             }
           }
         }
@@ -1542,80 +1733,185 @@ function uniqueCopyItems(items: LaunchConfig['primaryTexts']): Array<{ text: str
   return result.slice(0, 5);
 }
 
-function buildAssetFeedSpec(
-  config: LaunchConfig,
-): Record<string, unknown> {
-  const spec: Record<string, unknown> = {};
-  const bodies = uniqueCopyItems(config.primaryTexts);
-  const titles = uniqueCopyItems(config.headlines);
-  const descriptions = uniqueCopyItems(config.descriptions);
-
-  if (bodies.length > 0) spec.bodies = bodies;
-  if (titles.length > 0) spec.titles = titles;
-  if (descriptions.length > 0) spec.descriptions = descriptions;
-  spec.optimization_type = 'DEGREES_OF_FREEDOM';
-
-  return spec;
-}
-
-function buildMediaOptionsAssetFeedSpec(
-  config: LaunchConfig,
-  items: Array<Pick<CreativeTestItemRow, 'meta_asset_id' | 'meta_asset_type' | 'sourceCreativeId' | 'id'>>,
-  destinationUrl: string,
-  options: { includeAdFormats?: boolean } = {},
-): Record<string, unknown> {
-  const spec = buildAssetFeedSpec(config);
-  const images: Array<Record<string, string>> = [];
+function buildMediaAssetFeedEntries(mediaItems: CreativeTestItemRow[]): {
+  videos: Array<Record<string, string>>;
+  images: Array<Record<string, string>>;
+} {
   const videos: Array<Record<string, string>> = [];
+  const images: Array<Record<string, string>> = [];
+  const seenVideos = new Set<string>();
+  const seenImages = new Set<string>();
 
-  for (const item of items) {
+  for (const item of mediaItems.slice(0, 10)) {
     const assetId = item.meta_asset_id || '';
     if (!assetId) continue;
-    const assetType = item.meta_asset_type || 'IMAGE';
-    if (assetType === 'VIDEO' || assetType === 'video') {
-      const video: Record<string, string> = { video_id: assetId };
-      const thumbnailSelection = config.videoThumbnails?.[item.sourceCreativeId || item.id];
-      if (thumbnailSelection?.source === 'manual' && thumbnailSelection.imageHash) {
-        video.thumbnail_hash = thumbnailSelection.imageHash;
+    const assetType = (item.meta_asset_type || item.creative_format || '').toUpperCase();
+    if (assetType === 'VIDEO') {
+      if (seenVideos.has(assetId)) continue;
+      seenVideos.add(assetId);
+      const videoEntry: Record<string, string> = { video_id: assetId };
+      if (item.resolved_thumbnail_hash) {
+        videoEntry.thumbnail_hash = item.resolved_thumbnail_hash;
       }
-      videos.push(video);
+      videos.push(videoEntry);
     } else {
+      if (seenImages.has(assetId)) continue;
+      seenImages.add(assetId);
       images.push({ hash: assetId });
     }
   }
 
-  if (images.length > 0) spec.images = images.slice(0, 10);
-  if (videos.length > 0) spec.videos = videos.slice(0, 10);
-  spec.link_urls = [{
-    website_url: destinationUrl,
-    display_url: isValidHttpUrl(destinationUrl) ? new URL(destinationUrl).host : undefined,
-  }];
-  if (config.ctaType) {
-    spec.call_to_action_types = [config.ctaType];
+  return { videos, images };
+}
+
+async function resolveAssetFeedVideoThumbnailHash(input: {
+  accessToken: string;
+  accountNode: string;
+  item: CreativeTestItemRow;
+  config: LaunchConfig;
+  origin: string;
+}): Promise<string | null> {
+  const { accessToken, accountNode, item, config, origin } = input;
+  const assetType = (item.meta_asset_type || item.creative_format || '').toUpperCase();
+  if (assetType !== 'VIDEO' || !item.meta_asset_id) {
+    return null;
   }
 
-  if (options.includeAdFormats) {
-    const adFormats: string[] = [];
-    if (images.length > 0) adFormats.push('SINGLE_IMAGE');
-    if (videos.length > 0) adFormats.push('SINGLE_VIDEO');
-    if (adFormats.length > 0) {
-      spec.ad_formats = adFormats;
+  if (item.resolved_thumbnail_hash) {
+    return item.resolved_thumbnail_hash;
+  }
+
+  const thumbnailSelection = config.videoThumbnails?.[item.sourceCreativeId || item.id];
+  if (thumbnailSelection?.source === 'manual' && thumbnailSelection.imageHash) {
+    item.resolved_thumbnail_hash = thumbnailSelection.imageHash;
+    return thumbnailSelection.imageHash;
+  }
+
+  const candidates: string[] = [];
+  const manualThumbnailUrl = toFetchableThumbnailUrl(thumbnailSelection?.imageUrl, origin);
+  if (manualThumbnailUrl) {
+    candidates.push(manualThumbnailUrl);
+  }
+
+  const itemThumbnailUrl = toFetchableThumbnailUrl(item.thumbnail_url, origin);
+  if (itemThumbnailUrl) {
+    candidates.push(itemThumbnailUrl);
+  }
+
+  try {
+    const videoMeta = await fetchFromMeta<Record<string, unknown>>(
+      accessToken,
+      `/${item.meta_asset_id}`,
+      { fields: 'picture,thumbnails{uri}' },
+      10000,
+      1,
+    );
+    candidates.push(...collectVideoThumbnailUrls(videoMeta));
+  } catch (err) {
+    console.warn('[launch] Could not fetch video thumbnails from Meta', {
+      creativeName: item.creative_name,
+      videoId: item.meta_asset_id,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  for (const candidateUrl of Array.from(new Set(candidates))) {
+    const thumbnailHash = await uploadAdImageFromUrl(accessToken, accountNode, candidateUrl);
+    if (thumbnailHash) {
+      item.resolved_thumbnail_hash = thumbnailHash;
+      console.info('[launch] Resolved asset_feed_spec video thumbnail_hash', {
+        creativeName: item.creative_name,
+        videoId: item.meta_asset_id,
+      });
+      return thumbnailHash;
     }
   }
 
+  return null;
+}
+
+async function ensureAssetFeedVideoThumbnailHashes(input: {
+  accessToken: string;
+  accountNode: string;
+  config: LaunchConfig;
+  mediaItems: CreativeTestItemRow[];
+  origin: string;
+}): Promise<void> {
+  const { accessToken, accountNode, config, mediaItems, origin } = input;
+  if (mediaItems.length <= 1) {
+    return;
+  }
+
+  const missingVideoNames: string[] = [];
+  const seenVideoIds = new Set<string>();
+  for (const item of mediaItems.slice(0, 10)) {
+    const assetType = (item.meta_asset_type || item.creative_format || '').toUpperCase();
+    if (assetType !== 'VIDEO' || !item.meta_asset_id || seenVideoIds.has(item.meta_asset_id)) {
+      continue;
+    }
+    seenVideoIds.add(item.meta_asset_id);
+
+    const thumbnailHash = await resolveAssetFeedVideoThumbnailHash({
+      accessToken,
+      accountNode,
+      item,
+      config,
+      origin,
+    });
+
+    if (!thumbnailHash) {
+      missingVideoNames.push(item.creative_name || item.meta_asset_id);
+    }
+  }
+
+  if (missingVideoNames.length > 0) {
+    throw new Error(
+      `Meta multi-media ads require thumbnail_hash for every video in asset_feed_spec. Could not resolve thumbnail hash for: ${missingVideoNames.join(', ')}`,
+    );
+  }
+}
+
+function buildAssetFeedLinkUrl(destinationUrl: string): Record<string, string> {
+  const linkUrl: Record<string, string> = { website_url: destinationUrl };
+  if (isValidHttpUrl(destinationUrl)) {
+    linkUrl.display_url = new URL(destinationUrl).host;
+  }
+  return linkUrl;
+}
+
+function buildAssetFeedSpec(
+  config: LaunchConfig,
+  mediaItems: CreativeTestItemRow[] = [],
+  destinationUrl = '',
+): Record<string, unknown> {
+  const metaDestinationUrl = normalizeMetaDestinationUrl(destinationUrl);
+  const spec: Record<string, unknown> = {};
+  const bodies = uniqueCopyItems(config.primaryTexts);
+  const titles = uniqueCopyItems(config.headlines);
+  const descriptions = uniqueCopyItems(config.descriptions);
+  const media = buildMediaAssetFeedEntries(mediaItems);
+
+  if (bodies.length > 0) spec.bodies = bodies;
+  if (titles.length > 0) spec.titles = titles;
+  if (descriptions.length > 0) spec.descriptions = descriptions;
+  if (media.videos.length > 0) spec.videos = media.videos;
+  if (media.images.length > 0) spec.images = media.images;
+  if (isValidHttpUrl(metaDestinationUrl)) spec.link_urls = [buildAssetFeedLinkUrl(metaDestinationUrl)];
+  if (config.ctaType) {
+    spec.call_to_action_types = [config.ctaType];
+  }
+  if (media.videos.length > 0 && media.images.length > 0) {
+    spec.ad_formats = ['SINGLE_VIDEO', 'SINGLE_IMAGE'];
+  } else if (media.videos.length > 0) {
+    spec.ad_formats = ['SINGLE_VIDEO'];
+  } else if (media.images.length > 0) {
+    spec.ad_formats = ['SINGLE_IMAGE'];
+  }
   return spec;
 }
 
-function shouldAttachAssetFeedSpec(config: LaunchConfig): boolean {
-  if (config.creativeFormatMode === 'single_per_creative' || !config.creativeFormatMode) {
-    return false;
-  }
-
-  return (
-    uniqueCopyItems(config.primaryTexts).length > 1 ||
-    uniqueCopyItems(config.headlines).length > 1 ||
-    uniqueCopyItems(config.descriptions).length > 1
-  );
+function shouldUseFlexibleCreative(config: LaunchConfig, mediaItems: CreativeTestItemRow[] = []): boolean {
+  return mediaItems.length > 1;
 }
 
 function buildCreativeBody(
@@ -1623,115 +1919,52 @@ function buildCreativeBody(
   profile: { pageId?: string; instagramActorId?: string; destinationUrl?: string; utmTemplate?: string },
   item: Pick<CreativeTestItemRow, 'creative_name' | 'meta_asset_id' | 'meta_asset_type' | 'sourceCreativeId' | 'id'>,
   creativeUrl?: string,
+  mediaItems: CreativeTestItemRow[] = [],
+  adName?: string,
+  options: { forceAssetFeedSpec?: boolean } = {},
 ): { creativeBody: Record<string, string>; fallbackObjectStorySpec: Record<string, unknown> } {
   const assetId = item.meta_asset_id || '';
   const assetType = item.meta_asset_type || 'IMAGE';
   const thumbnailSelection = config.videoThumbnails?.[item.sourceCreativeId || item.id];
+  const mediaAssetItems = mediaItems.length > 0 ? mediaItems : [item as CreativeTestItemRow];
+  const destinationUrl = normalizeMetaDestinationUrl(
+    creativeUrl || profile.destinationUrl || config.destinationUrl || '',
+  );
   const fallbackObjectStorySpec = buildObjectStorySpec(
     config,
     profile,
     assetId,
     assetType,
-    creativeUrl,
+    destinationUrl,
     thumbnailSelection,
   );
   const creativeBody: Record<string, string> = {
-    name: `${item.creative_name} Creative`,
+    name: `${adName || item.creative_name} Creative`,
     url_tags: config.utmTemplate || profile.utmTemplate || DEFAULT_META_URL_TAGS,
     object_story_spec: JSON.stringify(fallbackObjectStorySpec),
     contextual_multi_ads: JSON.stringify(buildContextualMultiAdsOptOutSpec()),
   };
-
-  if (config.advantageCreative) {
-    creativeBody.degrees_of_freedom_spec = JSON.stringify(buildDegreesOfFreedomSpec(true));
-  }
-
-  if (shouldAttachAssetFeedSpec(config)) {
-    creativeBody.asset_feed_spec = JSON.stringify(buildAssetFeedSpec(config));
-  }
-
-  return { creativeBody, fallbackObjectStorySpec };
-}
-
-function buildMediaOptionsCreativeBody(
-  config: LaunchConfig,
-  profile: { pageId?: string; instagramActorId?: string; destinationUrl?: string; utmTemplate?: string },
-  items: CreativeTestItemRow[],
-  creativeName: string,
-  creativeUrl?: string,
-): { creativeBody: Record<string, string>; fallbackObjectStorySpec: Record<string, unknown> } {
-  const firstItem = items[0];
-  const destinationUrl = creativeUrl || profile.destinationUrl || config.destinationUrl || '';
-  const fallbackObjectStorySpec = buildObjectStorySpec(
-    config,
-    profile,
-    firstItem.meta_asset_id || '',
-    firstItem.meta_asset_type || 'IMAGE',
-    creativeUrl,
-    config.videoThumbnails?.[firstItem.sourceCreativeId || firstItem.id],
-  );
-  const objectStorySpec: Record<string, unknown> = {
-    page_id: profile.pageId || config.pageId,
-  };
-  if (profile.instagramActorId || config.instagramActorId) {
-    objectStorySpec.instagram_user_id = profile.instagramActorId || config.instagramActorId;
-  }
-
-  const creativeBody: Record<string, string> = {
-    name: `${creativeName} Creative`,
-    url_tags: config.utmTemplate || profile.utmTemplate || DEFAULT_META_URL_TAGS,
-    object_story_spec: JSON.stringify(objectStorySpec),
-    asset_feed_spec: JSON.stringify(buildMediaOptionsAssetFeedSpec(config, items, destinationUrl, { includeAdFormats: true })),
-    contextual_multi_ads: JSON.stringify(buildContextualMultiAdsOptOutSpec()),
-  };
-  if (destinationUrl) {
+  if (isValidHttpUrl(destinationUrl)) {
     creativeBody.link_url = destinationUrl;
   }
+  const useAssetFeedSpec = options.forceAssetFeedSpec || shouldUseFlexibleCreative(config, mediaAssetItems);
 
-  if (config.advantageCreative) {
-    creativeBody.degrees_of_freedom_spec = JSON.stringify(buildDegreesOfFreedomSpec(true));
-  }
-
-  return { creativeBody, fallbackObjectStorySpec };
-}
-
-function buildDynamicCreativeBody(
-  config: LaunchConfig,
-  profile: { pageId?: string; instagramActorId?: string; destinationUrl?: string; utmTemplate?: string },
-  items: CreativeTestItemRow[],
-  creativeName: string,
-  creativeUrl?: string,
-): { creativeBody: Record<string, string>; fallbackObjectStorySpec: Record<string, unknown> } {
-  const firstItem = items[0];
-  const destinationUrl = creativeUrl || profile.destinationUrl || config.destinationUrl || '';
-  const fallbackObjectStorySpec = buildObjectStorySpec(
-    config,
-    profile,
-    firstItem.meta_asset_id || '',
-    firstItem.meta_asset_type || 'IMAGE',
-    creativeUrl,
-    config.videoThumbnails?.[firstItem.sourceCreativeId || firstItem.id],
-  );
-  const objectStorySpec: Record<string, unknown> = {
-    page_id: profile.pageId || config.pageId,
-  };
-  if (profile.instagramActorId || config.instagramActorId) {
-    objectStorySpec.instagram_user_id = profile.instagramActorId || config.instagramActorId;
-  }
-
-  const creativeBody: Record<string, string> = {
-    name: `${creativeName} Dynamic Creative`,
-    url_tags: config.utmTemplate || profile.utmTemplate || DEFAULT_META_URL_TAGS,
-    object_story_spec: JSON.stringify(objectStorySpec),
-    asset_feed_spec: JSON.stringify(buildMediaOptionsAssetFeedSpec(config, items, destinationUrl)),
-    contextual_multi_ads: JSON.stringify(buildContextualMultiAdsOptOutSpec()),
-  };
-  if (destinationUrl) {
-    creativeBody.link_url = destinationUrl;
+  if (profile.instagramActorId && !useAssetFeedSpec) {
+    creativeBody.instagram_actor_id = profile.instagramActorId;
   }
 
   if (config.advantageCreative) {
     creativeBody.degrees_of_freedom_spec = JSON.stringify(buildDegreesOfFreedomSpec(true));
+  }
+
+  if (useAssetFeedSpec) {
+    const identityStorySpec: Record<string, unknown> = {
+      page_id: profile.pageId || config.pageId,
+    };
+    creativeBody.asset_feed_spec = JSON.stringify(
+      buildAssetFeedSpec(config, mediaAssetItems, destinationUrl),
+    );
+    creativeBody.object_story_spec = JSON.stringify(identityStorySpec);
   }
 
   return { creativeBody, fallbackObjectStorySpec };
@@ -1749,6 +1982,9 @@ function buildObjectStorySpec(
   const pageId = profile.pageId || config.pageId;
 
   const story: Record<string, unknown> = { page_id: pageId };
+  if (profile.instagramActorId) {
+    story.instagram_actor_id = profile.instagramActorId;
+  }
 
   const primaryText = config.primaryTexts[0]?.text || '';
   const headline = config.headlines[0]?.text || '';
@@ -1804,6 +2040,7 @@ interface CreativeTestItemRow {
   angle: string | null;
   drive_url: string | null;
   thumbnail_url: string | null;
+  resolved_thumbnail_hash?: string | null;
   upload_status: string;
 }
 
@@ -1835,12 +2072,129 @@ function mapSnapshotToLaunchItem(snapshot: InboxCreative): CreativeTestItemRow {
   };
 }
 
-function mergeLaunchItemsBySourceId(items: CreativeTestItemRow[]): CreativeTestItemRow[] {
-  const map = new Map<string, CreativeTestItemRow>();
-  for (const item of items) {
-    map.set(item.sourceCreativeId || item.id, item);
+function normalizeAdGroupsForCreativeIds(
+  containerName: string,
+  creativeIds: string[],
+  adGroups?: CreativeAdGroup[],
+): CreativeAdGroup[] {
+  const allowedIds = new Set(creativeIds);
+  const normalizedGroups = (adGroups || [])
+    .map((group, index) => ({
+      id: group.id || generateId(),
+      name: cleanMetaName(group.name || `Ad ${index + 1}`),
+      creativeIds: [...new Set((group.creativeIds || []).filter((creativeId) => allowedIds.has(creativeId)))].slice(0, 10),
+    }))
+    .filter((group) => group.creativeIds.length > 0);
+
+  const assignedIds = new Set(normalizedGroups.flatMap((group) => group.creativeIds));
+  const missingIds = creativeIds.filter((creativeId) => !assignedIds.has(creativeId));
+  const fallbackGroups = missingIds.map((creativeId, index) => ({
+    id: generateId(),
+    name: cleanMetaName(`${containerName} Ad ${normalizedGroups.length + index + 1}`),
+    creativeIds: [creativeId],
+  }));
+
+  return [...normalizedGroups, ...fallbackGroups];
+}
+
+function resolveItemsForAdGroup(
+  selectedItems: CreativeTestItemRow[],
+  adGroup: CreativeAdGroup,
+): CreativeTestItemRow[] {
+  const idSet = new Set(adGroup.creativeIds);
+  return selectedItems.filter((item) => idSet.has(item.sourceCreativeId || item.id));
+}
+
+function expandAdGroupIntoMetaAdUnits(
+  adGroup: CreativeAdGroup,
+  mediaItems: CreativeTestItemRow[],
+): Array<{ adName: string; mediaItems: CreativeTestItemRow[] }> {
+  return [{ adName: adGroup.name, mediaItems: mediaItems.slice(0, 10) }];
+}
+
+function hasMultiMediaAdGroupsInList(adGroups: CreativeAdGroup[]): boolean {
+  return adGroups.some((group) => (group.creativeIds || []).length > 1);
+}
+
+function hasDynamicCreativeMultiAdConflict(adGroups: CreativeAdGroup[]): boolean {
+  const activeGroups = adGroups.filter((group) => (group.creativeIds || []).length > 0);
+  return activeGroups.length > 1 && activeGroups.some((group) => (group.creativeIds || []).length > 1);
+}
+
+function findDynamicCreativeMultiAdConflicts(config: LaunchConfig): string[] {
+  if (config.adsetMode === 'existing_adsets') {
+    return Object.entries(config.existingAdsetAssignments || {})
+      .filter(([, creativeIds]) => Array.isArray(creativeIds) && creativeIds.length > 0)
+      .flatMap(([adsetId, creativeIds]) => {
+        const adGroups = normalizeAdGroupsForCreativeIds(
+          `Ad set ${adsetId}`,
+          creativeIds,
+          config.existingAdsetAdGroups?.[adsetId],
+        );
+        return hasDynamicCreativeMultiAdConflict(adGroups) ? [`ad set ${adsetId}`] : [];
+      });
   }
-  return Array.from(map.values());
+
+  return (config.batches || []).flatMap((batch) => {
+    const adGroups = normalizeAdGroupsForCreativeIds(
+      batch.name || 'New ad set',
+      batch.creativeIds || [],
+      batch.ads,
+    );
+    return hasDynamicCreativeMultiAdConflict(adGroups) ? [batch.name || batch.id || 'New ad set'] : [];
+  });
+}
+
+function getLaunchItemMediaFormat(item: CreativeTestItemRow): string {
+  const rawType = `${item.meta_asset_type || item.creative_format || ''}`.toLowerCase();
+  if (rawType.includes('video')) return 'video';
+  if (rawType.includes('image')) return 'image';
+  if (rawType.includes('carousel')) return 'carousel';
+  return rawType || 'unknown';
+}
+
+function findMixedFormatAdConflicts(config: LaunchConfig, selectedItems: CreativeTestItemRow[]): string[] {
+  const itemById = new Map<string, CreativeTestItemRow>();
+  for (const item of selectedItems) {
+    itemById.set(item.id, item);
+    if (item.sourceCreativeId) itemById.set(item.sourceCreativeId, item);
+  }
+
+  const inspectGroups = (containerName: string, creativeIds: string[], groups?: CreativeAdGroup[]) => {
+    const adGroups = normalizeAdGroupsForCreativeIds(containerName, creativeIds, groups);
+    return adGroups.flatMap((group) => {
+      const formats = [
+        ...new Set(
+          (group.creativeIds || [])
+            .map((creativeId) => itemById.get(creativeId))
+            .filter((item): item is CreativeTestItemRow => Boolean(item))
+            .map(getLaunchItemMediaFormat),
+        ),
+      ];
+      return formats.length > 1 ? [`${containerName} / ${group.name}`] : [];
+    });
+  };
+
+  if (config.adsetMode === 'existing_adsets') {
+    return Object.entries(config.existingAdsetAssignments || {}).flatMap(([adsetId, creativeIds]) =>
+      inspectGroups(`ad set ${adsetId}`, creativeIds || [], config.existingAdsetAdGroups?.[adsetId]),
+    );
+  }
+
+  return (config.batches || []).flatMap((batch) =>
+    inspectGroups(batch.name || batch.id || 'New ad set', batch.creativeIds || [], batch.ads),
+  );
+}
+
+function hasMultiMediaAdGroups(config: LaunchConfig): boolean {
+  if (config.adsetMode === 'existing_adsets') {
+    return Object.values(config.existingAdsetAdGroups || {})
+      .flat()
+      .some((group) => (group.creativeIds || []).length > 1);
+  }
+
+  const batches = config.batches || [];
+  return batches.some((batch) => hasMultiMediaAdGroupsInList(batch.ads || []));
 }
 
 /**
@@ -2028,11 +2382,6 @@ export async function POST(request: NextRequest) {
         }))
       : (launchConfig.selectedCreativeSnapshots || []).map(mapSnapshotToLaunchItem);
 
-    const mediaOptionItems = (launchConfig.mediaOptionCreativeSnapshots || [])
-      .map(mapSnapshotToLaunchItem)
-      .filter((item) => !selectedItems.some((selected) => (selected.sourceCreativeId || selected.id) === item.sourceCreativeId));
-    const launchAssetItems = mergeLaunchItemsBySourceId([...selectedItems, ...mediaOptionItems]);
-
     if (selectedItems.length === 0) {
       return NextResponse.json({ error: 'No valid creative items found' }, { status: 400 });
     }
@@ -2047,14 +2396,6 @@ export async function POST(request: NextRequest) {
     if (launchConfig.campaignMode === 'new' && !launchConfig.newCampaignName?.trim()) {
       return NextResponse.json(
         { error: 'Campaign name is required for new campaigns.' },
-        { status: 400 },
-      );
-    }
-
-    const formatValidation = validateLaunchCreativeFormat(launchConfig);
-    if (formatValidation.errors.length > 0) {
-      return NextResponse.json(
-        { error: formatValidation.errors.join(' ') },
         { status: 400 },
       );
     }
@@ -2088,6 +2429,28 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json(
         { error: `Launch plan is inconsistent. ${details}` },
+        { status: 400 },
+      );
+    }
+
+    const dynamicCreativeConflicts = findDynamicCreativeMultiAdConflicts(launchConfig);
+    if (dynamicCreativeConflicts.length > 0) {
+      return NextResponse.json(
+        {
+          error:
+            `Dynamic adsets can only have one ad. Create another ad set for: ${dynamicCreativeConflicts.join(', ')}.`,
+        },
+        { status: 400 },
+      );
+    }
+
+    const mixedFormatConflicts = findMixedFormatAdConflicts(launchConfig, selectedItems);
+    if (mixedFormatConflicts.length > 0) {
+      return NextResponse.json(
+        {
+          error:
+            `An ad can only have same-format media. Split mixed image/video media into separate ads: ${mixedFormatConflicts.join(', ')}.`,
+        },
         { status: 400 },
       );
     }
@@ -2142,6 +2505,19 @@ export async function POST(request: NextRequest) {
     const campaignName = launchConfig.newCampaignName || '';
     const entityLaunchStatus = launchConfig.launchStatus || 'ACTIVE';
     const adLaunchStatus = launchConfig.adLaunchStatus || entityLaunchStatus;
+    const useMultiMediaAssetFeedMethod = hasMultiMediaAdGroups(launchConfig);
+
+    if (useMultiMediaAssetFeedMethod) {
+      console.info('[launch] Multi-media asset_feed_spec method enabled', {
+        campaignMode: launchConfig.campaignMode,
+        campaignId: launchConfig.existingCampaignId || null,
+      });
+      if (launchConfig.campaignMode === 'existing') {
+        console.warn(
+          '[launch] Multi-media asset_feed_spec is enabled. Dynamic creative must be enabled on each new ad set; existing ad sets must already support it.',
+        );
+      }
+    }
 
     const testPayloadBase = {
       id: testId,
@@ -2157,7 +2533,7 @@ export async function POST(request: NextRequest) {
       testDuration: launchConfig.useTestDuration === false ? 0 : launchConfig.testDuration,
       launchStatus: entityLaunchStatus,
       launchedBy: 'user',
-      items: launchAssetItems.map((item) => ({
+      items: selectedItems.map((item) => ({
         id: item.id,
         clickupTaskId: item.clickup_task_id ?? undefined,
         clickupTaskName: item.clickup_task_name ?? undefined,
@@ -2235,7 +2611,7 @@ export async function POST(request: NextRequest) {
 
     // Step 2: Upload any creatives that don't have a Meta asset ID yet
     // This downloads from Drive and uploads to Meta ad account
-    for (const item of launchAssetItems) {
+    for (const item of selectedItems) {
       if (!item.meta_asset_id && item.drive_url) {
         try {
           const uploadRes = await fetch(
@@ -2248,6 +2624,7 @@ export async function POST(request: NextRequest) {
               },
               body: JSON.stringify({
                 creativeId: item.id,
+                creativeName: item.creative_name,
                 driveUrl: item.drive_url,
                 adAccountId: accountId,
                 storeId,
@@ -2289,38 +2666,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const preflightResult = await runMetaLaunchPreflight({
-      accessToken: token.accessToken,
-      accountNode,
-      launchConfig,
-      selectedItems: launchAssetItems,
-      existingAdsetAssignments,
-    });
-    if (preflightResult.errors.length > 0) {
-      const message = `Meta preflight failed. ${preflightResult.errors.join(' ')}`;
-      console.warn('[launch] Meta preflight failed', {
-        creativeFormatMode: launchConfig.creativeFormatMode || 'single_per_creative',
-        issues: preflightResult.errors,
-      });
-      if (campaignCreatedInThisRun && campaignId) {
-        try {
-          const rolledBackCampaignId = campaignId;
-          const rollbackStatus = await cleanupCampaignOnFailure(token.accessToken, campaignId);
-          if (rollbackStatus === 'deleted') {
-            campaignId = '';
-          }
-          console.warn(
-            `[Launch] Rolled back campaign ${rolledBackCampaignId} after Meta preflight failure (status=${rollbackStatus})`,
-          );
-        } catch (rollbackErr) {
-          const rollbackMessage = rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
-          console.error(`[Launch] Failed to rollback campaign ${campaignId} after preflight failure:`, rollbackMessage);
-        }
-      }
-      await updateCreativeTestStatus(testId, 'failed');
-      return NextResponse.json({ error: message }, { status: 400 });
-    }
-
     // Step 3: Create adsets + ad creatives + ads
     const createdAdsetIds: string[] = [];
     let hasFailure = false;
@@ -2329,6 +2674,7 @@ export async function POST(request: NextRequest) {
       id: string;
       name: string;
       creativeIds: string[];
+      ads?: CreativeAdGroup[];
       dailyBudget?: number;
       dailyMinSpend?: number;
       dailyMaxSpend?: number;
@@ -2342,74 +2688,118 @@ export async function POST(request: NextRequest) {
         const assignedCreatives = selectedItems.filter((item) =>
           creativeIds.includes(item.sourceCreativeId || item.id),
         );
+        const adGroups = normalizeAdGroupsForCreativeIds(
+          `Ad set ${adsetId}`,
+          creativeIds,
+          launchConfig.existingAdsetAdGroups?.[adsetId],
+        );
 
         if (assignedCreatives.length === 0) {
           continue;
         }
 
-        for (const item of assignedCreatives) {
-          try {
-            if (!item.meta_asset_id) {
-              throw new Error(
-                item.drive_url
-                  ? `Creative "${item.creative_name}" failed to upload to Meta.`
-                  : `Creative "${item.creative_name}" has no Drive URL. Cannot upload.`,
-              );
-            }
-
-            const creativeUrl =
-              launchConfig.usePerCreativeUrls && launchConfig.perCreativeUrls
-                ? launchConfig.perCreativeUrls[item.sourceCreativeId || item.id]
-                : undefined;
-            const { creativeBody, fallbackObjectStorySpec } = buildCreativeBody(
-              launchConfig,
-              launchProfileContext,
-              item,
-              creativeUrl,
-            );
-
-            const creativeRes = await createAdCreativeWithFallback(
-              token.accessToken,
-              accountNode,
-              creativeBody,
-              item.thumbnail_url || undefined,
-              fallbackObjectStorySpec,
-            );
-            const metaCreativeId = String(creativeRes.id || '');
-
-            if (!metaCreativeId) {
-              throw new Error('Meta ad creative creation did not return an ID');
-            }
-
-            const createdAd = await createAdWithCreativeFallback({
-              accessToken: token.accessToken,
-              accountNode,
-              adsetId,
-              adName: item.creative_name,
-              adStatus: adLaunchStatus,
-              metaCreativeId,
-              creativeBody,
-              preferredThumbnailUrl: item.thumbnail_url || undefined,
-              fallbackObjectStorySpec,
-            });
-
-            await updateCreativeTestItem(item.id, {
-              metaAdsetId: adsetId,
-              metaAdId: createdAd.adId,
-              metaCreativeId: createdAd.metaCreativeId,
-              launchStatus: 'created',
-            });
-          } catch (err) {
+        for (const adGroup of adGroups) {
+          const groupedMediaItems = resolveItemsForAdGroup(assignedCreatives, adGroup);
+          if (groupedMediaItems.length === 0) continue;
+          const missingItem = groupedMediaItems.find((item) => !item.meta_asset_id);
+          if (missingItem) {
             hasFailure = true;
-            const message = err instanceof Error ? err.message : 'Unknown error';
+            const message = missingItem.drive_url
+              ? `Creative "${missingItem.creative_name}" failed to upload to Meta.`
+              : `Creative "${missingItem.creative_name}" has no Drive URL. Cannot upload.`;
             console.error(
-              `[Launch] Existing adset "${adsetId}" - Failed for "${item.creative_name}":`,
+              `[Launch] Existing adset "${adsetId}" - Failed for ad "${adGroup.name}":`,
               message,
             );
-            await updateCreativeTestItem(item.id, {
-              launchStatus: 'failed',
-              reviewFeedback: message,
-            });
+            for (const item of groupedMediaItems) {
+              await updateCreativeTestItem(item.id, {
+                launchStatus: 'failed',
+                reviewFeedback: message,
+              });
+            }
+            continue;
+          }
+
+          const metaAdUnits = expandAdGroupIntoMetaAdUnits(adGroup, groupedMediaItems);
+
+          for (const metaAdUnit of metaAdUnits) {
+            const adMediaItems = metaAdUnit.mediaItems;
+            const primaryItem = adMediaItems[0];
+            try {
+              await ensureAssetFeedVideoThumbnailHashes({
+                accessToken: token.accessToken,
+                accountNode,
+                config: launchConfig,
+                mediaItems: adMediaItems,
+                origin: request.nextUrl.origin,
+              });
+              const creativeUrl =
+                launchConfig.usePerCreativeUrls && launchConfig.perCreativeUrls
+                  ? launchConfig.perCreativeUrls[primaryItem.sourceCreativeId || primaryItem.id]
+                  : undefined;
+              const { creativeBody, fallbackObjectStorySpec } = buildCreativeBody(
+                launchConfig,
+                launchProfileContext,
+                primaryItem,
+                creativeUrl,
+                adMediaItems,
+                metaAdUnit.adName,
+              );
+              console.info('[launch] Creating Meta creative for existing ad set', {
+                adsetId,
+                adName: metaAdUnit.adName,
+                mediaNames: adMediaItems.map((item) => item.creative_name),
+                metaAssetIds: adMediaItems.map((item) => item.meta_asset_id),
+                creativeSummary: summarizeCreativeBodyForLaunch(creativeBody),
+              });
+
+              const creativeRes = await createAdCreativeWithFallback(
+                token.accessToken,
+                accountNode,
+                creativeBody,
+                primaryItem.thumbnail_url || undefined,
+                fallbackObjectStorySpec,
+              );
+              const metaCreativeId = String(creativeRes.id || '');
+
+              if (!metaCreativeId) {
+                throw new Error('Meta ad creative creation did not return an ID');
+              }
+
+              const createdAd = await createAdWithCreativeFallback({
+                accessToken: token.accessToken,
+                accountNode,
+                adsetId,
+                adName: metaAdUnit.adName,
+                adStatus: adLaunchStatus,
+                metaCreativeId,
+                creativeBody,
+                preferredThumbnailUrl: primaryItem.thumbnail_url || undefined,
+                fallbackObjectStorySpec,
+              });
+
+              for (const item of adMediaItems) {
+                await updateCreativeTestItem(item.id, {
+                  metaAdsetId: adsetId,
+                  metaAdId: createdAd.adId,
+                  metaCreativeId: createdAd.metaCreativeId,
+                  launchStatus: 'created',
+                });
+              }
+            } catch (err) {
+              hasFailure = true;
+              const message = err instanceof Error ? err.message : 'Unknown error';
+              console.error(
+                `[Launch] Existing adset "${adsetId}" - Failed for ad "${metaAdUnit.adName}":`,
+                message,
+              );
+              for (const item of adMediaItems) {
+                await updateCreativeTestItem(item.id, {
+                  launchStatus: 'failed',
+                  reviewFeedback: message,
+                });
+              }
+            }
           }
         }
       }
@@ -2425,6 +2815,8 @@ export async function POST(request: NextRequest) {
         if (batchCreatives.length === 0) continue;
 
         try {
+          const adGroups = normalizeAdGroupsForCreativeIds(batch.name, batch.creativeIds, batch.ads);
+
           // Create one adset per batch
           const targetingPayload = buildTargetingPayload(targeting, defaultTargetingCountries);
           const adsetName = renderNameTemplate(
@@ -2448,7 +2840,7 @@ export async function POST(request: NextRequest) {
             attribution_spec: JSON.stringify(buildAttributionSpec(launchConfig.attributionWindow)),
             start_time: resolveStartTime(launchConfig, storeTimezone),
           };
-          if (launchConfig.creativeFormatMode === 'dynamic_creative') {
+          if (hasMultiMediaAdGroupsInList(adGroups)) {
             adsetBody.is_dynamic_creative = 'true';
           }
 
@@ -2511,154 +2903,103 @@ export async function POST(request: NextRequest) {
 
           createdAdsetIds.push(adsetId);
 
-          if (
-            launchConfig.creativeFormatMode === 'single_format_media_options' ||
-            launchConfig.creativeFormatMode === 'dynamic_creative'
-          ) {
-            for (const adItem of batchCreatives) {
-              const adCreativeSourceId = adItem.sourceCreativeId || adItem.id;
-              const mediaOptionIds = launchConfig.mediaOptionCreativeIds?.[adCreativeSourceId];
-              const mediaOptionCreatives =
-                mediaOptionIds && mediaOptionIds.length > 0
-                  ? launchAssetItems.filter((item) => mediaOptionIds.includes(item.sourceCreativeId || item.id))
-                  : [adItem];
-
-              if (mediaOptionCreatives.length === 0) {
-                throw new Error(`Select at least one media option for ad "${adItem.creative_name}".`);
+          // Keep grouped media together so Meta receives one adcreative with asset_feed_spec.
+          for (const adGroup of adGroups) {
+            const groupedMediaItems = resolveItemsForAdGroup(batchCreatives, adGroup);
+            if (groupedMediaItems.length === 0) continue;
+            const missingItem = groupedMediaItems.find((item) => !item.meta_asset_id);
+            if (missingItem) {
+              hasFailure = true;
+              const message = missingItem.drive_url
+                ? `Creative "${missingItem.creative_name}" failed to upload to Meta.`
+                : `Creative "${missingItem.creative_name}" has no Drive URL. Cannot upload.`;
+              console.error(`[Launch] Batch "${batch.name}" - Failed for ad "${adGroup.name}":`, message);
+              for (const item of groupedMediaItems) {
+                await updateCreativeTestItem(item.id, {
+                  launchStatus: 'failed',
+                  reviewFeedback: message,
+                });
               }
+              continue;
+            }
 
-              for (const item of mediaOptionCreatives) {
-                if (!item.meta_asset_id) {
-                  throw new Error(
-                    item.drive_url
-                      ? `Creative "${item.creative_name}" failed to upload to Meta.`
-                      : `Creative "${item.creative_name}" has no Drive URL. Cannot upload.`,
-                  );
+            const metaAdUnits = expandAdGroupIntoMetaAdUnits(adGroup, groupedMediaItems);
+
+            for (const metaAdUnit of metaAdUnits) {
+              const adMediaItems = metaAdUnit.mediaItems;
+              const primaryItem = adMediaItems[0];
+              try {
+                await ensureAssetFeedVideoThumbnailHashes({
+                  accessToken: token.accessToken,
+                  accountNode,
+                  config: launchConfig,
+                  mediaItems: adMediaItems,
+                  origin: request.nextUrl.origin,
+                });
+                const creativeUrl = launchConfig.usePerCreativeUrls && launchConfig.perCreativeUrls
+                  ? launchConfig.perCreativeUrls[primaryItem.sourceCreativeId || primaryItem.id]
+                  : undefined;
+                const { creativeBody, fallbackObjectStorySpec } = buildCreativeBody(
+                  launchConfig,
+                  launchProfileContext,
+                  primaryItem,
+                  creativeUrl,
+                  adMediaItems,
+                  metaAdUnit.adName,
+                );
+                console.info('[launch] Creating Meta creative for batch ad', {
+                  batchName: batch.name,
+                  adsetId,
+                  adName: metaAdUnit.adName,
+                  mediaNames: adMediaItems.map((item) => item.creative_name),
+                  metaAssetIds: adMediaItems.map((item) => item.meta_asset_id),
+                  creativeSummary: summarizeCreativeBodyForLaunch(creativeBody),
+                });
+
+                const creativeRes = await createAdCreativeWithFallback(
+                  token.accessToken,
+                  accountNode,
+                  creativeBody,
+                  primaryItem.thumbnail_url || undefined,
+                  fallbackObjectStorySpec,
+                );
+                const metaCreativeId = String(creativeRes.id || '');
+
+                if (!metaCreativeId) {
+                  throw new Error('Meta ad creative creation did not return an ID');
+                }
+
+                const createdAd = await createAdWithCreativeFallback({
+                  accessToken: token.accessToken,
+                  accountNode,
+                  adsetId,
+                  adName: metaAdUnit.adName,
+                  adStatus: adLaunchStatus,
+                  metaCreativeId,
+                  creativeBody,
+                  preferredThumbnailUrl: primaryItem.thumbnail_url || undefined,
+                  fallbackObjectStorySpec,
+                });
+
+                for (const item of adMediaItems) {
+                  await updateCreativeTestItem(item.id, {
+                    metaAdsetId: adsetId,
+                    metaAdId: createdAd.adId,
+                    metaCreativeId: createdAd.metaCreativeId,
+                    launchStatus: 'created',
+                  });
+                }
+              } catch (err) {
+                hasFailure = true;
+                const message = err instanceof Error ? err.message : 'Unknown error';
+                console.error(`[Launch] Batch "${batch.name}" - Failed for ad "${metaAdUnit.adName}":`, message);
+                for (const item of adMediaItems) {
+                  await updateCreativeTestItem(item.id, {
+                    launchStatus: 'failed',
+                    reviewFeedback: message,
+                  });
                 }
               }
-
-              const firstItem = mediaOptionCreatives[0];
-              const creativeUrl = launchConfig.usePerCreativeUrls && launchConfig.perCreativeUrls
-                ? launchConfig.perCreativeUrls[adCreativeSourceId]
-                : undefined;
-              const { creativeBody, fallbackObjectStorySpec } =
-                launchConfig.creativeFormatMode === 'dynamic_creative'
-                  ? buildDynamicCreativeBody(
-                      launchConfig,
-                      launchProfileContext,
-                      mediaOptionCreatives,
-                      adItem.creative_name,
-                      creativeUrl,
-                    )
-                  : buildMediaOptionsCreativeBody(
-                      launchConfig,
-                      launchProfileContext,
-                      mediaOptionCreatives,
-                      adItem.creative_name,
-                      creativeUrl,
-                    );
-
-              const creativeRes = await createAdCreativeWithFallback(
-                token.accessToken,
-                accountNode,
-                creativeBody,
-                firstItem.thumbnail_url || undefined,
-                fallbackObjectStorySpec,
-                false,
-              );
-              const metaCreativeId = String(creativeRes.id || '');
-
-              if (!metaCreativeId) {
-                throw new Error(
-                  launchConfig.creativeFormatMode === 'dynamic_creative'
-                    ? 'Meta dynamic ad creative creation did not return an ID'
-                    : 'Meta media-options ad creative creation did not return an ID',
-                );
-              }
-
-              const createdAd = await createAdWithCreativeFallback({
-                accessToken: token.accessToken,
-                accountNode,
-                adsetId,
-                adName: adItem.creative_name,
-                adStatus: adLaunchStatus,
-                metaCreativeId,
-                creativeBody,
-                preferredThumbnailUrl: firstItem.thumbnail_url || undefined,
-                fallbackObjectStorySpec,
-                allowAssetFeedDowngrade: false,
-              });
-
-              await updateCreativeTestItem(adItem.id, {
-                metaAdsetId: adsetId,
-                metaAdId: createdAd.adId,
-                metaCreativeId: createdAd.metaCreativeId,
-                launchStatus: 'created',
-              });
-            }
-            continue;
-          }
-
-          // Create an ad for each creative in the batch
-          for (const item of batchCreatives) {
-            try {
-              if (!item.meta_asset_id) {
-                throw new Error(
-                  item.drive_url
-                    ? `Creative "${item.creative_name}" failed to upload to Meta.`
-                    : `Creative "${item.creative_name}" has no Drive URL. Cannot upload.`
-                );
-              }
-
-              const creativeUrl = launchConfig.usePerCreativeUrls && launchConfig.perCreativeUrls
-                ? launchConfig.perCreativeUrls[item.sourceCreativeId || item.id]
-                : undefined;
-              const { creativeBody, fallbackObjectStorySpec } = buildCreativeBody(
-                launchConfig,
-                launchProfileContext,
-                item,
-                creativeUrl,
-              );
-
-              const creativeRes = await createAdCreativeWithFallback(
-                token.accessToken,
-                accountNode,
-                creativeBody,
-                item.thumbnail_url || undefined,
-                fallbackObjectStorySpec,
-              );
-              const metaCreativeId = String(creativeRes.id || '');
-
-              if (!metaCreativeId) {
-                throw new Error('Meta ad creative creation did not return an ID');
-              }
-
-              const createdAd = await createAdWithCreativeFallback({
-                accessToken: token.accessToken,
-                accountNode,
-                adsetId,
-                adName: item.creative_name,
-                adStatus: adLaunchStatus,
-                metaCreativeId,
-                creativeBody,
-                preferredThumbnailUrl: item.thumbnail_url || undefined,
-                fallbackObjectStorySpec,
-              });
-
-              await updateCreativeTestItem(item.id, {
-                metaAdsetId: adsetId,
-                metaAdId: createdAd.adId,
-                metaCreativeId: createdAd.metaCreativeId,
-                launchStatus: 'created',
-              });
-            } catch (err) {
-              hasFailure = true;
-              const message = err instanceof Error ? err.message : 'Unknown error';
-              console.error(`[Launch] Batch "${batch.name}" - Failed for "${item.creative_name}":`, message);
-              await updateCreativeTestItem(item.id, {
-                launchStatus: 'failed',
-                reviewFeedback: message,
-              });
             }
           }
         } catch (err) {

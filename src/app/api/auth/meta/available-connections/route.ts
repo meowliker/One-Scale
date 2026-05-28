@@ -3,6 +3,7 @@ import { getAllMetaConnections } from '@/app/api/lib/db';
 import { isSupabasePersistenceEnabled, getAllPersistentMetaConnections } from '@/app/api/lib/supabase-persistence';
 import { readSessionFromRequest } from '@/lib/auth/request-session';
 import { listStoreIdsForWorkspace } from '@/app/api/lib/auth-users';
+import { getMetaToken } from '@/app/api/lib/tokens';
 
 /**
  * GET /api/auth/meta/available-connections?excludeStoreId=xxx
@@ -37,7 +38,13 @@ export async function GET(request: NextRequest) {
       connections = connections.filter((c) => c.storeId !== excludeStoreId);
     }
 
-    return NextResponse.json({ connections });
+    const validConnections = [];
+    for (const connection of connections) {
+      const token = await getMetaToken(connection.storeId);
+      if (token) validConnections.push(connection);
+    }
+
+    return NextResponse.json({ connections: validConnections });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to fetch connections';
     return NextResponse.json({ error: message }, { status: 500 });

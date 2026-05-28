@@ -9,6 +9,11 @@ import { setMetaToken } from '@/app/api/lib/tokens';
 import { getAppUrl } from '@/app/api/lib/url';
 import type { MetaTokenPayload } from '@/types/auth';
 
+function resolveMetaRedirectUri(configuredRedirectUri: string | undefined | null, appUrl: string): string {
+  const trimmed = configuredRedirectUri?.trim();
+  return trimmed || `${appUrl}/api/auth/meta/callback`;
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get('code');
@@ -59,9 +64,7 @@ export async function GET(request: NextRequest) {
     // Use DB credentials atomically (both or neither) to avoid mixing sources
     const appId = (dbCreds?.app_id && dbCreds?.app_secret) ? dbCreds.app_id : process.env.META_APP_ID!;
     const appSecret = (dbCreds?.app_id && dbCreds?.app_secret) ? dbCreds.app_secret : process.env.META_APP_SECRET!;
-    // Build redirect URI dynamically — must match what was sent
-    // in the initial OAuth request (/api/auth/meta/route.ts)
-    const redirectUri = `${appUrl}/api/auth/meta/callback`;
+    const redirectUri = resolveMetaRedirectUri(dbCreds?.redirect_uri, appUrl);
 
     // Exchange code for short-lived token
     const tokenUrl = new URL('https://graph.facebook.com/v21.0/oauth/access_token');

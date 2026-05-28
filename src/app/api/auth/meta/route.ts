@@ -19,6 +19,11 @@ const DEFAULT_META_SCOPES = [
   'instagram_manage_insights',
 ].join(',');
 
+function resolveMetaRedirectUri(configuredRedirectUri: string | undefined | null, appUrl: string): string {
+  const trimmed = configuredRedirectUri?.trim();
+  return trimmed || `${appUrl}/api/auth/meta/callback`;
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const storeId = searchParams.get('storeId');
@@ -45,8 +50,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Always build redirect URI dynamically from the current host
-    const redirectUri = `${appUrl}/api/auth/meta/callback`;
+    const redirectUri = resolveMetaRedirectUri(dbCreds?.redirect_uri, appUrl);
 
     // Create a random state token in DB for CSRF protection
     const sb = isSupabasePersistenceEnabled();

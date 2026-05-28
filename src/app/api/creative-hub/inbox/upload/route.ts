@@ -89,6 +89,44 @@ function mediaTypeFromFilename(filename: string): 'image' | 'video' | null {
   return null;
 }
 
+function extensionForMediaType(mediaType: 'image' | 'video'): string {
+  return mediaType === 'image' ? '.png' : '.mp4';
+}
+
+function extensionMatchesMediaType(extension: string, mediaType: 'image' | 'video'): boolean {
+  const normalized = extension.toLowerCase();
+  return mediaType === 'image'
+    ? IMAGE_EXTENSIONS.includes(normalized)
+    : VIDEO_EXTENSIONS.includes(normalized);
+}
+
+function sanitizeMetaFileName(value: string): string {
+  return value
+    .replace(/[\\/]/g, '-')
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildMetaUploadFileName(
+  preferredName: string | null | undefined,
+  fallbackName: string,
+  mediaType: 'image' | 'video',
+): string {
+  const cleanPreferred = sanitizeMetaFileName(preferredName || '');
+  const cleanFallback = sanitizeMetaFileName(fallbackName || '');
+  const rawName = cleanPreferred || cleanFallback || 'creative';
+  const parsed = path.parse(rawName);
+  const fallbackExtension = path.extname(cleanFallback);
+  const extension = extensionMatchesMediaType(parsed.ext, mediaType)
+    ? parsed.ext
+    : extensionMatchesMediaType(fallbackExtension, mediaType)
+      ? fallbackExtension
+      : extensionForMediaType(mediaType);
+  const baseName = sanitizeMetaFileName(parsed.name || rawName.replace(/\.[^.]+$/, '') || 'creative');
+  return `${baseName}${extension.toLowerCase()}`;
+}
+
 function mediaTypeFromBuffer(fileBuffer: Buffer): 'image' | 'video' | null {
   if (fileBuffer.length < 12) return null;
 
@@ -169,6 +207,16 @@ function mediaTypeFromBuffer(fileBuffer: Buffer): 'image' | 'video' | null {
   return null;
 }
 
+function isNonMediaDocumentContentType(contentType: string): boolean {
+  return (
+    contentType.startsWith('text/html') ||
+    contentType.startsWith('application/json') ||
+    contentType.startsWith('text/plain') ||
+    contentType.startsWith('application/xml') ||
+    contentType.startsWith('text/xml')
+  );
+}
+
 function filenameFromContentDisposition(contentDisposition: string | null): string | null {
   if (!contentDisposition) return null;
   const utf8 = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
@@ -192,10 +240,17 @@ function detectMediaType(
 ): 'image' | 'video' | null {
   const normalizedContentType = (contentType || '').toLowerCase();
 
-  if (contentType) {
-    if (contentType.startsWith('image/')) return 'image';
-    if (contentType.startsWith('video/')) return 'video';
+  if (normalizedContentType) {
+    if (normalizedContentType.startsWith('image/')) return 'image';
+    if (normalizedContentType.startsWith('video/')) return 'video';
   }
+
+  const byBytes = mediaTypeFromBuffer(fileBuffer);
+  if (byBytes) return byBytes;
+
+  // If the upstream returned a document/error page, do not let a .png/.mp4
+  // URL or stale media hint send those bytes to Meta as creative media.
+  if (normalizedContentType && isNonMediaDocumentContentType(normalizedContentType)) return null;
 
   const byName = mediaTypeFromFilename(fileName);
   if (byName) return byName;
@@ -208,20 +263,9 @@ function detectMediaType(
     // ignore invalid URL paths
   }
 
-  const byBytes = mediaTypeFromBuffer(fileBuffer);
-  if (byBytes) return byBytes;
-
-  // Avoid forcing media type from hints when upstream returned a non-media document.
-  if (
-    normalizedContentType.startsWith('text/html') ||
-    normalizedContentType.startsWith('application/json') ||
-    normalizedContentType.startsWith('text/plain')
-  ) {
-    return null;
-  }
-
-  if (mediaTypeHint === 'image' || mediaTypeHint === 'video') {
-    return mediaTypeHint;
+  const normalizedMediaTypeHint = (mediaTypeHint || '').toLowerCase();
+  if (normalizedMediaTypeHint === 'image' || normalizedMediaTypeHint === 'video') {
+    return normalizedMediaTypeHint;
   }
 
   return null;
@@ -615,21 +659,84 @@ async function uploadVideoToMeta(
   fileBuffer: Buffer,
   fileName: string,
   contentType?: string | null,
+  title = fileName,
 ): Promise<Response> {
-  const uploadForm = new FormData();
-  uploadForm.set('access_token', accessToken);
-  const blobBytes = new Uint8Array(fileBuffer);
-  uploadForm.set(
-    'source',
-    new File([new Blob([blobBytes], { type: contentType || 'video/mp4' })], fileName),
-    fileName,
-  );
-  uploadForm.set('title', fileName);
+  const uploadEndpoint = `${GRAPH_VIDEO_BASE}/${accountNode}/advideos`;
+  const startForm = new FormData();
+  startForm.set('access_token', accessToken);
+  startForm.set('upload_phase', 'start');
+  startForm.set('file_size', String(fileBuffer.byteLength));
 
-  return fetch(`${GRAPH_VIDEO_BASE}/${accountNode}/advideos`, {
+  const startRes = await fetch(uploadEndpoint, {
     method: 'POST',
-    body: uploadForm,
+    body: startForm,
   });
+  if (!startRes.ok) return startRes;
+
+  const startBody = (await startRes.json()) as {
+    start_offset?: string;
+    end_offset?: string;
+    upload_session_id?: string;
+    video_id?: string;
+  };
+  const uploadSessionId = startBody.upload_session_id;
+  const videoId = startBody.video_id;
+  if (!uploadSessionId || !videoId) {
+    return Response.json(
+      { error: { message: 'Meta did not return a video upload session ID' } },
+      { status: 500 },
+    );
+  }
+
+  let startOffset = Number(startBody.start_offset || 0);
+  let endOffset = Number(startBody.end_offset || fileBuffer.byteLength);
+  while (startOffset < endOffset) {
+    const transferForm = new FormData();
+    transferForm.set('access_token', accessToken);
+    transferForm.set('upload_phase', 'transfer');
+    transferForm.set('upload_session_id', uploadSessionId);
+    transferForm.set('start_offset', String(startOffset));
+    const chunk = fileBuffer.subarray(startOffset, endOffset);
+    transferForm.set(
+      'video_file_chunk',
+      new File([new Blob([new Uint8Array(chunk)], { type: contentType || 'video/mp4' })], fileName),
+      fileName,
+    );
+
+    const transferRes = await fetch(uploadEndpoint, {
+      method: 'POST',
+      body: transferForm,
+    });
+    if (!transferRes.ok) return transferRes;
+
+    const transferBody = (await transferRes.json()) as {
+      start_offset?: string;
+      end_offset?: string;
+    };
+    const nextStartOffset = Number(transferBody.start_offset || endOffset);
+    const nextEndOffset = Number(transferBody.end_offset || nextStartOffset);
+    if (nextStartOffset <= startOffset && nextEndOffset <= endOffset) {
+      return Response.json(
+        { error: { message: 'Meta video upload did not advance offsets' } },
+        { status: 500 },
+      );
+    }
+    startOffset = nextStartOffset;
+    endOffset = nextEndOffset;
+  }
+
+  const finishForm = new FormData();
+  finishForm.set('access_token', accessToken);
+  finishForm.set('upload_phase', 'finish');
+  finishForm.set('upload_session_id', uploadSessionId);
+  finishForm.set('title', title);
+  const finishRes = await fetch(uploadEndpoint, {
+    method: 'POST',
+    body: finishForm,
+  });
+  if (!finishRes.ok) return finishRes;
+
+  return Response.json({ id: videoId });
 }
 
 async function fileExists(filePath?: string | null): Promise<boolean> {
@@ -761,6 +868,7 @@ async function transcodeVideoForMeta(fileBuffer: Buffer, fileName: string): Prom
 export async function POST(request: NextRequest) {
   let body: {
     creativeId?: string;
+    creativeName?: string;
     driveUrl?: string;
     adAccountId?: string;
     storeId?: string;
@@ -773,7 +881,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { creativeId, driveUrl, adAccountId, storeId, mediaTypeHint } = body;
+  const { creativeId, creativeName, driveUrl, adAccountId, storeId, mediaTypeHint } = body;
 
   if (!creativeId || !driveUrl || !adAccountId || !storeId) {
     return NextResponse.json(
@@ -904,13 +1012,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const metaFileName = buildMetaUploadFileName(creativeName, fileName, mediaType);
     const blob = new Blob([fileBuffer], { type: contentType || undefined });
-    const file = new File([blob], fileName);
+    const file = new File([blob], metaFileName);
 
     if (mediaType === 'image') {
       const uploadForm = new FormData();
       uploadForm.set('access_token', tokenData.accessToken);
-      uploadForm.set('filename', file, fileName);
+      uploadForm.set('filename', file, metaFileName);
 
       const metaRes = await fetch(`${GRAPH_BASE}/${accountNode}/adimages`, {
         method: 'POST',
@@ -949,12 +1058,13 @@ export async function POST(request: NextRequest) {
     // Video upload. If Meta rejects the source codec/container, normalize it
     // to a conservative H.264/AAC MP4 and retry once.
     let metaRes = await uploadVideoToMeta(
-      tokenData.accessToken,
-      accountNode,
-      fileBuffer,
-      fileName,
-      contentType,
-    );
+        tokenData.accessToken,
+        accountNode,
+        fileBuffer,
+        metaFileName,
+        contentType,
+        metaFileName,
+      );
 
     if (!metaRes.ok) {
       const msg = await parseGraphError(metaRes);
@@ -967,6 +1077,7 @@ export async function POST(request: NextRequest) {
             normalized.buffer,
             normalized.fileName,
             'video/mp4',
+            metaFileName,
           );
           if (metaRes.ok) {
             const metaBody = (await metaRes.json()) as { id?: string };

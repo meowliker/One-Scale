@@ -1,10 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Copy, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { cn } from '@/lib/utils';
 import type { Integration } from '@/types/integrations';
 import { getIntegrations } from '@/services/integrations';
 import { useConnectionStore } from '@/stores/connectionStore';
@@ -40,11 +39,35 @@ export function IntegrationsClient() {
 
   const searchParams = useSearchParams();
   const refreshStatus = useConnectionStore((s) => s.refreshStatus);
+  const connectionStatus = useConnectionStore((s) => s.status);
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
   const stores = useStoreStore((s) => s.stores);
   const activeStoreName = stores.find((s) => s.id === activeStoreId)?.name || 'Current Store';
 
   useEffect(() => { getWorkspaceId().then(setWorkspaceId); }, []);
+
+  // Fetch Google Drive connection status
+  const fetchGoogleDriveStatus = useCallback(async () => {
+    if (!activeStoreId) return;
+    try {
+      const res = await fetch(`/api/google-drive/status?storeId=${encodeURIComponent(activeStoreId)}`);
+      if (res.ok) {
+        const data = await res.json() as { connected?: boolean; email?: string; lastSynced?: string };
+        if (data.connected) {
+          setGoogleDriveEmail(data.email || null);
+          setIntegrations((prev) =>
+            prev.map((intg) =>
+              intg.platform === 'google_drive'
+                ? { ...intg, status: 'connected' as const, lastSynced: data.lastSynced || intg.lastSynced }
+                : intg
+            )
+          );
+        }
+      }
+    } catch {
+      // Ignore status check errors
+    }
+  }, [activeStoreId]);
 
   // Listen for OAuth popup callback messages
   useEffect(() => {
@@ -57,7 +80,7 @@ export function IntegrationsClient() {
       if (platform === 'meta') {
         if (status === 'connected') {
           toast.success('Meta Ads connected! Link ad accounts below.');
-          refreshStatus(activeStoreId);
+          if (activeStoreId) void refreshStatus(activeStoreId);
           setIntegrations((prev) =>
             prev.map((intg) =>
               intg.platform === 'meta'
@@ -73,7 +96,7 @@ export function IntegrationsClient() {
       if (platform === 'shopify') {
         if (status === 'connected') {
           toast.success('Shopify connected successfully!');
-          refreshStatus(activeStoreId);
+          if (activeStoreId) void refreshStatus(activeStoreId);
           setIntegrations((prev) =>
             prev.map((intg) =>
               intg.platform === 'shopify'
@@ -97,7 +120,7 @@ export function IntegrationsClient() {
             )
           );
           // Refresh Google Drive connection info
-          fetchGoogleDriveStatus();
+          void fetchGoogleDriveStatus();
         } else {
           toast.error(`Google Drive connection failed: ${message || 'Unknown error'}`);
         }
@@ -106,7 +129,7 @@ export function IntegrationsClient() {
 
     window.addEventListener('message', handleOAuthMessage);
     return () => window.removeEventListener('message', handleOAuthMessage);
-  }, [activeStoreId, refreshStatus]);
+  }, [activeStoreId, fetchGoogleDriveStatus, refreshStatus]);
 
   // Also check URL params for non-popup fallback (if popup was blocked)
   useEffect(() => {
@@ -135,9 +158,40 @@ export function IntegrationsClient() {
   // Load connection status on mount
   useEffect(() => {
     if (activeStoreId) {
-      refreshStatus(activeStoreId);
+      if (activeStoreId) void refreshStatus(activeStoreId);
     }
   }, [activeStoreId, refreshStatus]);
+
+  useEffect(() => {
+    if (!connectionStatus) return;
+
+    setIntegrations((prev) =>
+      prev.map((intg) => {
+        if (intg.platform === 'meta') {
+          return {
+            ...intg,
+            status: connectionStatus.meta.connected ? 'connected' as const : 'disconnected' as const,
+            lastSynced: connectionStatus.meta.lastSynced || intg.lastSynced,
+          };
+        }
+        if (intg.platform === 'shopify') {
+          return {
+            ...intg,
+            status: connectionStatus.shopify.connected ? 'connected' as const : 'disconnected' as const,
+            lastSynced: connectionStatus.shopify.lastSynced || intg.lastSynced,
+          };
+        }
+        if (intg.platform === 'google_drive') {
+          return {
+            ...intg,
+            status: connectionStatus.google_drive.connected ? 'connected' as const : intg.status,
+            lastSynced: connectionStatus.google_drive.lastSynced || intg.lastSynced,
+          };
+        }
+        return intg;
+      }),
+    );
+  }, [connectionStatus]);
 
   // Fetch available Meta connections from other stores (for "reuse existing" feature)
   useEffect(() => {
@@ -161,8 +215,8 @@ export function IntegrationsClient() {
         const err = await res.json().catch(() => ({ error: 'Failed' }));
         throw new Error(err.error || 'Failed to copy connection');
       }
+      if (activeStoreId) await refreshStatus(activeStoreId);
       toast.success(`Meta connection copied from "${fromStoreName}". Now link your ad accounts below.`);
-      refreshStatus(activeStoreId);
       // Update integration card status
       setIntegrations((prev) =>
         prev.map((intg) =>
@@ -175,29 +229,6 @@ export function IntegrationsClient() {
       toast.error(err instanceof Error ? err.message : 'Failed to copy connection');
     } finally {
       setCopyingConnection(false);
-    }
-  };
-
-  // Fetch Google Drive connection status
-  const fetchGoogleDriveStatus = async () => {
-    if (!activeStoreId) return;
-    try {
-      const res = await fetch(`/api/google-drive/status?storeId=${encodeURIComponent(activeStoreId)}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.connected) {
-          setGoogleDriveEmail(data.email || null);
-          setIntegrations((prev) =>
-            prev.map((intg) =>
-              intg.platform === 'google_drive'
-                ? { ...intg, status: 'connected' as const, lastSynced: data.lastSynced || intg.lastSynced }
-                : intg
-            )
-          );
-        }
-      }
-    } catch {
-      // Ignore status check errors
     }
   };
 

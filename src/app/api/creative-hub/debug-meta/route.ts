@@ -37,7 +37,10 @@ export async function GET(request: NextRequest) {
     try {
       const ad = await fetchFromMeta<Record<string, unknown>>(
         token, adId,
-        { fields: 'id,name,creative{id},promoted_object' },
+        {
+          fields:
+            'id,name,status,effective_status,configured_status,ad_review_feedback,issues_info,creative{id,name,object_story_spec,instagram_actor_id,asset_feed_spec}',
+        },
         10000, 0,
       );
       results.ad = ad;
@@ -49,7 +52,7 @@ export async function GET(request: NextRequest) {
     try {
       const adcreatives = await fetchFromMeta<{ data: Array<Record<string, unknown>> }>(
         token, `${adId}/adcreatives`,
-        { fields: 'id,object_story_spec' },
+        { fields: 'id,name,object_story_spec,instagram_actor_id,asset_feed_spec' },
         10000, 0,
       );
       results.adcreatives = adcreatives;
@@ -78,7 +81,11 @@ export async function GET(request: NextRequest) {
     try {
       const campaignAds = await fetchFromMeta<{ data: Array<Record<string, unknown>> }>(
         token, `${campaignId}/ads`,
-        { fields: 'id,creative{id},promoted_object', limit: '1' },
+        {
+          fields:
+            'id,name,status,effective_status,configured_status,ad_review_feedback,issues_info,creative{id,name,object_story_spec,instagram_actor_id,asset_feed_spec}',
+          limit: '1',
+        },
         10000, 0,
       );
       results.campaignAds = campaignAds;

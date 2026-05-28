@@ -360,6 +360,11 @@ function getAttachmentSize(attachment: ClickUpAttachment): number | undefined {
   return undefined;
 }
 
+function buildInboxCreativeId(profileId: string | undefined, sourceId: string): string {
+  const profileScope = profileId ? `${profileId}_` : '';
+  return `inbox_${profileScope}${sourceId}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
 function mapAttachmentFormat(attachment: ClickUpAttachment, fallbackName: string): CreativeFormat | null {
   const mime = getAttachmentMimeType(attachment);
   const name = getAttachmentName(attachment, fallbackName).toLowerCase();
@@ -663,7 +668,7 @@ function mapTaskToInboxCreative(
   const tested = testedMap.get(task.id);
 
   return {
-    id: `inbox_${task.id}`,
+    id: buildInboxCreativeId(profileId, task.id),
     clickupTaskId: task.id,
     clickupTaskName: task.name,
     clickupTaskStatus: task.status.status,
@@ -765,7 +770,7 @@ async function expandTaskToInboxCreatives(
       const attachmentCreatedAt = attachment.date_created || attachment.date || task.date_created;
 
       return mapTaskToInboxCreative(task, profileId, profileName, testedMap, {
-        id: `inbox_${task.id}_attachment_${attachmentId}`,
+        id: buildInboxCreativeId(profileId, `${task.id}_attachment_${attachmentId}`),
         creativeName: attachmentName,
         creativeFormat: attachmentFormat,
         clickupAttachmentId: attachment.id || attachmentId,
@@ -808,7 +813,7 @@ async function expandTaskToInboxCreatives(
       return mediaAssets.map((asset) => {
         const format = mapDriveFormat(asset, task.name) || baseCreative.creativeFormat;
         return mapTaskToInboxCreative(task, profileId, profileName, testedMap, {
-          id: `inbox_${task.id}_${asset.id}`,
+          id: buildInboxCreativeId(profileId, `${task.id}_${asset.id}`),
           creativeName: asset.name,
           creativeFormat: format,
           driveUrl: asset.webViewLink || buildDriveOpenUrl(asset.id),
@@ -896,7 +901,7 @@ interface LiveInboxCreativesResult {
 
 async function buildLiveInboxCreatives(
   storeId: string,
-  listProfileMap: Map<string, { id: string; name: string }>,
+  listProfileMap: Map<string, Array<{ id: string; name: string }>>,
   token: string,
   readyStatus: string,
   testedMap: Map<string, { testDate: string; roas: number; status: string }>,
@@ -905,7 +910,6 @@ async function buildLiveInboxCreatives(
   const syncedAt = new Date().toISOString();
   const allCreatives: InboxCreative[] = [];
   const creativesByProfile = new Map<string, InboxCreative[]>();
-  const seenIds = new Set<string>();
 
   const listEntries = Array.from(listProfileMap.entries());
   const taskArrays = await Promise.all(
@@ -913,40 +917,38 @@ async function buildLiveInboxCreatives(
   );
 
   for (let i = 0; i < listEntries.length; i++) {
-    const [, profile] = listEntries[i];
+    const [, profiles] = listEntries[i];
     const tasks = taskArrays[i];
-    const uniqueTasks = tasks.filter((task) => {
-      if (seenIds.has(task.id)) return false;
-      seenIds.add(task.id);
-      return true;
-    });
 
-    const profileCreatives: InboxCreative[] = [];
-    const concurrency = 6;
-    for (let start = 0; start < uniqueTasks.length; start += concurrency) {
-      const chunk = uniqueTasks.slice(start, start + concurrency);
-      const creativesChunk = await Promise.all(
-        chunk.map((task) =>
-          expandTaskToInboxCreatives(
-            storeId,
-            task,
-            profile.id,
-            profile.name,
-            testedMap,
-            driveAccessToken,
-            syncedAt,
+    for (const profile of profiles) {
+      const profileCreatives: InboxCreative[] = [];
+      const concurrency = 6;
+      for (let start = 0; start < tasks.length; start += concurrency) {
+        const chunk = tasks.slice(start, start + concurrency);
+        const creativesChunk = await Promise.all(
+          chunk.map((task) =>
+            expandTaskToInboxCreatives(
+              storeId,
+              task,
+              profile.id,
+              profile.name,
+              testedMap,
+              driveAccessToken,
+              syncedAt,
+            ),
           ),
-        ),
-      );
-      const flattened = creativesChunk.flat().map((creative) => ({ ...creative, syncedAt }));
-      profileCreatives.push(...flattened);
-      allCreatives.push(...flattened);
-    }
+        );
+        const flattened = creativesChunk.flat().map((creative) => ({ ...creative, syncedAt }));
+        profileCreatives.push(...flattened);
+        allCreatives.push(...flattened);
+      }
 
-    creativesByProfile.set(profile.id, profileCreatives);
+      creativesByProfile.set(profile.id, profileCreatives);
+    }
   }
 
-  const snapshots = listEntries.map(([, profile]) => ({
+  const profiles = listEntries.flatMap(([, listProfiles]) => listProfiles);
+  const snapshots = profiles.map((profile) => ({
     productProfileId: profile.id,
     creatives: creativesByProfile.get(profile.id) ?? [],
     lastSyncedAt: syncedAt,
@@ -978,13 +980,15 @@ export async function GET(request: NextRequest) {
     : profiles;
 
   // Collect all list IDs from profiles that have a ClickUp list configured
-  const listProfileMap = new Map<string, { id: string; name: string }>();
+  const listProfileMap = new Map<string, Array<{ id: string; name: string }>>();
   for (const profile of targetProfiles) {
     if (profile.clickupListId) {
-      listProfileMap.set(profile.clickupListId, {
+      const existingProfiles = listProfileMap.get(profile.clickupListId) || [];
+      existingProfiles.push({
         id: profile.id,
         name: profile.productName,
       });
+      listProfileMap.set(profile.clickupListId, existingProfiles);
     }
   }
 
@@ -992,7 +996,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ creatives: [], notConfigured: true });
   }
 
-  const targetProfileIds = Array.from(listProfileMap.values()).map((profile) => profile.id);
+  const targetProfileIds = Array.from(listProfileMap.values()).flatMap((profilesForList) =>
+    profilesForList.map((profile) => profile.id),
+  );
 
   if (!forceRefresh && await hasCachedInboxCreatives(storeId, targetProfileIds)) {
     const creatives = await getCachedInboxCreatives(storeId, targetProfileIds);

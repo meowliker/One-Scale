@@ -3,7 +3,6 @@ import { fromZonedTime, toZonedTime } from 'date-fns-tz';
 import { getMetaToken } from '@/app/api/lib/tokens';
 import { getProductProfile } from '@/app/api/lib/creative-hub-db';
 import { getDb } from '@/app/api/lib/db';
-import { formatModeLabel, validateLaunchCreativeFormat } from '@/lib/creative-hub/creativeFormatValidation';
 import { getStoreTimezoneFromConfig } from '@/lib/onboarding/stages/detectStoreConfig';
 import { validateLaunchPlanAssignments } from '@/lib/creative-hub/launchPlanValidation';
 import type { InboxCreative, LaunchConfig, HealthCheck, PreLaunchReport } from '@/types/creativeHub';
@@ -134,29 +133,6 @@ export async function POST(request: NextRequest) {
     }
 
     const planValidation = validateLaunchPlanAssignments(launchConfig);
-    const formatValidation = validateLaunchCreativeFormat(launchConfig);
-
-    if (formatValidation.errors.length > 0) {
-      checks.push({
-        check: 'creative_format',
-        status: 'fail',
-        message: `${formatModeLabel(formatValidation.mode)} is not launch-ready`,
-        details: formatValidation.errors.join(' '),
-      });
-    } else if (formatValidation.warnings.length > 0) {
-      checks.push({
-        check: 'creative_format',
-        status: 'warn',
-        message: `${formatModeLabel(formatValidation.mode)} has setup warnings`,
-        details: formatValidation.warnings.join(' '),
-      });
-    } else {
-      checks.push({
-        check: 'creative_format',
-        status: 'ok',
-        message: `${formatModeLabel(formatValidation.mode)} is supported`,
-      });
-    }
 
     // 3. Spending limit check (warn only -- we cannot fetch real-time limits without Meta API call)
     const laneCount = getLaneCount(launchConfig);

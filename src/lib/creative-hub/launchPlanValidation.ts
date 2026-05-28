@@ -16,6 +16,13 @@ function uniqueIds(ids: string[] = []): string[] {
   return [...new Set(ids.filter(Boolean))];
 }
 
+function flattenBatchCreativeIds(batch: { creativeIds?: string[]; ads?: Array<{ creativeIds?: string[] }> }): string[] {
+  if (batch.ads?.length) {
+    return uniqueIds(batch.ads.flatMap((ad) => ad.creativeIds || []));
+  }
+  return uniqueIds(batch.creativeIds || []);
+}
+
 export function getExplicitLaunchLanes(launchConfig: LaunchConfig): LaunchLaneInput[] {
   if (launchConfig.adsetMode === 'existing_adsets') {
     return Object.entries(launchConfig.existingAdsetAssignments || {})
@@ -31,7 +38,7 @@ export function getExplicitLaunchLanes(launchConfig: LaunchConfig): LaunchLaneIn
     return launchConfig.batches
       .map((batch) => ({
         id: batch.id,
-        creativeIds: (batch.creativeIds || []).filter(Boolean),
+        creativeIds: flattenBatchCreativeIds(batch),
       }))
       .filter((lane) => lane.creativeIds.length > 0);
   }

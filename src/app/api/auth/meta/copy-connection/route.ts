@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { copyMetaConnection, getStore } from '@/app/api/lib/db';
 import { isSupabasePersistenceEnabled, getPersistentStore, copyPersistentMetaConnection } from '@/app/api/lib/supabase-persistence';
+import { getMetaToken } from '@/app/api/lib/tokens';
 
 /**
  * POST /api/auth/meta/copy-connection
@@ -42,11 +43,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Target store not found' }, { status: 404 });
     }
 
+    const sourceToken = await getMetaToken(fromStoreId);
+    if (!sourceToken) {
+      return NextResponse.json(
+        { error: 'The selected Meta connection is expired or no longer valid. Reconnect Meta on that store, then try again.' },
+        { status: 400 },
+      );
+    }
+
     // Copy the connection
     if (sb) {
       await copyPersistentMetaConnection(fromStoreId, toStoreId);
     } else {
       copyMetaConnection(fromStoreId, toStoreId);
+    }
+
+    const copiedToken = await getMetaToken(toStoreId);
+    if (!copiedToken) {
+      return NextResponse.json(
+        { error: 'Meta connection was copied, but the copied token is not valid for this store. Reconnect Meta directly.' },
+        { status: 500 },
+      );
     }
 
     return NextResponse.json({

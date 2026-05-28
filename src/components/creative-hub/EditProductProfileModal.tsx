@@ -108,6 +108,7 @@ export function EditProductProfileModal({
   storeId,
 }: EditProductProfileModalProps) {
   const saveProfile = useCreativeHubStore((s) => s.saveProfile);
+  const fetchProfiles = useCreativeHubStore((s) => s.fetchProfiles);
   const stores = useStoreStore((s) => s.stores);
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
   const activeStore = stores.find((s) => s.id === (storeId || activeStoreId));
@@ -139,35 +140,40 @@ export function EditProductProfileModal({
 
   // Link account dropdown state
   const [showLinkDropdown, setShowLinkDropdown] = useState(false);
+  const [unlinkingAccountId, setUnlinkingAccountId] = useState<string | null>(null);
+  const [unlinkedAccountIds, setUnlinkedAccountIds] = useState<Set<string>>(new Set());
   const linkDropdownRef = useRef<HTMLDivElement>(null);
 
   // Derive linked ad account IDs from linkedCampaigns
   const linkedAccountIds = useMemo(() => {
     const ids = new Set<string>();
     linkedCampaigns.forEach((link) => {
+      if (unlinkedAccountIds.has(link.adAccountId)) return;
       if (link.adAccountId) ids.add(link.adAccountId);
     });
     // Also include the profile's own adAccountId
     if (form.adAccountId) ids.add(form.adAccountId);
     return ids;
-  }, [linkedCampaigns, form.adAccountId]);
+  }, [linkedCampaigns, form.adAccountId, unlinkedAccountIds]);
 
   // Derive BM info from linked campaigns
   const bmPills = useMemo(() => {
     const bms = new Map<string, string>();
     linkedCampaigns.forEach((link) => {
+      if (unlinkedAccountIds.has(link.adAccountId)) return;
       if (link.bmId && link.bmName) {
         bms.set(link.bmId, link.bmName);
       }
     });
     return Array.from(bms.entries()).map(([id, name]) => ({ id, name }));
-  }, [linkedCampaigns]);
+  }, [linkedCampaigns, unlinkedAccountIds]);
 
   // Derive linked accounts with metadata
   const linkedAccountsInfo = useMemo(() => {
     const accountMap = new Map<string, { accountId: string; name: string; currency: string; campaignCount: number }>();
     linkedCampaigns.forEach((link) => {
       if (!link.adAccountId) return;
+      if (unlinkedAccountIds.has(link.adAccountId)) return;
       const existing = accountMap.get(link.adAccountId);
       if (existing) {
         existing.campaignCount++;
@@ -193,7 +199,7 @@ export function EditProductProfileModal({
       });
     }
     return Array.from(accountMap.values());
-  }, [linkedCampaigns, form.adAccountId, form.adAccountCurrency, adAccounts]);
+  }, [linkedCampaigns, form.adAccountId, form.adAccountCurrency, adAccounts, unlinkedAccountIds]);
 
   // Stable string key for effect dependencies
   const linkedAccountIdsKey = useMemo(() => Array.from(linkedAccountIds).sort().join(','), [linkedAccountIds]);
@@ -244,6 +250,8 @@ export function EditProductProfileModal({
       }
       setExpandedSections(new Set(['meta', 'clickup', 'destination']));
       setSetupOptionsMap({});
+      setUnlinkedAccountIds(new Set());
+      setUnlinkingAccountId(null);
     }
   }, [isOpen, profile]);
 
@@ -385,6 +393,12 @@ export function EditProductProfileModal({
   };
 
   const handleLinkAccount = (accountId: string, currency: string) => {
+    setUnlinkedAccountIds((prev) => {
+      if (!prev.has(accountId)) return prev;
+      const next = new Set(prev);
+      next.delete(accountId);
+      return next;
+    });
     if (form.adAccountId !== accountId) {
       updateField('adAccountId', accountId);
       updateField('adAccountCurrency', currency);
@@ -392,17 +406,67 @@ export function EditProductProfileModal({
     setShowLinkDropdown(false);
   };
 
-  const handleUnlinkAccount = (accountId: string) => {
-    // If this is the primary ad account, clear it or replace with another linked account
-    if (form.adAccountId === accountId) {
-      const remaining = linkedAccountsInfo.filter((a) => a.accountId !== accountId);
-      if (remaining.length > 0) {
-        updateField('adAccountId', remaining[0].accountId);
-        updateField('adAccountCurrency', remaining[0].currency);
-      } else {
-        updateField('adAccountId', '');
-        updateField('adAccountCurrency', 'USD');
+  const handleUnlinkAccount = async (accountId: string) => {
+    if (unlinkingAccountId) return;
+
+    const account = linkedAccountsInfo.find((item) => item.accountId === accountId);
+    const remaining = linkedAccountsInfo.filter((item) => item.accountId !== accountId);
+    if (remaining.length === 0) {
+      window.alert('Link another ad account before unlinking the last one from this product profile.');
+      return;
+    }
+
+    if (
+      account?.campaignCount &&
+      !window.confirm(
+        `Unlink ${account.name}? This will remove ${account.campaignCount} linked campaign${account.campaignCount !== 1 ? 's' : ''} from this product profile.`,
+      )
+    ) {
+      return;
+    }
+
+    setUnlinkingAccountId(accountId);
+    const nextPrimaryAccount = form.adAccountId === accountId ? remaining[0] : null;
+    try {
+      if (profile?.id && account?.campaignCount) {
+        const res = await fetch('/api/creative-hub/product-profiles/campaign-links', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            productProfileId: profile.id,
+            adAccountId: accountId,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || 'Failed to unlink ad account');
+        }
       }
+
+      setUnlinkedAccountIds((prev) => new Set(prev).add(accountId));
+
+      if (nextPrimaryAccount) {
+        updateField('adAccountId', nextPrimaryAccount.accountId);
+        updateField('adAccountCurrency', nextPrimaryAccount.currency);
+
+        if (profile?.id) {
+          await saveProfile({
+            ...form,
+            storeId: profile.storeId ?? storeId,
+            id: profile.id,
+            adAccountId: nextPrimaryAccount.accountId,
+            adAccountCurrency: nextPrimaryAccount.currency,
+          } as Partial<ProductProfile> & { storeId: string });
+        }
+      }
+
+      if (profile?.id) {
+        void fetchProfiles(storeId);
+      }
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Failed to unlink ad account');
+    } finally {
+      setUnlinkingAccountId(null);
     }
   };
 
@@ -544,10 +608,16 @@ export function EditProductProfileModal({
                                 <button
                                   type="button"
                                   onClick={() => handleUnlinkAccount(account.accountId)}
-                                  className="text-text-dimmed hover:text-red-500 transition-colors ml-1"
+                                  disabled={!!unlinkingAccountId}
+                                  className="ml-1 inline-flex h-7 w-7 items-center justify-center rounded-md text-text-dimmed transition-colors hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-red-950/30"
+                                  aria-label={`Unlink ${account.name}`}
                                   title="Unlink account"
                                 >
-                                  <Unlink className="h-3.5 w-3.5" />
+                                  {unlinkingAccountId === account.accountId ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    <Unlink className="h-3.5 w-3.5" />
+                                  )}
                                 </button>
                               </div>
                             ))}
