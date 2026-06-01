@@ -26,6 +26,20 @@ const DEFAULT_META_URL_TAGS =
 const WORLDWIDE_COUNTRY_VALUE = 'WORLDWIDE';
 type VideoThumbnailOverride = NonNullable<LaunchConfig['videoThumbnails']>[string];
 
+interface ExternalLaunchCallback {
+  source?: string;
+  launchId?: string;
+  returnUrl?: string;
+  callbackUrl?: string;
+  clickupTaskIds?: string[];
+}
+
+interface ExternalCallbackResult {
+  attempted: boolean;
+  delivered: boolean;
+  error?: string;
+}
+
 // ── Helpers ──
 
 function normalizeAccountNode(value: string): string {
@@ -62,6 +76,64 @@ function generateId(): string {
 
 function asString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return Array.from(new Set(values.map((value) => value?.trim()).filter(Boolean) as string[]));
+}
+
+function isAllowedExternalCallbackUrl(value?: string): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
+      return false;
+    }
+    const allowedHosts = new Set([
+      'immuvi-command-center.vercel.app',
+      'localhost',
+      '127.0.0.1',
+    ]);
+    return allowedHosts.has(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+async function notifyExternalLaunchCallback(
+  externalLaunch: ExternalLaunchCallback | undefined,
+  payload: Record<string, unknown>,
+): Promise<ExternalCallbackResult | undefined> {
+  const callbackUrl = externalLaunch?.callbackUrl?.trim();
+  if (!callbackUrl) return undefined;
+
+  if (!isAllowedExternalCallbackUrl(callbackUrl)) {
+    return {
+      attempted: false,
+      delivered: false,
+      error: 'Callback URL is not allowed.',
+    };
+  }
+
+  try {
+    const response = await fetch(callbackUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`Callback returned HTTP ${response.status}${text ? `: ${text.slice(0, 250)}` : ''}`);
+    }
+    return { attempted: true, delivered: true };
+  } catch (err) {
+    return {
+      attempted: true,
+      delivered: false,
+      error: err instanceof Error ? err.message : 'Callback failed.',
+    };
+  }
 }
 
 function cleanMetaName(value: string): string {
@@ -2288,8 +2360,12 @@ function hasMultiMediaAdGroups(config: LaunchConfig): boolean {
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json() as { launchConfig: LaunchConfig; storeId: string };
-    const { launchConfig, storeId } = body;
+    const body = await request.json() as {
+      launchConfig: LaunchConfig;
+      storeId: string;
+      externalLaunch?: ExternalLaunchCallback;
+    };
+    const { launchConfig, storeId, externalLaunch } = body;
 
     if (!launchConfig || !storeId) {
       return NextResponse.json({ error: 'launchConfig and storeId are required' }, { status: 400 });
@@ -3299,14 +3375,37 @@ export async function POST(request: NextRequest) {
 
     // Fetch the updated test to return
     const test = await getCreativeTest(testId);
+    const responseStatus = hasFailure ? 'partial' : launchConfig.launchTime === 'scheduled' ? 'scheduled' : 'active';
+    const callbackStatus = hasFailure ? 'failed' : 'success';
+    const callbackItems = test?.items || [];
+    const externalCallback = await notifyExternalLaunchCallback(externalLaunch, {
+      launchId: externalLaunch?.launchId || testId,
+      status: callbackStatus,
+      oneScaleStatus: responseStatus,
+      storeId,
+      productProfileId: launchConfig.productProfileId,
+      clickupTaskIds: uniqueStrings(
+        externalLaunch?.clickupTaskIds?.length
+          ? externalLaunch.clickupTaskIds
+          : callbackItems.map((item) => item.clickupTaskId),
+      ),
+      clickupTaskNames: uniqueStrings(callbackItems.map((item) => item.clickupTaskName)),
+      testId,
+      metaCampaignId: campaignId || undefined,
+      metaAdSetIds: uniqueStrings(callbackItems.map((item) => item.metaAdsetId)),
+      metaAdIds: uniqueStrings(callbackItems.map((item) => item.metaAdId)),
+      launchedAt: effectiveLaunchTime,
+      scheduledFor: scheduledLaunchDate?.toISOString(),
+    });
 
     return NextResponse.json({
       testId,
-      status: hasFailure ? 'partial' : launchConfig.launchTime === 'scheduled' ? 'scheduled' : 'active',
+      status: responseStatus,
       campaignId,
       scheduledFor: scheduledLaunchDate?.toISOString(),
-      items: test?.items || [],
+      items: callbackItems,
       clickupSync,
+      externalCallback,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Launch execution failed';

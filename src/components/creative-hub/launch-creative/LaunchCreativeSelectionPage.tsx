@@ -216,6 +216,11 @@ interface LaunchSubmitResult {
   scheduledFor?: string;
   campaignId?: string;
   items?: Array<Record<string, unknown>>;
+  externalCallback?: {
+    attempted: boolean;
+    delivered: boolean;
+    error?: string;
+  };
   clickupSync?: {
     attempted: number;
     updated: number;
@@ -3794,6 +3799,15 @@ export default function LaunchCreativeSelectionPage() {
         body: JSON.stringify({
           storeId: resolvedStoreIdForView,
           launchConfig,
+          externalLaunch: externalLaunchContext
+            ? {
+                source: externalLaunchContext.source,
+                launchId: externalLaunchContext.launchId,
+                returnUrl: externalLaunchContext.returnUrl,
+                callbackUrl: externalLaunchContext.callbackUrl,
+                clickupTaskIds: externalLaunchContext.clickupTaskIds,
+              }
+            : undefined,
         }),
       });
       const data = (await response.json().catch(() => ({}))) as LaunchSubmitResult;
@@ -3811,7 +3825,10 @@ export default function LaunchCreativeSelectionPage() {
       const clickupWarning = data.clickupSync && data.clickupSync.failed > 0
         ? ` ClickUp status sync had ${data.clickupSync.failed} warning${data.clickupSync.failed !== 1 ? 's' : ''}; the Meta launch was still created.`
         : '';
-      setLaunchSuccess(`${successMessage}${clickupWarning}`);
+      const callbackWarning = data.externalCallback?.error
+        ? ` Immuvi callback warning: ${data.externalCallback.error}`
+        : '';
+      setLaunchSuccess(`${successMessage}${clickupWarning}${callbackWarning}`);
     } catch (err) {
       setLaunchError(err instanceof Error ? err.message : 'Launch failed');
     } finally {
