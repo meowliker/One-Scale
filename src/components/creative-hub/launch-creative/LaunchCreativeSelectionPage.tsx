@@ -3515,7 +3515,7 @@ export default function LaunchCreativeSelectionPage() {
       updateCreativeUploadProgress(creative, {
         stage: 'ready',
         progress: 100,
-        message: 'Ready in Meta',
+        message: data.metaAssetType === 'VIDEO' ? 'Uploaded to Meta; processing may continue' : 'Ready in Meta',
         error: undefined,
       });
 
@@ -6339,7 +6339,11 @@ function LaunchProgressPanel({
           creativeName: getCreativeName(creative),
           stage: creative.metaAssetId ? 'skipped' : 'waiting',
           progress: creative.metaAssetId ? 100 : 0,
-          message: creative.metaAssetId ? 'Ready in Meta' : 'Waiting to upload',
+          message: creative.metaAssetType === 'VIDEO'
+            ? 'Uploaded to Meta; processing may continue'
+            : creative.metaAssetId
+              ? 'Ready in Meta'
+              : 'Waiting to upload',
         };
       }),
     ),
@@ -6475,7 +6479,11 @@ function LaunchProgressPanel({
                                 creativeName: getCreativeName(creative),
                                 stage: creative.metaAssetId ? 'skipped' : 'waiting',
                                 progress: creative.metaAssetId ? 100 : 0,
-                                message: creative.metaAssetId ? 'Ready in Meta' : 'Waiting to upload',
+                                message: creative.metaAssetType === 'VIDEO'
+                                  ? 'Uploaded to Meta; processing may continue'
+                                  : creative.metaAssetId
+                                    ? 'Ready in Meta'
+                                    : 'Waiting to upload',
                               };
                               return (
                                 <div key={creative.id} className="rounded-lg border border-slate-100 bg-slate-50 p-3">

@@ -480,8 +480,8 @@ function classifyVideoProcessingState(raw: Record<string, unknown>): 'ready' | '
 async function waitForVideoReady(
   accessToken: string,
   videoId: string,
-  timeoutMs = 12_000,
-  pollMs = 2_000,
+  timeoutMs = 90_000,
+  pollMs = 3_000,
 ): Promise<'ready' | 'processing' | 'failed'> {
   const startedAt = Date.now();
 
