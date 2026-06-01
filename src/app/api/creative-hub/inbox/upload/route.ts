@@ -7,7 +7,7 @@ import ffmpegPath from 'ffmpeg-static';
 import { getGoogleDriveToken, getMetaToken } from '@/app/api/lib/tokens';
 import { GOOGLE_DRIVE_BASE_URL, listDriveChildren } from '@/app/api/google-drive/shared';
 import { getThirdPartyToken, upsertThirdPartyToken } from '@/app/api/lib/db';
-import { getCachedInboxCreatives } from '@/app/api/lib/creative-hub-db';
+import { getCachedInboxCreatives, updateCachedInboxCreativeUpload } from '@/app/api/lib/creative-hub-db';
 import {
   getPersistentThirdPartyToken,
   hydrateStoreFromSupabase,
@@ -1047,6 +1047,17 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      await updateCachedInboxCreativeUpload(storeId, creativeId, {
+        metaAssetId: imageHash,
+        metaAssetType: 'IMAGE',
+        thumbnailUrl: firstImage?.url,
+      }).catch((err) => {
+        console.warn('[creative-hub] failed to persist Meta image upload', {
+          creativeId,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      });
+
       return NextResponse.json({
         creativeId,
         metaAssetId: imageHash,
@@ -1090,6 +1101,16 @@ export async function POST(request: NextRequest) {
               );
             }
 
+            await updateCachedInboxCreativeUpload(storeId, creativeId, {
+              metaAssetId: videoId,
+              metaAssetType: 'VIDEO',
+            }).catch((err) => {
+              console.warn('[creative-hub] failed to persist Meta transcoded video upload', {
+                creativeId,
+                message: err instanceof Error ? err.message : String(err),
+              });
+            });
+
             return NextResponse.json({
               creativeId,
               metaAssetId: videoId,
@@ -1121,6 +1142,16 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
+
+    await updateCachedInboxCreativeUpload(storeId, creativeId, {
+      metaAssetId: videoId,
+      metaAssetType: 'VIDEO',
+    }).catch((err) => {
+      console.warn('[creative-hub] failed to persist Meta video upload', {
+        creativeId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    });
 
     return NextResponse.json({
       creativeId,

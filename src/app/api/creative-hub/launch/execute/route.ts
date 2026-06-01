@@ -534,7 +534,7 @@ async function waitForLaunchVideosReady(
     Array.from(videoNamesById.entries()).map(async ([videoId, names]) => ({
       videoId,
       names,
-      state: await waitForVideoReady(accessToken, videoId, 240_000, 5_000),
+      state: await waitForVideoReady(accessToken, videoId, 120_000, 5_000),
     })),
   );
 
@@ -550,7 +550,7 @@ async function waitForLaunchVideosReady(
     throw new Error(
       `Meta is still processing video asset(s): ${stillProcessing
         .map((result) => result.names.join(', '))
-        .join('; ')}. Wait a minute and launch again.`,
+        .join('; ')}. Wait a minute and launch again; the uploaded Meta video IDs will be reused.`,
     );
   }
 }

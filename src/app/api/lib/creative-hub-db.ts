@@ -522,6 +522,61 @@ async function getCachedInboxCreativeRows(
   ).all(storeId) as CreativeHubInboxCreativeRow[];
 }
 
+export async function updateCachedInboxCreativeUpload(
+  storeId: string,
+  creativeId: string,
+  upload: {
+    metaAssetId: string;
+    metaAssetType: 'IMAGE' | 'VIDEO';
+    thumbnailUrl?: string;
+  },
+): Promise<void> {
+  if (!storeId || !creativeId || !upload.metaAssetId) return;
+
+  const applyUpload = (row: CreativeHubInboxCreativeRow): string => {
+    const creative = parseInboxCreativeJson(row.creative_json);
+    return JSON.stringify({
+      ...creative,
+      metaAssetId: upload.metaAssetId,
+      metaAssetType: upload.metaAssetType,
+      thumbnailUrl: upload.thumbnailUrl || creative.thumbnailUrl,
+      uploadStatus: 'ready',
+      uploadProgress: 100,
+      uploadError: undefined,
+    });
+  };
+
+  if (isSupabasePersistenceEnabled()) {
+    try {
+      const rows = await supaRest<CreativeHubInboxCreativeRow[]>(
+        `/creative_hub_inbox_creatives?store_id=eq.${encodeURIComponent(storeId)}&id=eq.${encodeURIComponent(creativeId)}&select=*&limit=1`,
+      );
+      const row = rows[0];
+      if (!row) return;
+      await supaRest(
+        `/creative_hub_inbox_creatives?store_id=eq.${encodeURIComponent(storeId)}&id=eq.${encodeURIComponent(creativeId)}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ creative_json: applyUpload(row) }),
+        },
+      );
+    } catch (error) {
+      if (isMissingCreativeHubInboxCacheError(error)) return;
+      throw error;
+    }
+    return;
+  }
+
+  const db = getDb();
+  const row = db.prepare(
+    'SELECT * FROM creative_hub_inbox_creatives WHERE store_id = ? AND id = ?'
+  ).get(storeId, creativeId) as CreativeHubInboxCreativeRow | undefined;
+  if (!row) return;
+  db.prepare(
+    'UPDATE creative_hub_inbox_creatives SET creative_json = ? WHERE store_id = ? AND id = ?'
+  ).run(applyUpload(row), storeId, creativeId);
+}
+
 async function getCachedInboxSyncStatusRows(
   storeId: string,
   productProfileIds?: string[],
@@ -608,6 +663,9 @@ export async function replaceCachedInboxCreatives(
 ): Promise<void> {
   const uniqueSnapshots = snapshots.filter((snapshot) => snapshot.productProfileId.trim().length > 0);
   if (uniqueSnapshots.length === 0) return;
+  const profileFilter = uniqueSnapshots.map((snapshot) => snapshot.productProfileId);
+  const existingUploadRows = await getCachedInboxCreativeRows(storeId, profileFilter);
+  const existingUploadById = new Map(existingUploadRows.map((row) => [row.id, parseInboxCreativeJson(row.creative_json)]));
   const creativePayloads = uniqueSnapshots.flatMap((snapshot) => snapshot.creatives.map((creative) => ({
     id: creative.id,
     store_id: storeId,
@@ -615,13 +673,18 @@ export async function replaceCachedInboxCreatives(
     clickup_task_id: creative.clickupTaskId,
     creative_name: creative.creativeName,
     creative_format: creative.creativeFormat,
-    creative_json: serializeInboxCreative(creative),
+    creative_json: serializeInboxCreative({
+      ...creative,
+      metaAssetId: creative.metaAssetId || existingUploadById.get(creative.id)?.metaAssetId,
+      metaAssetType: creative.metaAssetType || existingUploadById.get(creative.id)?.metaAssetType,
+      thumbnailUrl: creative.thumbnailUrl || existingUploadById.get(creative.id)?.thumbnailUrl,
+      uploadStatus: creative.uploadStatus || existingUploadById.get(creative.id)?.uploadStatus,
+    }),
     synced_at: snapshot.lastSyncedAt,
   })));
 
   if (isSupabasePersistenceEnabled()) {
     try {
-      const profileFilter = uniqueSnapshots.map((snapshot) => snapshot.productProfileId);
       const existingRows = await getCachedInboxCreativeRows(storeId, profileFilter);
 
       if (creativePayloads.length > 0) {
