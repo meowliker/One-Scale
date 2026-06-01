@@ -1780,6 +1780,13 @@ export default function LaunchCreativeSelectionPage() {
     adSetsReadyForSource
       ? sortByLatest(adSets, (adSet) => adSet.updatedTime || adSet.startDate)[0]
       : undefined;
+  const inheritedCopySourceAdSets = useMemo(() => {
+    if (!adSetsReadyForSource) return [];
+    if (campaignMode === 'existing' && adSetMode === 'existing') {
+      return selectedAdSet ? [selectedAdSet] : [];
+    }
+    return sortByLatest(adSets, (adSet) => adSet.updatedTime || adSet.startDate).slice(0, 8);
+  }, [adSetMode, adSets, adSetsReadyForSource, campaignMode, selectedAdSet]);
   const inheritedCopySourceAdSet =
     campaignMode === 'existing' && adSetMode === 'existing'
         ? selectedAdSet
@@ -2342,6 +2349,12 @@ export default function LaunchCreativeSelectionPage() {
 
   useEffect(() => {
     const sourceAdSet = inheritedCopySourceAdSet;
+    const sourceAdSets =
+      inheritedCopySourceAdSets.length > 0
+        ? inheritedCopySourceAdSets
+        : sourceAdSet
+          ? [sourceAdSet]
+          : [];
     const sourceMode: InheritedAdSettings['sourceMode'] =
       campaignMode === 'existing' && adSetMode === 'existing' ? 'selected_adset' : 'latest_adset';
     const requestId = inheritedSettingsRequestIdRef.current + 1;
@@ -2350,7 +2363,7 @@ export default function LaunchCreativeSelectionPage() {
 
     if (
       !resolvedStoreIdForView ||
-      !sourceAdSet?.id
+      sourceAdSets.length === 0
     ) {
       setInheritedSettings(null);
       setInheritedSettingsError(null);
@@ -2371,13 +2384,12 @@ export default function LaunchCreativeSelectionPage() {
       }
 
       try {
-        if (!sourceAdSet) {
+        if (sourceAdSets.length === 0) {
           setInheritedSettings(null);
           setInheritedSettingsError('No ad set was found for the selected source campaign.');
           return;
         }
 
-        const sourceAdSets: MetaAdSetOption[] = [sourceAdSet];
         const inheritedCandidates: InheritedAdSettings[] = [];
         const sourceErrors: string[] = [];
 
@@ -2386,6 +2398,8 @@ export default function LaunchCreativeSelectionPage() {
             storeId: resolvedStoreIdForView,
             adsetId: candidateAdSet.id,
             mode: 'basic',
+            preferCache: '0',
+            forceLive: '1',
           });
           const response = await fetch(`/api/meta/ads?${params.toString()}`);
           const data = await response.json();
@@ -2433,6 +2447,7 @@ export default function LaunchCreativeSelectionPage() {
     campaignMode,
     currentStep,
     inheritedCopySourceAdSet,
+    inheritedCopySourceAdSets,
     resolvedStoreIdForView,
   ]);
 
