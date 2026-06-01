@@ -16,6 +16,8 @@ const platformBadge: Record<string, { label: string; className: string }> = {
 export function StoreManager() {
   const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletingStoreId, setDeletingStoreId] = useState<string | null>(null);
 
   const { stores, removeStore } = useStoreStore();
   const selectedStore = stores.find((s) => s.id === selectedStoreId);
@@ -35,6 +37,11 @@ export function StoreManager() {
           Add Store
         </button>
       </div>
+      {deleteError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {deleteError}
+        </div>
+      )}
 
       {/* Store cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -93,11 +100,20 @@ export function StoreManager() {
                     {activeAccounts}/{store.adAccounts.length} accounts active
                   </span>
                   <button
-                    onClick={(e) => {
+                    onClick={async (e) => {
                       e.stopPropagation();
-                      removeStore(store.id);
-                      if (isSelected) setSelectedStoreId(null);
+                      setDeleteError(null);
+                      setDeletingStoreId(store.id);
+                      try {
+                        await removeStore(store.id);
+                        if (isSelected) setSelectedStoreId(null);
+                      } catch (err) {
+                        setDeleteError(err instanceof Error ? err.message : 'Failed to delete store');
+                      } finally {
+                        setDeletingStoreId(null);
+                      }
                     }}
+                    disabled={deletingStoreId === store.id}
                     className="rounded-md p-1 text-gray-400 opacity-0 hover:bg-red-50 hover:text-red-600 group-hover:opacity-100 transition-all"
                     title="Remove store"
                   >

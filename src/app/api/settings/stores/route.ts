@@ -11,6 +11,7 @@ import {
 import { readSessionFromRequest } from '@/lib/auth/request-session';
 import {
   deletePersistentStore,
+  getPersistentStore,
   isSupabasePersistenceEnabled,
   listPersistentStores,
   upsertPersistentConnection,
@@ -255,7 +256,9 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    const store = getStore(storeId);
+    const store = isSupabasePersistenceEnabled()
+      ? await getPersistentStore(storeId)
+      : getStore(storeId);
     if (!store) {
       return NextResponse.json(
         { error: 'Store not found' },

@@ -119,7 +119,10 @@ export const useStoreStore = create<StoreState>()(
         const res = await fetch(`/api/settings/stores?storeId=${encodeURIComponent(storeId)}`, {
           method: 'DELETE',
         });
-        if (!res.ok) throw new Error('Failed to delete store');
+        if (!res.ok) {
+          const errData = await readJsonSafe<{ error?: string }>(res);
+          throw new Error(errData.error || `Failed to delete store (${res.status})`);
+        }
 
         // Refresh stores from server
         await get().fetchStores();
