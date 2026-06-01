@@ -238,6 +238,7 @@ export async function getGoogleDriveToken(storeId: string): Promise<OAuthTokens 
               storeId,
               platform: 'google_drive',
               accessToken: refreshed.access_token,
+              refreshToken: conn.refresh_token,
               expiresAt: newExpiresAt,
             });
           }
