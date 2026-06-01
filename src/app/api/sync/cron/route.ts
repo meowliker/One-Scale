@@ -15,6 +15,8 @@ import type { Ad, AdSet, Campaign } from '@/types/campaign';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
+const SLOT_MS = 10 * 60 * 1000; // 10 minutes
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -151,6 +153,15 @@ async function enrichAdsWithIdentity(params: {
   return out;
 }
 
+function currentSlot(): number {
+  return Math.floor(Date.now() / SLOT_MS);
+}
+
+function pickRoundRobinStoreId(storeIds: string[]): string | null {
+  if (storeIds.length === 0) return null;
+  return storeIds[currentSlot() % storeIds.length] || null;
+}
+
 /**
  * Cron endpoint — refresh campaign, adset, and ad data for all active stores.
  * Designed to be called by Vercel Cron or external scheduler every 10 minutes.
@@ -173,7 +184,12 @@ export async function GET(request: NextRequest) {
   if (authHeader !== `Bearer ${CRON_SECRET}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  const requestedStoreId = (request.nextUrl.searchParams.get('storeId') || '').trim();
+  const params = request.nextUrl.searchParams;
+  const requestedStoreId = (params.get('storeId') || params.get('store_id') || '').trim();
+  const forceAll = params.get('full') === '1';
+  const explicitAuto = params.get('auto') === '1';
+  const isVercelCron = (request.headers.get('x-vercel-cron') || '').length > 0;
+  const autoMode = !forceAll && (explicitAuto || (isVercelCron && requestedStoreId.length === 0));
 
   const today = new Date().toISOString().slice(0, 10);
   const dateRange = { since: today, until: today };
@@ -191,12 +207,24 @@ export async function GET(request: NextRequest) {
     const useSupabase = isSupabasePersistenceEnabled();
 
     if (useSupabase) {
-      const allStores = await listPersistentStores();
-      const stores = requestedStoreId
-        ? allStores.filter((s) => s.id === requestedStoreId)
-        : allStores;
+      const stores = await listPersistentStores();
+      const storesTotal = stores.length;
+      let targetStores = requestedStoreId
+        ? stores.filter((store) => store.id === requestedStoreId)
+        : stores;
 
-      for (const store of stores) {
+      if (autoMode) {
+        const eligible = targetStores
+          .filter((store) => (store.adAccounts || []).some((a) => Number(a.is_active) === 1))
+          .map((store) => store.id)
+          .sort();
+        const pickedStoreId = pickRoundRobinStoreId(eligible);
+        targetStores = pickedStoreId
+          ? targetStores.filter((store) => store.id === pickedStoreId)
+          : [];
+      }
+
+      for (const store of targetStores) {
         try {
           const token = await getMetaToken(store.id);
           if (!token) continue;
@@ -374,21 +402,35 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ 
         synced, 
         errors, 
-        storeCount: stores.length, 
-        requestedStoreId: requestedStoreId || null,
+        storeCount: storesTotal,
+        storesTargeted: targetStores.length,
+        mode: autoMode ? 'single_store_auto' : requestedStoreId ? 'single_store_manual' : 'all_stores',
         adSetsSynced,
         adsSynced,
         prunedAds,
         storeErrors,
-        mode: 'supabase' 
+        storage: 'supabase',
       });
     }
 
-    const allStores = getAllStores();
-    const stores = requestedStoreId
-      ? allStores.filter((s) => s.id === requestedStoreId)
-      : allStores;
-    for (const store of stores) {
+    const stores = getAllStores();
+    const storesTotal = stores.length;
+    let targetStores = requestedStoreId
+      ? stores.filter((store) => store.id === requestedStoreId)
+      : stores;
+
+    if (autoMode) {
+      const eligible = targetStores
+        .filter((store) => getStoreAdAccounts(store.id).some((a) => a.is_active))
+        .map((store) => store.id)
+        .sort();
+      const pickedStoreId = pickRoundRobinStoreId(eligible);
+      targetStores = pickedStoreId
+        ? targetStores.filter((store) => store.id === pickedStoreId)
+        : [];
+    }
+
+    for (const store of targetStores) {
       try {
         const token = await getMetaToken(store.id);
         if (!token) continue;
@@ -537,12 +579,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ 
       synced, 
       errors, 
-      storeCount: stores.length, 
-      requestedStoreId: requestedStoreId || null,
+      storeCount: storesTotal,
+      storesTargeted: targetStores.length,
+      mode: autoMode ? 'single_store_auto' : requestedStoreId ? 'single_store_manual' : 'all_stores',
       adSetsSynced,
       adsSynced,
       storeErrors,
-      mode: 'sqlite' 
+      storage: 'sqlite',
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Cron sync failed';

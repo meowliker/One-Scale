@@ -203,6 +203,7 @@ type DailyMetricRow = {
 
 const UPSERT_CHUNK_SIZE = 250;
 export const WAREHOUSE_LATEST_VARIANT = 'warehouse:last_30d';
+const missingColumnsByTable = new Map<string, Set<string>>();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -428,31 +429,60 @@ async function upsertRows<T extends Record<string, unknown>>(
   rows: T[]
 ): Promise<void> {
   if (rows.length === 0) return;
-  for (let i = 0; i < rows.length; i += UPSERT_CHUNK_SIZE) {
-    const chunk = rows.slice(i, i + UPSERT_CHUNK_SIZE);
-    await rest(path, {
-      method: 'POST',
-      headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify(chunk),
+  const tableName = path.replace(/^\//, '').split('?')[0] || 'unknown_table';
+  const knownMissingColumns = missingColumnsByTable.get(tableName);
+
+  const dropColumns = (inputRows: T[], columns: Set<string>): T[] => {
+    if (columns.size === 0) return inputRows;
+    return inputRows.map((row) => {
+      const copy = { ...row } as T;
+      for (const column of columns) {
+        delete (copy as Record<string, unknown>)[column];
+      }
+      return copy;
     });
+  };
+
+  const parseMissingColumn = (errorMessage: string): string | null => {
+    const match = errorMessage.match(/Could not find the '([^']+)' column of '([^']+)'/);
+    if (!match) return null;
+    const [, columnName, errorTableName] = match;
+    if (errorTableName !== tableName) return null;
+    return columnName || null;
+  };
+
+  for (let i = 0; i < rows.length; i += UPSERT_CHUNK_SIZE) {
+    let chunk = rows.slice(i, i + UPSERT_CHUNK_SIZE);
+    if (knownMissingColumns && knownMissingColumns.size > 0) {
+      chunk = dropColumns(chunk, knownMissingColumns);
+    }
+
+    for (;;) {
+      try {
+        await rest(path, {
+          method: 'POST',
+          headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+          body: JSON.stringify(chunk),
+        });
+        break;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const missingColumn = parseMissingColumn(message);
+        if (!missingColumn) throw error;
+
+        let tableMissingColumns = missingColumnsByTable.get(tableName);
+        if (!tableMissingColumns) {
+          tableMissingColumns = new Set<string>();
+          missingColumnsByTable.set(tableName, tableMissingColumns);
+        }
+        if (tableMissingColumns.has(missingColumn)) throw error;
+
+        tableMissingColumns.add(missingColumn);
+        console.warn(`[Warehouse] ${tableName}.${missingColumn} missing in Supabase schema; retrying upsert without it`);
+        chunk = dropColumns(chunk, tableMissingColumns);
+      }
+    }
   }
-}
-
-function isMissingAdAccountIsActiveColumnError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error || '');
-  if (!message) return false;
-  if (!message.includes('ad_account_is_active')) return false;
-  return (
-    message.includes('does not exist')
-    || message.includes('Could not find')
-    || message.includes('schema cache')
-  );
-}
-
-function stripAdAccountIsActive<T extends { ad_account_is_active: boolean }>(
-  rows: T[],
-): Array<Omit<T, 'ad_account_is_active'>> {
-  return rows.map(({ ad_account_is_active: _ignored, ...rest }) => rest);
 }
 
 async function getSnapshotData<T>(
@@ -1010,36 +1040,11 @@ export async function materializeStoreMetaEntitiesFromSnapshots(params: {
     };
   }).filter((row) => row.adset_id.length > 0 && row.campaign_id.length > 0);
 
-  try {
-    await Promise.all([
-      upsertRows('/meta_campaign_entities?on_conflict=store_id,campaign_id', campaignEntityRows),
-      upsertRows('/meta_adset_entities?on_conflict=store_id,adset_id', adsetEntityRows),
-      upsertRows('/meta_ad_entities?on_conflict=store_id,ad_id', adEntityRows),
-    ]);
-  } catch (error) {
-    if (!isMissingAdAccountIsActiveColumnError(error)) {
-      throw error;
-    }
-
-    console.warn(
-      '[Warehouse] ad_account_is_active column missing in one or more meta entity tables; retrying materialization without that field. Apply migration 041_mark_inactive_for_unlinked_accounts.sql.'
-    );
-
-    await Promise.all([
-      upsertRows(
-        '/meta_campaign_entities?on_conflict=store_id,campaign_id',
-        stripAdAccountIsActive(campaignEntityRows),
-      ),
-      upsertRows(
-        '/meta_adset_entities?on_conflict=store_id,adset_id',
-        stripAdAccountIsActive(adsetEntityRows),
-      ),
-      upsertRows(
-        '/meta_ad_entities?on_conflict=store_id,ad_id',
-        stripAdAccountIsActive(adEntityRows),
-      ),
-    ]);
-  }
+  await Promise.all([
+    upsertRows('/meta_campaign_entities?on_conflict=store_id,campaign_id', campaignEntityRows),
+    upsertRows('/meta_adset_entities?on_conflict=store_id,adset_id', adsetEntityRows),
+    upsertRows('/meta_ad_entities?on_conflict=store_id,ad_id', adEntityRows),
+  ]);
 
   return {
     campaigns: campaignEntityRows.length,

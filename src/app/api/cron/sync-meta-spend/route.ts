@@ -65,39 +65,6 @@ interface MetaInsightRow {
   website_url?: string;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function extractPurchases(arr: any[] | undefined): number {
-  if (!arr) return 0;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const entry = arr.find((a: any) => a.action_type === 'purchase' || a.action_type === 'offsite_conversion.fb_pixel_purchase');
-  return entry ? parseFloat(entry.value) || 0 : 0;
-}
-
-function mapRowToUpsert(storeId: string, adAccountId: string, row: MetaInsightRow, fallbackDate: string) {
-  return {
-    store_id: storeId,
-    ad_account_id: adAccountId,
-    campaign_id: row.campaign_id,
-    campaign_name: row.campaign_name,
-    adset_id: row.adset_id,
-    adset_name: row.adset_name,
-    ad_id: row.ad_id,
-    ad_name: row.ad_name,
-    date: row.date_start || fallbackDate,
-    spend: parseFloat(row.spend) || 0,
-    impressions: parseInt(row.impressions) || 0,
-    clicks: parseInt(row.clicks) || 0,
-    purchases: parseInt(String(extractPurchases(row.actions))) || 0,
-    purchase_value: parseFloat(String(extractPurchases(row.action_values))) || 0,
-    purchases_7d_click: parseInt(String(extractPurchases(row.actions_7d_click))) || 0,
-    purchase_value_7d_click: parseFloat(String(extractPurchases(row.action_values_7d_click))) || 0,
-    purchases_1d_view: parseInt(String(extractPurchases(row.actions_1d_view))) || 0,
-    purchase_value_1d_view: parseFloat(String(extractPurchases(row.action_values_1d_view))) || 0,
-    destination_url: row.website_url || null,
-    updated_at: new Date().toISOString(),
-  };
-}
-
 // ---- Refresh metadata for EXISTING ad accounts (no auto-discover) ----
 // Auto-discover was adding ALL Meta ad accounts to EVERY store,
 // causing cross-store spend pollution. Now we only update metadata
@@ -138,6 +105,143 @@ async function refreshAdAccountList(storeId: string, accessToken: string): Promi
   }
 }
 
+interface MetaSpendUpsertRow {
+  store_id: string;
+  ad_account_id: string;
+  campaign_id: string;
+  campaign_name: string;
+  adset_id: string;
+  adset_name: string;
+  ad_id: string;
+  ad_name: string;
+  date: string;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  purchases: number;
+  purchase_value: number;
+  purchases_7d_click: number;
+  purchase_value_7d_click: number;
+  purchases_1d_view: number;
+  purchase_value_1d_view: number;
+  destination_url: string | null;
+  updated_at: string;
+}
+
+type StoreLike = {
+  id: string;
+  adAccounts?: Array<{
+    platform?: string;
+    is_active: number | boolean;
+  }>;
+};
+
+type ActiveAccount = {
+  ad_account_id: string;
+  is_active: number | boolean;
+  timezone?: string | null;
+};
+
+const UPSERT_CHUNK_SIZE = 250;
+const AUTO_ACCOUNT_BATCH_SIZE = 5;
+const SLOT_MS = 10 * 60 * 1000; // 10 minutes
+
+function currentSlot(): number {
+  return Math.floor(Date.now() / SLOT_MS);
+}
+
+function parseDaysParam(raw: string | null, fallback: number): number {
+  const parsed = Number.parseInt(raw || '', 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.min(7, parsed));
+}
+
+function normalizeActiveMetaAccounts(rows: ActiveAccount[]): ActiveAccount[] {
+  return rows
+    .filter((row) => Number(row.is_active) === 1)
+    .sort((a, b) => a.ad_account_id.localeCompare(b.ad_account_id));
+}
+
+function isStoreMetaActive(store: StoreLike): boolean {
+  return (store.adAccounts || []).some((a) => (a.platform || 'meta') === 'meta' && Number(a.is_active) === 1);
+}
+
+function pickRoundRobinStoreId(storeIds: string[]): string | null {
+  if (storeIds.length === 0) return null;
+  return storeIds[currentSlot() % storeIds.length] || null;
+}
+
+function pickAccountBatch(accounts: ActiveAccount[], batchSize: number): ActiveAccount[] {
+  if (accounts.length <= batchSize) return accounts;
+  const batchCount = Math.ceil(accounts.length / batchSize);
+  const batchIndex = currentSlot() % batchCount;
+  const start = batchIndex * batchSize;
+  return accounts.slice(start, start + batchSize);
+}
+
+function extractPurchases(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  arr: any[] | undefined
+): number {
+  if (!arr) return 0;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const entry = arr.find((a: any) => a.action_type === 'purchase' || a.action_type === 'offsite_conversion.fb_pixel_purchase');
+  return entry ? parseFloat(entry.value) || 0 : 0;
+}
+
+async function upsertMetaSpendRows(
+  storeId: string,
+  adAccountId: string,
+  rows: MetaInsightRow[],
+  dateForRow: string
+): Promise<number> {
+  if (rows.length === 0) return 0;
+
+  const payload: MetaSpendUpsertRow[] = rows.map((row) => {
+    const purchases = extractPurchases(row.actions);
+    const purchaseValue = extractPurchases(row.action_values);
+    const purchases7dClick = extractPurchases(row.actions_7d_click);
+    const purchaseValue7dClick = extractPurchases(row.action_values_7d_click);
+    const purchases1dView = extractPurchases(row.actions_1d_view);
+    const purchaseValue1dView = extractPurchases(row.action_values_1d_view);
+    return {
+      store_id: storeId,
+      ad_account_id: adAccountId,
+      campaign_id: row.campaign_id,
+      campaign_name: row.campaign_name,
+      adset_id: row.adset_id,
+      adset_name: row.adset_name,
+      ad_id: row.ad_id,
+      ad_name: row.ad_name,
+      date: row.date_start || dateForRow,
+      spend: parseFloat(row.spend) || 0,
+      impressions: parseInt(row.impressions) || 0,
+      clicks: parseInt(row.clicks) || 0,
+      purchases: parseInt(String(purchases)) || 0,
+      purchase_value: parseFloat(String(purchaseValue)) || 0,
+      purchases_7d_click: parseInt(String(purchases7dClick)) || 0,
+      purchase_value_7d_click: parseFloat(String(purchaseValue7dClick)) || 0,
+      purchases_1d_view: parseInt(String(purchases1dView)) || 0,
+      purchase_value_1d_view: parseFloat(String(purchaseValue1dView)) || 0,
+      destination_url: row.website_url || null,
+      updated_at: new Date().toISOString(),
+    };
+  });
+
+  for (let i = 0; i < payload.length; i += UPSERT_CHUNK_SIZE) {
+    const chunk = payload.slice(i, i + UPSERT_CHUNK_SIZE);
+    await rest('/meta_spend_cache?on_conflict=store_id,ad_account_id,ad_id,date', {
+      method: 'POST',
+      headers: {
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify(chunk),
+    });
+  }
+
+  return payload.length;
+}
+
 // ---- Main Handler ----
 
 // pg_cron uses net.http_post — accept both GET and POST
@@ -153,9 +257,38 @@ export async function GET(req: NextRequest) {
   }
 
   const stores = await listPersistentStores();
-  const results: Array<{ storeId: string; status: string; rows?: number; discovered?: number; paginated?: number; error?: string }> = [];
+  const params = req.nextUrl.searchParams;
+  const requestedStoreId = (params.get('storeId') || params.get('store_id') || '').trim();
+  const forceAll = params.get('full') === '1';
+  const explicitAuto = params.get('auto') === '1';
+  const isVercelCron = (req.headers.get('x-vercel-cron') || '').length > 0;
+  const autoMode = !forceAll && (explicitAuto || (isVercelCron && requestedStoreId.length === 0));
+  const days = parseDaysParam(params.get('days'), autoMode ? 1 : 7);
 
-  for (const store of stores) {
+  let targetStores: StoreLike[] = requestedStoreId
+    ? stores.filter((store) => store.id === requestedStoreId)
+    : stores;
+
+  if (autoMode) {
+    const eligible = targetStores
+      .filter((store) => isStoreMetaActive(store))
+      .map((store) => store.id)
+      .sort();
+    const pickedStoreId = pickRoundRobinStoreId(eligible);
+    targetStores = pickedStoreId ? targetStores.filter((store) => store.id === pickedStoreId) : [];
+  }
+
+  const results: Array<{
+    storeId: string;
+    status: string;
+    rows?: number;
+    discovered?: number;
+    accountsProcessed?: number;
+    accountsTotal?: number;
+    error?: string;
+  }> = [];
+
+  for (const store of targetStores) {
     const start = Date.now();
     try {
       const metaConn = await getPersistentConnection(store.id, 'meta');
@@ -164,119 +297,82 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
-      // ── Auto-discover new ad accounts from Meta API ──
       const discovered = await refreshAdAccountList(store.id, metaConn.access_token);
 
-      // Re-fetch account list (may have new accounts from discovery)
-      const adAccounts = await listPersistentStoreAdAccounts(store.id);
-      const activeAccounts = adAccounts.filter((a) => a.is_active);
-      if (activeAccounts.length === 0) {
+      const adAccounts = await listPersistentStoreAdAccounts(store.id) as ActiveAccount[];
+      const activeAccounts = normalizeActiveMetaAccounts(adAccounts);
+      const accountsToProcess = autoMode
+        ? pickAccountBatch(activeAccounts, AUTO_ACCOUNT_BATCH_SIZE)
+        : activeAccounts;
+
+      if (accountsToProcess.length === 0) {
         results.push({ storeId: store.id, status: 'skipped', discovered, error: 'No active ad accounts' });
         continue;
       }
 
-      // ── Get previous row counts per account for monitoring ──
-      const prevCounts = new Map<string, number>();
-      try {
-        const countRows = await rest<Array<{ ad_account_id: string; count: string }>>(
-          `/meta_spend_cache?store_id=eq.${encodeURIComponent(store.id)}&select=ad_account_id,count:ad_id.count()&order=ad_account_id`
-        );
-        // Note: PostgREST count by group isn't straightforward. We'll check after sync.
-      } catch { /* monitoring is non-critical */ }
-
-      // ── Process ALL ad accounts in PARALLEL ──
-      let paginatedAccounts = 0;
-
-      const accountResults = await Promise.allSettled(
-        activeAccounts.map(async (account) => {
-          const adAccountId = account.ad_account_id.startsWith('act_')
-            ? account.ad_account_id
-            : `act_${account.ad_account_id}`;
-          const tz = account.timezone || 'America/New_York';
-          const today = todayInTimezone(tz);
-          const sevenDaysAgo = daysAgoInTimezone(6, tz);
-
-          // Fetch with full pagination (handles >500 ads)
-          const allInsightRows: MetaInsightRow[] = [];
-          let pageData = await fetchFromMeta<{
-            data: MetaInsightRow[];
-            paging?: { next?: string };
-          }>(metaConn.access_token, `/${adAccountId}/insights`, {
-            time_range: JSON.stringify({ since: sevenDaysAgo, until: today }),
-            time_increment: '1',
-            fields: 'campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,actions,action_values,website_url',
-            level: 'ad',
-            limit: '500',
-            action_attribution_windows: '7d_click,1d_view',
-          });
-          allInsightRows.push(...(pageData?.data || []));
-
-          // Follow pagination — log when >500 ads detected
-          let nextUrl = pageData?.paging?.next;
-          let pageCount = 1;
-          while (nextUrl && pageCount < 20) {
-            try {
-              const nextRes = await fetch(nextUrl);
-              if (!nextRes.ok) break;
-              const nextData = await nextRes.json() as { data: MetaInsightRow[]; paging?: { next?: string } };
-              allInsightRows.push(...(nextData?.data || []));
-              nextUrl = nextData?.paging?.next;
-              pageCount++;
-            } catch { break; }
-          }
-
-          if (pageCount > 1) {
-            paginatedAccounts++;
-            console.log(`[sync-meta-spend] ${adAccountId}: ${pageCount} pages, ${allInsightRows.length} total ad rows (>500 ads detected)`);
-          }
-
-          const rows = allInsightRows.map(row => mapRowToUpsert(store.id, adAccountId, row, today));
-          if (rows.length === 0) return 0;
-
-          // BATCH upsert (200 at a time)
-          const BATCH_SIZE = 200;
-          for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-            const batch = rows.slice(i, i + BATCH_SIZE);
-            await rest('/meta_spend_cache?on_conflict=store_id,ad_account_id,ad_id,date', {
-              method: 'POST',
-              headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-              body: JSON.stringify(batch),
-            });
-          }
-
-          return rows.length;
-        })
-      );
-
       let totalRows = 0;
-      const accountErrors: string[] = [];
-      for (let i = 0; i < accountResults.length; i++) {
-        const r = accountResults[i];
-        if (r.status === 'fulfilled') {
-          totalRows += r.value;
-        } else {
-          const accId = activeAccounts[i].ad_account_id;
-          const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
-          accountErrors.push(`${accId}: ${msg}`);
-          console.warn(`[sync-meta-spend] Account ${accId} failed:`, msg);
 
-          // ── Log failed account for retry on next run ──
-          await logStoreError(store.id, 'meta_spend_sync_account', `${accId}: ${msg}`, 'Will retry on next cron run').catch(() => {});
+      for (const account of accountsToProcess) {
+        const adAccountId = account.ad_account_id.startsWith('act_')
+          ? account.ad_account_id
+          : `act_${account.ad_account_id}`;
+        const tz = account.timezone || 'America/New_York';
+        const today = todayInTimezone(tz);
+
+        // ---- Pass 1: Fetch today's ad-level insights with attribution windows ----
+        const todayData = await fetchFromMeta<{
+          data: MetaInsightRow[];
+          paging?: { next?: string };
+        }>(metaConn.access_token, `/${adAccountId}/insights`, {
+          date_preset: 'today',
+          time_increment: '1',
+          fields:
+            'campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,actions,action_values,website_url',
+          level: 'ad',
+          limit: '500',
+          action_attribution_windows: '7d_click,1d_view',
+        });
+
+        totalRows += await upsertMetaSpendRows(store.id, adAccountId, todayData?.data || [], today);
+
+        // ---- Pass 2: Re-fetch previous days to capture retroactive Meta attribution updates ----
+        // Meta attribution data can change for up to 7 days after the click/view event.
+        for (let i = 1; i < days; i++) {
+          const dayStr = daysAgoInTimezone(i, tz);
+          try {
+            const historicalData = await fetchFromMeta<{
+              data: MetaInsightRow[];
+              paging?: { next?: string };
+            }>(metaConn.access_token, `/${adAccountId}/insights`, {
+              time_range: JSON.stringify({ since: dayStr, until: dayStr }),
+              time_increment: '1',
+              fields:
+                'campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,actions,action_values,website_url',
+              level: 'ad',
+              limit: '500',
+              action_attribution_windows: '7d_click,1d_view',
+            });
+
+            totalRows += await upsertMetaSpendRows(store.id, adAccountId, historicalData?.data || [], dayStr);
+          } catch (histErr) {
+            // Log but don't fail the whole sync for a single historical day
+            console.warn(
+              `[sync-meta-spend] Failed to fetch historical day ${dayStr} for ${adAccountId}:`,
+              histErr instanceof Error ? histErr.message : histErr
+            );
+          }
         }
       }
 
       const elapsed = Date.now() - start;
-      const status = accountErrors.length === activeAccounts.length ? 'error' : 'success';
-      const warnings = accountErrors.length > 0 ? `${accountErrors.length}/${activeAccounts.length} accounts failed` : undefined;
-
-      await logCron('sync-meta-spend', store.id, status, totalRows, warnings || null, elapsed);
+      await logCron('sync-meta-spend', store.id, 'success', totalRows, null, elapsed);
       results.push({
         storeId: store.id,
-        status,
+        status: 'success',
         rows: totalRows,
         discovered: discovered > 0 ? discovered : undefined,
-        paginated: paginatedAccounts > 0 ? paginatedAccounts : undefined,
-        error: warnings,
+        accountsProcessed: accountsToProcess.length,
+        accountsTotal: activeAccounts.length,
       });
     } catch (err) {
       const elapsed = Date.now() - start;
@@ -290,6 +386,10 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     ok: true,
     cron: 'sync-meta-spend',
+    mode: autoMode ? 'single_store_auto' : requestedStoreId ? 'single_store_manual' : 'all_stores',
+    days,
+    storesTargeted: targetStores.length,
+    storesTotal: stores.length,
     runAt: new Date().toISOString(),
     results,
   });
