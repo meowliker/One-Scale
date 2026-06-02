@@ -507,54 +507,6 @@ async function waitForVideoReady(
   return 'processing';
 }
 
-function getLaunchVideoAssetId(item: CreativeTestItemRow): string | null {
-  const assetType = `${item.meta_asset_type || item.creative_format || ''}`.toUpperCase();
-  if (!assetType.includes('VIDEO') || !item.meta_asset_id) return null;
-  return item.meta_asset_id;
-}
-
-async function waitForLaunchVideosReady(
-  accessToken: string,
-  items: CreativeTestItemRow[],
-): Promise<void> {
-  const videoNamesById = new Map<string, string[]>();
-
-  for (const item of items) {
-    const videoId = getLaunchVideoAssetId(item);
-    if (!videoId) continue;
-
-    const names = videoNamesById.get(videoId) || [];
-    names.push(item.creative_name || videoId);
-    videoNamesById.set(videoId, names);
-  }
-
-  if (videoNamesById.size === 0) return;
-
-  const results = await Promise.all(
-    Array.from(videoNamesById.entries()).map(async ([videoId, names]) => ({
-      videoId,
-      names,
-      state: await waitForVideoReady(accessToken, videoId, 120_000, 5_000),
-    })),
-  );
-
-  const failed = results.filter((result) => result.state === 'failed');
-  if (failed.length > 0) {
-    throw new Error(
-      `Meta video processing failed for: ${failed.map((result) => result.names.join(', ')).join('; ')}`,
-    );
-  }
-
-  const stillProcessing = results.filter((result) => result.state !== 'ready');
-  if (stillProcessing.length > 0) {
-    throw new Error(
-      `Meta is still processing video asset(s): ${stillProcessing
-        .map((result) => result.names.join(', '))
-        .join('; ')}. Wait a minute and launch again; the uploaded Meta video IDs will be reused.`,
-    );
-  }
-}
-
 function extractVideoIdFromCreativeBody(creativeBody: Record<string, string>): string | undefined {
   if (creativeBody.object_story_spec) {
     try {
@@ -2872,22 +2824,6 @@ export async function POST(request: NextRequest) {
           // We'll handle the launch failure for this item in the next loop
         }
       }
-    }
-
-    try {
-      await waitForLaunchVideosReady(token.accessToken, selectedItems);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Meta is still processing one or more videos.';
-      await updateCreativeTestStatus(testId, 'failed');
-      for (const item of selectedItems) {
-        if (getLaunchVideoAssetId(item)) {
-          await updateCreativeTestItem(item.id, {
-            launchStatus: 'failed',
-            reviewFeedback: message,
-          });
-        }
-      }
-      return NextResponse.json({ error: message }, { status: 409 });
     }
 
     // Step 3: Create adsets + ad creatives + ads
