@@ -89,12 +89,15 @@ function isAllowedExternalCallbackUrl(value?: string): boolean {
     if (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
       return false;
     }
+    const hostname = url.hostname.toLowerCase();
     const allowedHosts = new Set([
       'immuvi-command-center.vercel.app',
       'localhost',
       '127.0.0.1',
     ]);
-    return allowedHosts.has(url.hostname);
+    const isImmuviPreviewHost =
+      hostname.startsWith('immuvi-command-center-') && hostname.endsWith('.vercel.app');
+    return allowedHosts.has(hostname) || isImmuviPreviewHost;
   } catch {
     return false;
   }
