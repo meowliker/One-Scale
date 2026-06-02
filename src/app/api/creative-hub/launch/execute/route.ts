@@ -3368,11 +3368,9 @@ export async function POST(request: NextRequest) {
         testId,
         launchConfig.launchTime === 'scheduled' ? 'scheduled' : 'active',
       );
-      if (launchConfig.launchTime !== 'scheduled') {
-        clickupSync = await updateLaunchedClickUpTasksToTesting(storeId, selectedItems);
-        if (clickupSync.failed > 0) {
-          console.warn('[launch] ClickUp testing-status sync had warnings', clickupSync);
-        }
+      clickupSync = await updateLaunchedClickUpTasksToTesting(storeId, selectedItems);
+      if (clickupSync.failed > 0) {
+        console.warn('[launch] ClickUp testing-status sync had warnings', clickupSync);
       }
     }
 
