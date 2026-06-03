@@ -1842,18 +1842,31 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     overscan: 5,
   });
 
-  // Collect all entity ids for "select all"
-  const allEntityIds = useMemo(() => {
+  // Collect visible row ids for header "select all". Collapsed child rows are
+  // not selected just because their campaign is visible.
+  const visibleRowIds = useMemo(() => {
     const ids: string[] = [];
-    filteredCampaigns.forEach((c) => {
+    displayedCampaigns.forEach((c) => {
       ids.push(c.id);
+      if (!expandedCampaigns.has(c.id)) return;
       (c.adSets || []).forEach((as) => {
         ids.push(as.id);
+        if (!expandedAdSets.has(as.id)) return;
         (as.ads || []).forEach((ad) => ids.push(ad.id));
       });
     });
     return ids;
-  }, [filteredCampaigns]);
+  }, [displayedCampaigns, expandedCampaigns, expandedAdSets]);
+
+  const visibleRowIdSet = useMemo(() => new Set(visibleRowIds), [visibleRowIds]);
+
+  useEffect(() => {
+    if (selectedIds.size === 0) return;
+    const visibleSelectedIds = Array.from(selectedIds).filter((id) => visibleRowIdSet.has(id));
+    if (visibleSelectedIds.length !== selectedIds.size) {
+      selectAll(visibleSelectedIds);
+    }
+  }, [selectedIds, selectAll, visibleRowIdSet]);
 
   // Generate mock hourly data from 7-day campaign metrics for dayparting analysis.
   // Uses last7CampaignsForRecs (not the current date-filtered campaigns) so dayparting
@@ -1912,8 +1925,8 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
   }, [last7CampaignsForRecs]);
 
   const selectedCount = selectedIds.size;
-  const allSelected = allEntityIds.length > 0 && allEntityIds.every((id) => selectedIds.has(id));
-  const someSelected = allEntityIds.some((id) => selectedIds.has(id)) && !allSelected;
+  const allSelected = visibleRowIds.length > 0 && visibleRowIds.every((id) => selectedIds.has(id));
+  const someSelected = visibleRowIds.some((id) => selectedIds.has(id)) && !allSelected;
 
   const totals = useMemo(() => {
     const metrics: Record<string, number> = {};
@@ -2232,9 +2245,9 @@ export function AdsManagerClient({ initialCampaigns, dateRange }: AdsManagerClie
     if (allSelected) {
       clearSelection();
     } else {
-      selectAll(allEntityIds);
+      selectAll(visibleRowIds);
     }
-  }, [allSelected, allEntityIds, clearSelection, selectAll]);
+  }, [allSelected, visibleRowIds, clearSelection, selectAll]);
 
   const handleBulkToggleStatus = useCallback(async (campaignIds: string[], newStatus: 'ACTIVE' | 'PAUSED') => {
     // Optimistically update UI

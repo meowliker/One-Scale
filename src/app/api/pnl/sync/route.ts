@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { rest, isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
+import { convertCurrencyServer, getStoreReportingCurrencyServer, normalizeCurrencyCode } from '@/app/api/lib/currency-conversion';
 
 const PNL_SYNC_SECRET = process.env.PNL_SYNC_SECRET ?? '';
 
@@ -196,6 +197,7 @@ export async function POST(request: NextRequest) {
 
   // Get store timezone
   const storeTz = await getStoreTimezoneServer(storeId);
+  const storeCurrency = await getStoreReportingCurrencyServer(storeId);
 
   // Also try store_config
   let configTz = storeTz;
@@ -241,10 +243,26 @@ export async function POST(request: NextRequest) {
         const mappedIds = [...new Set(mappedAccounts.map(a => a.ad_account_id))];
         if (mappedIds.length > 0) {
           const accountFilter = mappedIds.map(id => encodeURIComponent(id)).join(',');
-          const spendRows = await rest<Array<{ spend: number }>>(
-            `/meta_spend_cache?store_id=eq.${encodeURIComponent(storeId)}&ad_account_id=in.(${accountFilter})&date=eq.${dateStr}&select=spend`
+          const [spendRows, accountRows] = await Promise.all([
+            rest<Array<{ ad_account_id: string; spend: number }>>(
+              `/meta_spend_cache?store_id=eq.${encodeURIComponent(storeId)}&ad_account_id=in.(${accountFilter})&date=eq.${dateStr}&select=ad_account_id,spend`
+            ),
+            rest<Array<{ ad_account_id: string; currency: string | null }>>(
+              `/store_ad_accounts?store_id=eq.${encodeURIComponent(storeId)}&ad_account_id=in.(${accountFilter})&select=ad_account_id,currency`
+            ).catch(() => []),
+          ]);
+          const currencyByAccount = new Map(
+            accountRows.map((account) => [account.ad_account_id, normalizeCurrencyCode(account.currency, 'USD')]),
           );
-          adSpend = (spendRows ?? []).reduce((s, r) => s + (Number(r.spend) || 0), 0);
+          const convertedSpendRows = await Promise.all((spendRows ?? []).map((row) => (
+            convertCurrencyServer(
+              Number(row.spend) || 0,
+              currencyByAccount.get(row.ad_account_id) || 'USD',
+              storeCurrency,
+              dateStr,
+            )
+          )));
+          adSpend = convertedSpendRows.reduce((sum, spend) => sum + spend, 0);
         }
       } catch { /* no meta */ }
 
@@ -384,4 +402,3 @@ export async function POST(request: NextRequest) {
 // Orders are only needed for product performance (which product was in which order).
 /* eslint-disable @typescript-eslint/no-unused-vars */
 const _LEGACY_REMOVED = true;
-

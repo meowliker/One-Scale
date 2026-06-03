@@ -7,7 +7,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { rest, isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
-import { fromZonedTime } from 'date-fns-tz';
+import { STORE_REPORTING_TIMEZONE, startOfStoreDayInTz, todayStoreDayInTimezone } from '@/lib/timezone';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,17 +22,16 @@ export async function GET(request: NextRequest) {
   if (!storeId) return NextResponse.json({ error: 'storeId required' }, { status: 400 });
 
   // Get store timezone
-  const config = await rest<Array<{ iana_timezone: string; currency: string }>>(
-    `/store_config?store_id=eq.${enc(storeId)}&select=iana_timezone,currency&limit=1`
+  const config = await rest<Array<{ currency: string }>>(
+    `/store_config?store_id=eq.${enc(storeId)}&select=currency&limit=1`
   ).catch(() => []);
-  const tz = config[0]?.iana_timezone || 'America/New_York';
+  const tz = STORE_REPORTING_TIMEZONE;
   const currency = config[0]?.currency || 'USD';
 
-  // Today's start in store timezone
+  // Today's store reporting day starts at 11:30 AM in the store timezone.
   const now = new Date();
-  const todayParts = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now);
-  const todayStr = `${todayParts.find(p => p.type === 'year')!.value}-${todayParts.find(p => p.type === 'month')!.value}-${todayParts.find(p => p.type === 'day')!.value}`;
-  const todayUtcStart = fromZonedTime(`${todayStr}T00:00:00`, tz).toISOString();
+  const todayStr = todayStoreDayInTimezone(tz);
+  const todayUtcStart = startOfStoreDayInTz(todayStr, tz).toISOString();
 
   // Today's orders (not settled yet — from orders cache)
   const todayOrders = await rest<Array<{ total_price: number; line_items: string }>>(

@@ -1,11 +1,11 @@
-import type { TimeSeriesDataPoint, DateRangePreset } from '@/types/analytics';
+import type { DateRange, TimeSeriesDataPoint, DateRangePreset } from '@/types/analytics';
 import type { Campaign } from '@/types/campaign';
 import { mockBlendedMetrics, mockTimeSeries, mockHourlyTimeSeries, mockYesterdayHourlyTimeSeries } from '@/data/mockAnalytics';
 import { mockCampaigns } from '@/data/mockCampaigns';
 import { createServiceFn } from '@/services/withMockFallback';
 import { apiClient } from '@/services/api';
 import { getDateRange } from '@/lib/dateUtils';
-import { formatDateInTimezone } from '@/lib/timezone';
+import { STORE_REPORTING_TIMEZONE, storeDayInTimezone } from '@/lib/timezone';
 import { buildStoreScopedKey, memoizePromise } from '@/services/perfCache';
 
 /**
@@ -17,12 +17,21 @@ import { buildStoreScopedKey, memoizePromise } from '@/services/perfCache';
  */
 async function fetchInsightsDirect(
   datePreset: string,
+  range?: DateRange,
 ): Promise<{ data: { date: string; metrics: Record<string, number> }[] }> {
   const { useStoreStore } = await import('@/stores/storeStore');
   const storeId = useStoreStore.getState().activeStoreId;
   if (!storeId) return { data: [] };
 
-  const res = await fetch(`/api/meta/insights?storeId=${encodeURIComponent(storeId)}&datePreset=${datePreset}`);
+  const params = new URLSearchParams({ storeId });
+  if (range) {
+    params.set('since', storeDayInTimezone(range.start, STORE_REPORTING_TIMEZONE));
+    params.set('until', storeDayInTimezone(range.end, STORE_REPORTING_TIMEZONE));
+  } else {
+    params.set('datePreset', datePreset);
+  }
+
+  const res = await fetch(`/api/meta/insights?${params.toString()}`);
   if (!res.ok) return { data: [] };
   return res.json();
 }
@@ -49,13 +58,16 @@ async function mockGetBlendedMetrics(): Promise<Record<string, number>> {
   return mockBlendedMetrics;
 }
 
-function createRealGetBlendedMetrics(datePreset: string) {
+function createRealGetBlendedMetrics(datePreset: string, range?: DateRange) {
   return async function realGetBlendedMetrics(): Promise<Record<string, number>> {
-    const key = buildStoreScopedKey('analytics:blended', datePreset);
+    const rangeKey = range
+      ? `${storeDayInTimezone(range.start, STORE_REPORTING_TIMEZONE)}:${storeDayInTimezone(range.end, STORE_REPORTING_TIMEZONE)}`
+      : datePreset;
+    const key = buildStoreScopedKey('analytics:blended', rangeKey);
     return memoizePromise(key, 45_000, async () => {
       // Use direct fetch (storeId only) so the API resolves ad accounts from DB,
       // matching the P&L page and avoiding stale frontend account IDs.
-      const response = await fetchInsightsDirect(datePreset);
+      const response = await fetchInsightsDirect(datePreset, range);
 
       // Aggregate daily insights into totals
       const totals = { spend: 0, revenue: 0, conversions: 0, impressions: 0, clicks: 0 };
@@ -102,13 +114,16 @@ async function mockGetTimeSeries(preset?: DateRangePreset): Promise<TimeSeriesDa
   }
 }
 
-function createRealGetTimeSeries(datePreset: string) {
+function createRealGetTimeSeries(datePreset: string, range?: DateRange) {
   return async function realGetTimeSeries(): Promise<TimeSeriesDataPoint[]> {
-    const key = buildStoreScopedKey('analytics:timeseries', datePreset);
+    const rangeKey = range
+      ? `${storeDayInTimezone(range.start, STORE_REPORTING_TIMEZONE)}:${storeDayInTimezone(range.end, STORE_REPORTING_TIMEZONE)}`
+      : datePreset;
+    const key = buildStoreScopedKey('analytics:timeseries', rangeKey);
     return memoizePromise(key, 45_000, async () => {
       // Use direct fetch (storeId only) so the API resolves ad accounts from DB,
       // matching the P&L page and avoiding stale frontend account IDs.
-      const response = await fetchInsightsDirect(datePreset);
+      const response = await fetchInsightsDirect(datePreset, range);
       return response.data.map((day) => ({
         date: day.date,
         spend: day.metrics.spend || 0,
@@ -140,21 +155,21 @@ export const getTimeSeries = createServiceFn<TimeSeriesDataPoint[]>(
 );
 
 // Date-range-aware functions
-export function getBlendedMetricsForRange(preset?: DateRangePreset) {
+export function getBlendedMetricsForRange(preset?: DateRangePreset, range?: DateRange) {
   const metaPreset = mapPresetToMeta(preset);
   return createServiceFn<Record<string, number>>(
     'meta',
     mockGetBlendedMetrics,
-    createRealGetBlendedMetrics(metaPreset)
+    createRealGetBlendedMetrics(metaPreset, preset === 'custom' ? range : undefined)
   );
 }
 
-export function getTimeSeriesForRange(preset?: DateRangePreset) {
+export function getTimeSeriesForRange(preset?: DateRangePreset, range?: DateRange) {
   const metaPreset = mapPresetToMeta(preset);
   return createServiceFn<TimeSeriesDataPoint[]>(
     'meta',
     () => mockGetTimeSeries(preset),
-    createRealGetTimeSeries(metaPreset)
+    createRealGetTimeSeries(metaPreset, preset === 'custom' ? range : undefined)
   );
 }
 
@@ -179,18 +194,26 @@ export const getTopCampaigns = createServiceFn<Campaign[]>(
   realGetTopCampaigns
 );
 
-function buildCampaignRangeParams(preset?: DateRangePreset): Record<string, string> {
+function buildCampaignRangeParams(preset?: DateRangePreset, range?: DateRange): Record<string, string> {
+  if (preset === 'custom' && range) {
+    return {
+      since: storeDayInTimezone(range.start, STORE_REPORTING_TIMEZONE),
+      until: storeDayInTimezone(range.end, STORE_REPORTING_TIMEZONE),
+      strictDate: '1',
+      forceLive: '1',
+    };
+  }
   if (!preset) return {};
-  const range = getDateRange(preset);
+  const presetRange = getDateRange(preset);
   return {
-    since: formatDateInTimezone(range.start),
-    until: formatDateInTimezone(range.end),
+    since: storeDayInTimezone(presetRange.start, STORE_REPORTING_TIMEZONE),
+    until: storeDayInTimezone(presetRange.end, STORE_REPORTING_TIMEZONE),
   };
 }
 
-function createRealGetTopCampaignsForRange(preset?: DateRangePreset) {
+function createRealGetTopCampaignsForRange(preset?: DateRangePreset, range?: DateRange) {
   return async function realGetTopCampaignsForRange(): Promise<Campaign[]> {
-    const params = buildCampaignRangeParams(preset);
+    const params = buildCampaignRangeParams(preset, range);
     const key = buildStoreScopedKey('analytics:top-campaigns', `${params.since || 'none'}:${params.until || 'none'}`);
     return memoizePromise(key, 60_000, async () => {
       const response = await apiClient<{ data: Campaign[] }>('/api/meta/campaigns', {
@@ -220,9 +243,9 @@ export const getAllCampaigns = createServiceFn<Campaign[]>(
   realGetAllCampaigns
 );
 
-function createRealGetAllCampaignsForRange(preset?: DateRangePreset) {
+function createRealGetAllCampaignsForRange(preset?: DateRangePreset, range?: DateRange) {
   return async function realGetAllCampaignsForRange(): Promise<Campaign[]> {
-    const params = buildCampaignRangeParams(preset);
+    const params = buildCampaignRangeParams(preset, range);
     const key = buildStoreScopedKey('analytics:all-campaigns', `${params.since || 'none'}:${params.until || 'none'}`);
     return memoizePromise(key, 60_000, async () => {
       const response = await apiClient<{ data: Campaign[] }>('/api/meta/campaigns', {
@@ -233,18 +256,18 @@ function createRealGetAllCampaignsForRange(preset?: DateRangePreset) {
   };
 }
 
-export function getTopCampaignsForRange(preset?: DateRangePreset) {
+export function getTopCampaignsForRange(preset?: DateRangePreset, range?: DateRange) {
   return createServiceFn<Campaign[]>(
     'meta',
     mockGetTopCampaigns,
-    createRealGetTopCampaignsForRange(preset)
+    createRealGetTopCampaignsForRange(preset, range)
   );
 }
 
-export function getAllCampaignsForRange(preset?: DateRangePreset) {
+export function getAllCampaignsForRange(preset?: DateRangePreset, range?: DateRange) {
   return createServiceFn<Campaign[]>(
     'meta',
     mockGetAllCampaigns,
-    createRealGetAllCampaignsForRange(preset)
+    createRealGetAllCampaignsForRange(preset, range)
   );
 }

@@ -14,6 +14,7 @@ import {
   getPersistentStore,
   isSupabasePersistenceEnabled,
   listPersistentStores,
+  rest,
   upsertPersistentConnection,
   upsertPersistentStore,
 } from '@/app/api/lib/supabase-persistence';
@@ -42,8 +43,28 @@ export async function GET(request: NextRequest) {
       ? stores.filter((store) => allowedStoreIds.has(store.id))
       : stores;
 
+    const storeConfigById = new Map<string, { iana_timezone?: string | null; currency?: string | null; reporting_currency?: string | null }>();
+    if (isSupabasePersistenceEnabled() && visibleStores.length > 0) {
+      await Promise.all(
+        visibleStores.map(async (store) => {
+          const rows = await rest<Array<{ iana_timezone?: string | null; currency?: string | null; reporting_currency?: string | null }>>(
+            `/store_config?store_id=eq.${encodeURIComponent(store.id)}&select=iana_timezone,currency,reporting_currency&limit=1`
+          ).catch(() => []);
+          if (rows[0]) storeConfigById.set(store.id, rows[0]);
+        })
+      );
+    }
+
     // Map to frontend-friendly shape
     const result = visibleStores.map((s) => ({
+      ...(() => {
+        const config = storeConfigById.get(s.id);
+        return {
+          timezone: config?.iana_timezone ?? null,
+          currency: config?.currency ?? null,
+          reportingCurrency: config?.reporting_currency ?? null,
+        };
+      })(),
       id: s.id,
       name: s.name,
       domain: s.domain,

@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { DateRangePreset } from '@/types/analytics';
+import type { DateRange, DateRangePreset } from '@/types/analytics';
 import type { TimeSeriesDataPoint } from '@/types/analytics';
 import type { PnLEntry } from '@/types/pnl';
 import { getBlendedMetricsForRange, getTimeSeriesForRange, getTopCampaignsForRange } from '@/services/analytics';
@@ -17,44 +17,88 @@ import { useStoreStore } from '@/stores/storeStore';
 import { NotConnectedError } from '@/services/withMockFallback';
 import { ConnectionEmptyState } from '@/components/ui/ConnectionEmptyState';
 import { getDailyPnL } from '@/services/pnl';
-import { formatDateInTimezone } from '@/lib/timezone';
+import { storeDayInTimezone } from '@/lib/timezone';
 import { getDateRange } from '@/lib/dateUtils';
 import type { Campaign } from '@/types/campaign';
+import { convertCurrency } from '@/lib/attribution/currencyHandler';
 
-function computeShopifyMetricsFromPnL(dailyPnL: PnLEntry[], preset: DateRangePreset) {
-  const range = getDateRange(preset);
-  const startStr = formatDateInTimezone(range.start);
-  const endStr = formatDateInTimezone(range.end);
+const DASHBOARD_CURRENCY = 'USD';
+const SUMMARY_QUERY_VERSION = 'store-day-v5';
+const SUMMARY_WARM_CACHE_VERSION = 'v6';
+
+async function getActiveStoreCurrency(): Promise<string> {
+  const { useStoreStore } = await import('@/stores/storeStore');
+  const storeId = useStoreStore.getState().activeStoreId;
+  if (!storeId) return DASHBOARD_CURRENCY;
+
+  try {
+    const res = await fetch(`/api/settings/store-config?storeId=${encodeURIComponent(storeId)}`);
+    if (!res.ok) return DASHBOARD_CURRENCY;
+    const data = await res.json() as {
+      config?: { currency?: string | null; reporting_currency?: string | null };
+    };
+    return (data.config?.currency || data.config?.reporting_currency || DASHBOARD_CURRENCY).toUpperCase();
+  } catch {
+    return DASHBOARD_CURRENCY;
+  }
+}
+
+function getSummaryRangeKey(preset: DateRangePreset, range: DateRange): string {
+  return `${preset}:${storeDayInTimezone(range.start)}:${storeDayInTimezone(range.end)}`;
+}
+
+async function computeShopifyMetricsFromPnL(dailyPnL: PnLEntry[], preset: DateRangePreset, selectedRange?: DateRange) {
+  const range = preset === 'custom' && selectedRange ? selectedRange : getDateRange(preset);
+  const startStr = storeDayInTimezone(range.start);
+  const endStr = storeDayInTimezone(range.end);
+  const storeCurrency = await getActiveStoreCurrency();
 
   const filteredDays = dailyPnL.filter((day) => {
     return day.date >= startStr && day.date <= endStr;
   });
 
-  const shopifyRevenue = Math.round(
+  const rawRevenue = Math.round(
     filteredDays.reduce((sum, day) => sum + (day.revenue || 0), 0) * 100
   ) / 100;
   const shopifyOrders = filteredDays.reduce((sum, day) => sum + (day.orderCount || 0), 0);
+  const shopifyRevenue = Math.round(
+    (await convertCurrency(rawRevenue, storeCurrency, DASHBOARD_CURRENCY)) * 100
+  ) / 100;
   const shopifyAov = shopifyOrders > 0
     ? Math.round((shopifyRevenue / shopifyOrders) * 100) / 100
     : 0;
-  const shopifyFees = Math.round(
+  const rawFees = Math.round(
     filteredDays.reduce((sum, day) => sum + (day.fees || 0), 0) * 100
   ) / 100;
-  const shopifyRefunds = Math.round(
+  const shopifyFees = Math.round(
+    (await convertCurrency(rawFees, storeCurrency, DASHBOARD_CURRENCY)) * 100
+  ) / 100;
+  const rawRefunds = Math.round(
     filteredDays.reduce((sum, day) => sum + (day.refunds || 0), 0) * 100
   ) / 100;
-  const fullRefundAmount = Math.round(
+  const shopifyRefunds = Math.round(
+    (await convertCurrency(rawRefunds, storeCurrency, DASHBOARD_CURRENCY)) * 100
+  ) / 100;
+  const rawFullRefundAmount = Math.round(
     filteredDays.reduce((sum, day) => sum + (day.fullRefundAmount || 0), 0) * 100
   ) / 100;
-  const partialRefundAmount = Math.round(
+  const fullRefundAmount = Math.round(
+    (await convertCurrency(rawFullRefundAmount, storeCurrency, DASHBOARD_CURRENCY)) * 100
+  ) / 100;
+  const rawPartialRefundAmount = Math.round(
     filteredDays.reduce((sum, day) => sum + (day.partialRefundAmount || 0), 0) * 100
   ) / 100;
-  const shopifyNetProfit = Math.round(
-    filteredDays.reduce((sum, day) => sum + (day.netProfit || 0), 0) * 100
+  const partialRefundAmount = Math.round(
+    (await convertCurrency(rawPartialRefundAmount, storeCurrency, DASHBOARD_CURRENCY)) * 100
   ) / 100;
-  // Ad spend from same P&L snapshots — matches P&L page exactly
-  const shopifyAdSpend = Math.round(
+  const rawAdSpend = Math.round(
     filteredDays.reduce((sum, day) => sum + (day.adSpend || 0), 0) * 100
+  ) / 100;
+  const shopifyAdSpend = Math.round(
+    (await convertCurrency(rawAdSpend, storeCurrency, DASHBOARD_CURRENCY)) * 100
+  ) / 100;
+  const shopifyNetProfit = Math.round(
+    (shopifyRevenue - shopifyAdSpend - shopifyFees - shopifyRefunds) * 100
   ) / 100;
 
   return {
@@ -87,10 +131,10 @@ interface SummaryPayload {
   cachedAt?: string;
 }
 
-function readSummaryWarmCache(storeId: string | null, preset: DateRangePreset): SummaryPayload | null {
+function readSummaryWarmCache(storeId: string | null, rangeKey: string): SummaryPayload | null {
   if (!storeId || typeof window === 'undefined') return null;
   try {
-    const raw = window.localStorage.getItem(`summary:cache:v2:${storeId}:${preset}`);
+    const raw = window.localStorage.getItem(`summary:cache:${SUMMARY_WARM_CACHE_VERSION}:${storeId}:${rangeKey}`);
     if (!raw) return null;
     return JSON.parse(raw) as SummaryPayload;
   } catch {
@@ -98,27 +142,28 @@ function readSummaryWarmCache(storeId: string | null, preset: DateRangePreset): 
   }
 }
 
-function writeSummaryWarmCache(storeId: string, preset: DateRangePreset, payload: SummaryPayload): void {
+function writeSummaryWarmCache(storeId: string, rangeKey: string, payload: SummaryPayload): void {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(`summary:cache:v2:${storeId}:${preset}`, JSON.stringify(payload));
+    window.localStorage.setItem(`summary:cache:${SUMMARY_WARM_CACHE_VERSION}:${storeId}:${rangeKey}`, JSON.stringify(payload));
   } catch {
     // ignore cache write failures
   }
 }
 
-async function fetchSummaryData(preset: DateRangePreset) {
+async function fetchSummaryData(preset: DateRangePreset, selectedRange: DateRange) {
+  const customRange = preset === 'custom' ? selectedRange : undefined;
   const [metrics, series, campaigns, dailyPnL] = await Promise.all([
-    getBlendedMetricsForRange(preset)(),
-    getTimeSeriesForRange(preset)(),
-    getTopCampaignsForRange(preset)(),
+    getBlendedMetricsForRange(preset, customRange)(),
+    getTimeSeriesForRange(preset, customRange)(),
+    getTopCampaignsForRange(preset, customRange)(),
     // Gracefully degrade: if P&L fetch fails (e.g. Shopify not connected),
     // the rest of the dashboard still loads with Meta data.
     getDailyPnL().catch(() => [] as PnLEntry[]),
   ]);
 
   // Single source of truth for Shopify metrics: same daily P&L pipeline used by P&L page cards.
-  const shopifyMetrics = computeShopifyMetricsFromPnL(dailyPnL, preset);
+  const shopifyMetrics = await computeShopifyMetricsFromPnL(dailyPnL, preset, customRange);
 
   return {
     blendedMetrics: {
@@ -149,15 +194,20 @@ const PREWARM_PRESETS: DateRangePreset[] = [
 
 export default function SummaryPage() {
   const [datePreset, setDatePreset] = useState<DateRangePreset>('today');
+  const [selectedRange, setSelectedRange] = useState<DateRange>(() => getDateRange('today'));
 
   const connectionLoading = useConnectionStore((s) => s.loading);
   const connectionStatus = useConnectionStore((s) => s.status);
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
   const connectionReady = !connectionLoading && connectionStatus !== null;
   const queryClient = useQueryClient();
+  const rangeKey = useMemo(
+    () => getSummaryRangeKey(datePreset, selectedRange),
+    [datePreset, selectedRange]
+  );
   const warmSummary = useMemo(
-    () => readSummaryWarmCache(activeStoreId, datePreset),
-    [activeStoreId, datePreset]
+    () => readSummaryWarmCache(activeStoreId, rangeKey),
+    [activeStoreId, rangeKey]
   );
 
   const {
@@ -166,8 +216,8 @@ export default function SummaryPage() {
     isFetching,
     error,
   } = useQuery({
-    queryKey: ['summary', activeStoreId, datePreset],
-    queryFn: () => fetchSummaryData(datePreset),
+    queryKey: ['summary', activeStoreId, rangeKey, SUMMARY_QUERY_VERSION],
+    queryFn: () => fetchSummaryData(datePreset, selectedRange),
     enabled: connectionReady && !!activeStoreId,
     initialData: warmSummary || undefined,
     staleTime: 60_000,
@@ -180,11 +230,13 @@ export default function SummaryPage() {
     queryFn: async () => {
       for (const preset of PREWARM_PRESETS) {
         // Skip if already cached
-        const existing = queryClient.getQueryData(['summary', activeStoreId, preset]);
+        const presetRange = getDateRange(preset);
+        const presetRangeKey = getSummaryRangeKey(preset, presetRange);
+        const existing = queryClient.getQueryData(['summary', activeStoreId, presetRangeKey, SUMMARY_QUERY_VERSION]);
         if (existing) continue;
         await queryClient.prefetchQuery({
-          queryKey: ['summary', activeStoreId, preset],
-          queryFn: () => fetchSummaryData(preset),
+          queryKey: ['summary', activeStoreId, presetRangeKey, SUMMARY_QUERY_VERSION],
+          queryFn: () => fetchSummaryData(preset, presetRange),
         });
       }
       return true;
@@ -196,13 +248,13 @@ export default function SummaryPage() {
 
   useEffect(() => {
     if (!activeStoreId || !data) return;
-    writeSummaryWarmCache(activeStoreId, datePreset, {
+    writeSummaryWarmCache(activeStoreId, rangeKey, {
       blendedMetrics: data.blendedMetrics,
       timeSeries: data.timeSeries,
       topCampaigns: data.topCampaigns,
       cachedAt: new Date().toISOString(),
     });
-  }, [activeStoreId, data, datePreset]);
+  }, [activeStoreId, data, rangeKey]);
 
   const blendedMetrics = data?.blendedMetrics ?? warmSummary?.blendedMetrics ?? {};
   const timeSeries = data?.timeSeries ?? warmSummary?.timeSeries ?? [];
@@ -216,6 +268,14 @@ export default function SummaryPage() {
 
   const handleDatePresetChange = useCallback((preset: DateRangePreset) => {
     setDatePreset(preset);
+    if (preset !== 'custom') {
+      setSelectedRange(getDateRange(preset));
+    }
+  }, []);
+
+  const handleDateRangeChange = useCallback((range: DateRange) => {
+    setSelectedRange(range);
+    setDatePreset(range.preset || 'custom');
   }, []);
 
   if (!connectionReady && Object.keys(blendedMetrics).length === 0 && !emptyReason) {
@@ -243,7 +303,9 @@ export default function SummaryPage() {
         timeSeries={timeSeries}
         topCampaigns={topCampaigns}
         datePreset={datePreset}
+        dateRange={selectedRange}
         onDatePresetChange={handleDatePresetChange}
+        onDateRangeChange={handleDateRangeChange}
         loading={isLoading || isFetching}
       />
     </div>

@@ -3,6 +3,7 @@ import {
   rest,
   isSupabasePersistenceEnabled,
 } from '@/app/api/lib/supabase-persistence';
+import { fetchLiveExchangeRate } from '@/app/api/lib/live-exchange-rate';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -36,13 +37,6 @@ interface StoreConfigRow {
   store_id: string;
   reporting_currency: string;
   meta_currencies: Record<string, string> | null;
-}
-
-interface ExchangeRateAPIResponse {
-  success?: boolean;
-  base: string;
-  date: string;
-  rates: Record<string, number>;
 }
 
 // ---- Main Handler ----
@@ -90,36 +84,23 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // 2. Fetch rates from exchangerate.host (free, no API key required)
-    //    Use USD as base and get all target currencies in one call
+    // 2. Fetch rates from Google Finance first, with API fallbacks in the shared helper.
     const targets = Array.from(currencies).filter((c) => c !== 'USD');
-    const apiUrl = `https://api.exchangerate.host/latest?base=USD&symbols=${targets.join(',')}`;
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-
-    let rateData: ExchangeRateAPIResponse;
-    try {
-      const resp = await fetch(apiUrl, { signal: controller.signal });
-      clearTimeout(timeout);
-      if (!resp.ok) {
-        throw new Error(`Exchange rate API returned ${resp.status}`);
-      }
-      rateData = (await resp.json()) as ExchangeRateAPIResponse;
-    } catch (err) {
-      clearTimeout(timeout);
-      throw err;
-    }
-
-    if (!rateData.rates || Object.keys(rateData.rates).length === 0) {
-      throw new Error('Exchange rate API returned no rates');
-    }
+    const liveRates = await Promise.all(
+      targets.map(async (targetCurrency) => ({
+        targetCurrency,
+        liveRate: await fetchLiveExchangeRate('USD', targetCurrency),
+      })),
+    );
 
     // 3. Upsert rates into exchange_rates table
     let upserted = 0;
+    const sources: Record<string, string> = {};
 
-    for (const [targetCurrency, rate] of Object.entries(rateData.rates)) {
-      if (typeof rate !== 'number' || rate <= 0) continue;
+    for (const { targetCurrency, liveRate } of liveRates) {
+      const rate = liveRate?.rate;
+      if (!liveRate || typeof rate !== 'number' || rate <= 0) continue;
+      sources[targetCurrency] = liveRate.source;
 
       // Forward: USD -> target
       await rest('/exchange_rates', {
@@ -148,6 +129,10 @@ export async function GET(req: NextRequest) {
       upserted++;
     }
 
+    if (upserted === 0) {
+      throw new Error('No live exchange rates could be fetched');
+    }
+
     const elapsed = Date.now() - start;
     await logCron('refresh-exchange-rates', null, 'success', upserted, null, elapsed);
 
@@ -158,6 +143,7 @@ export async function GET(req: NextRequest) {
       date: today,
       pairs: upserted,
       currencies: Array.from(currencies),
+      sources,
     });
   } catch (err) {
     const elapsed = Date.now() - start;

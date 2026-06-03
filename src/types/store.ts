@@ -16,6 +16,9 @@ export interface Store {
   domain: string;
   platform: 'shopify' | 'woocommerce' | 'custom';
   logoUrl?: string;
+  timezone?: string | null;
+  currency?: string | null;
+  reportingCurrency?: string | null;
   adAccounts: AdAccount[];
   createdAt: string;
   shopifyConnected?: boolean;

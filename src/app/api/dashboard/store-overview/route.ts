@@ -1,9 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { DateRangePreset } from '@/types/analytics';
 import type { Campaign } from '@/types/campaign';
-import { DEFAULT_TIMEZONE, formatDateInTimezone, getDateRangeInTimezone } from '@/lib/timezone';
-import { shopifyDateToStoreDate } from '@/lib/timezone';
-import { fromZonedTime } from 'date-fns-tz';
+import {
+  STORE_REPORTING_TIMEZONE,
+  endOfStoreDayInTz,
+  formatDateInTimezone,
+  getDateRangeInTimezone,
+  shopifyDateToStoreDayDate,
+  startOfStoreDayInTz,
+  storeDayInTimezone,
+} from '@/lib/timezone';
 import { readSessionFromRequest } from '@/lib/auth/request-session';
 import { listStoreIdsForWorkspace } from '@/app/api/lib/auth-users';
 import { getMetaToken } from '@/app/api/lib/tokens';
@@ -107,20 +113,36 @@ async function getStoredExchangeRate(
   date: string,
 ): Promise<number | null> {
   const enc = (value: string) => encodeURIComponent(value);
+  const isPlausibleRate = (rate: number): boolean => {
+    if (!Number.isFinite(rate) || rate <= 0) return false;
+    if (fromCurrency === 'INR' && toCurrency === 'USD') return rate >= 0.005 && rate <= 0.03;
+    if (fromCurrency === 'USD' && toCurrency === 'INR') return rate >= 30 && rate <= 200;
+    return rate < 1000;
+  };
   const exactRows = await rest<Array<{ rate: number }>>(
     `/exchange_rates?base_currency=eq.${enc(fromCurrency)}&target_currency=eq.${enc(toCurrency)}&date=eq.${enc(date)}&select=rate&limit=1`,
   ).catch(() => []);
-  if (exactRows[0]?.rate && Number(exactRows[0].rate) > 0) return Number(exactRows[0].rate);
+  if (exactRows[0]?.rate && isPlausibleRate(Number(exactRows[0].rate))) return Number(exactRows[0].rate);
 
   const recentRows = await rest<Array<{ rate: number }>>(
     `/exchange_rates?base_currency=eq.${enc(fromCurrency)}&target_currency=eq.${enc(toCurrency)}&date=lte.${enc(date)}&select=rate&order=date.desc&limit=1`,
   ).catch(() => []);
-  if (recentRows[0]?.rate && Number(recentRows[0].rate) > 0) return Number(recentRows[0].rate);
+  if (recentRows[0]?.rate && isPlausibleRate(Number(recentRows[0].rate))) return Number(recentRows[0].rate);
+
+  const legacyRecentRows = await rest<Array<{ rate: number }>>(
+    `/exchange_rates?from_currency=eq.${enc(fromCurrency)}&to_currency=eq.${enc(toCurrency)}&date=lte.${enc(date)}&select=rate&order=date.desc&limit=1`,
+  ).catch(() => []);
+  if (legacyRecentRows[0]?.rate && isPlausibleRate(Number(legacyRecentRows[0].rate))) return Number(legacyRecentRows[0].rate);
 
   const inverseRows = await rest<Array<{ rate: number }>>(
     `/exchange_rates?base_currency=eq.${enc(toCurrency)}&target_currency=eq.${enc(fromCurrency)}&date=lte.${enc(date)}&select=rate&order=date.desc&limit=1`,
   ).catch(() => []);
-  if (inverseRows[0]?.rate && Number(inverseRows[0].rate) > 0) return 1 / Number(inverseRows[0].rate);
+  if (inverseRows[0]?.rate && isPlausibleRate(1 / Number(inverseRows[0].rate))) return 1 / Number(inverseRows[0].rate);
+
+  const legacyInverseRows = await rest<Array<{ rate: number }>>(
+    `/exchange_rates?from_currency=eq.${enc(toCurrency)}&to_currency=eq.${enc(fromCurrency)}&date=lte.${enc(date)}&select=rate&order=date.desc&limit=1`,
+  ).catch(() => []);
+  if (legacyInverseRows[0]?.rate && isPlausibleRate(1 / Number(legacyInverseRows[0].rate))) return 1 / Number(legacyInverseRows[0].rate);
 
   return null;
 }
@@ -232,13 +254,6 @@ async function fetchInsightTotalsForStore(
   }, { spend: 0, clicks: 0, impressions: 0 });
 }
 
-function resolveStoreTimezone(store: { adAccounts?: Array<{ is_active?: number | boolean; timezone?: string | null }> }): string {
-  const active = (store.adAccounts || []).find((a) => Number(a.is_active) === 1 && a.timezone);
-  if (active?.timezone) return active.timezone;
-  const first = (store.adAccounts || []).find((a) => a.timezone);
-  return first?.timezone || DEFAULT_TIMEZONE;
-}
-
 async function fetchShopifyTopline(
   storeId: string,
   since: string,
@@ -248,8 +263,8 @@ async function fetchShopifyTopline(
   const token = await getShopifyToken(storeId);
   if (!token?.accessToken || !token?.shopDomain) return { revenue: 0, orders: 0 };
 
-  const createdAtMin = fromZonedTime(`${since}T00:00:00`, timezone).toISOString();
-  const createdAtMax = fromZonedTime(`${until}T23:59:59`, timezone).toISOString();
+  const createdAtMin = startOfStoreDayInTz(since, timezone).toISOString();
+  const createdAtMax = endOfStoreDayInTz(until, timezone).toISOString();
   let sinceId = '0';
   let totalRevenue = 0;
   let totalOrders = 0;
@@ -300,8 +315,8 @@ async function fetchShopifyCosts(
     return { fees: 0, refunds: 0, fullRefundAmount: 0, partialRefundAmount: 0 };
   }
 
-  const startUtc = fromZonedTime(`${since}T00:00:00`, timezone);
-  const endUtc = fromZonedTime(`${until}T23:59:59`, timezone);
+  const startUtc = startOfStoreDayInTz(since, timezone);
+  const endUtc = endOfStoreDayInTz(until, timezone);
 
   // 1) Orders in selected window for fee attribution
   let sinceId = '0';
@@ -378,7 +393,7 @@ async function fetchShopifyCosts(
       if (txns.length === 0) break;
       for (const tx of txns) {
         if (tx.type !== 'charge' || !tx.sourceOrderId) continue;
-        const txDate = shopifyDateToStoreDate(tx.processedAt, timezone);
+        const txDate = shopifyDateToStoreDayDate(tx.processedAt, timezone);
         if (txDate < since) {
           reachedOld = true;
           continue;
@@ -412,7 +427,7 @@ async function fetchShopifyCosts(
     if (!order.refunds || order.refunds.length === 0) continue;
     for (const refund of order.refunds) {
       if (!refund.totalAmount || refund.totalAmount <= 0) continue;
-      const refundDate = shopifyDateToStoreDate(refund.createdAt, timezone);
+      const refundDate = shopifyDateToStoreDayDate(refund.createdAt, timezone);
       if (refundDate < since || refundDate > until) continue;
       refunds += refund.totalAmount;
       if (order.financialStatus === 'refunded') {
@@ -435,9 +450,9 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const preset = parsePreset(searchParams.get('preset'));
-    const displayRange = getDateRangeInTimezone(preset, DEFAULT_TIMEZONE);
-    const since = formatDateInTimezone(displayRange.start, DEFAULT_TIMEZONE);
-    const until = formatDateInTimezone(displayRange.end, DEFAULT_TIMEZONE);
+    const displayRange = getDateRangeInTimezone(preset, STORE_REPORTING_TIMEZONE);
+    const since = formatDateInTimezone(displayRange.start, STORE_REPORTING_TIMEZONE);
+    const until = formatDateInTimezone(displayRange.end, STORE_REPORTING_TIMEZONE);
 
     const useSupabase = isSupabasePersistenceEnabled();
     const allStores = useSupabase ? await listPersistentStores() : getAllStores();
@@ -453,10 +468,10 @@ export async function GET(request: NextRequest) {
     const rows: StoreOverviewRow[] = [];
 
     for (const store of visibleStores) {
-      const storeTz = resolveStoreTimezone(store);
+      const storeTz = STORE_REPORTING_TIMEZONE;
       const storeRange = getDateRangeInTimezone(preset, storeTz);
-      const storeSince = formatDateInTimezone(storeRange.start, storeTz);
-      const storeUntil = formatDateInTimezone(storeRange.end, storeTz);
+      const storeSince = storeDayInTimezone(storeRange.start, storeTz);
+      const storeUntil = storeDayInTimezone(storeRange.end, storeTz);
       const exactVariant = `range:since:${storeSince}|until:${storeUntil}|strict:1`;
       const metaPreset = mapPresetToMeta(preset);
       const storeSettings = useSupabase
@@ -546,15 +561,14 @@ export async function GET(request: NextRequest) {
         adSpend = insightTotals.spend > 0 ? insightTotals.spend : campaignSpend;
       }
 
-      // Keep Store Overview fast: use cache first. Only compute live Shopify values if
-      // the selected date window has no cached P&L rows yet.
-      if (pnlRows.length === 0) {
+      // For today's store-day window, cached daily rows can include the old
+      // midnight-based day. Live Shopify is the source of truth.
+      const shouldUseLiveShopifyTopline = preset === 'today' || pnlRows.length === 0;
+      if (shouldUseLiveShopifyTopline) {
         try {
           const shopify = await fetchShopifyTopline(store.id, storeSince, storeUntil, storeTz);
-          if (shopify.orders > 0 || shopify.revenue > 0) {
-            revenue = shopify.revenue;
-            orders = shopify.orders;
-          }
+          revenue = shopify.revenue;
+          orders = shopify.orders;
         } catch {
           // keep cache-derived values
         }
@@ -563,12 +577,14 @@ export async function GET(request: NextRequest) {
       // Refunds can remain zero in cache even when fee rows are present; backfill refunds
       // (and optionally fees) from Shopify for recent presets.
       const shouldBackfillRefunds =
-        (refunds === 0 && (preset === 'today' || preset === 'yesterday' || preset === 'last7' || preset === 'last7today' || preset === 'last14'))
+        preset === 'today'
+        ||
+        (refunds === 0 && (preset === 'yesterday' || preset === 'last7' || preset === 'last7today' || preset === 'last14'))
         || (pnlRows.length === 0 && fees === 0 && refunds === 0);
       if (shouldBackfillRefunds) {
         try {
           const shopifyCosts = await fetchShopifyCosts(store.id, storeSince, storeUntil, storeTz);
-          if (fees === 0) {
+          if (preset === 'today' || fees === 0) {
             fees = shopifyCosts.fees;
           }
           refunds = shopifyCosts.refunds;

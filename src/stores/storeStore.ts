@@ -194,6 +194,8 @@ export function getActiveStoreTimezone(): string {
   const state = useStoreStore.getState();
   const activeStore = state.stores.find((s) => s.id === state.activeStoreId);
 
+  if (activeStore?.timezone) return activeStore.timezone;
+
   if (activeStore?.adAccounts?.length) {
     const activeAccount = activeStore.adAccounts.find((a) => a.isActive);
     if (activeAccount?.timezone) return activeAccount.timezone;

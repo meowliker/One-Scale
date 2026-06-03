@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Loader2, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import type { PnLSummary, PnLEntry, ProductCOGS, HourlyPnLEntry } from '@/types/pnl';
 import type { ProductPnLData } from '@/types/productPnl';
 import { getPnLSummary, getDailyPnL, getProducts, getHourlyPnL, clearPnLCaches } from '@/services/pnl';
@@ -14,6 +14,7 @@ import { ConnectionEmptyState } from '@/components/ui/ConnectionEmptyState';
 import { StoreHealthBanner } from '@/components/pnl/StoreHealthBanner';
 
 interface PnLCachePayload {
+  version?: number;
   summary: PnLSummary;
   dailyPnL: PnLEntry[];
   products: ProductCOGS[];
@@ -21,6 +22,8 @@ interface PnLCachePayload {
   lastRefreshedIso: string | null;
   currency?: string;
 }
+
+const PNL_CACHE_VERSION = 2;
 
 function getPnLCacheKey(storeId: string): string {
   return `pnl:cache:${storeId}`;
@@ -30,7 +33,12 @@ function readPnLCache(storeId: string): PnLCachePayload | null {
   try {
     const raw = localStorage.getItem(getPnLCacheKey(storeId));
     if (!raw) return null;
-    return JSON.parse(raw) as PnLCachePayload;
+    const parsed = JSON.parse(raw) as PnLCachePayload;
+    if (parsed.version !== PNL_CACHE_VERSION) {
+      localStorage.removeItem(getPnLCacheKey(storeId));
+      return null;
+    }
+    return parsed;
   } catch {
     return null;
   }
@@ -38,7 +46,10 @@ function readPnLCache(storeId: string): PnLCachePayload | null {
 
 function writePnLCache(storeId: string, payload: PnLCachePayload): void {
   try {
-    localStorage.setItem(getPnLCacheKey(storeId), JSON.stringify(payload));
+    localStorage.setItem(getPnLCacheKey(storeId), JSON.stringify({
+      ...payload,
+      version: PNL_CACHE_VERSION,
+    }));
   } catch {
     // Ignore localStorage quota/security errors
   }
@@ -363,6 +374,15 @@ export default function PnLPage() {
         // Skip if snapshot hasn't been updated since last poll
         const newSyncedAt = json.meta?.lastSyncedAt || '';
         if (newSyncedAt && newSyncedAt === lastSyncedAt) return;
+        const currentLastRefreshed = latestLastRefreshedRef.current;
+        if (
+          newSyncedAt &&
+          currentLastRefreshed &&
+          new Date(newSyncedAt).getTime() < currentLastRefreshed.getTime()
+        ) {
+          lastSyncedAt = newSyncedAt;
+          return;
+        }
         lastSyncedAt = newSyncedAt;
 
         // Merge snapshot entries — NEVER downgrade fresh data

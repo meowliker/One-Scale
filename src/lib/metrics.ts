@@ -111,11 +111,16 @@ export function getRankingColor(value: number): string {
 
 /**
  * Safely get a metric value from a PerformanceMetrics-like object.
- * Returns 0 for metrics not present in the data (e.g., netProfit, thumbstopRate).
+ * Derives computed metrics when the API does not send them.
  */
 export function getMetricValue(
   metrics: Record<string, number>,
   key: MetricKey
 ): number {
+  if (key === 'netProfit') {
+    const explicit = metrics.netProfit;
+    if (explicit != null && Number.isFinite(Number(explicit))) return Number(explicit);
+    return Number(metrics.revenue || 0) - Number(metrics.spend || 0);
+  }
   return (metrics as Record<string, number>)[key] ?? 0;
 }

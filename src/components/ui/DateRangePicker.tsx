@@ -4,7 +4,15 @@ import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Calendar, ChevronLeft, ChevronRight, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getDateRange } from '@/lib/dateUtils';
-import { formatInTimezone, formatDateInTimezone, getStoreTimezone } from '@/lib/timezone';
+import {
+  STORE_REPORTING_TIMEZONE,
+  endOfStoreDayInTz,
+  formatInTimezone,
+  formatDateInTimezone,
+  startOfStoreDayInTz,
+  storeDayInTimezone,
+  todayStoreDayInTimezone,
+} from '@/lib/timezone';
 import { fromZonedTime, toZonedTime } from 'date-fns-tz';
 import type { DateRangePreset } from '@/types/analytics';
 
@@ -66,7 +74,7 @@ function getFirstDayOfWeek(year: number, month: number): number {
 
 function formatTriggerLabel(start: Date, end: Date, preset?: DateRangePreset, tz?: string): string {
   if (preset && preset !== 'custom' && presetLabels[preset]) return presetLabels[preset];
-  const timezone = tz || getStoreTimezone();
+  const timezone = tz || STORE_REPORTING_TIMEZONE;
   const startStr = formatDateInTimezone(start, timezone);
   const endStr = formatDateInTimezone(end, timezone);
   if (startStr === endStr) return formatInTimezone(start, 'MMM d, yyyy', timezone);
@@ -79,6 +87,22 @@ function formatTriggerLabel(start: Date, end: Date, preset?: DateRangePreset, tz
 
 function formatCompact(date: Date, tz: string): string {
   return formatInTimezone(date, 'MMM d, yyyy', tz);
+}
+
+function getSelectionLabels(
+  range: { start: Date; end: Date; preset?: DateRangePreset },
+  tz: string,
+): { start: string; end: string } {
+  if (range.preset && range.preset !== 'custom') {
+    return {
+      start: storeDayInTimezone(range.start, tz),
+      end: storeDayInTimezone(range.end, tz),
+    };
+  }
+  return {
+    start: formatDateInTimezone(range.start, tz),
+    end: formatDateInTimezone(range.end, tz),
+  };
 }
 
 // ── Calendar Grid ───────────────────────────────────────────────────────────
@@ -101,7 +125,7 @@ function CalendarGrid({
 }: CalendarGridProps) {
   const daysInMonth = getDaysInMonth(year, month);
   const firstDay = getFirstDayOfWeek(year, month);
-  const todayStr = formatDateInTimezone(new Date(), timezone);
+  const todayStr = todayStoreDayInTimezone(timezone);
 
   // Compute effective range for highlight
   const effectiveEnd = selectedEnd || hoverDate;
@@ -186,7 +210,7 @@ function CalendarGrid({
 
 export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerProps) {
   const [open, setOpen] = useState(false);
-  const tz = getStoreTimezone();
+  const tz = STORE_REPORTING_TIMEZONE;
   const ref = useRef<HTMLDivElement>(null);
 
   // Calendar navigation — always derive from dateRange when not open
@@ -215,33 +239,31 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
-  // Reset selection state when opening — use YYYY-MM-DD parsing to avoid timezone bugs
-  useEffect(() => {
-    if (open) {
-      const startStr = formatDateInTimezone(dateRange.start, tz);
-      const endStr = formatDateInTimezone(dateRange.end, tz);
-      setSelStart(startStr);
-      setSelEnd(endStr);
-      setIsSelectingEnd(false);
-      setHoverDate(null);
-      // Navigate calendar to the END date's month (most relevant for ranges)
-      const [ey, em] = endStr.split('-').map(Number);
-      setViewMonth({ year: ey, month: em - 1 });
-    }
-  }, [open, dateRange, tz]);
+  const resetSelectionFromCurrentRange = useCallback(() => {
+    const { start: startStr, end: endStr } = getSelectionLabels(dateRange, tz);
+    setSelStart(startStr);
+    setSelEnd(endStr);
+    setIsSelectingEnd(false);
+    setHoverDate(null);
+    const [ey, em] = endStr.split('-').map(Number);
+    setViewMonth({ year: ey, month: em - 1 });
+  }, [dateRange, tz]);
+
+  const handleTriggerClick = useCallback(() => {
+    if (!open) resetSelectionFromCurrentRange();
+    setOpen((p) => !p);
+  }, [open, resetSelectionFromCurrentRange]);
 
   // ── Preset click → immediate apply ──
   const handlePresetClick = useCallback((preset: DateRangePreset) => {
     const range = getDateRange(preset);
-    const startStr = formatDateInTimezone(range.start, tz);
-    const endStr = formatDateInTimezone(range.end, tz);
     onRangeChange({
-      start: fromZonedTime(`${startStr}T00:00:00`, tz),
-      end: fromZonedTime(`${endStr}T23:59:59`, tz),
+      start: range.start,
+      end: range.end,
       preset,
     });
     setOpen(false);
-  }, [tz, onRangeChange]);
+  }, [onRangeChange]);
 
   // ── Calendar date click ──
   const handleDateClick = useCallback((dateStr: string) => {
@@ -266,9 +288,12 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
   const handleApply = useCallback(() => {
     if (!selStart) return;
     const endStr = selEnd || selStart;
+    const rangeStart = selStart <= endStr ? selStart : endStr;
+    const rangeEnd = selStart <= endStr ? endStr : selStart;
+    const currentStoreDay = todayStoreDayInTimezone(tz);
     onRangeChange({
-      start: fromZonedTime(`${selStart}T00:00:00`, tz),
-      end: fromZonedTime(`${endStr}T23:59:59`, tz),
+      start: startOfStoreDayInTz(rangeStart, tz),
+      end: rangeEnd >= currentStoreDay ? new Date() : endOfStoreDayInTz(rangeEnd, tz),
       preset: 'custom',
     });
     setOpen(false);
@@ -306,7 +331,7 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
     <div className="relative inline-flex items-center" ref={ref}>
       {/* ── Trigger Button ── */}
       <button
-        onClick={() => setOpen((p) => !p)}
+        onClick={handleTriggerClick}
         className={cn(
           'inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-all duration-200',
           open

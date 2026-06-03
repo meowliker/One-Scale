@@ -55,11 +55,18 @@ export async function getStoreCurrencyConfig(
     );
     if (res.ok) {
       const data = await res.json();
-      const store = data.store || data;
+      const store = data.store
+        || (Array.isArray(data.stores) ? data.stores.find((item: { id?: string }) => item.id === storeId) : null)
+        || data;
       return {
         storeId,
-        reportingCurrency: store.reporting_currency || store.currency || 'USD',
-        metaCurrencies: store.meta_currencies || {},
+        reportingCurrency: store.reportingCurrency || store.reporting_currency || store.currency || 'USD',
+        metaCurrencies: store.meta_currencies || Object.fromEntries(
+          (store.adAccounts || []).map((account: { accountId?: string; id?: string; currency?: string }) => [
+            account.accountId || account.id,
+            account.currency || 'USD',
+          ]).filter(([accountId]: [string | undefined, string]) => !!accountId),
+        ),
       };
     }
   } catch {

@@ -1,8 +1,15 @@
-import { fromZonedTime } from 'date-fns-tz';
 import { fetchBalanceTransactions, fetchShopifyOrders } from '@/app/api/lib/shopify-client';
 import { fetchMetaInsights, mapInsightsToMetrics } from '@/app/api/lib/meta-client';
 import { getMetaToken, getShopifyToken } from '@/app/api/lib/tokens';
-import { daysAgoInTimezone, shopifyDateToStoreDate, todayInTimezone } from '@/lib/timezone';
+import { convertCurrencyServer, getStoreReportingCurrencyServer, normalizeCurrencyCode } from '@/app/api/lib/currency-conversion';
+import {
+  STORE_REPORTING_TIMEZONE,
+  endOfStoreDayInTz,
+  shopifyDateToStoreDayDate,
+  startOfStoreDayInTz,
+  storeDaysAgoInTimezone,
+  todayStoreDayInTimezone,
+} from '@/lib/timezone';
 import {
   batchUpsertCachedPnLDays,
   getAllStores,
@@ -33,17 +40,10 @@ interface SyncResult {
   reason?: string;
 }
 
-function resolveStoreTimezone(store: { adAccounts?: Array<{ is_active?: number | boolean; timezone?: string | null }> }): string {
-  const active = (store.adAccounts || []).find((a) => Number(a.is_active) === 1 && a.timezone);
-  if (active?.timezone) return active.timezone;
-  const first = (store.adAccounts || []).find((a) => a.timezone);
-  return first?.timezone || 'America/New_York';
-}
-
 function buildDateRangeDays(days: number, tz: string): string[] {
   const out: string[] = [];
   for (let i = days - 1; i >= 0; i -= 1) {
-    out.push(daysAgoInTimezone(i, tz));
+    out.push(storeDaysAgoInTimezone(i, tz));
   }
   return out;
 }
@@ -136,10 +136,10 @@ async function paginateShopifyOrders(
 
 async function syncOneStore(store: StoreWithAccounts, days: number): Promise<SyncResult> {
   const useSupabase = isSupabasePersistenceEnabled();
-  const tz = resolveStoreTimezone(store);
+  const tz = STORE_REPORTING_TIMEZONE;
   const dates = buildDateRangeDays(days, tz);
   const startDate = dates[0];
-  const endDate = dates[dates.length - 1] || todayInTimezone(tz);
+  const endDate = dates[dates.length - 1] || todayStoreDayInTimezone(tz);
 
   const [shopifyToken, metaToken] = await Promise.all([
     getShopifyToken(store.id),
@@ -164,8 +164,9 @@ async function syncOneStore(store: StoreWithAccounts, days: number): Promise<Syn
       ]);
 
   const productType: 'physical' | 'digital' = storeSettings?.product_type === 'digital' ? 'digital' : 'physical';
-  const startUtc = fromZonedTime(`${startDate}T00:00:00`, tz).toISOString();
-  const endUtc = fromZonedTime(`${endDate}T23:59:59`, tz).toISOString();
+  const reportingCurrency = await getStoreReportingCurrencyServer(store.id);
+  const startUtc = startOfStoreDayInTz(startDate, tz).toISOString();
+  const endUtc = endOfStoreDayInTz(endDate, tz).toISOString();
 
   const [windowOrders, olderRefunded, olderPartials] = await Promise.all([
     paginateShopifyOrders(shopifyToken.accessToken, shopifyToken.shopDomain, {
@@ -197,7 +198,7 @@ async function syncOneStore(store: StoreWithAccounts, days: number): Promise<Syn
   const ordersByDate = new Map<string, typeof windowOrders>();
   for (const d of dates) ordersByDate.set(d, []);
   for (const order of windowOrders) {
-    const d = shopifyDateToStoreDate(order.createdAt, tz);
+    const d = shopifyDateToStoreDayDate(order.createdAt, tz);
     if (!ordersByDate.has(d)) ordersByDate.set(d, []);
     ordersByDate.get(d)!.push(order);
   }
@@ -210,7 +211,7 @@ async function syncOneStore(store: StoreWithAccounts, days: number): Promise<Syn
     for (const refund of order.refunds || []) {
       const amount = refund.totalAmount || 0;
       if (amount <= 0) continue;
-      const d = shopifyDateToStoreDate(refund.createdAt, tz);
+      const d = shopifyDateToStoreDayDate(refund.createdAt, tz);
       if (d < startDate || d > endDate) continue;
       if (!refundsByDate.has(d)) refundsByDate.set(d, { refunds: 0, fullRefundCount: 0, partialRefundCount: 0, fullRefundAmount: 0, partialRefundAmount: 0 });
       const bucket = refundsByDate.get(d)!;
@@ -236,7 +237,7 @@ async function syncOneStore(store: StoreWithAccounts, days: number): Promise<Syn
       if (txns.length === 0) break;
       for (const txn of txns) {
         if (txn.type !== 'charge' || !txn.sourceOrderId) continue;
-        const d = shopifyDateToStoreDate(txn.processedAt, tz);
+        const d = shopifyDateToStoreDayDate(txn.processedAt, tz);
         if (d < startDate) {
           reachedOld = true;
           continue;
@@ -255,30 +256,43 @@ async function syncOneStore(store: StoreWithAccounts, days: number): Promise<Syn
   }
 
   const adAccounts = (store.adAccounts || [])
-    .filter((a) => Number(a.is_active) === 1)
-    .map((a) => a.ad_account_id);
+    .filter((a) => Number(a.is_active) === 1 && a.platform === 'meta');
 
   const spendByDate = new Map<string, number>();
   for (const d of dates) spendByDate.set(d, 0);
   if (metaToken && adAccounts.length > 0) {
     const insightGroups = await Promise.all(
-      adAccounts.map((id) => fetchMetaInsights(metaToken.accessToken, id, 'last_30d').catch(() => []))
+      adAccounts.map(async (account) => ({
+        account,
+        rows: await fetchMetaInsights(metaToken.accessToken, account.ad_account_id, 'last_30d').catch(() => []),
+      }))
     );
-    for (const day of insightGroups.flat()) {
-      const d = day.date_start;
-      if (d < startDate || d > endDate) continue;
-      const m = mapInsightsToMetrics(day);
-      spendByDate.set(d, (spendByDate.get(d) || 0) + (m.spend || 0));
+    for (const group of insightGroups) {
+      const accountCurrency = normalizeCurrencyCode(group.account.currency, 'USD');
+      for (const day of group.rows) {
+        const d = day.date_start;
+        if (d < startDate || d > endDate) continue;
+        const m = mapInsightsToMetrics(day);
+        const spend = await convertCurrencyServer(m.spend || 0, accountCurrency, reportingCurrency, d);
+        spendByDate.set(d, (spendByDate.get(d) || 0) + spend);
+      }
     }
-    const today = todayInTimezone(tz);
+    const today = todayStoreDayInTimezone(tz);
     if (today >= startDate && today <= endDate) {
       const todayGroups = await Promise.all(
-        adAccounts.map((id) => fetchMetaInsights(metaToken.accessToken, id, 'today').catch(() => []))
+        adAccounts.map(async (account) => ({
+          account,
+          rows: await fetchMetaInsights(metaToken.accessToken, account.ad_account_id, 'today').catch(() => []),
+        }))
       );
-      for (const day of todayGroups.flat()) {
-        if (day.date_start !== today) continue;
-        const m = mapInsightsToMetrics(day);
-        spendByDate.set(today, (spendByDate.get(today) || 0) + (m.spend || 0));
+      for (const group of todayGroups) {
+        const accountCurrency = normalizeCurrencyCode(group.account.currency, 'USD');
+        for (const day of group.rows) {
+          if (day.date_start !== today) continue;
+          const m = mapInsightsToMetrics(day);
+          const spend = await convertCurrencyServer(m.spend || 0, accountCurrency, reportingCurrency, today);
+          spendByDate.set(today, (spendByDate.get(today) || 0) + spend);
+        }
       }
     }
   }

@@ -36,6 +36,10 @@ function getMetricColorClass(metricKey: MetricKey, value: number): string {
       if (value < 3.0) return 'text-[#ff9500]';
       return 'text-[#34c759]';
     }
+    case 'netProfit': {
+      if (value === 0) return 'text-[#aeaeb2]';
+      return value > 0 ? 'text-[#34c759]' : 'text-[#ff3b30]';
+    }
     default:
       return '';
   }

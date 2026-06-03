@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useRef, useMemo, useEffect, type DragEvent, type ReactNode } from 'react';
+import { useState, useRef, useMemo, type DragEvent, type ReactNode } from 'react';
 import { Plus, Loader2, Save, RotateCcw, ChevronDown, X } from 'lucide-react';
-import type { TimeSeriesDataPoint, DateRangePreset } from '@/types/analytics';
+import type { DateRange, TimeSeriesDataPoint, DateRangePreset } from '@/types/analytics';
 import type { Campaign } from '@/types/campaign';
 import type { WidgetType, WidgetConfig } from '@/types/dashboard';
 import { cn } from '@/lib/utils';
@@ -32,7 +32,9 @@ export interface AnalyticsDashboardClientProps {
   timeSeries: TimeSeriesDataPoint[];
   topCampaigns: Campaign[];
   datePreset?: DateRangePreset;
+  dateRange?: DateRange;
   onDatePresetChange?: (preset: DateRangePreset) => void;
+  onDateRangeChange?: (range: DateRange) => void;
   loading?: boolean;
 }
 
@@ -52,10 +54,13 @@ export function AnalyticsDashboardClient({
   timeSeries,
   topCampaigns,
   datePreset = 'today',
+  dateRange: controlledDateRange,
   onDatePresetChange,
+  onDateRangeChange,
   loading = false,
 }: AnalyticsDashboardClientProps) {
-  const [dateRange, setDateRange] = useState(() => getDateRange(datePreset));
+  const [internalDateRange, setInternalDateRange] = useState(() => getDateRange(datePreset));
+  const pickerDateRange = controlledDateRange || internalDateRange;
   const [isAddPanelOpen, setIsAddPanelOpen] = useState(false);
   const [isCustomMetricOpen, setIsCustomMetricOpen] = useState(false);
   const [isSavePopoverOpen, setIsSavePopoverOpen] = useState(false);
@@ -113,11 +118,6 @@ export function AnalyticsDashboardClient({
     [blendedMetrics, timeSeries, topCampaigns, datePreset]
   );
 
-  // Keep picker UI in sync with externally controlled preset from page state.
-  useEffect(() => {
-    setDateRange(getDateRange(datePreset));
-  }, [datePreset]);
-
   // --- Widget handlers ---
   const handleAddWidget = (type: WidgetType) => {
     if (type === 'custom_metric') {
@@ -135,10 +135,11 @@ export function AnalyticsDashboardClient({
   };
 
   const handleDateRangeChange = (range: { start: Date; end: Date; preset?: DateRangePreset }) => {
-    setDateRange(range);
+    setInternalDateRange(range);
     if (range.preset && onDatePresetChange) {
       onDatePresetChange(range.preset);
     }
+    onDateRangeChange?.(range);
   };
 
   // --- Drag-and-drop handlers ---
@@ -147,6 +148,7 @@ export function AnalyticsDashboardClient({
   };
 
   const handleDragOver = (e: DragEvent<HTMLDivElement>, _id: string) => {
+    void _id;
     e.preventDefault();
   };
 
@@ -300,7 +302,7 @@ export function AnalyticsDashboardClient({
         )}
 
         <EditModeToggle />
-        <DateRangePicker dateRange={dateRange} onRangeChange={handleDateRangeChange} />
+        <DateRangePicker dateRange={pickerDateRange} onRangeChange={handleDateRangeChange} />
       </div>
 
       {/* Saved views pills (always visible when views exist and in edit mode) */}

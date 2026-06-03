@@ -1,7 +1,7 @@
 /**
  * Timezone Utilities
  *
- * All date operations in the app should use the Shopify store's timezone,
+ * Most date operations in the app should use the Shopify store's timezone,
  * NOT the browser's local timezone. This ensures data consistency between
  * Shopify orders, Meta Ads insights, and dashboard displays.
  *
@@ -11,6 +11,7 @@
 
 import { toZonedTime, fromZonedTime, format as formatTz } from 'date-fns-tz';
 import {
+  addDays,
   subDays,
   startOfMonth,
   endOfMonth,
@@ -20,6 +21,9 @@ import {
 
 // Default timezone fallback when no store is selected
 export const DEFAULT_TIMEZONE = 'America/New_York';
+export const STORE_REPORTING_TIMEZONE = 'Asia/Kolkata';
+export const STORE_DAY_RESET_HOUR = 11;
+export const STORE_DAY_RESET_MINUTE = 30;
 
 /**
  * Get the active store's timezone from the Zustand store.
@@ -33,12 +37,21 @@ export function getStoreTimezone(): string {
     // Dynamic import to avoid SSR issues — the store module is loaded lazily
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { useStoreStore } = require('@/stores/storeStore');
-    const state = useStoreStore.getState();
-    const activeStore = state.stores.find((s: any) => s.id === state.activeStoreId);
+    const state = useStoreStore.getState() as {
+      activeStoreId?: string | null;
+      stores?: Array<{
+        id?: string;
+        timezone?: string | null;
+        adAccounts?: Array<{ isActive?: boolean; timezone?: string | null }>;
+      }>;
+    };
+    const activeStore = state.stores?.find((s) => s.id === state.activeStoreId);
+
+    if (activeStore?.timezone) return activeStore.timezone;
 
     if (activeStore?.adAccounts?.length) {
       // Use the timezone from the first active ad account
-      const activeAccount = activeStore.adAccounts.find((a: any) => a.isActive);
+      const activeAccount = activeStore.adAccounts.find((a) => a.isActive);
       if (activeAccount?.timezone) return activeAccount.timezone;
       // Fallback to first account's timezone
       if (activeStore.adAccounts[0]?.timezone) return activeStore.adAccounts[0].timezone;
@@ -87,6 +100,36 @@ export function daysAgoInTimezone(n: number, tz?: string): string {
 }
 
 /**
+ * Get the active reporting day for stores whose operational day resets at
+ * 11:30 AM in the store timezone.
+ *
+ * Example: at 2026-06-03 10:00 IST this returns 2026-06-02; at 11:54 IST it
+ * returns 2026-06-03.
+ */
+export function storeDayInTimezone(date: Date = new Date(), tz?: string): string {
+  const timezone = tz || STORE_REPORTING_TIMEZONE;
+  const zonedDate = toZonedTime(date, timezone);
+  const hour = Number(formatTz(zonedDate, 'H', { timeZone: timezone }));
+  const minute = Number(formatTz(zonedDate, 'm', { timeZone: timezone }));
+  const beforeReset =
+    hour < STORE_DAY_RESET_HOUR
+    || (hour === STORE_DAY_RESET_HOUR && minute < STORE_DAY_RESET_MINUTE);
+  const reportingDate = beforeReset ? subDays(zonedDate, 1) : zonedDate;
+  return formatTz(reportingDate, 'yyyy-MM-dd', { timeZone: timezone });
+}
+
+export function todayStoreDayInTimezone(tz?: string): string {
+  return storeDayInTimezone(new Date(), tz);
+}
+
+export function storeDaysAgoInTimezone(n: number, tz?: string): string {
+  const timezone = tz || STORE_REPORTING_TIMEZONE;
+  const currentStoreDay = todayStoreDayInTimezone(timezone);
+  const anchor = fromZonedTime(`${currentStoreDay}T12:00:00`, timezone);
+  return formatDateInTimezone(subDays(anchor, n), timezone);
+}
+
+/**
  * Get start of month as YYYY-MM-DD in the store's timezone.
  */
 export function monthStartInTimezone(tz?: string): string {
@@ -116,7 +159,7 @@ export function monthStartInTimezone(tz?: string): string {
  *   Returns UTC Date = 2026-02-14T05:00:00Z (midnight ET = 5AM UTC)
  *   formatDateInTimezone() → toZonedTime → "2026-02-14" ✓
  */
-function startOfDayInTz(dateStr: string, tz: string): Date {
+export function startOfDayInTz(dateStr: string, tz: string): Date {
   // Parse as UTC to avoid browser local TZ affecting the date components
   return fromZonedTime(`${dateStr}T00:00:00`, tz);
 }
@@ -124,8 +167,19 @@ function startOfDayInTz(dateStr: string, tz: string): Date {
 /**
  * Create a Date representing the end of a day (23:59:59) in the store timezone.
  */
-function endOfDayInTz(dateStr: string, tz: string): Date {
+export function endOfDayInTz(dateStr: string, tz: string): Date {
   return fromZonedTime(`${dateStr}T23:59:59`, tz);
+}
+
+export function startOfStoreDayInTz(dateStr: string, tz: string = STORE_REPORTING_TIMEZONE): Date {
+  const hh = String(STORE_DAY_RESET_HOUR).padStart(2, '0');
+  const mm = String(STORE_DAY_RESET_MINUTE).padStart(2, '0');
+  return fromZonedTime(`${dateStr}T${hh}:${mm}:00`, tz);
+}
+
+export function endOfStoreDayInTz(dateStr: string, tz: string = STORE_REPORTING_TIMEZONE): Date {
+  const nextDateStr = formatDateInTimezone(addDays(fromZonedTime(`${dateStr}T12:00:00`, tz), 1), tz);
+  return new Date(startOfStoreDayInTz(nextDateStr, tz).getTime() - 1);
 }
 
 /**
@@ -141,59 +195,60 @@ export function getDateRangeInTimezone(
   preset: string,
   tz?: string
 ): { start: Date; end: Date; preset: string } {
-  const timezone = tz || getStoreTimezone();
+  const timezone = tz || STORE_REPORTING_TIMEZONE;
 
-  // Get today's date string in the store timezone — this is always correct
-  const todayStr = todayInTimezone(timezone);
-  const yesterdayStr = daysAgoInTimezone(1, timezone);
+  // Get today's reporting date in the store timezone. Store reporting days reset
+  // at 11:30 AM, not midnight.
+  const todayStr = todayStoreDayInTimezone(timezone);
+  const yesterdayStr = storeDaysAgoInTimezone(1, timezone);
 
   switch (preset) {
     case 'today':
-      return { start: startOfDayInTz(todayStr, timezone), end: endOfDayInTz(todayStr, timezone), preset };
+      return { start: startOfStoreDayInTz(todayStr, timezone), end: new Date(), preset };
     case 'yesterday':
-      return { start: startOfDayInTz(yesterdayStr, timezone), end: endOfDayInTz(yesterdayStr, timezone), preset };
+      return { start: startOfStoreDayInTz(yesterdayStr, timezone), end: endOfStoreDayInTz(yesterdayStr, timezone), preset };
     case 'last3': {
-      const startStr = daysAgoInTimezone(3, timezone);
-      return { start: startOfDayInTz(startStr, timezone), end: endOfDayInTz(yesterdayStr, timezone), preset };
+      const startStr = storeDaysAgoInTimezone(3, timezone);
+      return { start: startOfStoreDayInTz(startStr, timezone), end: endOfStoreDayInTz(yesterdayStr, timezone), preset };
     }
     case 'last7': {
       // 7 complete days ending yesterday (matches Shopify's "Last 7 days")
-      const startStr = daysAgoInTimezone(7, timezone);
-      return { start: startOfDayInTz(startStr, timezone), end: endOfDayInTz(yesterdayStr, timezone), preset };
+      const startStr = storeDaysAgoInTimezone(7, timezone);
+      return { start: startOfStoreDayInTz(startStr, timezone), end: endOfStoreDayInTz(yesterdayStr, timezone), preset };
     }
     case 'last7today': {
       // 7 days ago through end of today (8-day window including today)
-      const startStr = daysAgoInTimezone(7, timezone);
-      return { start: startOfDayInTz(startStr, timezone), end: endOfDayInTz(todayStr, timezone), preset };
+      const startStr = storeDaysAgoInTimezone(7, timezone);
+      return { start: startOfStoreDayInTz(startStr, timezone), end: new Date(), preset };
     }
     case 'last14': {
-      const startStr = daysAgoInTimezone(14, timezone);
-      return { start: startOfDayInTz(startStr, timezone), end: endOfDayInTz(yesterdayStr, timezone), preset };
+      const startStr = storeDaysAgoInTimezone(14, timezone);
+      return { start: startOfStoreDayInTz(startStr, timezone), end: endOfStoreDayInTz(yesterdayStr, timezone), preset };
     }
     case 'last28': {
-      const startStr = daysAgoInTimezone(28, timezone);
-      return { start: startOfDayInTz(startStr, timezone), end: endOfDayInTz(yesterdayStr, timezone), preset };
+      const startStr = storeDaysAgoInTimezone(28, timezone);
+      return { start: startOfStoreDayInTz(startStr, timezone), end: endOfStoreDayInTz(yesterdayStr, timezone), preset };
     }
     case 'last30': {
-      const startStr = daysAgoInTimezone(30, timezone);
-      return { start: startOfDayInTz(startStr, timezone), end: endOfDayInTz(yesterdayStr, timezone), preset };
+      const startStr = storeDaysAgoInTimezone(30, timezone);
+      return { start: startOfStoreDayInTz(startStr, timezone), end: endOfStoreDayInTz(yesterdayStr, timezone), preset };
     }
     case 'thisMonth': {
-      const monthStartStr = monthStartInTimezone(timezone);
-      return { start: startOfDayInTz(monthStartStr, timezone), end: endOfDayInTz(todayStr, timezone), preset };
+      const monthStartStr = `${todayStr.slice(0, 7)}-01`;
+      return { start: startOfStoreDayInTz(monthStartStr, timezone), end: new Date(), preset };
     }
     case 'lastMonth': {
       // Compute last month's start and end in the store timezone
-      const now = nowInTimezone(timezone);
+      const now = toZonedTime(fromZonedTime(`${todayStr}T12:00:00`, timezone), timezone);
       const lastMonth = subMonths(now, 1);
       const lastMonthStartStr = formatTz(lastMonth, 'yyyy-MM-01', { timeZone: timezone });
       const lastMonthEnd = endOfMonth(new Date(`${lastMonthStartStr}T12:00:00`));
       const lastMonthEndStr = formatTz(lastMonthEnd, 'yyyy-MM-dd', { timeZone: timezone });
-      return { start: startOfDayInTz(lastMonthStartStr, timezone), end: endOfDayInTz(lastMonthEndStr, timezone), preset };
+      return { start: startOfStoreDayInTz(lastMonthStartStr, timezone), end: endOfStoreDayInTz(lastMonthEndStr, timezone), preset };
     }
     default: {
-      const startStr = daysAgoInTimezone(29, timezone);
-      return { start: startOfDayInTz(startStr, timezone), end: endOfDayInTz(todayStr, timezone), preset: 'last30' };
+      const startStr = storeDaysAgoInTimezone(29, timezone);
+      return { start: startOfStoreDayInTz(startStr, timezone), end: new Date(), preset: 'last30' };
     }
   }
 }
@@ -229,4 +284,8 @@ export function shopifyDateToStoreDate(isoTimestamp: string, tz?: string): strin
   const timezone = tz || getStoreTimezone();
   const date = new Date(isoTimestamp);
   return formatTz(toZonedTime(date, timezone), 'yyyy-MM-dd', { timeZone: timezone });
+}
+
+export function shopifyDateToStoreDayDate(isoTimestamp: string, tz?: string): string {
+  return storeDayInTimezone(new Date(isoTimestamp), tz);
 }

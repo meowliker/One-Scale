@@ -7,13 +7,21 @@ import { apiClient } from '@/services/api';
 import { buildStoreScopedKey, clearCachePrefix, memoizePromise } from '@/services/perfCache';
 import type { ShopifyOrder } from '@/types/shopify';
 import type { BalanceTransaction } from '@/app/api/lib/shopify-client';
-import { todayInTimezone, daysAgoInTimezone, monthStartInTimezone, shopifyDateToStoreDate, getStoreTimezone, formatDateInTimezone } from '@/lib/timezone';
-import { fromZonedTime } from 'date-fns-tz';
+import {
+  STORE_REPORTING_TIMEZONE,
+  todayStoreDayInTimezone,
+  storeDaysAgoInTimezone,
+  shopifyDateToStoreDayDate,
+  startOfStoreDayInTz,
+  endOfStoreDayInTz,
+} from '@/lib/timezone';
 import { convertCurrency, getStoreCurrencyConfig } from '@/lib/attribution/currencyHandler';
 import { calculateFees } from '@/lib/pnl/feesCalculator';
 import type { OrderWithTransactions } from '@/lib/pnl/feesCalculator';
 import { calculateRevenue } from '@/lib/pnl/revenueCalculator';
 import type { RevenueBreakdown, ShopifyOrderData } from '@/lib/pnl/revenueCalculator';
+
+type PnLInsightRow = { date: string; metrics: Record<string, number> };
 
 // ------ Fetch chargebacks from daily_pnl_snapshots (populated by sync script) ------
 
@@ -66,14 +74,106 @@ async function fetchPnLSettings(): Promise<PnLSettings | null> {
  */
 async function fetchInsightsDirectly(
   datePreset: string,
-): Promise<{ data: { date: string; metrics: Record<string, number> }[] }> {
+  opts?: { objectId?: string },
+): Promise<{ data: PnLInsightRow[] }> {
   const { useStoreStore } = await import('@/stores/storeStore');
   const storeId = useStoreStore.getState().activeStoreId;
   if (!storeId) return { data: [] };
 
-  const res = await fetch(`/api/meta/insights?storeId=${encodeURIComponent(storeId)}&datePreset=${datePreset}`);
+  const params = new URLSearchParams({
+    storeId,
+    datePreset,
+  });
+  if (opts?.objectId) params.set('objectId', opts.objectId);
+
+  const res = await fetch(`/api/meta/insights?${params.toString()}`);
   if (!res.ok) return { data: [] };
   return res.json();
+}
+
+function normalizeCurrencyCode(value: string | null | undefined, fallback = 'USD'): string {
+  const code = String(value || '').trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(code) ? code : fallback;
+}
+
+function addMetrics(target: Record<string, number>, incoming: Record<string, number>) {
+  for (const [key, value] of Object.entries(incoming)) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      target[key] = (target[key] || 0) + value;
+    }
+  }
+}
+
+async function getStoreReportingCurrency(storeId: string): Promise<string> {
+  const { useStoreStore } = await import('@/stores/storeStore');
+  let state = useStoreStore.getState();
+  let activeStore = state.stores.find((store) => store.id === storeId);
+  if (!activeStore) {
+    await state.fetchStores().catch(() => undefined);
+    state = useStoreStore.getState();
+    activeStore = state.stores.find((store) => store.id === storeId);
+  }
+  const fromStore = activeStore?.reportingCurrency || activeStore?.currency;
+  if (fromStore) return normalizeCurrencyCode(fromStore);
+
+  const config = await getStoreCurrencyConfig(storeId);
+  return normalizeCurrencyCode(config.reportingCurrency);
+}
+
+/**
+ * Fetch Meta insights in the store reporting currency.
+ *
+ * Meta spend is returned in each ad account's currency. P&L rows are displayed
+ * and calculated in Shopify/store currency, so aggregating raw Meta spend would
+ * show USD spend with a rupee sign for INR stores like Naiva.
+ */
+async function fetchPnlInsights(
+  datePreset: string,
+): Promise<{ data: PnLInsightRow[] }> {
+  const { useStoreStore } = await import('@/stores/storeStore');
+  let state = useStoreStore.getState();
+  const storeId = state.activeStoreId;
+  if (!storeId) return { data: [] };
+
+  let activeStore = state.stores.find((store) => store.id === storeId);
+  if (!activeStore) {
+    await state.fetchStores().catch(() => undefined);
+    state = useStoreStore.getState();
+    activeStore = state.stores.find((store) => store.id === storeId);
+  }
+  const reportingCurrency = await getStoreReportingCurrency(storeId);
+  const activeAccounts = (activeStore?.adAccounts || [])
+    .filter((account) => account.platform === 'meta' && account.isActive !== false);
+
+  if (activeAccounts.length === 0) {
+    return fetchInsightsDirectly(datePreset);
+  }
+
+  const rowsByDate = new Map<string, Record<string, number>>();
+
+  await Promise.all(activeAccounts.map(async (account) => {
+    const accountCurrency = normalizeCurrencyCode(account.currency, 'USD');
+    const accountId = account.accountId || account.id;
+    const res = await fetchInsightsDirectly(datePreset, { objectId: accountId });
+
+    for (const row of res.data || []) {
+      const convertedMetrics = { ...row.metrics };
+      convertedMetrics.spend = await convertCurrency(
+        convertedMetrics.spend || 0,
+        accountCurrency,
+        reportingCurrency,
+      );
+
+      if (!rowsByDate.has(row.date)) rowsByDate.set(row.date, {});
+      addMetrics(rowsByDate.get(row.date)!, convertedMetrics);
+    }
+  }));
+
+  return {
+    data: Array.from(rowsByDate.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, metrics]) => ({ date, metrics })),
+  };
 }
 
 // ------ Cost Calculators ------
@@ -295,7 +395,7 @@ async function _doFetchRealTransactionFees(tz: string): Promise<FeeData> {
   // Calculate the cutoff date — we only need fees for the last 10 days
   // (8-day Shopify order window + 2 days buffer). Older days use Meta revenue
   // with date-based fee fallback which is already populated from recent pages.
-  const cutoffDateStr = daysAgoInTimezone(10, tz);
+  const cutoffDateStr = storeDaysAgoInTimezone(10, tz);
 
   try {
     let hasMore = true;
@@ -329,7 +429,7 @@ async function _doFetchRealTransactionFees(tz: string): Promise<FeeData> {
         // Check if this transaction is older than our cutoff (35 days ago).
         // Since results are in descending order, once we hit the cutoff,
         // all remaining transactions will also be too old.
-        const dateStr = shopifyDateToStoreDate(txn.processedAt, tz);
+        const dateStr = shopifyDateToStoreDayDate(txn.processedAt, tz);
         if (dateStr < cutoffDateStr) {
           reachedCutoff = true;
           break;
@@ -399,8 +499,8 @@ async function fetchOrdersForDateRange(
   endDateStr: string,
   tz: string,
 ): Promise<ShopifyOrder[]> {
-  const startUtc = fromZonedTime(`${startDateStr}T00:00:00`, tz);
-  const endUtc = fromZonedTime(`${endDateStr}T23:59:59`, tz);
+  const startUtc = startOfStoreDayInTz(startDateStr, tz);
+  const endUtc = endOfStoreDayInTz(endDateStr, tz);
 
   const dateParams = {
     created_at_min: startUtc.toISOString(),
@@ -440,7 +540,7 @@ async function fetchOrdersForDateRange(
   }
 
   return allOrders.filter((order) => {
-    const orderDate = shopifyDateToStoreDate(order.createdAt, tz);
+    const orderDate = shopifyDateToStoreDayDate(order.createdAt, tz);
     return orderDate >= startDateStr && orderDate <= endDateStr;
   });
 }
@@ -530,9 +630,9 @@ async function fetchAllRefundedOrders(
   shopifyWindowStartDateStr: string,
   tz: string,
 ): Promise<ShopifyOrder[]> {
-  const displayStartUtc = fromZonedTime(`${displayStartDateStr}T00:00:00`, tz);
-  const displayEndUtc = fromZonedTime(`${displayEndDateStr}T23:59:59`, tz);
-  const shopifyWindowStartUtc = fromZonedTime(`${shopifyWindowStartDateStr}T00:00:00`, tz);
+  const displayStartUtc = startOfStoreDayInTz(displayStartDateStr, tz);
+  const displayEndUtc = endOfStoreDayInTz(displayEndDateStr, tz);
+  const shopifyWindowStartUtc = startOfStoreDayInTz(shopifyWindowStartDateStr, tz);
 
   // Source 1: Refunded orders created in the older part of the display window
   // (before the Shopify per-day window which is already fetched)
@@ -600,7 +700,7 @@ function collectRefundsByDate(orders: ShopifyOrder[], tz: string): Map<string, R
       if (refund.totalAmount <= 0) continue;
 
       // Use the refund's creation date, not the order's creation date
-      const refundDateStr = shopifyDateToStoreDate(refund.createdAt, tz);
+      const refundDateStr = shopifyDateToStoreDayDate(refund.createdAt, tz);
       const bucket = getOrCreate(refundDateStr);
 
       if (isFullRefund) {
@@ -625,8 +725,8 @@ async function mockGetPnLSummary(): Promise<PnLSummary> {
 }
 
 async function realGetPnLSummaryUncached(): Promise<PnLSummary> {
-  const tz = getStoreTimezone();
-  const todayStr = todayInTimezone(tz);
+  const tz = STORE_REPORTING_TIMEZONE;
+  const todayStr = todayStoreDayInTimezone(tz);
 
   // Reuse today's orders from getDailyPnL if available (cached within last 2 min).
   // This avoids a duplicate Shopify orders fetch — the page calls getDailyPnL first.
@@ -634,22 +734,19 @@ async function realGetPnLSummaryUncached(): Promise<PnLSummary> {
     && _cachedTodayOrders.tz === tz
     && (Date.now() - _cachedTodayOrders.timestamp) < 120_000;
 
-  // Fetch refunded orders + Meta insights + fees + chargebacks (all use caches if getDailyPnL ran first)
-  const [orders, refundedOlderOrders, historicalRes, recentRes, todayRes, pnlSettings, realFees, chargebacksByDate] = await Promise.all([
+  // Fetch refunded orders + today's Meta insights + fees + chargebacks.
+  const [orders, refundedOlderOrders, todayRes, pnlSettings, realFees, chargebacksByDate] = await Promise.all([
     useCachedOrders
       ? Promise.resolve(_cachedTodayOrders!.orders)
       : fetchOrdersForDateRange(todayStr, todayStr, tz),
     fetchAllRefundedOrders(todayStr, todayStr, todayStr, tz),
-    fetchInsightsDirectly('last_30d'),
-    fetchInsightsDirectly('last_7d'),
-    fetchInsightsDirectly('today'),
+    fetchPnlInsights('today'),
     fetchPnLSettings(),
     fetchRealTransactionFees(tz), // uses 5-min cache — instant if getDailyPnL ran first
     fetchChargebacks(todayStr, todayStr, tz),
   ]);
 
-  // Merge with priority: today > last_7d > last_30d (more recent data wins)
-  const insights = mergeInsights(historicalRes.data, recentRes.data, todayRes.data);
+  const insights = todayRes.data;
 
   // Collect refunds by refund date from ALL orders (today's + older refunded)
   const allOrdersForRefunds = [...orders, ...refundedOlderOrders];
@@ -769,32 +866,6 @@ async function realGetPnLSummaryUncached(): Promise<PnLSummary> {
  * Falls back to live computation only if no snapshot exists.
  */
 async function fastGetPnLSummary(): Promise<PnLSummary> {
-  const { useStoreStore } = await import('@/stores/storeStore');
-  const storeId = useStoreStore.getState().activeStoreId;
-  const tz = getStoreTimezone();
-  const todayStr = todayInTimezone(tz);
-
-  if (storeId) {
-    try {
-      const params = new URLSearchParams({ storeId, days: '1' });
-      const res = await fetch(`/api/pnl/sync?${params}`);
-      if (res.ok) {
-        const json = await res.json() as { data?: PnLEntry[] };
-        const todaySnap = (json.data || []).find(e => e.date === todayStr);
-        if (todaySnap && (todaySnap.orderCount ?? 0) > 0) {
-          return {
-            today: todaySnap,
-            thisWeek: { date: todayStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0, chargebackLoss: 0, chargebackWon: 0 },
-            thisMonth: { date: todayStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0, chargebackLoss: 0, chargebackWon: 0 },
-            allTime: { date: todayStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0, chargebackLoss: 0, chargebackWon: 0 },
-            productType: 'digital',
-          };
-        }
-      }
-    } catch { /* DB not available, fall back to live */ }
-  }
-
-  // Fallback: live computation (slow but works when DB has no data)
   return realGetPnLSummaryUncached();
 }
 
@@ -894,7 +965,7 @@ async function computeSnapshotPlusTodayLive(
   tz: string,
 ): Promise<PnLEntry[]> {
   const snapshotMap = new Map(snapshots.map(s => [s.date, s]));
-  const yesterdayStr = daysAgoInTimezone(1, tz);
+  const yesterdayStr = storeDaysAgoInTimezone(1, tz);
 
   // Compute today AND yesterday live — yesterday's BT/orders may still be settling
   const liveDates = [yesterdayStr, todayStr];
@@ -903,8 +974,8 @@ async function computeSnapshotPlusTodayLive(
 
   const [allOrders, todayInsightsRes, yesterdayInsightsRes, pnlSettings, realFees, chargebacksByDate] = await Promise.all([
     fetchOrdersForDateRange(liveStart, todayStr, tz),
-    fetchInsightsDirectly('today'),
-    fetchInsightsDirectly('yesterday'),
+    fetchPnlInsights('today'),
+    fetchPnlInsights('yesterday'),
     fetchPnLSettings(),
     fetchRealTransactionFees(tz),
     fetchChargebacks(liveStart, todayStr, tz),
@@ -913,7 +984,7 @@ async function computeSnapshotPlusTodayLive(
   // Group orders by date
   const ordersByDate = new Map<string, import('@/types/shopify').ShopifyOrder[]>();
   for (const order of allOrders) {
-    const dateStr = shopifyDateToStoreDate(order.createdAt, tz);
+    const dateStr = shopifyDateToStoreDayDate(order.createdAt, tz);
     if (!ordersByDate.has(dateStr)) ordersByDate.set(dateStr, []);
     ordersByDate.get(dateStr)!.push(order);
   }
@@ -952,7 +1023,7 @@ async function computeSnapshotPlusTodayLive(
   // Generate all 31 dates and merge
   const allDates: string[] = [];
   for (let i = 30; i >= 0; i--) {
-    allDates.push(daysAgoInTimezone(i, tz));
+    allDates.push(storeDaysAgoInTimezone(i, tz));
   }
   if (!allDates.includes(todayStr)) allDates.push(todayStr);
   allDates.sort();
@@ -972,8 +1043,8 @@ async function computeSnapshotPlusTodayLive(
 }
 
 async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
-  const tz = getStoreTimezone();
-  const todayStr = todayInTimezone(tz);
+  const tz = STORE_REPORTING_TIMEZONE;
+  const todayStr = todayStoreDayInTimezone(tz);
 
   // ---- Fast path: use snapshots for historical days ----
   const { useStoreStore } = await import('@/stores/storeStore');
@@ -991,11 +1062,11 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
   const SHOPIFY_DAYS = 8;
   const dayDates: string[] = [];
   for (let i = 0; i < SHOPIFY_DAYS; i++) {
-    dayDates.push(daysAgoInTimezone(i, tz));
+    dayDates.push(storeDaysAgoInTimezone(i, tz));
   }
 
   const earliestShopifyDate = dayDates[dayDates.length - 1];
-  const displayStartDate = daysAgoInTimezone(30, tz);
+  const displayStartDate = storeDaysAgoInTimezone(30, tz);
 
   // Fetch EVERYTHING in parallel — single range for all 8 days of orders,
   // Meta insights, P&L settings, refund orders, and transaction fees all at once.
@@ -1004,9 +1075,9 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
     historicalRes, recentRes, todayRes, pnlSettings,
     allShopifyOrders, refundedOrders, realFees, chargebacksByDate,
   ] = await Promise.all([
-    fetchInsightsDirectly('last_30d'),
-    fetchInsightsDirectly('last_7d'),
-    fetchInsightsDirectly('today'),
+    fetchPnlInsights('last_30d'),
+    fetchPnlInsights('last_7d'),
+    fetchPnlInsights('today'),
     fetchPnLSettings(),
     // ONE range call for all 8 days instead of 8 separate day calls
     fetchOrdersForDateRange(earliestShopifyDate, todayStr, tz),
@@ -1032,7 +1103,7 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
   console.log(`[P&L] Today in store TZ (${tz}): ${todayStr}`);
 
   for (const order of allShopifyOrders) {
-    const dateStr = shopifyDateToStoreDate(order.createdAt, tz);
+    const dateStr = shopifyDateToStoreDayDate(order.createdAt, tz);
     if (!ordersByDate.has(dateStr)) ordersByDate.set(dateStr, []);
     ordersByDate.get(dateStr)!.push(order);
     totalShopifyOrders++;
@@ -1071,7 +1142,7 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
   // Generate entries for ALL days in the last 31 days (last_30d + today).
   const allDates: string[] = [];
   for (let i = 30; i >= 0; i--) {
-    allDates.push(daysAgoInTimezone(i, tz));
+    allDates.push(storeDaysAgoInTimezone(i, tz));
   }
   if (!allDates.includes(todayStr)) {
     allDates.push(todayStr);
@@ -1212,21 +1283,9 @@ async function fastGetDailyPnL(): Promise<PnLEntry[]> {
   if (storeId) {
     const snapshots = await fetchSnapshotEntries(storeId);
     if (snapshots.length >= 5) {
-      // DB has good data — use it directly, no live API calls needed
-      const tz = getStoreTimezone();
-      const todayStr = todayInTimezone(tz);
-      // Generate all 31 dates
-      const allDates: string[] = [];
-      for (let i = 30; i >= 0; i--) allDates.push(daysAgoInTimezone(i, tz));
-      if (!allDates.includes(todayStr)) allDates.push(todayStr);
-      allDates.sort();
-
-      const snapMap = new Map(snapshots.map(s => [s.date, s]));
-      return allDates.map(d => snapMap.get(d) || {
-        date: d, revenue: 0, cogs: 0, adSpend: 0, shipping: 0,
-        fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0,
-        chargebackLoss: 0, chargebackWon: 0,
-      });
+      const tz = STORE_REPORTING_TIMEZONE;
+      const todayStr = todayStoreDayInTimezone(tz);
+      return computeSnapshotPlusTodayLive(snapshots, todayStr, tz);
     }
   }
 
