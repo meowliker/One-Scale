@@ -23,6 +23,7 @@ import {
   getPersistentPnlCacheLastSynced,
   isSupabasePersistenceEnabled,
   listPersistentStores,
+  rest,
 } from '@/app/api/lib/supabase-persistence';
 import {
   getPersistentMetaEndpointSnapshot,
@@ -68,6 +69,13 @@ interface InsightTotals {
   impressions: number;
 }
 
+const DASHBOARD_CURRENCY = 'USD';
+const fallbackToUsdRates: Record<string, number> = {
+  USD: 1,
+  INR: 0.012,
+};
+const requestRateCache = new Map<string, number>();
+
 function toMoney(value: number): number {
   return Math.round((Number.isFinite(value) ? value : 0) * 100) / 100;
 }
@@ -79,6 +87,92 @@ function toRate(value: number): number {
 function buildScopeId(accountIds: string[]): string {
   const sorted = [...new Set(accountIds)].filter(Boolean).sort();
   return `accounts:${sorted.join(',')}`;
+}
+
+function normalizeCurrencyCode(value?: string | null): string {
+  const code = String(value || '').trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(code) ? code : DASHBOARD_CURRENCY;
+}
+
+async function getStoreCurrency(storeId: string): Promise<string> {
+  const rows = await rest<Array<{ currency: string | null; reporting_currency?: string | null }>>(
+    `/store_config?store_id=eq.${encodeURIComponent(storeId)}&select=currency,reporting_currency&limit=1`,
+  ).catch(() => []);
+  return normalizeCurrencyCode(rows[0]?.currency || rows[0]?.reporting_currency);
+}
+
+async function getStoredExchangeRate(
+  fromCurrency: string,
+  toCurrency: string,
+  date: string,
+): Promise<number | null> {
+  const enc = (value: string) => encodeURIComponent(value);
+  const exactRows = await rest<Array<{ rate: number }>>(
+    `/exchange_rates?base_currency=eq.${enc(fromCurrency)}&target_currency=eq.${enc(toCurrency)}&date=eq.${enc(date)}&select=rate&limit=1`,
+  ).catch(() => []);
+  if (exactRows[0]?.rate && Number(exactRows[0].rate) > 0) return Number(exactRows[0].rate);
+
+  const recentRows = await rest<Array<{ rate: number }>>(
+    `/exchange_rates?base_currency=eq.${enc(fromCurrency)}&target_currency=eq.${enc(toCurrency)}&date=lte.${enc(date)}&select=rate&order=date.desc&limit=1`,
+  ).catch(() => []);
+  if (recentRows[0]?.rate && Number(recentRows[0].rate) > 0) return Number(recentRows[0].rate);
+
+  const inverseRows = await rest<Array<{ rate: number }>>(
+    `/exchange_rates?base_currency=eq.${enc(toCurrency)}&target_currency=eq.${enc(fromCurrency)}&date=lte.${enc(date)}&select=rate&order=date.desc&limit=1`,
+  ).catch(() => []);
+  if (inverseRows[0]?.rate && Number(inverseRows[0].rate) > 0) return 1 / Number(inverseRows[0].rate);
+
+  return null;
+}
+
+async function fetchLiveExchangeRate(fromCurrency: string, toCurrency: string): Promise<number | null> {
+  const sources = [
+    `https://open.er-api.com/v6/latest/${encodeURIComponent(fromCurrency)}`,
+    `https://api.exchangerate-api.com/v4/latest/${encodeURIComponent(fromCurrency)}`,
+  ];
+
+  for (const source of sources) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5_000);
+    try {
+      const response = await fetch(source, { signal: controller.signal });
+      if (!response.ok) continue;
+      const data = await response.json() as {
+        rates?: Record<string, number>;
+        conversion_rates?: Record<string, number>;
+      };
+      const rate = data.rates?.[toCurrency] || data.conversion_rates?.[toCurrency];
+      if (rate && rate > 0) return rate;
+    } catch {
+      // Try the next source.
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  return null;
+}
+
+async function getExchangeRate(
+  fromCurrency: string,
+  toCurrency: string,
+  date: string,
+): Promise<number> {
+  if (fromCurrency === toCurrency) return 1;
+  const cacheKey = `${fromCurrency}:${toCurrency}:${date}`;
+  const cached = requestRateCache.get(cacheKey);
+  if (cached) return cached;
+
+  const storedRate = await getStoredExchangeRate(fromCurrency, toCurrency, date);
+  const liveRate = storedRate ?? await fetchLiveExchangeRate(fromCurrency, toCurrency);
+  const fallbackRate =
+    fromCurrency === DASHBOARD_CURRENCY
+      ? 1 / (fallbackToUsdRates[toCurrency] || 1)
+      : fallbackToUsdRates[fromCurrency];
+  const rate = liveRate && liveRate > 0 ? liveRate : fallbackRate || 1;
+
+  requestRateCache.set(cacheKey, rate);
+  return rate;
 }
 
 function sumCampaignTraffic(campaigns: Campaign[]): { clicks: number; impressions: number } {
@@ -386,8 +480,10 @@ export async function GET(request: NextRequest) {
       let partialRefundAmount = pnlRows.reduce((sum, row) => sum + (row.partial_refund_amount || 0), 0);
       let netProfit = pnlRows.reduce((sum, row) => sum + (row.net_profit || 0), 0);
       let orders = pnlRows.reduce((sum, row) => sum + (row.order_count || 0), 0);
-      const cogs = productType === 'digital' ? 0 : cogsRaw;
-      const shipping = productType === 'digital' ? 0 : shippingRaw;
+      let cogs = productType === 'digital' ? 0 : cogsRaw;
+      let shipping = productType === 'digital' ? 0 : shippingRaw;
+      const storeCurrency = await getStoreCurrency(store.id);
+      const storeToDashboardRate = await getExchangeRate(storeCurrency, DASHBOARD_CURRENCY, storeUntil);
 
       const activeAccountIds = (store.adAccounts || [])
         .filter((a) => Number(a.is_active) === 1)
@@ -481,6 +577,16 @@ export async function GET(request: NextRequest) {
         } catch {
           // keep cache-derived values
         }
+      }
+
+      if (storeCurrency !== DASHBOARD_CURRENCY && storeToDashboardRate > 0) {
+        revenue *= storeToDashboardRate;
+        cogs *= storeToDashboardRate;
+        fees *= storeToDashboardRate;
+        shipping *= storeToDashboardRate;
+        refunds *= storeToDashboardRate;
+        fullRefundAmount *= storeToDashboardRate;
+        partialRefundAmount *= storeToDashboardRate;
       }
 
       const clicks = insightTotals.clicks > 0 ? insightTotals.clicks : campaignTraffic.clicks;
