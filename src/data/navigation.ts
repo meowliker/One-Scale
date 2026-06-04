@@ -73,6 +73,6 @@ export const sidebarConfig: SidebarConfig = {
   bottomItems: [
     { label: 'Data', href: '/dashboard/data', icon: Database },
     { label: 'Help', href: '/dashboard/help', icon: HelpCircle },
-    { label: 'Settings', href: '/dashboard/settings', icon: Settings },
+    { label: 'Settings', href: '/dashboard/settings/stores', icon: Settings },
   ],
 };

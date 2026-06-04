@@ -1,5 +1,5 @@
-import { redirect } from 'next/navigation';
+import StoresSettingsPage from './stores/page';
 
 export default function SettingsPage() {
-  redirect('/dashboard/settings/stores');
+  return <StoresSettingsPage />;
 }
