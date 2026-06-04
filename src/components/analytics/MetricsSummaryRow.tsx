@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   AreaChart,
   Area,
@@ -104,6 +104,7 @@ function AnimatedNumber({ value }: { value: string }) {
   const [display, setDisplay] = useState(value);
   const prevValue = useRef(value);
   const raf = useRef<number | null>(null);
+  const isNumericValue = parseNumericValue(value) !== null;
 
   useEffect(() => {
     const parsed = parseNumericValue(value);
@@ -113,7 +114,6 @@ function AnimatedNumber({ value }: { value: string }) {
     if (raf.current !== null) cancelAnimationFrame(raf.current);
 
     if (!parsed) {
-      setDisplay(value);
       prevValue.current = value;
       return;
     }
@@ -142,6 +142,8 @@ function AnimatedNumber({ value }: { value: string }) {
 
     return () => { if (raf.current !== null) cancelAnimationFrame(raf.current); };
   }, [value]);
+
+  if (!isNumericValue) return <>{value}</>;
 
   return <>{display}</>;
 }
@@ -389,6 +391,7 @@ export function MetricsSummaryRow({ metrics }: MetricsSummaryRowProps) {
   // Use P&L-derived values when available. Fallback to 0 (not hardcoded rates).
   const transactionFees = metrics.shopifyFees ?? 0;
   const refunds = metrics.shopifyRefunds ?? 0;
+  const shopifyTips = metrics.shopifyTips ?? 0;
   const netProfit = metrics.shopifyNetProfit ?? (shopifyRevenue - spend - transactionFees - refunds);
   const margin = shopifyRevenue > 0 ? (netProfit / shopifyRevenue) * 100 : 0;
 
@@ -418,6 +421,7 @@ export function MetricsSummaryRow({ metrics }: MetricsSummaryRowProps) {
       source: 'shopify',
       subValues: [
         { label: 'Shopify', value: formatCurrency(shopifyRevenue), source: 'shopify' },
+        { label: 'Tips', value: formatCurrency(shopifyTips), source: 'shopify' },
         { label: 'FB Attributed', value: formatCurrency(fbRevenue), source: 'facebook' },
       ],
     },

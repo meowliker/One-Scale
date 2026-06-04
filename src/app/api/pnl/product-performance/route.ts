@@ -148,7 +148,7 @@ export async function GET(request: NextRequest) {
   let pnlChargebackWon = 0;
   let pnlOrderCount = 0;
   // Load snapshots with product_breakdown — this is the source of truth for Period View
-  let snapshotProductBreakdowns: Array<{ productId: string; productTitle: string; classification: string; revenue: number; unitsSold: number; fees: number; orders: number }> = [];
+  const snapshotProductBreakdowns: Array<{ productId: string; productTitle: string; classification: string; revenue: number; unitsSold: number; fees: number; orders: number }> = [];
   try {
     const snapshots = await rest<Array<{
       revenue: number; transaction_fees: number; ad_spend: number;
@@ -276,6 +276,7 @@ export async function GET(request: NextRequest) {
       if (appsScriptResults.length > 0) {
         // Fetch product images
         const imgMap = new Map<string, string>();
+        const handleMap = new Map<string, string>();
         try {
           const shopToken = await getShopifyToken(storeId);
           if (shopToken?.accessToken && shopToken?.shopDomain) {
@@ -283,6 +284,7 @@ export async function GET(request: NextRequest) {
             for (const p of shopProducts) {
               const img = p.images?.[0]?.src;
               if (img) imgMap.set(String(p.id), img);
+              if (p.handle) handleMap.set(String(p.id), p.handle);
             }
           }
         } catch { /* images non-critical */ }
@@ -353,9 +355,11 @@ export async function GET(request: NextRequest) {
           productId: r.product_id,
           productName: r.product_name,
           productImage: imgMap.get(r.product_id) ?? null,
+          productPath: handleMap.get(r.product_id) ? `/${handleMap.get(r.product_id)}` : null,
           shopifyUrl: r.product_id.startsWith('unknown_') ? null : `/admin/products/${r.product_id}`,
           sku: '',
           unitsSold: r.orders,
+          orderCount: r.orders,
           revenue: r.revenue,
           cogs: r.cogs,
           shipping: 0,
@@ -458,6 +462,7 @@ export async function GET(request: NextRequest) {
 
     // Fetch product images from Shopify (for card display)
     const productImageMap = new Map<string, string>();
+    const productHandleMap = new Map<string, string>();
     try {
       const shopToken = await getShopifyToken(storeId);
       if (shopToken?.accessToken && shopToken?.shopDomain) {
@@ -465,6 +470,7 @@ export async function GET(request: NextRequest) {
         for (const p of shopProducts) {
           const img = p.images?.[0]?.src;
           if (img) productImageMap.set(String(p.id), img);
+          if (p.handle) productHandleMap.set(String(p.id), p.handle);
         }
       }
     } catch {
@@ -1028,9 +1034,11 @@ export async function GET(request: NextRequest) {
         productId,
         productName: agg.productName,
         productImage: productImageMap.get(productId) ?? null,
+        productPath: productHandleMap.get(productId) ? `/${productHandleMap.get(productId)}` : null,
         shopifyUrl: productId.startsWith('unknown_') ? null : `/admin/products/${productId}`,
         sku: agg.sku,
         unitsSold: agg.unitsSold,
+        orderCount: agg.orderIds.size || agg.orderCount,
         revenue: normalizedRevenue,
         cogs,
         shipping,

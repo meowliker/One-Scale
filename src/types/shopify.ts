@@ -38,6 +38,7 @@ export interface ShopifyOrder {
   subtotalPrice: string;
   totalTax: string;
   totalDiscounts: string;
+  totalTipReceived?: string;
   totalShippingPrice: string;
   currency: string;
   financialStatus: string;

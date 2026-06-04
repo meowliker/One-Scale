@@ -9,6 +9,7 @@ export interface PnLEntry {
   shipping: number;
   fees: number;
   refunds: number;
+  tips?: number;
   netProfit: number;
   margin: number;
   orderCount?: number;

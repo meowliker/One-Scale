@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useMemo, type DragEvent, type ReactNode } from 'react';
-import { Plus, Loader2, Save, RotateCcw, ChevronDown, X } from 'lucide-react';
+import { Plus, Loader2, Save, RotateCcw, ChevronDown, X, RefreshCw } from 'lucide-react';
 import type { DateRange, TimeSeriesDataPoint, DateRangePreset } from '@/types/analytics';
 import type { Campaign } from '@/types/campaign';
 import type { WidgetType, WidgetConfig } from '@/types/dashboard';
@@ -35,6 +35,7 @@ export interface AnalyticsDashboardClientProps {
   dateRange?: DateRange;
   onDatePresetChange?: (preset: DateRangePreset) => void;
   onDateRangeChange?: (range: DateRange) => void;
+  onRefresh?: () => void;
   loading?: boolean;
 }
 
@@ -57,6 +58,7 @@ export function AnalyticsDashboardClient({
   dateRange: controlledDateRange,
   onDatePresetChange,
   onDateRangeChange,
+  onRefresh,
   loading = false,
 }: AnalyticsDashboardClientProps) {
   const [internalDateRange, setInternalDateRange] = useState(() => getDateRange(datePreset));
@@ -302,6 +304,17 @@ export function AnalyticsDashboardClient({
         )}
 
         <EditModeToggle />
+        {onRefresh && (
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={loading}
+            title="Refresh dashboard data"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-surface text-text-secondary transition-colors hover:border-primary/40 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+          </button>
+        )}
         <DateRangePicker dateRange={pickerDateRange} onRangeChange={handleDateRangeChange} />
       </div>
 

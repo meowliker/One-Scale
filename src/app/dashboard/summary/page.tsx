@@ -21,10 +21,11 @@ import { storeDayInTimezone } from '@/lib/timezone';
 import { getDateRange } from '@/lib/dateUtils';
 import type { Campaign } from '@/types/campaign';
 import { convertCurrency } from '@/lib/attribution/currencyHandler';
+import { clearCachePrefix } from '@/services/perfCache';
 
 const DASHBOARD_CURRENCY = 'USD';
-const SUMMARY_QUERY_VERSION = 'store-day-v5';
-const SUMMARY_WARM_CACHE_VERSION = 'v6';
+const SUMMARY_QUERY_VERSION = 'store-day-v6';
+const SUMMARY_WARM_CACHE_VERSION = 'v7';
 
 async function getActiveStoreCurrency(): Promise<string> {
   const { useStoreStore } = await import('@/stores/storeStore');
@@ -79,6 +80,12 @@ async function computeShopifyMetricsFromPnL(dailyPnL: PnLEntry[], preset: DateRa
   const shopifyRefunds = Math.round(
     (await convertCurrency(rawRefunds, storeCurrency, DASHBOARD_CURRENCY)) * 100
   ) / 100;
+  const rawTips = Math.round(
+    filteredDays.reduce((sum, day) => sum + (day.tips || 0), 0) * 100
+  ) / 100;
+  const shopifyTips = Math.round(
+    (await convertCurrency(rawTips, storeCurrency, DASHBOARD_CURRENCY)) * 100
+  ) / 100;
   const rawFullRefundAmount = Math.round(
     filteredDays.reduce((sum, day) => sum + (day.fullRefundAmount || 0), 0) * 100
   ) / 100;
@@ -107,6 +114,7 @@ async function computeShopifyMetricsFromPnL(dailyPnL: PnLEntry[], preset: DateRa
     shopifyAov,
     shopifyFees,
     shopifyRefunds,
+    shopifyTips,
     fullRefundAmount,
     partialRefundAmount,
     shopifyNetProfit,
@@ -121,6 +129,7 @@ interface SummaryPayload {
     shopifyAov: number;
     shopifyFees: number;
     shopifyRefunds: number;
+    shopifyTips: number;
     fullRefundAmount: number;
     partialRefundAmount: number;
     shopifyNetProfit: number;
@@ -151,6 +160,15 @@ function writeSummaryWarmCache(storeId: string, rangeKey: string, payload: Summa
   }
 }
 
+function clearSummaryWarmCache(storeId: string, rangeKey: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(`summary:cache:${SUMMARY_WARM_CACHE_VERSION}:${storeId}:${rangeKey}`);
+  } catch {
+    // ignore cache clear failures
+  }
+}
+
 async function fetchSummaryData(preset: DateRangePreset, selectedRange: DateRange) {
   const customRange = preset === 'custom' ? selectedRange : undefined;
   const [metrics, series, campaigns, dailyPnL] = await Promise.all([
@@ -173,6 +191,7 @@ async function fetchSummaryData(preset: DateRangePreset, selectedRange: DateRang
       shopifyAov: shopifyMetrics.shopifyAov,
       shopifyFees: shopifyMetrics.shopifyFees,
       shopifyRefunds: shopifyMetrics.shopifyRefunds,
+      shopifyTips: shopifyMetrics.shopifyTips,
       fullRefundAmount: shopifyMetrics.fullRefundAmount,
       partialRefundAmount: shopifyMetrics.partialRefundAmount,
       shopifyNetProfit: shopifyMetrics.shopifyNetProfit,
@@ -278,6 +297,15 @@ export default function SummaryPage() {
     setDatePreset(range.preset || 'custom');
   }, []);
 
+  const handleRefresh = useCallback(() => {
+    if (!activeStoreId) return;
+    clearSummaryWarmCache(activeStoreId, rangeKey);
+    clearCachePrefix(`pnl:daily:${activeStoreId}`);
+    clearCachePrefix(`pnl:summary:${activeStoreId}`);
+    void queryClient.invalidateQueries({ queryKey: ['summary', activeStoreId, rangeKey, SUMMARY_QUERY_VERSION] });
+    void queryClient.invalidateQueries({ queryKey: ['product-perf', activeStoreId] });
+  }, [activeStoreId, queryClient, rangeKey]);
+
   if (!connectionReady && Object.keys(blendedMetrics).length === 0 && !emptyReason) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -306,6 +334,7 @@ export default function SummaryPage() {
         dateRange={selectedRange}
         onDatePresetChange={handleDatePresetChange}
         onDateRangeChange={handleDateRangeChange}
+        onRefresh={handleRefresh}
         loading={isLoading || isFetching}
       />
     </div>

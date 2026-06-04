@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { rest, isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
 import { getShopifyToken } from '@/app/api/lib/tokens';
-import { fetchShopifyOrders } from '@/app/api/lib/shopify-client';
+import { fetchShopifyOrders, fetchShopifyProducts } from '@/app/api/lib/shopify-client';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -86,7 +86,20 @@ async function fetchMetaMetrics(
 // ── Build product response from a product map + meta metrics ────────────────
 
 function buildResponse(
-  products: Map<string, { name: string; image: string | null; revenue: number; units: number; fees?: number; cogs?: number; orderIds?: Set<string>; category?: string }>,
+  products: Map<string, {
+    name: string;
+    image: string | null;
+    revenue: number;
+    units: number;
+    fees?: number;
+    cogs?: number;
+    orderIds?: Set<string>;
+    category?: string;
+    classificationConfidence?: number;
+    classificationMethod?: string;
+    needsReview?: boolean;
+    productPath?: string | null;
+  }>,
   metaMetrics: Map<string, { spend: number; impressions: number; clicks: number; purchases: number }>,
   totalOrderCount?: number,
   totalOrderRevenue?: number,
@@ -109,8 +122,11 @@ function buildResponse(
       productId: pid,
       productName: p.name,
       productImage: p.image,
+      productPath: p.productPath ?? null,
+      shopifyUrl: pid.startsWith('unknown_') ? null : `/admin/products/${pid}`,
       sku: '',
       unitsSold: p.units,
+      orderCount,
       revenue: p.revenue,
       cogs,
       shipping: 0,
@@ -138,8 +154,9 @@ function buildResponse(
       adSetName: null,
       campaignName: null,
       category: p.category || 'main',
-      classificationConfidence: 80,
-      classificationMethod: 'shopify_live',
+      classificationConfidence: p.classificationConfidence ?? 80,
+      classificationMethod: p.classificationMethod || 'prism',
+      needsReview: p.needsReview ?? false,
     };
   });
 }
@@ -191,22 +208,74 @@ export async function GET(request: NextRequest) {
       console.log(`[ProductPerf] Shopify API: ${orders.length} orders for ${from}→${to} (${storeTz})`);
 
       if (orders.length > 0) {
-        // Load stored classifications from DB (if available)
-        const classMap = new Map<string, string>();
+        // Load PRISM classifications from DB. PRISM owns main/upsell/pending decisions.
+        const classMap = new Map<string, {
+          classification: string;
+          confidence: number;
+          method: string;
+          needsReview: boolean;
+        }>();
         if (isSupabasePersistenceEnabled()) {
           try {
-            const cls = await rest<Array<{ product_id: string; classification: string }>>(
-              `/product_classifications?store_id=eq.${enc(storeId)}&select=product_id,classification`
+            const cls = await rest<Array<{
+              product_id: string;
+              classification: string;
+              confidence: number | null;
+              classification_method: string | null;
+              needs_review: boolean | null;
+            }>>(
+              `/product_classifications?store_id=eq.${enc(storeId)}&select=product_id,classification,confidence,classification_method,needs_review`
             );
-            for (const c of cls || []) classMap.set(c.product_id, c.classification);
+            for (const c of cls || []) {
+              classMap.set(c.product_id, {
+                classification: c.classification,
+                confidence: Number(c.confidence) || 0,
+                method: c.classification_method || 'prism',
+                needsReview: Boolean(c.needs_review),
+              });
+            }
           } catch { /* non-critical */ }
         }
 
         // Aggregate by product from line items + track order→product for fee distribution
-        const byProduct = new Map<string, { name: string; image: string | null; revenue: number; units: number; fees: number; cogs: number; orderIds: Set<string>; category: string }>();
+        const byProduct = new Map<string, {
+          name: string;
+          image: string | null;
+          revenue: number;
+          units: number;
+          fees: number;
+          cogs: number;
+          orderIds: Set<string>;
+          category: string;
+          classificationConfidence?: number;
+          classificationMethod?: string;
+          needsReview?: boolean;
+          productPath?: string | null;
+        }>();
         const orderToProduct = new Map<string, string>(); // orderId → main productId
         let totalOrderCount = 0;
         let totalOrderRevenue = 0;
+        const productDetails = new Map<string, { image: string | null; handle: string }>();
+
+        try {
+          const productIds = [...new Set(
+            orders.flatMap(order => (order.lineItems || [])
+              .map(item => item.productId ? String(item.productId) : '')
+              .filter(Boolean))
+          )];
+          const shopProducts = productIds.length > 0
+            ? await fetchShopifyProducts(shopToken.accessToken, shopToken.shopDomain, {
+              limit: Math.min(productIds.length, 250),
+              ids: productIds.slice(0, 250),
+            })
+            : [];
+          for (const product of shopProducts) {
+            productDetails.set(String(product.id), {
+              image: product.images?.[0]?.src || null,
+              handle: product.handle || '',
+            });
+          }
+        } catch { /* product details are non-critical */ }
 
         for (const order of orders) {
           if (['voided', 'refunded'].includes(order.financialStatus)) continue;
@@ -238,7 +307,7 @@ export async function GET(request: NextRequest) {
 
           // Check DB classifications first
           for (const oi of orderItems) {
-            if (classMap.get(oi.pid) === 'main') { mainPid = oi.pid; break; }
+            if (classMap.get(oi.pid)?.classification === 'main') { mainPid = oi.pid; break; }
           }
 
           if (!mainPid) {
@@ -256,14 +325,34 @@ export async function GET(request: NextRequest) {
           }
           if (!mainPid) mainPid = orderItems[0].pid;
 
+          const mainItem = orderItems.find(oi => oi.pid === mainPid);
+          const assignOrderTotalToMain =
+            isFreeShipping ||
+            (mainItem?.itemRev !== undefined && mainItem.itemRev < 0.01 && orderTotal > 0 && classMap.get(mainPid)?.classification === 'main');
+
           // Aggregate revenue and units per product
           for (const oi of orderItems) {
-            const existing = byProduct.get(oi.pid) || { name: oi.title, image: null, revenue: 0, units: 0, fees: 0, cogs: 0, orderIds: new Set<string>(), category: classMap.get(oi.pid) || 'pending' };
+            const prismClass = classMap.get(oi.pid);
+            const details = productDetails.get(oi.pid);
+            const existing = byProduct.get(oi.pid) || {
+              name: oi.title,
+              image: details?.image || null,
+              revenue: 0,
+              units: 0,
+              fees: 0,
+              cogs: 0,
+              orderIds: new Set<string>(),
+              category: prismClass?.classification || 'unclassified',
+              classificationConfidence: prismClass?.confidence,
+              classificationMethod: prismClass?.method || (prismClass ? 'prism' : 'shopify_live_fallback'),
+              needsReview: prismClass?.needsReview ?? false,
+              productPath: details?.handle ? `/${details.handle}` : null,
+            };
             existing.units += oi.qty;
             existing.orderIds.add(String(order.id));
 
-            if (isFreeShipping) {
-              // Free+shipping: main product gets full order total
+            if (assignOrderTotalToMain) {
+              // Free lead product with paid bumps/upsells: attribute checkout revenue to the main lead.
               existing.revenue += (oi.pid === mainPid) ? orderTotal : 0;
             } else {
               existing.revenue += oi.itemRev;
@@ -277,19 +366,26 @@ export async function GET(request: NextRequest) {
           if (orderItems.length > 1) {
             for (const oi of orderItems) {
               const p = byProduct.get(oi.pid);
-              if (p && p.category === 'pending') {
+              if (p && p.category === 'unclassified') {
                 p.category = oi.pid === mainPid ? 'main' : 'upsell';
+                p.classificationMethod = 'shopify_live_fallback';
               }
             }
           } else {
             const p = byProduct.get(orderItems[0].pid);
-            if (p && p.category === 'pending') p.category = 'main';
+            if (p && p.category === 'unclassified') {
+              p.category = 'main';
+              p.classificationMethod = 'shopify_live_fallback';
+            }
           }
         }
 
-        // Any still-pending products default to main
+        // Any still-unclassified products default to main. PRISM `pending` stays pending.
         for (const p of byProduct.values()) {
-          if (p.category === 'pending' || p.category === 'unknown') p.category = 'main';
+          if (p.category === 'unclassified' || p.category === 'unknown') {
+            p.category = 'main';
+            p.classificationMethod = 'shopify_live_fallback';
+          }
         }
 
         // Fetch fees from balance transactions (same source as P&L)
@@ -381,7 +477,7 @@ export async function GET(request: NextRequest) {
           const spend = meta.spend || r.ad_spend;
           return {
             productId: r.product_id, productName: r.product_name, productImage: null as string | null,
-            sku: '', unitsSold: r.orders, revenue: r.revenue, cogs: r.cogs, shipping: 0, fees: r.fees,
+            sku: '', unitsSold: r.orders, orderCount: r.orders, revenue: r.revenue, cogs: r.cogs, shipping: 0, fees: r.fees,
             netProfit: r.net_profit, margin: r.margin,
             fbMetrics: {
               roas: spend > 0 ? round2(r.revenue / spend) : 0,

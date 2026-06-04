@@ -755,7 +755,7 @@ async function realGetPnLSummaryUncached(): Promise<PnLSummary> {
 
   // Compute today's P&L from Shopify orders (revenue = non-refunded orders)
   const todayAcc = {
-    revenue: 0, shipping: 0, fees: 0, cogs: 0,
+    revenue: 0, shipping: 0, fees: 0, cogs: 0, tips: 0,
     refunds: todayRefunds?.totalRefunds || 0,
     fullRefundCount: todayRefunds?.fullRefundCount || 0,
     partialRefundCount: todayRefunds?.partialRefundCount || 0,
@@ -807,6 +807,7 @@ async function realGetPnLSummaryUncached(): Promise<PnLSummary> {
     }
 
     todayAcc.revenue += revenue;
+    todayAcc.tips += parseFloat(order.totalTipReceived || '0');
     todayAcc.shipping += shippingCost;
     todayAcc.fees += paymentFee + handlingCost;
     todayAcc.cogs += orderCogs;
@@ -836,6 +837,7 @@ async function realGetPnLSummaryUncached(): Promise<PnLSummary> {
       shipping: p.shipping,
       fees: p.fees,
       refunds: p.refunds,
+      tips: p.tips,
       netProfit,
       margin,
       orderCount,
@@ -850,7 +852,7 @@ async function realGetPnLSummaryUncached(): Promise<PnLSummary> {
 
   const todayEntry = buildEntry(todayStr, todayAcc, todayAdSpend, orders.length);
   // Use the same entry for all periods — the actual breakdown comes from getDailyPnL()
-  const emptyEntry: PnLEntry = { date: todayStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, netProfit: 0, margin: 0, orderCount: 0, chargebackLoss: 0, chargebackWon: 0 };
+  const emptyEntry: PnLEntry = { date: todayStr, revenue: 0, cogs: 0, adSpend: 0, shipping: 0, fees: 0, refunds: 0, tips: 0, netProfit: 0, margin: 0, orderCount: 0, chargebackLoss: 0, chargebackWon: 0 };
 
   return {
     today: todayEntry,
@@ -913,12 +915,13 @@ function computeDayLive(
 ): PnLEntry {
   const dayRefunds = refundsByDate.get(dateStr);
   const isDigital = pnlSettings?.productType === 'digital';
-  let revenue = 0, shipping = 0, fees = 0, cogs = 0;
+  let revenue = 0, shipping = 0, fees = 0, cogs = 0, tips = 0;
 
   for (const order of orders) {
     if (order.financialStatus === 'refunded') continue;
     const rev = getAdjustedRevenue(order, pnlSettings);
     revenue += rev;
+    tips += parseFloat(order.totalTipReceived || '0');
     shipping += calculateShippingCost(order, pnlSettings);
     if (realFees.feesByOrderId.has(order.id)) {
       fees += realFees.feesByOrderId.get(order.id)!;
@@ -949,7 +952,7 @@ function computeDayLive(
   const margin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
 
   return {
-    date: dateStr, revenue, cogs, adSpend, shipping, fees, refunds,
+    date: dateStr, revenue, cogs, adSpend, shipping, fees, refunds, tips,
     netProfit, margin, orderCount: orders.filter((o: { financialStatus: string }) => o.financialStatus !== 'refunded').length,
     fullRefundCount: dayRefunds?.fullRefundCount || 0,
     partialRefundCount: dayRefunds?.partialRefundCount || 0,
@@ -1166,6 +1169,7 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
     let revenue = 0;
     let shipping = 0;
     let fees = 0;
+    let tips = 0;
 
     if (dayOrders.length > 0) {
       // Compute revenue from actual Shopify orders (excluding fully refunded ones)
@@ -1177,6 +1181,7 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
         }
         const rev = getAdjustedRevenue(order, pnlSettings);
         revenue += rev;
+        tips += parseFloat(order.totalTipReceived || '0');
         shipping += calculateShippingCost(order, pnlSettings);
 
         // Use real Shopify Payments fee if available, otherwise fall back to settings-based estimate
@@ -1254,6 +1259,7 @@ async function realGetDailyPnLUncached(): Promise<PnLEntry[]> {
       shipping,
       fees,
       refunds,
+      tips,
       netProfit,
       margin,
       orderCount: dayOrders.length,

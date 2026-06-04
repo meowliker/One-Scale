@@ -224,6 +224,7 @@ function mapOrder(raw: Record<string, any>): ShopifyOrder {
     subtotalPrice: raw.subtotal_price,
     totalTax: raw.total_tax,
     totalDiscounts: raw.total_discounts,
+    totalTipReceived: raw.total_tip_received || '0.00',
     totalShippingPrice,
     currency: raw.currency,
     financialStatus: raw.financial_status,
@@ -378,13 +379,16 @@ export async function fetchShopifyOrders(
 export async function fetchShopifyProducts(
   token: string,
   shopDomain: string,
-  opts: { limit?: number; sinceId?: string } = {}
+  opts: { limit?: number; sinceId?: string; ids?: string[] } = {}
 ): Promise<ShopifyProduct[]> {
   const params: Record<string, string> = {
     limit: String(opts.limit || 50),
   };
   if (opts.sinceId) {
     params.since_id = opts.sinceId;
+  }
+  if (opts.ids && opts.ids.length > 0) {
+    params.ids = opts.ids.join(',');
   }
 
   const data = await fetchFromShopify<{

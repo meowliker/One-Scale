@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -31,9 +31,11 @@ interface ProductRow {
   productId: string;
   productName: string;
   productImage: string | null;
+  productPath?: string | null;
   category: string;
   revenue: number;
   unitsSold: number;
+  orderCount?: number;
   fbMetrics: {
     spend: number;
     impressions: number;
@@ -118,37 +120,29 @@ async function fetchProductPerf(storeId: string, preset: DateRangePreset): Promi
   const to = formatDateInTimezone(range.end);
 
   const params = `storeId=${encodeURIComponent(storeId)}&from=${from}&to=${to}`;
+  const productEndpoints = preset === 'today'
+    ? ['/api/pnl/product-perf-cached', '/api/pnl/product-performance']
+    : ['/api/pnl/product-performance', '/api/pnl/product-perf-cached'];
 
-  const [perfRes, alertRes] = await Promise.all([
-    fetch(`/api/pnl/product-performance?${params}`),
+  const [perfResults, alertRes] = await Promise.all([
+    Promise.allSettled(productEndpoints.map((endpoint) => fetch(`${endpoint}?${params}`))),
     fetch(`/api/meta/ad-rejections?storeId=${encodeURIComponent(storeId)}`).catch(() => null),
   ]);
 
   let products: ProductRow[] = [];
   let rejectedAds: RejectedAd[] = [];
 
-  if (perfRes.ok) {
-    const perfJson = await perfRes.json();
-    if (perfJson.ok && perfJson.data) {
-      products = perfJson.data.filter(
-        (p: ProductRow) => p.category === 'main' || p.category === 'MAIN'
-      );
-    }
-  }
-
-  // Fallback: product-perf-cached (live Shopify) if product-performance returned empty
-  if (products.length === 0) {
+  for (const result of perfResults) {
+    if (result.status !== 'fulfilled' || !result.value.ok) continue;
     try {
-      const cachedRes = await fetch(`/api/pnl/product-perf-cached?${params}`);
-      if (cachedRes.ok) {
-        const cachedJson = await cachedRes.json();
-        if (cachedJson.ok && cachedJson.data) {
-          products = cachedJson.data.filter(
-            (p: ProductRow) => p.category === 'main' || p.category === 'MAIN'
-          );
-        }
+      const perfJson = await result.value.json();
+      if (perfJson.ok && perfJson.data) {
+        products = perfJson.data.filter(
+          (p: ProductRow) => p.category === 'main' || p.category === 'MAIN'
+        );
       }
-    } catch { /* ignore */ }
+    } catch { /* ignore malformed product response */ }
+    if (products.length > 0) break;
   }
 
   if (alertRes) {
@@ -399,13 +393,14 @@ export function ProductPerformanceTable({ datePreset = 'last7' }: ProductPerform
     writeWarmCache(activeStoreId, datePreset, data);
   }, [activeStoreId, data, datePreset, warmData]);
 
-  const products = data?.products ?? [];
-  const rejectedAds = data?.rejectedAds ?? [];
+  const products = useMemo(() => data?.products ?? [], [data?.products]);
+  const rejectedAds = useMemo(() => data?.rejectedAds ?? [], [data?.rejectedAds]);
   const showSkeleton = isLoading && products.length === 0;
 
   // ── Computed metrics & sort ──
   const sortedProducts = useMemo(() => {
     const withMetrics = products.map((p) => {
+      const orderCount = p.orderCount ?? p.unitsSold;
       // hasMetaData: true if any Meta metric exists (not just spend)
       const hasMetaData = p.isAdvertised || p.fbMetrics.impressions > 0 || p.fbMetrics.clicks > 0 || p.fbMetrics.spend > 0;
       return {
@@ -414,9 +409,9 @@ export function ProductPerformanceTable({ datePreset = 'last7' }: ProductPerform
         computedCpc: computeCpc(p.fbMetrics.spend, p.fbMetrics.clicks),
         computedCpm: computeCpm(p.fbMetrics.spend, p.fbMetrics.impressions),
         computedCtr: computeCtr(p.fbMetrics.clicks, p.fbMetrics.impressions),
-        computedAov: computeAov(p.revenue, p.unitsSold),
+        computedAov: computeAov(p.revenue, orderCount),
         // CVR: use Meta purchases if available, fallback to Shopify order count
-        computedCvr: computeCvr(p.fbMetrics.clicks, p.fbMetrics.purchases > 0 ? p.fbMetrics.purchases : p.unitsSold),
+        computedCvr: computeCvr(p.fbMetrics.clicks, p.fbMetrics.purchases > 0 ? p.fbMetrics.purchases : orderCount),
       };
     });
 
@@ -443,7 +438,7 @@ export function ProductPerformanceTable({ datePreset = 'last7' }: ProductPerform
     const totalImpressions = products.reduce((s, p) => s + p.fbMetrics.impressions, 0);
     const totalClicks = products.reduce((s, p) => s + p.fbMetrics.clicks, 0);
     const totalPurchases = products.reduce((s, p) => s + p.fbMetrics.purchases, 0);
-    const totalOrders = products.reduce((s, p) => s + p.unitsSold, 0);
+    const totalOrders = products.reduce((s, p) => s + (p.orderCount ?? p.unitsSold), 0);
     return {
       revenue: totalRevenue,
       cpc: computeCpc(totalSpend, totalClicks),
@@ -630,7 +625,12 @@ export function ProductPerformanceTable({ datePreset = 'last7' }: ProductPerform
                             )}
                             <div className="min-w-0">
                               <p className="text-sm font-medium text-text-primary truncate max-w-[180px]">{product.productName}</p>
-                              <p className="text-[10px] text-text-secondary uppercase tracking-wide">{product.unitsSold} units</p>
+                              {product.productPath && (
+                                <p className="text-[11px] text-primary truncate max-w-[180px]">{product.productPath}</p>
+                              )}
+                              <p className="text-[10px] text-text-secondary uppercase tracking-wide">
+                                {product.orderCount ?? product.unitsSold} orders &middot; {product.unitsSold} units
+                              </p>
                             </div>
                           </div>
                         </td>
