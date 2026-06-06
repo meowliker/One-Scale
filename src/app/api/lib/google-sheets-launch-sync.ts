@@ -3,7 +3,7 @@ import { createSign } from 'crypto';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const SHEETS_API_BASE = 'https://sheets.googleapis.com/v4/spreadsheets';
 const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
-const LAUNCH_SHEET_ID = '1L0V2eFdWdwKLLEOjiFp-kpp4FZ7JRYuRK-vPXh1MLWA';
+const DEFAULT_LAUNCH_SPREADSHEET_ID = '1L0V2eFdWdwKLLEOjiFp-kpp4FZ7JRYuRK-vPXh1MLWA';
 
 const LAUNCH_SHEET_MAPPINGS = [
   {
@@ -47,6 +47,7 @@ interface TaskTarget {
 
 interface SheetMatch {
   task: TaskTarget;
+  spreadsheetId: string;
   tabName: string;
   statusColumn: string;
   rowNumber: number;
@@ -64,6 +65,18 @@ function base64UrlEncode(value: string | Buffer): string {
 
 function escapeSheetName(name: string): string {
   return `'${name.replace(/'/g, "''")}'`;
+}
+
+function getLaunchSpreadsheetIds(): string[] {
+  const configured = process.env.GOOGLE_SHEETS_LAUNCH_SPREADSHEET_IDS?.trim();
+  if (!configured) return [DEFAULT_LAUNCH_SPREADSHEET_ID];
+
+  const ids = configured
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
+
+  return ids.length > 0 ? ids : [DEFAULT_LAUNCH_SPREADSHEET_ID];
 }
 
 function readServiceAccountCredentials(): ServiceAccountCredentials | null {
@@ -193,12 +206,12 @@ function toTaskTargets(tasks: GoogleSheetLaunchTask[]): TaskTarget[] {
   return Array.from(byKey.values());
 }
 
-function findTaskForCell(cellValue: unknown, remainingTasks: TaskTarget[]): TaskTarget | undefined {
+function findTaskForCell(cellValue: unknown, tasks: TaskTarget[]): TaskTarget | undefined {
   if (typeof cellValue !== 'string' && typeof cellValue !== 'number') return undefined;
   const cellKeys = extractTaskKeys(String(cellValue));
   if (cellKeys.size === 0) return undefined;
 
-  return remainingTasks.find((task) => {
+  return tasks.find((task) => {
     for (const key of task.keys) {
       if (cellKeys.has(key)) return true;
     }
@@ -206,7 +219,10 @@ function findTaskForCell(cellValue: unknown, remainingTasks: TaskTarget[]): Task
   });
 }
 
-async function fetchClickUpColumns(accessToken: string): Promise<Array<{ values?: unknown[][] }>> {
+async function fetchClickUpColumns(
+  accessToken: string,
+  spreadsheetId: string,
+): Promise<Array<{ values?: unknown[][] }>> {
   const params = new URLSearchParams({
     valueRenderOption: 'FORMATTED_VALUE',
     majorDimension: 'ROWS',
@@ -215,7 +231,7 @@ async function fetchClickUpColumns(accessToken: string): Promise<Array<{ values?
     params.append('ranges', `${escapeSheetName(mapping.tabName)}!${mapping.clickupColumn}:${mapping.clickupColumn}`);
   }
 
-  const response = await fetch(`${SHEETS_API_BASE}/${LAUNCH_SHEET_ID}/values:batchGet?${params.toString()}`, {
+  const response = await fetch(`${SHEETS_API_BASE}/${spreadsheetId}/values:batchGet?${params.toString()}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
 
@@ -231,24 +247,33 @@ async function fetchClickUpColumns(accessToken: string): Promise<Array<{ values?
 async function updateStatusCells(accessToken: string, matches: SheetMatch[]): Promise<void> {
   if (matches.length === 0) return;
 
-  const response = await fetch(`${SHEETS_API_BASE}/${LAUNCH_SHEET_ID}/values:batchUpdate`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      valueInputOption: 'USER_ENTERED',
-      data: matches.map((match) => ({
-        range: `${escapeSheetName(match.tabName)}!${match.statusColumn}${match.rowNumber}`,
-        values: [['Testing']],
-      })),
-    }),
-  });
+  const matchesBySpreadsheet = new Map<string, SheetMatch[]>();
+  for (const match of matches) {
+    const spreadsheetMatches = matchesBySpreadsheet.get(match.spreadsheetId) || [];
+    spreadsheetMatches.push(match);
+    matchesBySpreadsheet.set(match.spreadsheetId, spreadsheetMatches);
+  }
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`Google Sheets update failed (${response.status})${text ? `: ${text.slice(0, 250)}` : ''}`);
+  for (const [spreadsheetId, spreadsheetMatches] of matchesBySpreadsheet.entries()) {
+    const response = await fetch(`${SHEETS_API_BASE}/${spreadsheetId}/values:batchUpdate`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        valueInputOption: 'USER_ENTERED',
+        data: spreadsheetMatches.map((match) => ({
+          range: `${escapeSheetName(match.tabName)}!${match.statusColumn}${match.rowNumber}`,
+          values: [['Testing']],
+        })),
+      }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`Google Sheets update failed (${response.status})${text ? `: ${text.slice(0, 250)}` : ''}`);
+    }
   }
 }
 
@@ -270,37 +295,41 @@ export async function updateLaunchedTasksInGoogleSheet(
 
   try {
     const accessToken = await getGoogleSheetsAccessToken();
-    const valueRanges = await fetchClickUpColumns(accessToken);
-    const remaining = [...targets];
     const matches: SheetMatch[] = [];
+    const matchedTaskIds = new Set<string>();
 
-    for (const [tabIndex, mapping] of LAUNCH_SHEET_MAPPINGS.entries()) {
-      const rows = valueRanges[tabIndex]?.values || [];
-      for (const [rowIndex, row] of rows.entries()) {
-        if (remaining.length === 0) break;
-        const task = findTaskForCell(row?.[0], remaining);
-        if (!task) continue;
+    for (const spreadsheetId of getLaunchSpreadsheetIds()) {
+      const valueRanges = await fetchClickUpColumns(accessToken, spreadsheetId);
 
-        matches.push({
-          task,
-          tabName: mapping.tabName,
-          statusColumn: mapping.statusColumn,
-          rowNumber: rowIndex + 1,
-        });
-        remaining.splice(remaining.indexOf(task), 1);
+      for (const [tabIndex, mapping] of LAUNCH_SHEET_MAPPINGS.entries()) {
+        const rows = valueRanges[tabIndex]?.values || [];
+        for (const [rowIndex, row] of rows.entries()) {
+          const task = findTaskForCell(row?.[0], targets);
+          if (!task) continue;
+
+          matches.push({
+            task,
+            spreadsheetId,
+            tabName: mapping.tabName,
+            statusColumn: mapping.statusColumn,
+            rowNumber: rowIndex + 1,
+          });
+          matchedTaskIds.add(task.taskId);
+        }
       }
     }
 
     await updateStatusCells(accessToken, matches);
+    const notMatched = targets.filter((task) => !matchedTaskIds.has(task.taskId));
 
     return {
       configured: true,
       attempted: targets.length,
       updated: matches.length,
-      failed: remaining.length,
-      notFound: remaining.length,
-      notUpdatedTaskNames: remaining.map((task) => task.taskName),
-      errors: remaining.length > 0 ? ['Some ClickUp tasks were not found in the configured Google Sheet tabs.'] : [],
+      failed: notMatched.length,
+      notFound: notMatched.length,
+      notUpdatedTaskNames: notMatched.map((task) => task.taskName),
+      errors: notMatched.length > 0 ? ['Some ClickUp tasks were not found in the configured Google Sheet tabs.'] : [],
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
