@@ -16,6 +16,7 @@ import {
   hydrateStoreFromSupabase,
   isSupabasePersistenceEnabled,
 } from '@/app/api/lib/supabase-persistence';
+import { updateLaunchedTasksInGoogleSheet } from '@/app/api/lib/google-sheets-launch-sync';
 import { validateLaunchPlanAssignments } from '@/lib/creative-hub/launchPlanValidation';
 import { getStoreCurrencyFromConfig, getStoreTimezoneFromConfig } from '@/lib/onboarding/stages/detectStoreConfig';
 import type { CreativeAdGroup, InboxCreative, LaunchConfig, TargetingSpec } from '@/types/creativeHub';
@@ -2231,6 +2232,21 @@ async function updateLaunchedClickUpTasksToTesting(
   };
 }
 
+function dedupeSheetSyncTasks(items: CreativeTestItemRow[]): Array<{ taskId: string; taskName?: string | null }> {
+  const tasks = new Map<string, { taskId: string; taskName?: string | null }>();
+  for (const item of items) {
+    const taskId = item.clickup_task_id?.trim();
+    if (!taskId) continue;
+    if (!tasks.has(taskId)) {
+      tasks.set(taskId, {
+        taskId,
+        taskName: item.clickup_task_name || taskId,
+      });
+    }
+  }
+  return Array.from(tasks.values());
+}
+
 function normalizeAdGroupsForCreativeIds(
   containerName: string,
   creativeIds: string[],
@@ -2833,6 +2849,7 @@ export async function POST(request: NextRequest) {
     const createdAdsetIds: string[] = [];
     let hasFailure = false;
     let clickupSync: Awaited<ReturnType<typeof updateLaunchedClickUpTasksToTesting>> | undefined;
+    let googleSheetSync: Awaited<ReturnType<typeof updateLaunchedTasksInGoogleSheet>> | undefined;
 
     const batches = launchConfig.batches as Array<{
       id: string;
@@ -3372,6 +3389,10 @@ export async function POST(request: NextRequest) {
       if (clickupSync.failed > 0) {
         console.warn('[launch] ClickUp testing-status sync had warnings', clickupSync);
       }
+      googleSheetSync = await updateLaunchedTasksInGoogleSheet(dedupeSheetSyncTasks(selectedItems));
+      if (googleSheetSync.failed > 0) {
+        console.warn('[launch] Google Sheet testing-status sync had warnings', googleSheetSync);
+      }
     }
 
     // Fetch the updated test to return
@@ -3406,6 +3427,7 @@ export async function POST(request: NextRequest) {
       scheduledFor: scheduledLaunchDate?.toISOString(),
       items: callbackItems,
       clickupSync,
+      googleSheetSync,
       externalCallback,
     });
   } catch (err) {

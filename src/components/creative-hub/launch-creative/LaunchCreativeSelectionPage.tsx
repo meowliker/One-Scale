@@ -227,6 +227,15 @@ interface LaunchSubmitResult {
     failed: number;
     errors?: string[];
   };
+  googleSheetSync?: {
+    configured?: boolean;
+    attempted: number;
+    updated: number;
+    failed: number;
+    notFound?: number;
+    notUpdatedTaskNames?: string[];
+    errors?: string[];
+  };
   error?: string;
 }
 
@@ -3840,10 +3849,13 @@ export default function LaunchCreativeSelectionPage() {
       const clickupWarning = data.clickupSync && data.clickupSync.failed > 0
         ? ` ClickUp status sync had ${data.clickupSync.failed} warning${data.clickupSync.failed !== 1 ? 's' : ''}; the Meta launch was still created.`
         : '';
+      const googleSheetWarning = data.googleSheetSync && data.googleSheetSync.failed > 0
+        ? ` Launch successful, but Google Sheet was not updated for ${data.googleSheetSync.failed} task${data.googleSheetSync.failed !== 1 ? 's' : ''}: ${(data.googleSheetSync.notUpdatedTaskNames || []).join(', ') || 'Unknown task'}.`
+        : '';
       const callbackWarning = data.externalCallback?.error
         ? ` Immuvi callback warning: ${data.externalCallback.error}`
         : '';
-      setLaunchSuccess(`${successMessage}${clickupWarning}${callbackWarning}`);
+      setLaunchSuccess(`${successMessage}${clickupWarning}${googleSheetWarning}${callbackWarning}`);
     } catch (err) {
       setLaunchError(err instanceof Error ? err.message : 'Launch failed');
     } finally {
