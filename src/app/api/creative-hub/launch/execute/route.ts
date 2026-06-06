@@ -2247,6 +2247,37 @@ function dedupeSheetSyncTasks(items: CreativeTestItemRow[]): Array<{ taskId: str
   return Array.from(tasks.values());
 }
 
+function formatLaunchTestingLabel(
+  structure: LaunchConfig['structure'],
+  launchedAtIso: string,
+  timezone: string,
+): string {
+  const structureLabel = String(structure || 'ABO').toUpperCase() === 'CBO' ? 'CBO' : 'ABO';
+  const date = new Date(launchedAtIso);
+
+  try {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone || 'UTC',
+      day: 'numeric',
+      month: 'long',
+    });
+    const parts = formatter.formatToParts(date);
+    const day = parts.find((part) => part.type === 'day')?.value || String(date.getUTCDate());
+    const month = parts.find((part) => part.type === 'month')?.value || 'Month';
+    return `${structureLabel} ${day} ${month} Testing`;
+  } catch {
+    const fallbackFormatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'UTC',
+      day: 'numeric',
+      month: 'long',
+    });
+    const parts = fallbackFormatter.formatToParts(date);
+    const day = parts.find((part) => part.type === 'day')?.value || String(date.getUTCDate());
+    const month = parts.find((part) => part.type === 'month')?.value || 'Month';
+    return `${structureLabel} ${day} ${month} Testing`;
+  }
+}
+
 function normalizeAdGroupsForCreativeIds(
   containerName: string,
   creativeIds: string[],
@@ -3389,7 +3420,10 @@ export async function POST(request: NextRequest) {
       if (clickupSync.failed > 0) {
         console.warn('[launch] ClickUp testing-status sync had warnings', clickupSync);
       }
-      googleSheetSync = await updateLaunchedTasksInGoogleSheet(dedupeSheetSyncTasks(selectedItems));
+      googleSheetSync = await updateLaunchedTasksInGoogleSheet(
+        dedupeSheetSyncTasks(selectedItems),
+        formatLaunchTestingLabel(launchConfig.structure, effectiveLaunchTime, storeTimezone),
+      );
       if (googleSheetSync.failed > 0) {
         console.warn('[launch] Google Sheet testing-status sync had warnings', googleSheetSync);
       }

@@ -11,11 +11,13 @@ const LAUNCH_SPREADSHEETS = [
         tabName: 'Final Sheet 2026',
         clickupColumn: 'C',
         statusColumn: 'K',
+        launchLabelColumn: 'M',
       },
       {
         tabName: 'Immuvi Creative sheet',
         clickupColumn: 'C',
         statusColumn: 'J',
+        launchLabelColumn: 'L',
       },
     ],
   },
@@ -26,6 +28,7 @@ const LAUNCH_SPREADSHEETS = [
         tabName: 'Final Sheet 2026',
         clickupColumn: 'C',
         statusColumn: 'K',
+        launchLabelColumn: 'M',
       },
     ],
   },
@@ -65,6 +68,7 @@ interface SheetMatch {
   spreadsheetId: string;
   tabName: string;
   statusColumn: string;
+  launchLabelColumn: string;
   rowNumber: number;
 }
 
@@ -248,7 +252,11 @@ async function fetchClickUpColumns(
   return data.valueRanges || [];
 }
 
-async function updateStatusCells(accessToken: string, matches: SheetMatch[]): Promise<void> {
+async function updateMatchedRows(
+  accessToken: string,
+  matches: SheetMatch[],
+  launchTestingLabel?: string,
+): Promise<void> {
   if (matches.length === 0) return;
 
   const matchesBySpreadsheet = new Map<string, SheetMatch[]>();
@@ -267,10 +275,20 @@ async function updateStatusCells(accessToken: string, matches: SheetMatch[]): Pr
       },
       body: JSON.stringify({
         valueInputOption: 'USER_ENTERED',
-        data: spreadsheetMatches.map((match) => ({
-          range: `${escapeSheetName(match.tabName)}!${match.statusColumn}${match.rowNumber}`,
-          values: [['Testing']],
-        })),
+        data: spreadsheetMatches.flatMap((match) => [
+          {
+            range: `${escapeSheetName(match.tabName)}!${match.statusColumn}${match.rowNumber}`,
+            values: [['Testing']],
+          },
+          ...(launchTestingLabel
+            ? [
+                {
+                  range: `${escapeSheetName(match.tabName)}!${match.launchLabelColumn}${match.rowNumber}`,
+                  values: [[launchTestingLabel]],
+                },
+              ]
+            : []),
+        ]),
       }),
     });
 
@@ -283,6 +301,7 @@ async function updateStatusCells(accessToken: string, matches: SheetMatch[]): Pr
 
 export async function updateLaunchedTasksInGoogleSheet(
   tasks: GoogleSheetLaunchTask[],
+  launchTestingLabel?: string,
 ): Promise<GoogleSheetLaunchSyncResult> {
   const targets = toTaskTargets(tasks);
   if (targets.length === 0) {
@@ -320,6 +339,7 @@ export async function updateLaunchedTasksInGoogleSheet(
             spreadsheetId: spreadsheet.spreadsheetId,
             tabName: mapping.tabName,
             statusColumn: mapping.statusColumn,
+            launchLabelColumn: mapping.launchLabelColumn,
             rowNumber: rowIndex + 1,
           });
           matchedTaskIds.add(task.taskId);
@@ -327,7 +347,7 @@ export async function updateLaunchedTasksInGoogleSheet(
       }
     }
 
-    await updateStatusCells(accessToken, matches);
+    await updateMatchedRows(accessToken, matches, launchTestingLabel);
     const notMatched = targets.filter((task) => !matchedTaskIds.has(task.taskId));
 
     return {
