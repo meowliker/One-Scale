@@ -3,20 +3,35 @@ import { createSign } from 'crypto';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const SHEETS_API_BASE = 'https://sheets.googleapis.com/v4/spreadsheets';
 const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
-const DEFAULT_LAUNCH_SPREADSHEET_ID = '1L0V2eFdWdwKLLEOjiFp-kpp4FZ7JRYuRK-vPXh1MLWA';
-
-const LAUNCH_SHEET_MAPPINGS = [
+const LAUNCH_SPREADSHEETS = [
   {
-    tabName: 'Final Sheet 2026',
-    clickupColumn: 'C',
-    statusColumn: 'K',
+    spreadsheetId: '1L0V2eFdWdwKLLEOjiFp-kpp4FZ7JRYuRK-vPXh1MLWA',
+    mappings: [
+      {
+        tabName: 'Final Sheet 2026',
+        clickupColumn: 'C',
+        statusColumn: 'K',
+      },
+      {
+        tabName: 'Immuvi Creative sheet',
+        clickupColumn: 'C',
+        statusColumn: 'J',
+      },
+    ],
   },
   {
-    tabName: 'Immuvi Creative sheet',
-    clickupColumn: 'C',
-    statusColumn: 'J',
+    spreadsheetId: '1rqqsENvXzYwQqgvVmikzBq5LK9dS2OlokVpQNBh0W64',
+    mappings: [
+      {
+        tabName: 'Final Sheet 2026',
+        clickupColumn: 'C',
+        statusColumn: 'K',
+      },
+    ],
   },
 ] as const;
+
+type LaunchSheetMapping = (typeof LAUNCH_SPREADSHEETS)[number]['mappings'][number];
 
 interface ServiceAccountCredentials {
   client_email?: string;
@@ -65,18 +80,6 @@ function base64UrlEncode(value: string | Buffer): string {
 
 function escapeSheetName(name: string): string {
   return `'${name.replace(/'/g, "''")}'`;
-}
-
-function getLaunchSpreadsheetIds(): string[] {
-  const configured = process.env.GOOGLE_SHEETS_LAUNCH_SPREADSHEET_IDS?.trim();
-  if (!configured) return [DEFAULT_LAUNCH_SPREADSHEET_ID];
-
-  const ids = configured
-    .split(',')
-    .map((id) => id.trim())
-    .filter(Boolean);
-
-  return ids.length > 0 ? ids : [DEFAULT_LAUNCH_SPREADSHEET_ID];
 }
 
 function readServiceAccountCredentials(): ServiceAccountCredentials | null {
@@ -222,12 +225,13 @@ function findTaskForCell(cellValue: unknown, tasks: TaskTarget[]): TaskTarget | 
 async function fetchClickUpColumns(
   accessToken: string,
   spreadsheetId: string,
+  mappings: readonly LaunchSheetMapping[],
 ): Promise<Array<{ values?: unknown[][] }>> {
   const params = new URLSearchParams({
     valueRenderOption: 'FORMATTED_VALUE',
     majorDimension: 'ROWS',
   });
-  for (const mapping of LAUNCH_SHEET_MAPPINGS) {
+  for (const mapping of mappings) {
     params.append('ranges', `${escapeSheetName(mapping.tabName)}!${mapping.clickupColumn}:${mapping.clickupColumn}`);
   }
 
@@ -298,10 +302,14 @@ export async function updateLaunchedTasksInGoogleSheet(
     const matches: SheetMatch[] = [];
     const matchedTaskIds = new Set<string>();
 
-    for (const spreadsheetId of getLaunchSpreadsheetIds()) {
-      const valueRanges = await fetchClickUpColumns(accessToken, spreadsheetId);
+    for (const spreadsheet of LAUNCH_SPREADSHEETS) {
+      const valueRanges = await fetchClickUpColumns(
+        accessToken,
+        spreadsheet.spreadsheetId,
+        spreadsheet.mappings,
+      );
 
-      for (const [tabIndex, mapping] of LAUNCH_SHEET_MAPPINGS.entries()) {
+      for (const [tabIndex, mapping] of spreadsheet.mappings.entries()) {
         const rows = valueRanges[tabIndex]?.values || [];
         for (const [rowIndex, row] of rows.entries()) {
           const task = findTaskForCell(row?.[0], targets);
@@ -309,7 +317,7 @@ export async function updateLaunchedTasksInGoogleSheet(
 
           matches.push({
             task,
-            spreadsheetId,
+            spreadsheetId: spreadsheet.spreadsheetId,
             tabName: mapping.tabName,
             statusColumn: mapping.statusColumn,
             rowNumber: rowIndex + 1,
