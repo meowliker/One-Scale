@@ -60,6 +60,7 @@ export interface GoogleSheetLaunchSyncResult {
 interface TaskTarget {
   taskId: string;
   taskName: string;
+  taskNameKey: string;
   keys: Set<string>;
 }
 
@@ -160,6 +161,21 @@ function normalizeTaskKey(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+function normalizeTaskName(value: string | null | undefined): string {
+  return (value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function columnToZeroIndex(column: string): number {
+  return column
+    .toUpperCase()
+    .replace(/[^A-Z]/g, '')
+    .split('')
+    .reduce((index, char) => index * 26 + char.charCodeAt(0) - 64, 0) - 1;
+}
+
 function extractTaskKeys(value: string | null | undefined): Set<string> {
   const keys = new Set<string>();
   const raw = (value || '').trim().toLowerCase();
@@ -199,13 +215,17 @@ function toTaskTargets(tasks: GoogleSheetLaunchTask[]): TaskTarget[] {
     const existing = byKey.get(primaryKey);
     if (existing) {
       for (const key of keys) existing.keys.add(key);
-      if (!existing.taskName && task.taskName) existing.taskName = task.taskName;
+      if (!existing.taskName && task.taskName) {
+        existing.taskName = task.taskName;
+        existing.taskNameKey = normalizeTaskName(task.taskName);
+      }
       continue;
     }
 
     byKey.set(primaryKey, {
       taskId: task.taskId,
       taskName: task.taskName?.trim() || task.taskId,
+      taskNameKey: normalizeTaskName(task.taskName),
       keys,
     });
   }
@@ -213,7 +233,7 @@ function toTaskTargets(tasks: GoogleSheetLaunchTask[]): TaskTarget[] {
   return Array.from(byKey.values());
 }
 
-function findTaskForCell(cellValue: unknown, tasks: TaskTarget[]): TaskTarget | undefined {
+function findTaskForLinkCell(cellValue: unknown, tasks: TaskTarget[]): TaskTarget | undefined {
   if (typeof cellValue !== 'string' && typeof cellValue !== 'number') return undefined;
   const cellKeys = extractTaskKeys(String(cellValue));
   if (cellKeys.size === 0) return undefined;
@@ -226,7 +246,21 @@ function findTaskForCell(cellValue: unknown, tasks: TaskTarget[]): TaskTarget | 
   });
 }
 
-async function fetchClickUpColumns(
+function findTaskForRow(row: unknown[], mapping: LaunchSheetMapping, tasks: TaskTarget[]): TaskTarget | undefined {
+  const clickupIndex = columnToZeroIndex(mapping.clickupColumn);
+  const linkMatch = findTaskForLinkCell(row[clickupIndex], tasks);
+  if (linkMatch) return linkMatch;
+
+  const rowCellNames = new Set(
+    row
+      .map((cell) => (typeof cell === 'string' || typeof cell === 'number' ? normalizeTaskName(String(cell)) : ''))
+      .filter(Boolean),
+  );
+
+  return tasks.find((task) => task.taskNameKey && rowCellNames.has(task.taskNameKey));
+}
+
+async function fetchSheetRows(
   accessToken: string,
   spreadsheetId: string,
   mappings: readonly LaunchSheetMapping[],
@@ -236,7 +270,7 @@ async function fetchClickUpColumns(
     majorDimension: 'ROWS',
   });
   for (const mapping of mappings) {
-    params.append('ranges', `${escapeSheetName(mapping.tabName)}!${mapping.clickupColumn}:${mapping.clickupColumn}`);
+    params.append('ranges', `${escapeSheetName(mapping.tabName)}!A:${mapping.launchLabelColumn}`);
   }
 
   const response = await fetch(`${SHEETS_API_BASE}/${spreadsheetId}/values:batchGet?${params.toString()}`, {
@@ -322,7 +356,7 @@ export async function updateLaunchedTasksInGoogleSheet(
     const matchedTaskIds = new Set<string>();
 
     for (const spreadsheet of LAUNCH_SPREADSHEETS) {
-      const valueRanges = await fetchClickUpColumns(
+      const valueRanges = await fetchSheetRows(
         accessToken,
         spreadsheet.spreadsheetId,
         spreadsheet.mappings,
@@ -331,7 +365,7 @@ export async function updateLaunchedTasksInGoogleSheet(
       for (const [tabIndex, mapping] of spreadsheet.mappings.entries()) {
         const rows = valueRanges[tabIndex]?.values || [];
         for (const [rowIndex, row] of rows.entries()) {
-          const task = findTaskForCell(row?.[0], targets);
+          const task = findTaskForRow(row || [], mapping, targets);
           if (!task) continue;
 
           matches.push({
