@@ -2232,8 +2232,85 @@ async function updateLaunchedClickUpTasksToTesting(
   };
 }
 
-function dedupeSheetSyncTasks(items: CreativeTestItemRow[]): Array<{ taskId: string; taskName?: string | null }> {
-  const tasks = new Map<string, { taskId: string; taskName?: string | null }>();
+function extractClickUpTaskIdsFromText(value: string): string[] {
+  const taskIds = new Set<string>();
+  const pattern = /https?:\/\/app\.clickup\.com\/t\/(?:\d+\/)?([a-z0-9]+)/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(value)) !== null) {
+    const taskId = match[1]?.trim();
+    if (taskId) taskIds.add(taskId);
+  }
+
+  return Array.from(taskIds);
+}
+
+function collectTextValues(value: unknown, depth = 0): string[] {
+  if (depth > 5 || value == null) return [];
+  if (typeof value === 'string') return [value];
+  if (typeof value === 'number') return [String(value)];
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectTextValues(item, depth + 1));
+  }
+  if (typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).flatMap((item) => collectTextValues(item, depth + 1));
+  }
+  return [];
+}
+
+async function fetchRelatedClickUpTaskIdsFromComments(taskId: string, token: string): Promise<string[]> {
+  const relatedTaskIds = new Set<string>();
+  const currentTaskId = taskId.trim().toLowerCase();
+  let start: string | undefined;
+  let startId: string | undefined;
+
+  for (let page = 0; page < 2; page += 1) {
+    const params = new URLSearchParams();
+    if (start && startId) {
+      params.set('start', start);
+      params.set('start_id', startId);
+    }
+
+    const response = await fetch(
+      `https://api.clickup.com/api/v2/task/${encodeURIComponent(taskId)}/comment${params.size ? `?${params.toString()}` : ''}`,
+      { headers: { Authorization: token } },
+    );
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`ClickUp comments ${response.status}${text ? `: ${text.slice(0, 240)}` : ''}`);
+    }
+
+    const data = (await response.json()) as { comments?: Array<Record<string, unknown>> };
+    const comments = data.comments || [];
+    for (const comment of comments) {
+      for (const text of collectTextValues(comment)) {
+        for (const linkedTaskId of extractClickUpTaskIdsFromText(text)) {
+          if (linkedTaskId.toLowerCase() !== currentTaskId) {
+            relatedTaskIds.add(linkedTaskId);
+          }
+        }
+      }
+    }
+
+    const lastComment = comments[comments.length - 1];
+    const nextStart = typeof lastComment?.date === 'string' || typeof lastComment?.date === 'number'
+      ? String(lastComment.date)
+      : undefined;
+    const nextStartId = typeof lastComment?.id === 'string' || typeof lastComment?.id === 'number'
+      ? String(lastComment.id)
+      : undefined;
+    if (!comments.length || !nextStart || !nextStartId) break;
+    start = nextStart;
+    startId = nextStartId;
+  }
+
+  return Array.from(relatedTaskIds);
+}
+
+function dedupeSheetSyncTasks(
+  items: CreativeTestItemRow[],
+): Array<{ taskId: string; taskName?: string | null; relatedTaskIds?: string[] }> {
+  const tasks = new Map<string, { taskId: string; taskName?: string | null; relatedTaskIds?: string[] }>();
   for (const item of items) {
     const taskId = item.clickup_task_id?.trim();
     if (!taskId) continue;
@@ -3420,9 +3497,18 @@ export async function POST(request: NextRequest) {
       if (clickupSync.failed > 0) {
         console.warn('[launch] ClickUp testing-status sync had warnings', clickupSync);
       }
+      let clickupTokenForSheetFallback: string | null | undefined;
       googleSheetSync = await updateLaunchedTasksInGoogleSheet(
         dedupeSheetSyncTasks(selectedItems),
         formatLaunchTestingLabel(launchConfig.structure, effectiveLaunchTime, storeTimezone),
+        async (task) => {
+          if (clickupTokenForSheetFallback === undefined) {
+            clickupTokenForSheetFallback = await getClickUpTokenForLaunch(storeId);
+          }
+          return clickupTokenForSheetFallback
+            ? fetchRelatedClickUpTaskIdsFromComments(task.taskId, clickupTokenForSheetFallback)
+            : [];
+        },
       );
       if (googleSheetSync.failed > 0) {
         console.warn('[launch] Google Sheet testing-status sync had warnings', googleSheetSync);

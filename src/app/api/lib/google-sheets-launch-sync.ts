@@ -45,6 +45,7 @@ interface ServiceAccountCredentials {
 export interface GoogleSheetLaunchTask {
   taskId: string;
   taskName?: string | null;
+  relatedTaskIds?: string[];
 }
 
 export interface GoogleSheetLaunchSyncResult {
@@ -57,11 +58,14 @@ export interface GoogleSheetLaunchSyncResult {
   errors: string[];
 }
 
+type RelatedTaskIdResolver = (task: GoogleSheetLaunchTask) => Promise<string[]>;
+
 interface TaskTarget {
   taskId: string;
   taskName: string;
   taskNameKey: string;
-  keys: Set<string>;
+  primaryKeys: Set<string>;
+  relatedKeys: Set<string>;
 }
 
 interface SheetMatch {
@@ -208,13 +212,18 @@ function toTaskTargets(tasks: GoogleSheetLaunchTask[]): TaskTarget[] {
   const byKey = new Map<string, TaskTarget>();
 
   for (const task of tasks) {
-    const keys = extractTaskKeys(task.taskId);
+    const primaryKeys = extractTaskKeys(task.taskId);
     const primaryKey = normalizeTaskKey(task.taskId);
-    if (!primaryKey || keys.size === 0) continue;
+    if (!primaryKey || primaryKeys.size === 0) continue;
+    const relatedKeys = new Set<string>();
+    for (const relatedTaskId of task.relatedTaskIds || []) {
+      for (const key of extractTaskKeys(relatedTaskId)) relatedKeys.add(key);
+    }
 
     const existing = byKey.get(primaryKey);
     if (existing) {
-      for (const key of keys) existing.keys.add(key);
+      for (const key of primaryKeys) existing.primaryKeys.add(key);
+      for (const key of relatedKeys) existing.relatedKeys.add(key);
       if (!existing.taskName && task.taskName) {
         existing.taskName = task.taskName;
         existing.taskNameKey = normalizeTaskName(task.taskName);
@@ -226,20 +235,26 @@ function toTaskTargets(tasks: GoogleSheetLaunchTask[]): TaskTarget[] {
       taskId: task.taskId,
       taskName: task.taskName?.trim() || task.taskId,
       taskNameKey: normalizeTaskName(task.taskName),
-      keys,
+      primaryKeys,
+      relatedKeys,
     });
   }
 
   return Array.from(byKey.values());
 }
 
-function findTaskForLinkCell(cellValue: unknown, tasks: TaskTarget[]): TaskTarget | undefined {
+function findTaskForLinkCell(
+  cellValue: unknown,
+  tasks: TaskTarget[],
+  keyKind: 'primary' | 'related',
+): TaskTarget | undefined {
   if (typeof cellValue !== 'string' && typeof cellValue !== 'number') return undefined;
   const cellKeys = extractTaskKeys(String(cellValue));
   if (cellKeys.size === 0) return undefined;
 
   return tasks.find((task) => {
-    for (const key of task.keys) {
+    const taskKeys = keyKind === 'primary' ? task.primaryKeys : task.relatedKeys;
+    for (const key of taskKeys) {
       if (cellKeys.has(key)) return true;
     }
     return false;
@@ -248,7 +263,7 @@ function findTaskForLinkCell(cellValue: unknown, tasks: TaskTarget[]): TaskTarge
 
 function findTaskForRow(row: unknown[], mapping: LaunchSheetMapping, tasks: TaskTarget[]): TaskTarget | undefined {
   const clickupIndex = columnToZeroIndex(mapping.clickupColumn);
-  const linkMatch = findTaskForLinkCell(row[clickupIndex], tasks);
+  const linkMatch = findTaskForLinkCell(row[clickupIndex], tasks, 'primary');
   if (linkMatch) return linkMatch;
 
   const rowCellNames = new Set(
@@ -258,6 +273,15 @@ function findTaskForRow(row: unknown[], mapping: LaunchSheetMapping, tasks: Task
   );
 
   return tasks.find((task) => task.taskNameKey && rowCellNames.has(task.taskNameKey));
+}
+
+function findTaskForRelatedLinkRow(
+  row: unknown[],
+  mapping: LaunchSheetMapping,
+  tasks: TaskTarget[],
+): TaskTarget | undefined {
+  const clickupIndex = columnToZeroIndex(mapping.clickupColumn);
+  return findTaskForLinkCell(row[clickupIndex], tasks, 'related');
 }
 
 async function fetchSheetRows(
@@ -336,6 +360,7 @@ async function updateMatchedRows(
 export async function updateLaunchedTasksInGoogleSheet(
   tasks: GoogleSheetLaunchTask[],
   launchTestingLabel?: string,
+  resolveRelatedTaskIds?: RelatedTaskIdResolver,
 ): Promise<GoogleSheetLaunchSyncResult> {
   const targets = toTaskTargets(tasks);
   if (targets.length === 0) {
@@ -354,6 +379,12 @@ export async function updateLaunchedTasksInGoogleSheet(
     const accessToken = await getGoogleSheetsAccessToken();
     const matches: SheetMatch[] = [];
     const matchedTaskIds = new Set<string>();
+    const matchedRows = new Set<string>();
+    const scannedSheets: Array<{
+      spreadsheetId: string;
+      mappings: readonly LaunchSheetMapping[];
+      valueRanges: Array<{ values?: unknown[][] }>;
+    }> = [];
 
     for (const spreadsheet of LAUNCH_SPREADSHEETS) {
       const valueRanges = await fetchSheetRows(
@@ -361,12 +392,19 @@ export async function updateLaunchedTasksInGoogleSheet(
         spreadsheet.spreadsheetId,
         spreadsheet.mappings,
       );
+      scannedSheets.push({
+        spreadsheetId: spreadsheet.spreadsheetId,
+        mappings: spreadsheet.mappings,
+        valueRanges,
+      });
 
       for (const [tabIndex, mapping] of spreadsheet.mappings.entries()) {
         const rows = valueRanges[tabIndex]?.values || [];
         for (const [rowIndex, row] of rows.entries()) {
           const task = findTaskForRow(row || [], mapping, targets);
           if (!task) continue;
+          const rowKey = `${spreadsheet.spreadsheetId}:${mapping.tabName}:${rowIndex + 1}`;
+          if (matchedRows.has(rowKey)) continue;
 
           matches.push({
             task,
@@ -376,7 +414,56 @@ export async function updateLaunchedTasksInGoogleSheet(
             launchLabelColumn: mapping.launchLabelColumn,
             rowNumber: rowIndex + 1,
           });
+          matchedRows.add(rowKey);
           matchedTaskIds.add(task.taskId);
+        }
+      }
+    }
+
+    const unmatchedAfterDirectScan = targets.filter((task) => !matchedTaskIds.has(task.taskId));
+    if (resolveRelatedTaskIds && unmatchedAfterDirectScan.length > 0) {
+      await Promise.all(
+        unmatchedAfterDirectScan.map(async (task) => {
+          try {
+            const relatedTaskIds = await resolveRelatedTaskIds({
+              taskId: task.taskId,
+              taskName: task.taskName,
+            });
+            for (const relatedTaskId of relatedTaskIds) {
+              for (const key of extractTaskKeys(relatedTaskId)) task.relatedKeys.add(key);
+            }
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.warn(`[google-sheets-sync] Failed to resolve related ClickUp task IDs for ${task.taskId}: ${message}`);
+          }
+        }),
+      );
+    }
+
+    const unmatchedWithRelatedKeys = targets.filter(
+      (task) => !matchedTaskIds.has(task.taskId) && task.relatedKeys.size > 0,
+    );
+    if (unmatchedWithRelatedKeys.length > 0) {
+      for (const spreadsheet of scannedSheets) {
+        for (const [tabIndex, mapping] of spreadsheet.mappings.entries()) {
+          const rows = spreadsheet.valueRanges[tabIndex]?.values || [];
+          for (const [rowIndex, row] of rows.entries()) {
+            const task = findTaskForRelatedLinkRow(row || [], mapping, unmatchedWithRelatedKeys);
+            if (!task) continue;
+            const rowKey = `${spreadsheet.spreadsheetId}:${mapping.tabName}:${rowIndex + 1}`;
+            if (matchedRows.has(rowKey)) continue;
+
+            matches.push({
+              task,
+              spreadsheetId: spreadsheet.spreadsheetId,
+              tabName: mapping.tabName,
+              statusColumn: mapping.statusColumn,
+              launchLabelColumn: mapping.launchLabelColumn,
+              rowNumber: rowIndex + 1,
+            });
+            matchedRows.add(rowKey);
+            matchedTaskIds.add(task.taskId);
+          }
         }
       }
     }
