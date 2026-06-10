@@ -2264,7 +2264,7 @@ function formatLaunchTestingLabel(
     const parts = formatter.formatToParts(date);
     const day = parts.find((part) => part.type === 'day')?.value || String(date.getUTCDate());
     const month = parts.find((part) => part.type === 'month')?.value || 'Month';
-    return `${structureLabel} ${day} ${month} Testing`;
+    return `${day} ${month} ${structureLabel} Testing`;
   } catch {
     const fallbackFormatter = new Intl.DateTimeFormat('en-US', {
       timeZone: 'UTC',
@@ -2274,7 +2274,7 @@ function formatLaunchTestingLabel(
     const parts = fallbackFormatter.formatToParts(date);
     const day = parts.find((part) => part.type === 'day')?.value || String(date.getUTCDate());
     const month = parts.find((part) => part.type === 'month')?.value || 'Month';
-    return `${structureLabel} ${day} ${month} Testing`;
+    return `${day} ${month} ${structureLabel} Testing`;
   }
 }
 
