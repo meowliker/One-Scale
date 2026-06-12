@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { addDays } from 'date-fns';
 import { fromZonedTime } from 'date-fns-tz';
-import { getMetaToken } from '@/app/api/lib/tokens';
+import { getGoogleDriveToken, getMetaToken } from '@/app/api/lib/tokens';
 import { fetchFromMeta } from '@/app/api/lib/meta-client';
+import {
+  fetchDriveFileMetadata,
+  GOOGLE_DRIVE_BASE_URL,
+  GOOGLE_DRIVE_FOLDER_MIME,
+} from '@/app/api/google-drive/shared';
 import {
   getProductProfile,
   createCreativeTest,
@@ -842,6 +847,66 @@ function addDestinationLinkToCreativeBody(
   return linkedBody;
 }
 
+function parseDriveProxyThumbnailUrl(sourceUrl: string): { storeId: string; fileId: string } | null {
+  try {
+    const parsed = new URL(sourceUrl);
+    if (parsed.pathname !== '/api/google-drive/content') return null;
+    if (parsed.searchParams.get('mode') !== 'thumbnail') return null;
+    const storeId = parsed.searchParams.get('storeId')?.trim() || '';
+    const fileId = parsed.searchParams.get('fileId')?.trim() || '';
+    if (!storeId || !fileId) return null;
+    return { storeId, fileId };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchDriveProxyThumbnailImage(
+  sourceUrl: string,
+): Promise<{ imageBuffer: ArrayBuffer; contentType: string } | null> {
+  const proxyTarget = parseDriveProxyThumbnailUrl(sourceUrl);
+  if (!proxyTarget) return null;
+
+  const driveToken = await getGoogleDriveToken(proxyTarget.storeId);
+  if (!driveToken) return null;
+
+  const file = await fetchDriveFileMetadata(
+    driveToken.accessToken,
+    proxyTarget.fileId,
+    'id,name,mimeType,thumbnailLink,webViewLink,webContentLink',
+  );
+  if (file.mimeType === GOOGLE_DRIVE_FOLDER_MIME) return null;
+
+  let imageResponse: Response | null = null;
+  if (file.thumbnailLink) {
+    const thumbnailResponse = await fetch(file.thumbnailLink);
+    if (thumbnailResponse.ok) {
+      imageResponse = thumbnailResponse;
+    }
+  }
+
+  if (!imageResponse && file.mimeType.startsWith('image/')) {
+    const mediaUrl = new URL(`${GOOGLE_DRIVE_BASE_URL}/files/${encodeURIComponent(file.id)}`);
+    mediaUrl.searchParams.set('alt', 'media');
+    mediaUrl.searchParams.set('supportsAllDrives', 'true');
+    const mediaResponse = await fetch(mediaUrl.toString(), {
+      headers: { Authorization: `Bearer ${driveToken.accessToken}` },
+    });
+    if (mediaResponse.ok) {
+      imageResponse = mediaResponse;
+    }
+  }
+
+  if (!imageResponse) return null;
+
+  const imageBuffer = await imageResponse.arrayBuffer();
+  let contentType = imageResponse.headers.get('content-type') || 'image/jpeg';
+  if (!contentType.startsWith('image/')) {
+    contentType = 'image/jpeg';
+  }
+  return { imageBuffer, contentType };
+}
+
 async function uploadAdImageFromUrl(
   accessToken: string,
   accountNode: string,
@@ -854,14 +919,20 @@ async function uploadAdImageFromUrl(
   let imageBuffer: ArrayBuffer;
   let contentType = 'image/jpeg';
   try {
-    const imageResponse = await fetch(sourceUrl);
-    if (!imageResponse.ok) {
-      return null;
-    }
-    imageBuffer = await imageResponse.arrayBuffer();
-    contentType = imageResponse.headers.get('content-type') || contentType;
-    if (!contentType.startsWith('image/')) {
-      contentType = 'image/jpeg';
+    const driveProxyImage = await fetchDriveProxyThumbnailImage(sourceUrl);
+    if (driveProxyImage) {
+      imageBuffer = driveProxyImage.imageBuffer;
+      contentType = driveProxyImage.contentType;
+    } else {
+      const imageResponse = await fetch(sourceUrl);
+      if (!imageResponse.ok) {
+        return null;
+      }
+      imageBuffer = await imageResponse.arrayBuffer();
+      contentType = imageResponse.headers.get('content-type') || contentType;
+      if (!contentType.startsWith('image/')) {
+        contentType = 'image/jpeg';
+      }
     }
   } catch {
     return null;
@@ -982,7 +1053,10 @@ async function addVideoThumbnailToCreativeBody(
       }
     }
 
-    const fallbackUrl = uniqueCandidates[0];
+    const fallbackUrl = uniqueCandidates.find((candidateUrl) => !parseDriveProxyThumbnailUrl(candidateUrl));
+    if (!fallbackUrl) {
+      return null;
+    }
     const updatedVideoData = {
       ...videoData,
       image_url: fallbackUrl,
