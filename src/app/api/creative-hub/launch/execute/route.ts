@@ -623,6 +623,24 @@ function isMultiMediaAssetFeedCreative(creativeBody: Record<string, string>): bo
   return getAssetFeedMediaCount(creativeBody) > 1;
 }
 
+function getAssetFeedCopyVariationCount(creativeBody: Record<string, string>): number {
+  if (!creativeBody.asset_feed_spec) return 0;
+  try {
+    const parsed = JSON.parse(creativeBody.asset_feed_spec) as Record<string, unknown>;
+    const counts = ['bodies', 'titles', 'descriptions'].map((key) => {
+      const value = parsed[key];
+      return Array.isArray(value) ? value.length : 0;
+    });
+    return Math.max(0, ...counts);
+  } catch {
+    return 0;
+  }
+}
+
+function isCopyVariationAssetFeedCreative(creativeBody: Record<string, string>): boolean {
+  return getAssetFeedCopyVariationCount(creativeBody) > 1;
+}
+
 function summarizeCreativeBodyForLaunch(creativeBody: Record<string, string>): Record<string, unknown> {
   let assetFeedSpec: Record<string, unknown> = {};
   let objectStorySpec: Record<string, unknown> = {};
@@ -659,6 +677,11 @@ function summarizeCreativeBodyForLaunch(creativeBody: Record<string, string>): R
       return Boolean(asString(videoItem.thumbnail_hash));
     }).length,
     assetFeedImages: images.length,
+    assetFeedBodies: Array.isArray(assetFeedSpec.bodies) ? assetFeedSpec.bodies.length : 0,
+    assetFeedTitles: Array.isArray(assetFeedSpec.titles) ? assetFeedSpec.titles.length : 0,
+    assetFeedDescriptions: Array.isArray(assetFeedSpec.descriptions)
+      ? assetFeedSpec.descriptions.length
+      : 0,
     assetFeedAdFormats: assetFeedSpec.ad_formats || null,
     assetFeedLinkUrls: Array.isArray(assetFeedSpec.link_urls) ? assetFeedSpec.link_urls.length : 0,
     assetFeedDisplayUrls: Array.isArray(assetFeedSpec.link_urls)
@@ -1288,6 +1311,7 @@ async function createAdCreativeWithFallback(
       effectiveFallbackObjectStorySpec &&
       workingBody.asset_feed_spec &&
       !isMultiMediaAssetFeedCreative(workingBody) &&
+      !isCopyVariationAssetFeedCreative(workingBody) &&
       isLinkRequiredMetaError(currentMessage)
     ) {
       const downgradedBody: Record<string, string> = {
@@ -1316,6 +1340,7 @@ async function createAdCreativeWithFallback(
       effectiveFallbackObjectStorySpec &&
       workingBody.asset_feed_spec &&
       !isMultiMediaAssetFeedCreative(workingBody) &&
+      !isCopyVariationAssetFeedCreative(workingBody) &&
       isGenericAdCreativeMetaError(currentMessage)
     ) {
       const downgradedBody: Record<string, string> = {
@@ -1366,6 +1391,7 @@ async function createAdCreativeWithFallback(
       effectiveFallbackObjectStorySpec &&
       workingBody.asset_feed_spec &&
       !isMultiMediaAssetFeedCreative(workingBody) &&
+      !isCopyVariationAssetFeedCreative(workingBody) &&
       isAssetFeedFormatMetaError(currentMessage)
     ) {
       const downgradedBody: Record<string, string> = {
@@ -1506,9 +1532,9 @@ async function createAdWithCreativeFallback(input: {
     if (!creativeBody.asset_feed_spec || !isDynamicCreativeAdsetMismatchMetaError(message)) {
       throw err instanceof Error ? err : new Error(message);
     }
-    if (isMultiMediaAssetFeedCreative(creativeBody)) {
+    if (isMultiMediaAssetFeedCreative(creativeBody) || isCopyVariationAssetFeedCreative(creativeBody)) {
       throw new Error(
-        `Meta rejected the multi-media creative for this ad set, so launch was stopped instead of silently creating a one-video ad. ${message}`,
+        `Meta rejected the flexible creative for this ad set, so launch was stopped instead of silently creating a single-variation ad. ${message}`,
       );
     }
 
@@ -1999,6 +2025,14 @@ function uniqueCopyItems(items: LaunchConfig['primaryTexts']): Array<{ text: str
   return result.slice(0, 5);
 }
 
+function hasMultipleCopyOptions(config: LaunchConfig): boolean {
+  return (
+    uniqueCopyItems(config.primaryTexts).length > 1 ||
+    uniqueCopyItems(config.headlines).length > 1 ||
+    uniqueCopyItems(config.descriptions).length > 1
+  );
+}
+
 function buildMediaAssetFeedEntries(mediaItems: CreativeTestItemRow[]): {
   videos: Array<Record<string, string>>;
   images: Array<Record<string, string>>;
@@ -2104,7 +2138,7 @@ async function ensureAssetFeedVideoThumbnailHashes(input: {
   origin: string;
 }): Promise<void> {
   const { accessToken, accountNode, config, mediaItems, origin } = input;
-  if (mediaItems.length <= 1) {
+  if (!shouldUseFlexibleCreative(config, mediaItems)) {
     return;
   }
 
@@ -2177,7 +2211,7 @@ function buildAssetFeedSpec(
 }
 
 function shouldUseFlexibleCreative(config: LaunchConfig, mediaItems: CreativeTestItemRow[] = []): boolean {
-  return mediaItems.length > 1;
+  return mediaItems.length > 1 || hasMultipleCopyOptions(config);
 }
 
 function buildCreativeBody(
@@ -2584,6 +2618,10 @@ function hasMultiMediaAdGroupsInList(adGroups: CreativeAdGroup[]): boolean {
   return adGroups.some((group) => (group.creativeIds || []).length > 1);
 }
 
+function shouldUseFlexibleCreativeForAdGroups(config: LaunchConfig, adGroups: CreativeAdGroup[]): boolean {
+  return hasMultipleCopyOptions(config) || hasMultiMediaAdGroupsInList(adGroups);
+}
+
 function hasDynamicCreativeMultiAdConflict(adGroups: CreativeAdGroup[]): boolean {
   const activeGroups = adGroups.filter((group) => (group.creativeIds || []).length > 0);
   return activeGroups.length > 1 && activeGroups.some((group) => (group.creativeIds || []).length > 1);
@@ -2663,6 +2701,13 @@ function hasMultiMediaAdGroups(config: LaunchConfig): boolean {
 
   const batches = config.batches || [];
   return batches.some((batch) => hasMultiMediaAdGroupsInList(batch.ads || []));
+}
+
+function hasFlexibleCreativeAdGroups(config: LaunchConfig): boolean {
+  if (hasMultipleCopyOptions(config)) {
+    return true;
+  }
+  return hasMultiMediaAdGroups(config);
 }
 
 /**
@@ -3066,16 +3111,18 @@ export async function POST(request: NextRequest) {
     const campaignName = launchConfig.newCampaignName || '';
     const entityLaunchStatus = launchConfig.launchStatus || 'ACTIVE';
     const adLaunchStatus = launchConfig.adLaunchStatus || entityLaunchStatus;
-    const useMultiMediaAssetFeedMethod = hasMultiMediaAdGroups(launchConfig);
+    const useFlexibleCreativeMethod = hasFlexibleCreativeAdGroups(launchConfig);
 
-    if (useMultiMediaAssetFeedMethod) {
-      console.info('[launch] Multi-media asset_feed_spec method enabled', {
+    if (useFlexibleCreativeMethod) {
+      console.info('[launch] Flexible asset_feed_spec method enabled', {
         campaignMode: launchConfig.campaignMode,
         campaignId: launchConfig.existingCampaignId || null,
+        multipleCopyOptions: hasMultipleCopyOptions(launchConfig),
+        multiMediaAdGroups: hasMultiMediaAdGroups(launchConfig),
       });
       if (launchConfig.campaignMode === 'existing') {
         console.warn(
-          '[launch] Multi-media asset_feed_spec is enabled. Dynamic creative must be enabled on each new ad set; existing ad sets must already support it.',
+          '[launch] Flexible asset_feed_spec is enabled. Dynamic creative must be enabled on each new ad set; existing ad sets must already support it.',
         );
       }
     }
@@ -3405,7 +3452,7 @@ export async function POST(request: NextRequest) {
             attribution_spec: JSON.stringify(buildAttributionSpec(launchConfig.attributionWindow)),
             start_time: resolveStartTime(launchConfig, storeTimezone),
           };
-          if (hasMultiMediaAdGroupsInList(adGroups)) {
+          if (shouldUseFlexibleCreativeForAdGroups(launchConfig, adGroups)) {
             adsetBody.is_dynamic_creative = 'true';
           }
 
@@ -3623,6 +3670,9 @@ export async function POST(request: NextRequest) {
           attribution_spec: JSON.stringify(buildAttributionSpec(launchConfig.attributionWindow)),
           start_time: resolveStartTime(launchConfig, storeTimezone),
         };
+        if (hasMultipleCopyOptions(launchConfig)) {
+          adsetBody.is_dynamic_creative = 'true';
+        }
 
         // Budget (ABO puts budget on adset, CBO on campaign)
         if (launchConfig.structure === 'ABO') {
@@ -3680,6 +3730,14 @@ export async function POST(request: NextRequest) {
         }
 
         createdAdsetIds.push(adsetId);
+
+        await ensureAssetFeedVideoThumbnailHashes({
+          accessToken: token.accessToken,
+          accountNode,
+          config: launchConfig,
+          mediaItems: [item],
+          origin: request.nextUrl.origin,
+        });
 
         const { creativeBody, fallbackObjectStorySpec } = buildCreativeBody(
           launchConfig,
