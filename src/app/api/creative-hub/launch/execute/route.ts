@@ -858,9 +858,27 @@ function addDestinationLinkToCreativeBody(
         const websiteUrl = asString(item.website_url);
         return Boolean(websiteUrl && isValidHttpUrl(websiteUrl));
       });
+      const callToActions = Array.isArray(assetFeedSpec.call_to_actions)
+        ? (assetFeedSpec.call_to_actions as Array<Record<string, unknown>>)
+        : [];
+      const hasValidCallToActionLink = callToActions.some((item) => {
+        const value = item.value as Record<string, unknown> | undefined;
+        const link = asString(value?.link);
+        return Boolean(link && isValidHttpUrl(link));
+      });
+      const callToActionTypes = Array.isArray(assetFeedSpec.call_to_action_types)
+        ? assetFeedSpec.call_to_action_types.map((item) => asString(item)).filter(Boolean)
+        : [];
+      const fallbackCallToActionType =
+        asString(callToActions[0]?.type) || callToActionTypes[0] || 'LEARN_MORE';
       linkedBody.asset_feed_spec = JSON.stringify({
         ...assetFeedSpec,
         link_urls: hasValidAssetFeedUrl ? linkUrls : [buildAssetFeedLinkUrl(destinationUrl)],
+        call_to_actions: hasValidCallToActionLink
+          ? callToActions
+          : [{ type: fallbackCallToActionType, value: { link: destinationUrl } }],
+        call_to_action_types:
+          callToActionTypes.length > 0 ? callToActionTypes : [fallbackCallToActionType],
       });
     } catch {
       // Keep the top-level link_url repair even if the asset feed is malformed.
@@ -2183,6 +2201,7 @@ function buildAssetFeedSpec(
   config: LaunchConfig,
   mediaItems: CreativeTestItemRow[] = [],
   destinationUrl = '',
+  options: { includeMediaAssets?: boolean; includeDestinationAssets?: boolean } = {},
 ): Record<string, unknown> {
   const metaDestinationUrl = normalizeMetaDestinationUrl(destinationUrl);
   const spec: Record<string, unknown> = {
@@ -2191,15 +2210,19 @@ function buildAssetFeedSpec(
   const bodies = uniqueCopyItems(config.primaryTexts);
   const titles = uniqueCopyItems(config.headlines);
   const descriptions = uniqueCopyItems(config.descriptions);
-  const media = buildMediaAssetFeedEntries(mediaItems);
+  const media = options.includeMediaAssets
+    ? buildMediaAssetFeedEntries(mediaItems)
+    : { videos: [], images: [] };
 
   if (bodies.length > 0) spec.bodies = bodies;
   if (titles.length > 0) spec.titles = titles;
   if (descriptions.length > 0) spec.descriptions = descriptions;
   if (media.videos.length > 0) spec.videos = media.videos;
   if (media.images.length > 0) spec.images = media.images;
-  if (isValidHttpUrl(metaDestinationUrl)) spec.link_urls = [buildAssetFeedLinkUrl(metaDestinationUrl)];
-  if (config.ctaType) {
+  if (options.includeDestinationAssets && isValidHttpUrl(metaDestinationUrl)) {
+    spec.link_urls = [buildAssetFeedLinkUrl(metaDestinationUrl)];
+  }
+  if (options.includeDestinationAssets && config.ctaType) {
     spec.call_to_action_types = [config.ctaType];
     if (isValidHttpUrl(metaDestinationUrl)) {
       spec.call_to_actions = [
@@ -2227,7 +2250,7 @@ function shouldUseFlexibleCreative(config: LaunchConfig, mediaItems: CreativeTes
 function buildCreativeBody(
   config: LaunchConfig,
   profile: { pageId?: string; instagramActorId?: string; destinationUrl?: string; utmTemplate?: string },
-  item: Pick<CreativeTestItemRow, 'creative_name' | 'meta_asset_id' | 'meta_asset_type' | 'sourceCreativeId' | 'id'>,
+  item: Pick<CreativeTestItemRow, 'creative_name' | 'meta_asset_id' | 'meta_asset_type' | 'sourceCreativeId' | 'id' | 'resolved_thumbnail_hash'>,
   creativeUrl?: string,
   mediaItems: CreativeTestItemRow[] = [],
   adName?: string,
@@ -2247,6 +2270,7 @@ function buildCreativeBody(
     assetType,
     destinationUrl,
     thumbnailSelection,
+    item.resolved_thumbnail_hash || undefined,
   );
   const creativeBody: Record<string, string> = {
     name: `${adName || item.creative_name} Creative`,
@@ -2257,6 +2281,7 @@ function buildCreativeBody(
   if (isValidHttpUrl(destinationUrl)) {
     creativeBody.link_url = destinationUrl;
   }
+  const hasMultiMediaAssets = mediaAssetItems.length > 1;
   const useAssetFeedSpec = options.forceAssetFeedSpec || shouldUseFlexibleCreative(config, mediaAssetItems);
 
   if (profile.instagramActorId && !useAssetFeedSpec) {
@@ -2268,16 +2293,21 @@ function buildCreativeBody(
   }
 
   if (useAssetFeedSpec) {
-    const identityStorySpec: Record<string, unknown> = {
-      page_id: profile.pageId || config.pageId,
-    };
-    if (profile.instagramActorId) {
-      identityStorySpec.instagram_user_id = profile.instagramActorId;
-    }
     creativeBody.asset_feed_spec = JSON.stringify(
-      buildAssetFeedSpec(config, mediaAssetItems, destinationUrl),
+      buildAssetFeedSpec(config, mediaAssetItems, destinationUrl, {
+        includeMediaAssets: hasMultiMediaAssets,
+        includeDestinationAssets: hasMultiMediaAssets,
+      }),
     );
-    creativeBody.object_story_spec = JSON.stringify(identityStorySpec);
+    if (hasMultiMediaAssets || options.forceAssetFeedSpec) {
+      const identityStorySpec: Record<string, unknown> = {
+        page_id: profile.pageId || config.pageId,
+      };
+      if (profile.instagramActorId) {
+        identityStorySpec.instagram_user_id = profile.instagramActorId;
+      }
+      creativeBody.object_story_spec = JSON.stringify(identityStorySpec);
+    }
   }
 
   return { creativeBody, fallbackObjectStorySpec };
@@ -2290,6 +2320,7 @@ function buildObjectStorySpec(
   assetType: string,
   creativeUrl?: string,
   thumbnailSelection?: VideoThumbnailOverride,
+  resolvedThumbnailHash?: string,
 ): Record<string, unknown> {
   const destinationUrl = creativeUrl || profile.destinationUrl || config.destinationUrl || '';
   const pageId = profile.pageId || config.pageId;
@@ -2317,7 +2348,9 @@ function buildObjectStorySpec(
       videoData.link_description = description;
     }
     if (cta) videoData.call_to_action = cta;
-    if (thumbnailSelection?.source === 'manual') {
+    if (resolvedThumbnailHash) {
+      videoData.image_hash = resolvedThumbnailHash;
+    } else if (thumbnailSelection?.source === 'manual') {
       if (thumbnailSelection.imageHash) {
         videoData.image_hash = thumbnailSelection.imageHash;
       } else if (thumbnailSelection.imageUrl && isValidHttpUrl(thumbnailSelection.imageUrl)) {
