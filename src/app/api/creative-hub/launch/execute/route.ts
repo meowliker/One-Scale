@@ -2784,37 +2784,46 @@ export async function POST(request: NextRequest) {
 
     try {
       const promotePages = await fetchLaunchPromotePages(token.accessToken, accountNode);
-      if (promotePages.length > 0) {
-        const accessiblePage = promotePages.find((page) => page.id === resolvedPageId);
-        if (!accessiblePage) {
-          return NextResponse.json(
-            {
-              error: buildProfileAccessError(accountNode, resolvedPageId),
-            },
-            { status: 400 },
-          );
-        }
-        if (accessiblePage.instagramBusinessAccountId) {
-          if (
-            resolvedInstagramActorId &&
-            resolvedInstagramActorId !== accessiblePage.instagramBusinessAccountId
-          ) {
-            console.warn('[launch] Replacing saved Instagram actor with account-accessible Page Instagram actor', {
-              accountNode,
-              pageId: resolvedPageId,
-              savedInstagramActorId: resolvedInstagramActorId,
-              accessibleInstagramActorId: accessiblePage.instagramBusinessAccountId,
-            });
-          }
-          resolvedInstagramActorId = accessiblePage.instagramBusinessAccountId;
-        } else if (resolvedInstagramActorId) {
-          console.warn('[launch] Clearing Instagram actor because target ad account does not list one for the Page', {
+      if (promotePages.length === 0) {
+        return NextResponse.json(
+          {
+            error:
+              `Meta returned no promotable Facebook Pages for ad account ${accountNode}. ` +
+              'Grant this ad account access to a Page in Meta Business Settings, then reconnect Meta if the Page was just added.',
+          },
+          { status: 400 },
+        );
+      }
+
+      const accessiblePage = promotePages.find((page) => page.id === resolvedPageId);
+      if (!accessiblePage) {
+        return NextResponse.json(
+          {
+            error: buildProfileAccessError(accountNode, resolvedPageId),
+          },
+          { status: 400 },
+        );
+      }
+      if (accessiblePage.instagramBusinessAccountId) {
+        if (
+          resolvedInstagramActorId &&
+          resolvedInstagramActorId !== accessiblePage.instagramBusinessAccountId
+        ) {
+          console.warn('[launch] Replacing saved Instagram actor with account-accessible Page Instagram actor', {
             accountNode,
             pageId: resolvedPageId,
             savedInstagramActorId: resolvedInstagramActorId,
+            accessibleInstagramActorId: accessiblePage.instagramBusinessAccountId,
           });
-          resolvedInstagramActorId = '';
         }
+        resolvedInstagramActorId = accessiblePage.instagramBusinessAccountId;
+      } else if (resolvedInstagramActorId) {
+        console.warn('[launch] Clearing Instagram actor because target ad account does not list one for the Page', {
+          accountNode,
+          pageId: resolvedPageId,
+          savedInstagramActorId: resolvedInstagramActorId,
+        });
+        resolvedInstagramActorId = '';
       }
     } catch (err) {
       console.warn('[launch] Could not verify Page access before launch', {
@@ -2822,6 +2831,14 @@ export async function POST(request: NextRequest) {
         pageId: resolvedPageId,
         error: err instanceof Error ? err.message : String(err),
       });
+      return NextResponse.json(
+        {
+          error:
+            `Could not verify Facebook Page access for ad account ${accountNode}. ` +
+            'Please reconnect Meta, then confirm the selected ad account can promote the selected Page.',
+        },
+        { status: 400 },
+      );
     }
 
     if (resolvedInstagramActorId) {
