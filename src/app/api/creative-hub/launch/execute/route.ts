@@ -2201,6 +2201,14 @@ function buildAssetFeedSpec(
   if (isValidHttpUrl(metaDestinationUrl)) spec.link_urls = [buildAssetFeedLinkUrl(metaDestinationUrl)];
   if (config.ctaType) {
     spec.call_to_action_types = [config.ctaType];
+    if (isValidHttpUrl(metaDestinationUrl)) {
+      spec.call_to_actions = [
+        {
+          type: config.ctaType,
+          value: { link: metaDestinationUrl },
+        },
+      ];
+    }
   }
   if (media.videos.length > 0 && media.images.length > 0) {
     spec.ad_formats = ['SINGLE_VIDEO', 'SINGLE_IMAGE'];
