@@ -2185,7 +2185,9 @@ function buildAssetFeedSpec(
   destinationUrl = '',
 ): Record<string, unknown> {
   const metaDestinationUrl = normalizeMetaDestinationUrl(destinationUrl);
-  const spec: Record<string, unknown> = {};
+  const spec: Record<string, unknown> = {
+    optimization_type: 'DEGREES_OF_FREEDOM',
+  };
   const bodies = uniqueCopyItems(config.primaryTexts);
   const titles = uniqueCopyItems(config.headlines);
   const descriptions = uniqueCopyItems(config.descriptions);
@@ -2261,6 +2263,9 @@ function buildCreativeBody(
     const identityStorySpec: Record<string, unknown> = {
       page_id: profile.pageId || config.pageId,
     };
+    if (profile.instagramActorId) {
+      identityStorySpec.instagram_user_id = profile.instagramActorId;
+    }
     creativeBody.asset_feed_spec = JSON.stringify(
       buildAssetFeedSpec(config, mediaAssetItems, destinationUrl),
     );
@@ -2616,10 +2621,6 @@ function expandAdGroupIntoMetaAdUnits(
 
 function hasMultiMediaAdGroupsInList(adGroups: CreativeAdGroup[]): boolean {
   return adGroups.some((group) => (group.creativeIds || []).length > 1);
-}
-
-function shouldUseFlexibleCreativeForAdGroups(config: LaunchConfig, adGroups: CreativeAdGroup[]): boolean {
-  return hasMultipleCopyOptions(config) || hasMultiMediaAdGroupsInList(adGroups);
 }
 
 function hasDynamicCreativeMultiAdConflict(adGroups: CreativeAdGroup[]): boolean {
@@ -3122,7 +3123,7 @@ export async function POST(request: NextRequest) {
       });
       if (launchConfig.campaignMode === 'existing') {
         console.warn(
-          '[launch] Flexible asset_feed_spec is enabled. Dynamic creative must be enabled on each new ad set; existing ad sets must already support it.',
+          '[launch] asset_feed_spec is enabled. Multiple copy options use Degrees of Freedom and do not require dynamic ad sets; multi-media ad groups may still require dynamic creative support.',
         );
       }
     }
@@ -3452,7 +3453,7 @@ export async function POST(request: NextRequest) {
             attribution_spec: JSON.stringify(buildAttributionSpec(launchConfig.attributionWindow)),
             start_time: resolveStartTime(launchConfig, storeTimezone),
           };
-          if (shouldUseFlexibleCreativeForAdGroups(launchConfig, adGroups)) {
+          if (hasMultiMediaAdGroupsInList(adGroups)) {
             adsetBody.is_dynamic_creative = 'true';
           }
 
@@ -3670,10 +3671,6 @@ export async function POST(request: NextRequest) {
           attribution_spec: JSON.stringify(buildAttributionSpec(launchConfig.attributionWindow)),
           start_time: resolveStartTime(launchConfig, storeTimezone),
         };
-        if (hasMultipleCopyOptions(launchConfig)) {
-          adsetBody.is_dynamic_creative = 'true';
-        }
-
         // Budget (ABO puts budget on adset, CBO on campaign)
         if (launchConfig.structure === 'ABO') {
           const budgetCents = Math.round(launchConfig.dailyBudget * 100);
