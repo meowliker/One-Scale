@@ -364,6 +364,10 @@ function isBidAmountRequiredMetaError(message: string): boolean {
 function isInvalidInstagramActorMetaError(message: string): boolean {
   const lower = message.toLowerCase();
   return (
+    lower.includes('subcode=1341012') ||
+    lower.includes('no permission to access this profile') ||
+    lower.includes("don't have required permission to access this profile") ||
+    lower.includes('required permission to access this profile') ||
     (lower.includes('instagram_actor_id') || lower.includes('instagram_user_id')) &&
     (lower.includes('valid instagram account id') || lower.includes('invalid parameter'))
   );
@@ -1246,7 +1250,26 @@ async function createAdCreativeWithFallback(
             thumbnailErr instanceof Error ? thumbnailErr.message : String(thumbnailErr);
           attemptErrors.push(`attempt_3_with_video_thumbnail:${thumbnailMessage}`);
           currentMessage = thumbnailMessage;
-          if (!isVideoNotReadyMetaError(thumbnailMessage)) {
+          if (isInvalidInstagramActorMetaError(thumbnailMessage)) {
+            const withoutInstagramActor = removeInstagramActorFromCreativeBody(sanitizedThumbnailBody);
+            if (withoutInstagramActor) {
+              workingBody = withoutInstagramActor;
+              if (effectiveFallbackObjectStorySpec) {
+                effectiveFallbackObjectStorySpec = removeInstagramActorFromObjectStorySpec(
+                  effectiveFallbackObjectStorySpec,
+                );
+              }
+              try {
+                return await postToMeta(accessToken, `/${accountNode}/adcreatives`, workingBody);
+              } catch (identityErr) {
+                const identityMessage =
+                  identityErr instanceof Error ? identityErr.message : String(identityErr);
+                attemptErrors.push(`attempt_4_with_video_thumbnail_without_instagram_actor:${identityMessage}`);
+                currentMessage = identityMessage;
+              }
+            }
+          }
+          if (!isVideoNotReadyMetaError(currentMessage)) {
             throw new Error(attemptErrors.join(' || '));
           }
         }
