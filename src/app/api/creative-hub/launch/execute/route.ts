@@ -2201,12 +2201,17 @@ function buildAssetFeedSpec(
   config: LaunchConfig,
   mediaItems: CreativeTestItemRow[] = [],
   destinationUrl = '',
-  options: { includeMediaAssets?: boolean; includeDestinationAssets?: boolean } = {},
+  options: {
+    includeMediaAssets?: boolean;
+    includeDestinationAssets?: boolean;
+    includeOptimizationType?: boolean;
+  } = {},
 ): Record<string, unknown> {
   const metaDestinationUrl = normalizeMetaDestinationUrl(destinationUrl);
-  const spec: Record<string, unknown> = {
-    optimization_type: 'DEGREES_OF_FREEDOM',
-  };
+  const spec: Record<string, unknown> = {};
+  if (options.includeOptimizationType !== false) {
+    spec.optimization_type = 'DEGREES_OF_FREEDOM';
+  }
   const bodies = uniqueCopyItems(config.primaryTexts);
   const titles = uniqueCopyItems(config.headlines);
   const descriptions = uniqueCopyItems(config.descriptions);
@@ -2298,6 +2303,7 @@ function buildCreativeBody(
       buildAssetFeedSpec(config, mediaAssetItems, destinationUrl, {
         includeMediaAssets: hasMultiMediaAssets,
         includeDestinationAssets: hasMultiMediaAssets,
+        includeOptimizationType: !hasMultiMediaAssets,
       }),
     );
     if (hasMultiMediaAssets || options.forceAssetFeedSpec) {
