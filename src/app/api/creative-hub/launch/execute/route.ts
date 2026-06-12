@@ -2278,11 +2278,12 @@ function buildCreativeBody(
     object_story_spec: JSON.stringify(fallbackObjectStorySpec),
     contextual_multi_ads: JSON.stringify(buildContextualMultiAdsOptOutSpec()),
   };
-  if (isValidHttpUrl(destinationUrl)) {
-    creativeBody.link_url = destinationUrl;
-  }
   const hasMultiMediaAssets = mediaAssetItems.length > 1;
   const useAssetFeedSpec = options.forceAssetFeedSpec || shouldUseFlexibleCreative(config, mediaAssetItems);
+
+  if (isValidHttpUrl(destinationUrl) && !useAssetFeedSpec) {
+    creativeBody.link_url = destinationUrl;
+  }
 
   if (profile.instagramActorId && !useAssetFeedSpec) {
     creativeBody.instagram_actor_id = profile.instagramActorId;
@@ -2327,7 +2328,7 @@ function buildObjectStorySpec(
 
   const story: Record<string, unknown> = { page_id: pageId };
   if (profile.instagramActorId) {
-    story.instagram_actor_id = profile.instagramActorId;
+    story.instagram_user_id = profile.instagramActorId;
   }
 
   const primaryText = config.primaryTexts[0]?.text || '';
