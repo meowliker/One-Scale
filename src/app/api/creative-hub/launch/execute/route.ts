@@ -84,7 +84,7 @@ async function fetchLaunchPromotePages(
   const promotedPages = await fetchFromMeta<{ data?: Array<Record<string, unknown>> }>(
     accessToken,
     `/${accountNode}/promote_pages`,
-    { fields: 'id,name,instagram_business_account{id}', limit: '100' },
+    { fields: 'id,name,instagram_business_account{id},connected_instagram_account{id}', limit: '100' },
     10000,
     1,
   );
@@ -93,11 +93,32 @@ async function fetchLaunchPromotePages(
     .map((page) => ({
       id: asString(page.id) || '',
       name: asString(page.name) || undefined,
-      instagramBusinessAccountId: asString(
-        (page.instagram_business_account as Record<string, unknown> | undefined)?.id,
-      ) || undefined,
+      instagramBusinessAccountId:
+        asString((page.instagram_business_account as Record<string, unknown> | undefined)?.id) ||
+        asString((page.connected_instagram_account as Record<string, unknown> | undefined)?.id) ||
+        undefined,
     }))
     .filter((page) => page.id);
+}
+
+async function fetchLaunchInstagramAccounts(
+  accessToken: string,
+  accountNode: string,
+): Promise<Array<{ id: string; username?: string }>> {
+  const accounts = await fetchFromMeta<{ data?: Array<Record<string, unknown>> }>(
+    accessToken,
+    `/${accountNode}/instagram_accounts`,
+    { fields: 'id,username', limit: '100' },
+    10000,
+    1,
+  );
+
+  return (accounts.data || [])
+    .map((account) => ({
+      id: asString(account.id) || '',
+      username: asString(account.username) || undefined,
+    }))
+    .filter((account) => account.id);
 }
 
 function generateId(): string {
@@ -2699,8 +2720,26 @@ export async function POST(request: NextRequest) {
             { status: 400 },
           );
         }
-        if (!resolvedInstagramActorId && accessiblePage.instagramBusinessAccountId) {
+        if (accessiblePage.instagramBusinessAccountId) {
+          if (
+            resolvedInstagramActorId &&
+            resolvedInstagramActorId !== accessiblePage.instagramBusinessAccountId
+          ) {
+            console.warn('[launch] Replacing saved Instagram actor with account-accessible Page Instagram actor', {
+              accountNode,
+              pageId: resolvedPageId,
+              savedInstagramActorId: resolvedInstagramActorId,
+              accessibleInstagramActorId: accessiblePage.instagramBusinessAccountId,
+            });
+          }
           resolvedInstagramActorId = accessiblePage.instagramBusinessAccountId;
+        } else if (resolvedInstagramActorId) {
+          console.warn('[launch] Clearing Instagram actor because target ad account does not list one for the Page', {
+            accountNode,
+            pageId: resolvedPageId,
+            savedInstagramActorId: resolvedInstagramActorId,
+          });
+          resolvedInstagramActorId = '';
         }
       }
     } catch (err) {
@@ -2716,18 +2755,48 @@ export async function POST(request: NextRequest) {
         const pageMeta = await fetchFromMeta<Record<string, unknown>>(
           token.accessToken,
           `/${resolvedPageId}`,
-          { fields: 'instagram_business_account{id}' },
+          { fields: 'instagram_business_account{id},connected_instagram_account{id}' },
           10000,
           1,
         );
-        const linkedInstagramActorId = asString(
-          (pageMeta.instagram_business_account as Record<string, unknown> | undefined)?.id,
-        );
+        const linkedInstagramActorId =
+          asString((pageMeta.instagram_business_account as Record<string, unknown> | undefined)?.id) ||
+          asString((pageMeta.connected_instagram_account as Record<string, unknown> | undefined)?.id);
         if (!linkedInstagramActorId || linkedInstagramActorId !== resolvedInstagramActorId) {
+          console.warn('[launch] Clearing Instagram actor because it is not linked to the selected Page', {
+            accountNode,
+            pageId: resolvedPageId,
+            savedInstagramActorId: resolvedInstagramActorId,
+            linkedInstagramActorId,
+          });
           resolvedInstagramActorId = '';
         }
       } catch {
         // If validation fails, avoid passing an invalid actor id.
+        resolvedInstagramActorId = '';
+      }
+    }
+
+    if (resolvedInstagramActorId) {
+      try {
+        const instagramAccounts = await fetchLaunchInstagramAccounts(token.accessToken, accountNode);
+        const hasAccountActor = instagramAccounts.some((account) => account.id === resolvedInstagramActorId);
+        if (!hasAccountActor) {
+          console.warn('[launch] Clearing Instagram actor because target ad account cannot use it', {
+            accountNode,
+            pageId: resolvedPageId,
+            savedInstagramActorId: resolvedInstagramActorId,
+            availableInstagramActorIds: instagramAccounts.map((account) => account.id),
+          });
+          resolvedInstagramActorId = '';
+        }
+      } catch (err) {
+        console.warn('[launch] Could not verify ad account Instagram actor access; clearing actor for launch safety', {
+          accountNode,
+          pageId: resolvedPageId,
+          savedInstagramActorId: resolvedInstagramActorId,
+          error: err instanceof Error ? err.message : String(err),
+        });
         resolvedInstagramActorId = '';
       }
     }
@@ -3155,12 +3224,14 @@ export async function POST(request: NextRequest) {
                 metaAssetIds: adMediaItems.map((item) => item.meta_asset_id),
                 creativeSummary: summarizeCreativeBodyForLaunch(creativeBody),
               });
+              const preferredThumbnailUrl =
+                toFetchableThumbnailUrl(primaryItem.thumbnail_url, request.nextUrl.origin) || undefined;
 
               const creativeRes = await createAdCreativeWithFallback(
                 token.accessToken,
                 accountNode,
                 creativeBody,
-                primaryItem.thumbnail_url || undefined,
+                preferredThumbnailUrl,
                 fallbackObjectStorySpec,
               );
               const metaCreativeId = String(creativeRes.id || '');
@@ -3177,7 +3248,7 @@ export async function POST(request: NextRequest) {
                 adStatus: adLaunchStatus,
                 metaCreativeId,
                 creativeBody,
-                preferredThumbnailUrl: primaryItem.thumbnail_url || undefined,
+                preferredThumbnailUrl,
                 fallbackObjectStorySpec,
               });
 
@@ -3358,12 +3429,14 @@ export async function POST(request: NextRequest) {
                   metaAssetIds: adMediaItems.map((item) => item.meta_asset_id),
                   creativeSummary: summarizeCreativeBodyForLaunch(creativeBody),
                 });
+                const preferredThumbnailUrl =
+                  toFetchableThumbnailUrl(primaryItem.thumbnail_url, request.nextUrl.origin) || undefined;
 
                 const creativeRes = await createAdCreativeWithFallback(
                   token.accessToken,
                   accountNode,
                   creativeBody,
-                  primaryItem.thumbnail_url || undefined,
+                  preferredThumbnailUrl,
                   fallbackObjectStorySpec,
                 );
                 const metaCreativeId = String(creativeRes.id || '');
@@ -3380,7 +3453,7 @@ export async function POST(request: NextRequest) {
                   adStatus: adLaunchStatus,
                   metaCreativeId,
                   creativeBody,
-                  preferredThumbnailUrl: primaryItem.thumbnail_url || undefined,
+                  preferredThumbnailUrl,
                   fallbackObjectStorySpec,
                 });
 
@@ -3523,12 +3596,14 @@ export async function POST(request: NextRequest) {
           item,
           creativeUrl,
         );
+        const preferredThumbnailUrl =
+          toFetchableThumbnailUrl(item.thumbnail_url, request.nextUrl.origin) || undefined;
 
         const creativeRes = await createAdCreativeWithFallback(
           token.accessToken,
           accountNode,
           creativeBody,
-          item.thumbnail_url || undefined,
+          preferredThumbnailUrl,
           fallbackObjectStorySpec,
         );
         const creativeId = String(creativeRes.id || '');
@@ -3545,7 +3620,7 @@ export async function POST(request: NextRequest) {
           adStatus: adLaunchStatus,
           metaCreativeId: creativeId,
           creativeBody,
-          preferredThumbnailUrl: item.thumbnail_url || undefined,
+          preferredThumbnailUrl,
           fallbackObjectStorySpec,
         });
 
