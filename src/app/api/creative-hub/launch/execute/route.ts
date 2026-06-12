@@ -71,6 +71,35 @@ async function resolveCampaignOwnerAccountId(
   return accountId ? normalizeAccountNode(accountId) : null;
 }
 
+interface LaunchPromotePage {
+  id: string;
+  name?: string;
+  instagramBusinessAccountId?: string;
+}
+
+async function fetchLaunchPromotePages(
+  accessToken: string,
+  accountNode: string,
+): Promise<LaunchPromotePage[]> {
+  const promotedPages = await fetchFromMeta<{ data?: Array<Record<string, unknown>> }>(
+    accessToken,
+    `/${accountNode}/promote_pages`,
+    { fields: 'id,name,instagram_business_account{id}', limit: '100' },
+    10000,
+    1,
+  );
+
+  return (promotedPages.data || [])
+    .map((page) => ({
+      id: asString(page.id) || '',
+      name: asString(page.name) || undefined,
+      instagramBusinessAccountId: asString(
+        (page.instagram_business_account as Record<string, unknown> | undefined)?.id,
+      ) || undefined,
+    }))
+    .filter((page) => page.id);
+}
+
 function generateId(): string {
   return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -371,6 +400,12 @@ function isInvalidInstagramActorMetaError(message: string): boolean {
     (lower.includes('instagram_actor_id') || lower.includes('instagram_user_id')) &&
     (lower.includes('valid instagram account id') || lower.includes('invalid parameter'))
   );
+}
+
+function buildProfileAccessError(accountNode: string, pageId?: string): string {
+  const accountId = accountNode.replace(/^act_/, '');
+  const pageDetail = pageId ? ` Facebook Page ${pageId}` : ' the selected Facebook Page/profile';
+  return `Meta rejected${pageDetail} for ad account ${accountId}. Grant this ad account access to that Page in Meta Business Settings, or update the Product Profile to use a Page that this ad account can promote.`;
 }
 
 function isLinkRequiredMetaError(message: string): boolean {
@@ -676,6 +711,23 @@ function removeInstagramActorFromObjectStorySpec(
   delete sanitized.instagram_actor_id;
   delete sanitized.instagram_user_id;
   return sanitized;
+}
+
+function extractPageIdFromCreativeBody(
+  creativeBody: Record<string, string>,
+  fallbackObjectStorySpec?: Record<string, unknown>,
+): string | null {
+  try {
+    if (creativeBody.object_story_spec) {
+      const parsed = JSON.parse(creativeBody.object_story_spec) as Record<string, unknown>;
+      const pageId = asString(parsed.page_id);
+      if (pageId) return pageId;
+    }
+  } catch {
+    // Ignore parse errors and try the fallback spec.
+  }
+
+  return asString(fallbackObjectStorySpec?.page_id);
 }
 
 function extractDestinationUrlFromCreativeBody(
@@ -1112,6 +1164,14 @@ async function createAdCreativeWithFallback(
           attemptErrors.push(`attempt_2_without_instagram_actor:${fallbackMessage}`);
           currentMessage = fallbackMessage;
         }
+      } else {
+        attemptErrors.push(
+          `identity_access_error:${buildProfileAccessError(
+            accountNode,
+            extractPageIdFromCreativeBody(workingBody, effectiveFallbackObjectStorySpec) || undefined,
+          )}`,
+        );
+        throw new Error(attemptErrors.join(' || '));
       }
     }
 
@@ -1267,6 +1327,13 @@ async function createAdCreativeWithFallback(
                 attemptErrors.push(`attempt_4_with_video_thumbnail_without_instagram_actor:${identityMessage}`);
                 currentMessage = identityMessage;
               }
+            } else {
+              attemptErrors.push(
+                `identity_access_error:${buildProfileAccessError(
+                  accountNode,
+                  extractPageIdFromCreativeBody(sanitizedThumbnailBody, effectiveFallbackObjectStorySpec) || undefined,
+                )}`,
+              );
             }
           }
           if (!isVideoNotReadyMetaError(currentMessage)) {
@@ -2618,6 +2685,30 @@ export async function POST(request: NextRequest) {
         },
         { status: 400 },
       );
+    }
+
+    try {
+      const promotePages = await fetchLaunchPromotePages(token.accessToken, accountNode);
+      if (promotePages.length > 0) {
+        const accessiblePage = promotePages.find((page) => page.id === resolvedPageId);
+        if (!accessiblePage) {
+          return NextResponse.json(
+            {
+              error: buildProfileAccessError(accountNode, resolvedPageId),
+            },
+            { status: 400 },
+          );
+        }
+        if (!resolvedInstagramActorId && accessiblePage.instagramBusinessAccountId) {
+          resolvedInstagramActorId = accessiblePage.instagramBusinessAccountId;
+        }
+      }
+    } catch (err) {
+      console.warn('[launch] Could not verify Page access before launch', {
+        accountNode,
+        pageId: resolvedPageId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
 
     if (resolvedInstagramActorId) {
