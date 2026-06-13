@@ -73,12 +73,14 @@ export async function POST(request: NextRequest) {
   });
   if (productId) params.set('productId', productId);
   const inboxUrl = `${origin}/api/creative-hub/inbox?${params.toString()}`;
+  const authorization = request.headers.get('authorization') || '';
 
   try {
     const res = await fetch(inboxUrl, {
       method: 'GET',
       headers: {
         cookie: request.headers.get('cookie') || '',
+        ...(authorization ? { authorization } : {}),
       },
     });
 
