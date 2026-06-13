@@ -27,6 +27,7 @@ const tabs: { id: CreativeHubTab; label: string }[] = [
 ];
 
 const CREATIVE_HUB_RELOAD_STATE_KEY = 'creative-hub-reload-state';
+const CLICKUP_REFRESH_POLL_MS = 30 * 60 * 1000;
 
 export default function CreativeHubClient() {
   const activeTab = useCreativeHubStore((s) => s.activeTab);
@@ -171,6 +172,18 @@ export default function CreativeHubClient() {
     launchStudioOpen,
     launchStudioProductId,
   ]);
+
+  useEffect(() => {
+    if (!activeStoreId || activeTab !== 'profiles' || launchStudioOpen) return;
+
+    const refreshCachedClickUpMeta = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      void fetchProfileCreativeCounts(activeStoreId);
+    };
+
+    const intervalId = window.setInterval(refreshCachedClickUpMeta, CLICKUP_REFRESH_POLL_MS);
+    return () => window.clearInterval(intervalId);
+  }, [activeStoreId, activeTab, fetchProfileCreativeCounts, launchStudioOpen]);
 
   return (
     <div className="space-y-6">
