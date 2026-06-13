@@ -45,6 +45,12 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  const cronSecret = process.env.CRON_SECRET;
+  const authHeader = request.headers.get('authorization') || '';
+  if (pathname.startsWith('/api/') && cronSecret && authHeader === `Bearer ${cronSecret}`) {
+    return NextResponse.next();
+  }
+
   const token = request.cookies.get(ONE_SCALE_SESSION_COOKIE)?.value || '';
   if (token) {
     const claims = await verifySignedSessionToken(token);
