@@ -142,7 +142,10 @@ export async function GET(req: NextRequest) {
 
       // Always paginate to handle large gaps
       let allOrders: ShopifyOrderRaw[] = [];
-      let sinceId: string | undefined;
+      // Start at 0 so Shopify paginates forward by ID for historical backfills.
+      // Without this, the first page can default to newest-first and the next
+      // since_id cursor misses the older rows we are trying to backfill.
+      let sinceId: string | undefined = '0';
       let hasMore = true;
       const maxPages = 100;
       let page = 0;

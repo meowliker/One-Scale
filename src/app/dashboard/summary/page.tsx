@@ -16,16 +16,17 @@ import { useConnectionStore } from '@/stores/connectionStore';
 import { useStoreStore } from '@/stores/storeStore';
 import { NotConnectedError } from '@/services/withMockFallback';
 import { ConnectionEmptyState } from '@/components/ui/ConnectionEmptyState';
-import { getDailyPnL } from '@/services/pnl';
+import { getDailyPnLForRange } from '@/services/pnl';
 import { storeDayInTimezone } from '@/lib/timezone';
 import { getDateRange } from '@/lib/dateUtils';
 import type { Campaign } from '@/types/campaign';
 import { convertCurrency } from '@/lib/attribution/currencyHandler';
 import { clearCachePrefix } from '@/services/perfCache';
+import toast from 'react-hot-toast';
 
 const DASHBOARD_CURRENCY = 'USD';
-const SUMMARY_QUERY_VERSION = 'store-day-v6';
-const SUMMARY_WARM_CACHE_VERSION = 'v7';
+const SUMMARY_QUERY_VERSION = 'store-day-v7-range-pnl';
+const SUMMARY_WARM_CACHE_VERSION = 'v8-range-pnl';
 
 async function getActiveStoreCurrency(): Promise<string> {
   const { useStoreStore } = await import('@/stores/storeStore');
@@ -171,13 +172,16 @@ function clearSummaryWarmCache(storeId: string, rangeKey: string): void {
 
 async function fetchSummaryData(preset: DateRangePreset, selectedRange: DateRange) {
   const customRange = preset === 'custom' ? selectedRange : undefined;
+  const pnlRange = customRange || getDateRange(preset);
+  const pnlStartStr = storeDayInTimezone(pnlRange.start);
+  const pnlEndStr = storeDayInTimezone(pnlRange.end);
   const [metrics, series, campaigns, dailyPnL] = await Promise.all([
     getBlendedMetricsForRange(preset, customRange)(),
     getTimeSeriesForRange(preset, customRange)(),
     getTopCampaignsForRange(preset, customRange)(),
     // Gracefully degrade: if P&L fetch fails (e.g. Shopify not connected),
     // the rest of the dashboard still loads with Meta data.
-    getDailyPnL().catch(() => [] as PnLEntry[]),
+    getDailyPnLForRange(pnlStartStr, pnlEndStr).catch(() => [] as PnLEntry[]),
   ]);
 
   // Single source of truth for Shopify metrics: same daily P&L pipeline used by P&L page cards.
@@ -214,6 +218,7 @@ const PREWARM_PRESETS: DateRangePreset[] = [
 export default function SummaryPage() {
   const [datePreset, setDatePreset] = useState<DateRangePreset>('today');
   const [selectedRange, setSelectedRange] = useState<DateRange>(() => getDateRange('today'));
+  const [manualRefreshRunning, setManualRefreshRunning] = useState(false);
 
   const connectionLoading = useConnectionStore((s) => s.loading);
   const connectionStatus = useConnectionStore((s) => s.status);
@@ -297,14 +302,44 @@ export default function SummaryPage() {
     setDatePreset(range.preset || 'custom');
   }, []);
 
-  const handleRefresh = useCallback(() => {
+  const handleRefresh = useCallback(async () => {
     if (!activeStoreId) return;
-    clearSummaryWarmCache(activeStoreId, rangeKey);
-    clearCachePrefix(`pnl:daily:${activeStoreId}`);
-    clearCachePrefix(`pnl:summary:${activeStoreId}`);
-    void queryClient.invalidateQueries({ queryKey: ['summary', activeStoreId, rangeKey, SUMMARY_QUERY_VERSION] });
-    void queryClient.invalidateQueries({ queryKey: ['product-perf', activeStoreId] });
-  }, [activeStoreId, queryClient, rangeKey]);
+    const from = storeDayInTimezone(selectedRange.start);
+    const to = storeDayInTimezone(selectedRange.end);
+
+    setManualRefreshRunning(true);
+    const toastId = toast.loading('Syncing Shopify and rebuilding dashboard data...');
+    try {
+      const res = await fetch('/api/pnl/refresh-range', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        body: JSON.stringify({ storeId: activeStoreId, from, to }),
+      });
+      const json = await res.json().catch(() => ({})) as {
+        ok?: boolean;
+        error?: string;
+        orders?: number;
+        revenue?: number;
+      };
+
+      if (!res.ok || !json.ok) {
+        throw new Error(json.error || 'Refresh failed');
+      }
+
+      clearSummaryWarmCache(activeStoreId, rangeKey);
+      clearCachePrefix(`pnl:daily:${activeStoreId}`);
+      clearCachePrefix(`pnl:summary:${activeStoreId}`);
+      await queryClient.invalidateQueries({ queryKey: ['summary', activeStoreId, rangeKey, SUMMARY_QUERY_VERSION] });
+      await queryClient.invalidateQueries({ queryKey: ['product-perf', activeStoreId] });
+      toast.success(`Dashboard refreshed: ${json.orders ?? 0} Shopify orders synced`, { id: toastId });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Refresh failed';
+      toast.error(message, { id: toastId });
+    } finally {
+      setManualRefreshRunning(false);
+    }
+  }, [activeStoreId, queryClient, rangeKey, selectedRange]);
 
   if (!connectionReady && Object.keys(blendedMetrics).length === 0 && !emptyReason) {
     return (
@@ -335,7 +370,7 @@ export default function SummaryPage() {
         onDatePresetChange={handleDatePresetChange}
         onDateRangeChange={handleDateRangeChange}
         onRefresh={handleRefresh}
-        loading={isLoading || isFetching}
+        loading={isLoading || isFetching || manualRefreshRunning}
       />
     </div>
   );

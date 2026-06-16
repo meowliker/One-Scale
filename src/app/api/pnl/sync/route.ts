@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { rest, isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence';
+import { fetchAllRestRows } from '@/app/api/lib/supabase-pagination';
 import { convertCurrencyServer, getStoreReportingCurrencyServer, normalizeCurrencyCode } from '@/app/api/lib/currency-conversion';
 
 const PNL_SYNC_SECRET = process.env.PNL_SYNC_SECRET ?? '';
@@ -89,6 +90,8 @@ async function getStoreCurrencyServer(storeId: string): Promise<string> {
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const storeId = searchParams.get('storeId');
+  const from = searchParams.get('from');
+  const to = searchParams.get('to');
   const days = parseInt(searchParams.get('days') ?? '31', 10);
 
   if (!storeId) return NextResponse.json({ error: 'storeId required' }, { status: 400 });
@@ -96,12 +99,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Supabase not configured' }, { status: 503 });
   }
 
-  // Use store timezone to calculate the date range
-  const now = new Date();
-  const sinceDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
-  // For the GET query we just need a YYYY-MM-DD string — use UTC as a safe approximation
-  // since daily_pnl_snapshots dates are already stored in store timezone by the POST handler
-  const sinceStr = sinceDate.toISOString().split('T')[0];
+  // Snapshot dates are already stored as store-local YYYY-MM-DD values.
+  const sinceStr = from || new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+  const untilFilter = to ? `&date=lte.${encodeURIComponent(to)}` : '';
 
   try {
     const data = await rest<Array<{
@@ -127,7 +127,7 @@ export async function GET(request: NextRequest) {
       revenue_source: string;
       synced_at: string;
     }>>(
-      `/daily_pnl_snapshots?store_id=eq.${encodeURIComponent(storeId)}&date=gte.${sinceStr}&select=*&order=date.asc`
+      `/daily_pnl_snapshots?store_id=eq.${encodeURIComponent(storeId)}&date=gte.${encodeURIComponent(sinceStr)}${untilFilter}&select=*&order=date.asc`
     );
 
     const entries = (data ?? []).map(row => ({
@@ -277,12 +277,11 @@ export async function POST(request: NextRequest) {
         // Without this, Key Metrics (AOV, Total Orders) show 0.
         let orderCount = 0;
         try {
-          const orderCountRows = await rest<Array<{ count: number }>>(
+          const orderCountRows = await fetchAllRestRows<{ shopify_order_id: string }>(
             `/shopify_orders_cache?store_id=eq.${encodeURIComponent(storeId)}` +
             `&and=(created_at.gte.${encodeURIComponent(utcBounds.min)},created_at.lte.${encodeURIComponent(utcBounds.max)})` +
             `&order_status=neq.cancelled&financial_status=neq.refunded&financial_status=neq.voided` +
-            `&select=shopify_order_id`,
-            { headers: { Prefer: 'count=exact' } }
+            `&select=shopify_order_id`
           );
           orderCount = orderCountRows?.length ?? 0;
         } catch { /* orders cache may not be populated yet */ }
@@ -290,11 +289,11 @@ export async function POST(request: NextRequest) {
         // Also build per-product breakdown for multi-day aggregation
         let productBreakdown: string | null = null;
         try {
-          const orderRows = await rest<Array<{ shopify_order_id: string; total_price: number; line_items: string; financial_status: string }>>(
+          const orderRows = await fetchAllRestRows<{ shopify_order_id: string; total_price: number; line_items: string; financial_status: string }>(
             `/shopify_orders_cache?store_id=eq.${encodeURIComponent(storeId)}` +
             `&and=(created_at.gte.${encodeURIComponent(utcBounds.min)},created_at.lte.${encodeURIComponent(utcBounds.max)})` +
             `&order_status=neq.cancelled&financial_status=neq.refunded&financial_status=neq.voided` +
-            `&select=shopify_order_id,total_price,line_items,financial_status&limit=1000`
+            `&select=shopify_order_id,total_price,line_items,financial_status`
           );
           if (orderRows && orderRows.length > 0) {
             const prodMap = new Map<string, { productTitle: string; revenue: number; unitsSold: number; fees: number; orders: Set<string>; classification: string }>();
@@ -348,7 +347,7 @@ export async function POST(request: NextRequest) {
         );
       } else {
         // Orders fallback for stores without Shopify Payments (e.g. Naiva)
-        const orders = await rest<Array<{ total_price: number; financial_status: string; refund_total: number }>>(
+        const orders = await fetchAllRestRows<{ total_price: number; financial_status: string; refund_total: number }>(
           `/shopify_orders_cache?store_id=eq.${encodeURIComponent(storeId)}` +
           `&and=(created_at.gte.${encodeURIComponent(utcBounds.min)},created_at.lte.${encodeURIComponent(utcBounds.max)})` +
           `&order_status=neq.cancelled&select=total_price,financial_status,refund_total`

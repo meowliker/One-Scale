@@ -5,6 +5,9 @@
     "src/app/api/creative-hub/launch/execute/route.ts": {
       "maxDuration": 300
     },
+    "src/app/api/pnl/refresh-range/route.ts": {
+      "maxDuration": 300
+    },
     "src/app/api/**/route.ts": {
       "maxDuration": 60
     },

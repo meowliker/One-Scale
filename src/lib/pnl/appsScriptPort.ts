@@ -10,6 +10,7 @@
  */
 
 import { rest } from '@/app/api/lib/supabase-persistence';
+import { fetchAllRestRows } from '@/app/api/lib/supabase-pagination';
 import { rollUpOrders } from './productRollup';
 
 const enc = (v: string) => encodeURIComponent(v);
@@ -385,11 +386,11 @@ export async function buildProductPerformance(
   // Load all data in parallel
   const [orders, btTxns, spendRows, adMappings, costRows] = await Promise.all([
     // Orders for date range (created_at — has ALL orders with line items for matching)
-    rest<OrderRow[]>(
+    fetchAllRestRows<OrderRow>(
       `/shopify_orders_cache?store_id=eq.${enc(storeId)}&created_at=gte.${enc(orderStart)}&created_at=lte.${enc(orderEnd)}&order_status=neq.cancelled&select=shopify_order_id,total_price,subtotal_price,financial_status,order_status,line_items`
     ).catch(() => [] as OrderRow[]),
     // Balance transactions for fees
-    rest<BTRow[]>(
+    fetchAllRestRows<BTRow>(
       `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&and=(processed_at.gte.${enc(orderStart)},processed_at.lte.${enc(orderEnd)})&select=transaction_id,type,amount,fee,net,source_order_id`
     ).catch(() => [] as BTRow[]),
     // Meta spend for date range
@@ -409,7 +410,7 @@ export async function buildProductPerformance(
   // Get ad spend from daily_pnl_snapshots (ground truth, matches P&L period view)
   let pnlAdSpend = 0;
   try {
-    const snapshots = await rest<Array<{ ad_spend: number }>>(
+    const snapshots = await fetchAllRestRows<{ ad_spend: number }>(
       `/daily_pnl_snapshots?store_id=eq.${enc(storeId)}&date=gte.${dateFrom}&date=lte.${dateTo}&select=ad_spend`
     );
     pnlAdSpend = (snapshots ?? []).reduce((s, r) => s + (Number(r.ad_spend) || 0), 0);
