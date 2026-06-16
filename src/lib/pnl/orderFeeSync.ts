@@ -14,6 +14,7 @@ import { getShopifyToken } from '@/app/api/lib/tokens';
 
 const enc = (v: string) => encodeURIComponent(v);
 const SHOPIFY_API_VERSION = '2024-01';
+const FEE_LOOKUP_CHUNK_SIZE = 150;
 
 interface TransactionResponse {
   transactions: Array<{
@@ -124,9 +125,14 @@ export async function getOrderFees(
   if (orderIds.length === 0) return new Map();
 
   // Step 1: Get existing BT fees
-  const btRows = await rest<Array<{ source_order_id: string; fee: string }>>(
-    `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&type=eq.charge&source_order_id=in.(${orderIds.join(',')})&select=source_order_id,fee`
-  ).catch(() => []);
+  const btRows: Array<{ source_order_id: string; fee: string }> = [];
+  for (let i = 0; i < orderIds.length; i += FEE_LOOKUP_CHUNK_SIZE) {
+    const chunk = orderIds.slice(i, i + FEE_LOOKUP_CHUNK_SIZE);
+    const rows = await rest<Array<{ source_order_id: string; fee: string }>>(
+      `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&type=eq.charge&source_order_id=in.(${chunk.join(',')})&select=source_order_id,fee`
+    ).catch(() => []);
+    btRows.push(...rows);
+  }
 
   const feeMap = new Map<string, number>();
   for (const t of btRows) {

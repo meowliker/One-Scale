@@ -17,6 +17,7 @@ import {
   rest,
   isSupabasePersistenceEnabled,
 } from '@/app/api/lib/supabase-persistence';
+import { fetchAllRestRows } from '@/app/api/lib/supabase-pagination';
 import { getStoreDateRangeForPeriod } from '@/lib/pnl/dateUtils';
 import { getOrderFees } from '@/lib/pnl/orderFeeSync';
 
@@ -36,6 +37,8 @@ export async function GET(req: NextRequest) {
   const storeId = req.nextUrl.searchParams.get('storeId');
   const from = req.nextUrl.searchParams.get('from');
   const to = req.nextUrl.searchParams.get('to');
+  const feeMode = req.nextUrl.searchParams.get('feeMode') || 'exact';
+  const useEstimatedFees = feeMode === 'estimate';
 
   if (!storeId || !from || !to) {
     return NextResponse.json({ error: 'storeId, from, to required' }, { status: 400 });
@@ -68,11 +71,11 @@ export async function GET(req: NextRequest) {
       const { start: tzStart, end: tzEnd } = getStoreDateRangeForPeriod(date, date, tz);
 
       // 1. Orders for this date
-      const dayOrders = await rest<Array<{
+      const dayOrders = await fetchAllRestRows<{
         shopify_order_id: string; total_price: number; subtotal_price: number;
         financial_status: string; line_items: string;
-      }>>(
-        `/shopify_orders_cache?store_id=eq.${enc(storeId)}&and=(created_at.gte.${enc(tzStart)},created_at.lte.${enc(tzEnd)})&select=shopify_order_id,total_price,subtotal_price,financial_status,line_items&limit=1000`
+      }>(
+        `/shopify_orders_cache?store_id=eq.${enc(storeId)}&and=(created_at.gte.${enc(tzStart)},created_at.lte.${enc(tzEnd)})&select=shopify_order_id,total_price,subtotal_price,financial_status,line_items`
       ).catch(() => []);
 
       const paidOrders = dayOrders.filter(o => o.financial_status !== 'refunded' && o.financial_status !== 'voided');
@@ -80,11 +83,16 @@ export async function GET(req: NextRequest) {
       const orderRevenue = paidOrders.reduce((s, o) => s + (Number(o.total_price) || 0), 0);
 
       // 2. Exact fees per order
-      const orderFeeMap = await getOrderFees(storeId, orderIds);
+      const orderFeeMap = useEstimatedFees
+        ? new Map(paidOrders.map(o => [
+          String(o.shopify_order_id),
+          Math.round(((Number(o.total_price) || 0) * 0.029 + 0.30) * 100) / 100,
+        ]))
+        : await getOrderFees(storeId, orderIds);
 
       // 3. Refunds/chargebacks by processed_at
       let totalRefunds = 0, totalCbLoss = 0, totalCbWon = 0, totalCbFees = 0, totalDebits = 0, totalCredits = 0, totalReserve = 0;
-      const btByDate = await rest<Array<{ type: string; amount: string; fee: string; net: string }>>(
+      const btByDate = await fetchAllRestRows<{ type: string; amount: string; fee: string; net: string }>(
         `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&type=neq.charge&type=neq.payout&and=(processed_at.gte.${enc(tzStart)},processed_at.lte.${enc(tzEnd)})&select=type,amount,fee,net`
       ).catch(() => []);
 
@@ -169,12 +177,14 @@ export async function GET(req: NextRequest) {
           full_refund_count: 0, partial_refund_count: 0,
           full_refund_amount: 0, partial_refund_amount: 0,
           chargeback_loss: totalCbLoss, chargeback_won: totalCbWon,
-          chargeback_fees: totalCbFees, debits: totalDebits,
-          credits: totalCredits, reserve_hold: totalReserve,
+          adjustment: totalCredits - totalDebits - totalCbFees,
+          credit: totalCredits,
+          reserved_funds: totalReserve,
+          net_revenue: orderRevenue - totalRefunds,
           net_profit: netProfit, margin,
           warnings: '[]',
           product_breakdown: JSON.stringify(productBreakdownArr),
-          fee_method: orderFeeMap.size > 0 ? 'bt_exact' : 'none',
+          fee_method: useEstimatedFees ? 'estimated' : (orderFeeMap.size > 0 ? 'bt_exact' : 'none'),
           synced_at: new Date().toISOString(),
           shopify_synced: paidOrders.length > 0,
           meta_synced: totalAdSpend > 0,

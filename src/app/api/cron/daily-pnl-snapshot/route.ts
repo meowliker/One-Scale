@@ -6,6 +6,7 @@ import {
   listPersistentStoreAdAccounts,
   logStoreError,
 } from '@/app/api/lib/supabase-persistence';
+import { fetchAllRestRows } from '@/app/api/lib/supabase-pagination';
 import { daysAgoInTimezone } from '@/lib/timezone';
 import { getStoreDateRangeForPeriod } from '@/lib/pnl/dateUtils';
 import { getOrderFees } from '@/lib/pnl/orderFeeSync';
@@ -207,11 +208,11 @@ export async function GET(req: NextRequest) {
       // This matches what Shopify shows the merchant.
 
       // 1. Orders for this day (store timezone)
-      const dayOrders = await rest<Array<{
+      const dayOrders = await fetchAllRestRows<{
         shopify_order_id: string; total_price: number; subtotal_price: number;
         financial_status: string; line_items: string;
-      }>>(
-        `/shopify_orders_cache?store_id=eq.${enc(store.id)}&and=(created_at.gte.${enc(tzStart)},created_at.lte.${enc(tzEnd)})&select=shopify_order_id,total_price,subtotal_price,financial_status,line_items&limit=1000`
+      }>(
+        `/shopify_orders_cache?store_id=eq.${enc(store.id)}&and=(created_at.gte.${enc(tzStart)},created_at.lte.${enc(tzEnd)})&select=shopify_order_id,total_price,subtotal_price,financial_status,line_items`
       ).catch(() => []);
 
       const paidOrders = dayOrders.filter(o => o.financial_status !== 'refunded' && o.financial_status !== 'voided');
@@ -225,7 +226,7 @@ export async function GET(req: NextRequest) {
       // A refund/chargeback processed on March 15 affects March 15 P&L,
       // even if the original order was from March 10.
       let totalRefunds = 0, totalCbLoss = 0, totalCbWon = 0, totalAdjustments = 0;
-      const btByDate = await rest<Array<{ type: string; amount: string; fee: string; net: string }>>(
+      const btByDate = await fetchAllRestRows<{ type: string; amount: string; fee: string; net: string }>(
         `/shopify_balance_transactions?store_id=eq.${enc(store.id)}&type=neq.charge&type=neq.payout&and=(processed_at.gte.${enc(tzStart)},processed_at.lte.${enc(tzEnd)})&select=type,amount,fee,net`
       ).catch(() => []);
 

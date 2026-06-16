@@ -17,6 +17,7 @@
  */
 
 import { rest } from '@/app/api/lib/supabase-persistence';
+import { fetchAllRestRows } from '@/app/api/lib/supabase-pagination';
 import { getStoreDateRangeForPeriod } from '@/lib/pnl/dateUtils';
 import { getOrderFees } from '@/lib/pnl/orderFeeSync';
 
@@ -52,10 +53,10 @@ export async function computeDayPnL(storeId: string, date: string, tz: string): 
   const { start: tzStart, end: tzEnd } = getStoreDateRangeForPeriod(date, date, tz);
 
   // 1. Orders for this date (store timezone)
-  const dayOrders = await rest<Array<{
+  const dayOrders = await fetchAllRestRows<{
     shopify_order_id: string; total_price: number; financial_status: string; line_items: string;
-  }>>(
-    `/shopify_orders_cache?store_id=eq.${enc(storeId)}&and=(created_at.gte.${enc(tzStart)},created_at.lte.${enc(tzEnd)})&select=shopify_order_id,total_price,financial_status,line_items&limit=1000`
+  }>(
+    `/shopify_orders_cache?store_id=eq.${enc(storeId)}&and=(created_at.gte.${enc(tzStart)},created_at.lte.${enc(tzEnd)})&select=shopify_order_id,total_price,financial_status,line_items`
   ).catch(() => []);
 
   const paidOrders = dayOrders.filter(o => o.financial_status !== 'refunded' && o.financial_status !== 'voided');
@@ -73,7 +74,7 @@ export async function computeDayPnL(storeId: string, date: string, tz: string): 
     reserveHold: 0, credits: 0, debits: 0,
   };
 
-  const btByDate = await rest<Array<{ type: string; amount: string; fee: string; net: string }>>(
+  const btByDate = await fetchAllRestRows<{ type: string; amount: string; fee: string; net: string }>(
     `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&type=neq.charge&type=neq.payout&and=(processed_at.gte.${enc(tzStart)},processed_at.lte.${enc(tzEnd)})&select=type,amount,fee,net`
   ).catch(() => []);
 
@@ -186,10 +187,10 @@ export async function computeAndSaveDayPnL(storeId: string, date: string, tz: st
       transaction_fees: pnl.fees, refunds: pnl.costs.refunds,
       chargeback_loss: pnl.costs.chargebackLoss,
       chargeback_won: pnl.costs.chargebackWon,
-      chargeback_fees: pnl.costs.chargebackFees,
-      debits: pnl.costs.debits,
-      credits: pnl.costs.credits,
-      reserve_hold: pnl.costs.reserveHold,
+      adjustment: pnl.costs.credits - pnl.costs.debits - pnl.costs.chargebackFees,
+      credit: pnl.costs.credits,
+      reserved_funds: pnl.costs.reserveHold,
+      net_revenue: pnl.revenue - pnl.costs.refunds,
       net_profit: pnl.netProfit, margin: pnl.margin,
       warnings: '[]',
       product_breakdown: pnl.productBreakdown,
