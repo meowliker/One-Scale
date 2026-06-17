@@ -1599,15 +1599,20 @@ export async function fetchMetaAds(
 export async function fetchMetaInsights(
   token: string,
   objectId: string,
-  datePreset: string = 'last_30d'
+  datePreset: string = 'last_30d',
+  timeRange?: { since: string; until: string }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): Promise<Record<string, any>[]> {
+  const dateParams: Record<string, string> = timeRange
+    ? { time_range: JSON.stringify({ since: timeRange.since, until: timeRange.until }) }
+    : { date_preset: datePreset };
+
   const data = await fetchFromMeta<{
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     data: Record<string, any>[];
   }>(token, `/${objectId}/insights`, {
     fields: 'spend,impressions,reach,clicks,actions,action_values,ctr,cpc,cpm,unique_clicks,unique_ctr,quality_ranking,engagement_rate_ranking,conversion_rate_ranking,date_start,date_stop',
-    date_preset: datePreset,
+    ...dateParams,
     time_increment: '1',
   });
 

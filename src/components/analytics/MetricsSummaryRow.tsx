@@ -392,7 +392,7 @@ export function MetricsSummaryRow({ metrics }: MetricsSummaryRowProps) {
   const transactionFees = metrics.shopifyFees ?? 0;
   const refunds = metrics.shopifyRefunds ?? 0;
   const shopifyTips = metrics.shopifyTips ?? 0;
-  const netProfit = metrics.shopifyNetProfit ?? (shopifyRevenue - spend - transactionFees - refunds);
+  const netProfit = shopifyRevenue - spend - transactionFees - refunds;
   const margin = shopifyRevenue > 0 ? (netProfit / shopifyRevenue) * 100 : 0;
 
   // Additional FB metrics

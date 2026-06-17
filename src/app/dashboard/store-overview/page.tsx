@@ -16,6 +16,7 @@ import {
 import type { DateRangePreset } from '@/types/analytics';
 import { DateRangePicker } from '@/components/ui/DateRangePicker';
 import { getDateRange } from '@/lib/dateUtils';
+import { STORE_REPORTING_TIMEZONE, storeDayInTimezone } from '@/lib/timezone';
 import { useStoreStore } from '@/stores/storeStore';
 
 type StoreOverviewRow = {
@@ -52,6 +53,12 @@ type StoreOverviewResponse = {
   generatedAt: string;
 };
 
+type StoreOverviewRange = {
+  start: Date;
+  end: Date;
+  preset?: DateRangePreset;
+};
+
 function money(value: number): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(value || 0);
 }
@@ -79,8 +86,31 @@ function relativeDate(iso: string | null): string {
   return `${hrs}h ago`;
 }
 
-async function fetchStoreOverview(preset: DateRangePreset): Promise<StoreOverviewResponse> {
-  const res = await fetch(`/api/dashboard/store-overview?preset=${encodeURIComponent(preset)}`, {
+function rangeStart(range: StoreOverviewRange): string {
+  return storeDayInTimezone(range.start, STORE_REPORTING_TIMEZONE);
+}
+
+function rangeEnd(range: StoreOverviewRange): string {
+  return storeDayInTimezone(range.end, STORE_REPORTING_TIMEZONE);
+}
+
+function rangeCacheKey(range: StoreOverviewRange): string {
+  const preset = range.preset || 'custom';
+  return `${preset}:${rangeStart(range)}:${rangeEnd(range)}`;
+}
+
+function storeOverviewUrl(range: StoreOverviewRange): string {
+  const params = new URLSearchParams();
+  params.set('since', rangeStart(range));
+  params.set('until', rangeEnd(range));
+  if (range.preset && range.preset !== 'custom') {
+    params.set('preset', range.preset);
+  }
+  return `/api/dashboard/store-overview?${params.toString()}`;
+}
+
+async function fetchStoreOverview(range: StoreOverviewRange): Promise<StoreOverviewResponse> {
+  const res = await fetch(storeOverviewUrl(range), {
     method: 'GET',
     cache: 'no-store',
     credentials: 'include',
@@ -92,44 +122,37 @@ async function fetchStoreOverview(preset: DateRangePreset): Promise<StoreOvervie
   return res.json();
 }
 
-function readStoreOverviewWarmCache(scopeId: string | null, preset: DateRangePreset): StoreOverviewResponse | null {
-  if (!scopeId || typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(`store-overview:cache:v1:${scopeId}:${preset}`);
-    if (!raw) return null;
-    return JSON.parse(raw) as StoreOverviewResponse;
-  } catch {
-    return null;
-  }
-}
-
-function writeStoreOverviewWarmCache(scopeId: string, preset: DateRangePreset, payload: StoreOverviewResponse): void {
+function writeStoreOverviewWarmCache(scopeId: string, cacheKey: string, payload: StoreOverviewResponse): void {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(`store-overview:cache:v1:${scopeId}:${preset}`, JSON.stringify(payload));
+    window.localStorage.setItem(`store-overview:cache:v2:${scopeId}:${cacheKey}`, JSON.stringify(payload));
   } catch {
     // ignore cache write failures
   }
 }
 
 export default function StoreOverviewPage() {
-  const [preset, setPreset] = useState<DateRangePreset>('today');
+  const [dateRange, setDateRange] = useState<StoreOverviewRange>(() => getDateRange('lastMonth'));
+  const [hasHydrated, setHasHydrated] = useState(false);
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
-  const dateRange = useMemo(() => getDateRange(preset), [preset]);
-  const warmData = useMemo(() => readStoreOverviewWarmCache(activeStoreId, preset), [activeStoreId, preset]);
+  const cacheKey = useMemo(() => rangeCacheKey(dateRange), [dateRange]);
 
   const { data, isLoading, isFetching, error, refetch } = useQuery({
-    queryKey: ['store-overview', preset],
-    queryFn: () => fetchStoreOverview(preset),
-    initialData: warmData || undefined,
+    queryKey: ['store-overview', cacheKey],
+    queryFn: () => fetchStoreOverview(dateRange),
+    enabled: hasHydrated,
     staleTime: 60_000,
     gcTime: 10 * 60_000,
   });
 
   useEffect(() => {
     if (!activeStoreId || !data) return;
-    writeStoreOverviewWarmCache(activeStoreId, preset, data);
-  }, [activeStoreId, data, preset]);
+    writeStoreOverviewWarmCache(activeStoreId, cacheKey, data);
+  }, [activeStoreId, cacheKey, data]);
+
+  useEffect(() => {
+    setHasHydrated(true);
+  }, []);
 
   const stores = data?.stores || [];
   const totals = data?.totals;
@@ -149,20 +172,20 @@ export default function StoreOverviewPage() {
           <div className="flex items-center gap-2">
             <DateRangePicker
               dateRange={dateRange}
-              onRangeChange={(range) => setPreset((range.preset as DateRangePreset) || 'today')}
+              onRangeChange={(range) => setDateRange(range)}
             />
             <button
               onClick={() => refetch()}
               className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-surface px-3 text-sm font-semibold text-text-secondary hover:bg-surface-hover"
             >
-              <RefreshCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-4 w-4 ${hasHydrated && isFetching ? 'animate-spin' : ''}`} />
               Refresh
             </button>
           </div>
         </div>
       </section>
 
-      {isLoading && (
+      {hasHydrated && isLoading && (
         <div className="flex h-44 items-center justify-center rounded-2xl border border-border bg-surface-elevated">
           <Loader2 className="h-7 w-7 animate-spin text-primary" />
         </div>

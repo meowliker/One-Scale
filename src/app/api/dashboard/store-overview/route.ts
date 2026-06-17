@@ -3,19 +3,11 @@ import type { DateRangePreset } from '@/types/analytics';
 import type { Campaign } from '@/types/campaign';
 import {
   STORE_REPORTING_TIMEZONE,
-  endOfStoreDayInTz,
   formatDateInTimezone,
   getDateRangeInTimezone,
-  shopifyDateToStoreDayDate,
-  startOfStoreDayInTz,
-  storeDayInTimezone,
 } from '@/lib/timezone';
 import { readSessionFromRequest } from '@/lib/auth/request-session';
 import { listStoreIdsForWorkspace } from '@/app/api/lib/auth-users';
-import { getMetaToken } from '@/app/api/lib/tokens';
-import { fetchMetaCampaigns, fetchMetaInsights, mapInsightsToMetrics } from '@/app/api/lib/meta-client';
-import { getShopifyToken } from '@/app/api/lib/tokens';
-import { fetchBalanceTransactions, fetchShopifyOrders } from '@/app/api/lib/shopify-client';
 import {
   getAllStores,
   getCachedPnLDays,
@@ -34,6 +26,11 @@ import {
 import {
   getPersistentMetaEndpointSnapshot,
 } from '@/app/api/lib/supabase-tracking';
+import {
+  fetchLiveExchangeRate,
+  getFallbackExchangeRate,
+  isPlausibleRate,
+} from '@/app/api/lib/live-exchange-rate';
 
 interface StoreOverviewRow {
   storeId: string;
@@ -69,18 +66,28 @@ interface StoreOverviewResponse {
   generatedAt: string;
 }
 
-interface InsightTotals {
-  spend: number;
-  clicks: number;
-  impressions: number;
+interface DailyPnlSnapshotRow {
+  date: string;
+  revenue: number | string | null;
+  cogs: number | string | null;
+  ad_spend: number | string | null;
+  shipping_cost: number | string | null;
+  transaction_fees: number | string | null;
+  refunds: number | string | null;
+  chargeback_loss: number | string | null;
+  net_profit: number | string | null;
+  margin: number | string | null;
+  order_count: number | string | null;
+  full_refund_amount: number | string | null;
+  partial_refund_amount: number | string | null;
+  currency: string | null;
+  synced_at: string | null;
 }
 
 const DASHBOARD_CURRENCY = 'USD';
-const fallbackToUsdRates: Record<string, number> = {
-  USD: 1,
-  INR: 0.012,
-};
 const requestRateCache = new Map<string, number>();
+const requestRatePromiseCache = new Map<string, Promise<number>>();
+const LIVE_RATE_TIMEOUT_MS = 4_000;
 
 function toMoney(value: number): number {
   return Math.round((Number.isFinite(value) ? value : 0) * 100) / 100;
@@ -113,64 +120,30 @@ async function getStoredExchangeRate(
   date: string,
 ): Promise<number | null> {
   const enc = (value: string) => encodeURIComponent(value);
-  const isPlausibleRate = (rate: number): boolean => {
-    if (!Number.isFinite(rate) || rate <= 0) return false;
-    if (fromCurrency === 'INR' && toCurrency === 'USD') return rate >= 0.005 && rate <= 0.03;
-    if (fromCurrency === 'USD' && toCurrency === 'INR') return rate >= 30 && rate <= 200;
-    return rate < 1000;
-  };
   const exactRows = await rest<Array<{ rate: number }>>(
     `/exchange_rates?base_currency=eq.${enc(fromCurrency)}&target_currency=eq.${enc(toCurrency)}&date=eq.${enc(date)}&select=rate&limit=1`,
   ).catch(() => []);
-  if (exactRows[0]?.rate && isPlausibleRate(Number(exactRows[0].rate))) return Number(exactRows[0].rate);
+  if (exactRows[0]?.rate && isPlausibleRate(fromCurrency, toCurrency, Number(exactRows[0].rate))) return Number(exactRows[0].rate);
 
   const recentRows = await rest<Array<{ rate: number }>>(
     `/exchange_rates?base_currency=eq.${enc(fromCurrency)}&target_currency=eq.${enc(toCurrency)}&date=lte.${enc(date)}&select=rate&order=date.desc&limit=1`,
   ).catch(() => []);
-  if (recentRows[0]?.rate && isPlausibleRate(Number(recentRows[0].rate))) return Number(recentRows[0].rate);
+  if (recentRows[0]?.rate && isPlausibleRate(fromCurrency, toCurrency, Number(recentRows[0].rate))) return Number(recentRows[0].rate);
 
   const legacyRecentRows = await rest<Array<{ rate: number }>>(
     `/exchange_rates?from_currency=eq.${enc(fromCurrency)}&to_currency=eq.${enc(toCurrency)}&date=lte.${enc(date)}&select=rate&order=date.desc&limit=1`,
   ).catch(() => []);
-  if (legacyRecentRows[0]?.rate && isPlausibleRate(Number(legacyRecentRows[0].rate))) return Number(legacyRecentRows[0].rate);
+  if (legacyRecentRows[0]?.rate && isPlausibleRate(fromCurrency, toCurrency, Number(legacyRecentRows[0].rate))) return Number(legacyRecentRows[0].rate);
 
   const inverseRows = await rest<Array<{ rate: number }>>(
     `/exchange_rates?base_currency=eq.${enc(toCurrency)}&target_currency=eq.${enc(fromCurrency)}&date=lte.${enc(date)}&select=rate&order=date.desc&limit=1`,
   ).catch(() => []);
-  if (inverseRows[0]?.rate && isPlausibleRate(1 / Number(inverseRows[0].rate))) return 1 / Number(inverseRows[0].rate);
+  if (inverseRows[0]?.rate && isPlausibleRate(fromCurrency, toCurrency, 1 / Number(inverseRows[0].rate))) return 1 / Number(inverseRows[0].rate);
 
   const legacyInverseRows = await rest<Array<{ rate: number }>>(
     `/exchange_rates?from_currency=eq.${enc(toCurrency)}&to_currency=eq.${enc(fromCurrency)}&date=lte.${enc(date)}&select=rate&order=date.desc&limit=1`,
   ).catch(() => []);
-  if (legacyInverseRows[0]?.rate && isPlausibleRate(1 / Number(legacyInverseRows[0].rate))) return 1 / Number(legacyInverseRows[0].rate);
-
-  return null;
-}
-
-async function fetchLiveExchangeRate(fromCurrency: string, toCurrency: string): Promise<number | null> {
-  const sources = [
-    `https://open.er-api.com/v6/latest/${encodeURIComponent(fromCurrency)}`,
-    `https://api.exchangerate-api.com/v4/latest/${encodeURIComponent(fromCurrency)}`,
-  ];
-
-  for (const source of sources) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5_000);
-    try {
-      const response = await fetch(source, { signal: controller.signal });
-      if (!response.ok) continue;
-      const data = await response.json() as {
-        rates?: Record<string, number>;
-        conversion_rates?: Record<string, number>;
-      };
-      const rate = data.rates?.[toCurrency] || data.conversion_rates?.[toCurrency];
-      if (rate && rate > 0) return rate;
-    } catch {
-      // Try the next source.
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
+  if (legacyInverseRows[0]?.rate && isPlausibleRate(fromCurrency, toCurrency, 1 / Number(legacyInverseRows[0].rate))) return 1 / Number(legacyInverseRows[0].rate);
 
   return null;
 }
@@ -185,16 +158,34 @@ async function getExchangeRate(
   const cached = requestRateCache.get(cacheKey);
   if (cached) return cached;
 
-  const storedRate = await getStoredExchangeRate(fromCurrency, toCurrency, date);
-  const liveRate = storedRate ?? await fetchLiveExchangeRate(fromCurrency, toCurrency);
-  const fallbackRate =
-    fromCurrency === DASHBOARD_CURRENCY
-      ? 1 / (fallbackToUsdRates[toCurrency] || 1)
-      : fallbackToUsdRates[fromCurrency];
-  const rate = liveRate && liveRate > 0 ? liveRate : fallbackRate || 1;
+  const inFlight = requestRatePromiseCache.get(cacheKey);
+  if (inFlight) return inFlight;
 
-  requestRateCache.set(cacheKey, rate);
-  return rate;
+  const promise = (async () => {
+    const liveRate = await Promise.race([
+      fetchLiveExchangeRate(fromCurrency, toCurrency).catch(() => null),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), LIVE_RATE_TIMEOUT_MS)),
+    ]);
+    if (liveRate?.rate && liveRate.rate > 0) {
+      requestRateCache.set(cacheKey, liveRate.rate);
+      return liveRate.rate;
+    }
+
+    const storedRate = await getStoredExchangeRate(fromCurrency, toCurrency, date);
+    const fallbackRate = getFallbackExchangeRate(fromCurrency, toCurrency);
+    const rate = storedRate && storedRate > 0 ? storedRate : fallbackRate || 1;
+
+    requestRateCache.set(cacheKey, rate);
+    return rate;
+  })();
+
+  requestRatePromiseCache.set(cacheKey, promise);
+
+  try {
+    return await promise;
+  } finally {
+    requestRatePromiseCache.delete(cacheKey);
+  }
 }
 
 function sumCampaignTraffic(campaigns: Campaign[]): { clicks: number; impressions: number } {
@@ -207,238 +198,81 @@ function sumCampaignTraffic(campaigns: Campaign[]): { clicks: number; impression
   return { clicks, impressions };
 }
 
+function asNumber(value: number | string | null | undefined): number {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function maxIsoTimestamp(values: Array<string | null | undefined>): string | null {
+  let latest: string | null = null;
+  for (const value of values) {
+    if (!value) continue;
+    if (!latest || Date.parse(value) > Date.parse(latest)) {
+      latest = value;
+    }
+  }
+  return latest;
+}
+
+async function getDailyPnlSnapshots(
+  storeId: string,
+  startDate: string,
+  endDate: string,
+): Promise<DailyPnlSnapshotRow[]> {
+  return rest<DailyPnlSnapshotRow[]>(
+    `/daily_pnl_snapshots?store_id=eq.${encodeURIComponent(storeId)}` +
+      `&date=gte.${encodeURIComponent(startDate)}` +
+      `&date=lte.${encodeURIComponent(endDate)}` +
+      '&select=date,revenue,cogs,ad_spend,shipping_cost,transaction_fees,refunds,chargeback_loss,net_profit,margin,order_count,full_refund_amount,partial_refund_amount,currency,synced_at' +
+      '&order=date.asc',
+  ).catch(() => []);
+}
+
 function parsePreset(value: string | null): DateRangePreset {
-  const allowed: DateRangePreset[] = ['today', 'yesterday', 'last3', 'last7', 'last7today', 'last14', 'last28', 'last30', 'thisMonth', 'lastMonth'];
+  const allowed: DateRangePreset[] = ['today', 'yesterday', 'last3', 'last7', 'last7today', 'last14', 'last28', 'last30', 'thisMonth', 'lastMonth', 'custom'];
   if (!value) return 'today';
   return allowed.includes(value as DateRangePreset) ? (value as DateRangePreset) : 'today';
 }
 
-function mapPresetToMeta(preset: DateRangePreset): string {
-  switch (preset) {
-    case 'today': return 'today';
-    case 'yesterday': return 'yesterday';
-    case 'last3': return 'last_3d';
-    case 'last7': return 'last_7d';
-    case 'last7today': return 'last_7d';
-    case 'last14': return 'last_14d';
-    case 'last28': return 'last_28d';
-    case 'last30': return 'last_30d';
-    case 'thisMonth': return 'this_month';
-    case 'lastMonth': return 'last_month';
-    default: return 'last_30d';
-  }
+function isValidDateParam(value: string | null): value is string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
-async function fetchInsightTotalsForStore(
-  storeId: string,
-  accountIds: string[],
-  metaPreset: string,
-  since: string,
-  until: string
-): Promise<InsightTotals> {
-  if (accountIds.length === 0) return { spend: 0, clicks: 0, impressions: 0 };
-  const token = await getMetaToken(storeId);
-  if (!token) return { spend: 0, clicks: 0, impressions: 0 };
+function resolveRequestRange(searchParams: URLSearchParams): {
+  preset: DateRangePreset;
+  since: string;
+  until: string;
+} {
+  const requestedPreset = searchParams.get('preset');
+  const sinceParam = searchParams.get('since');
+  const untilParam = searchParams.get('until');
 
-  const allInsights = await Promise.all(
-    accountIds.map((id) => fetchMetaInsights(token.accessToken, id, metaPreset).catch(() => []))
-  );
-
-  return allInsights.flat().reduce<InsightTotals>((acc, day) => {
-    if (day.date_start < since || day.date_start > until) return acc;
-    const m = mapInsightsToMetrics(day);
-    acc.spend += m.spend || 0;
-    acc.clicks += m.clicks || 0;
-    acc.impressions += m.impressions || 0;
-    return acc;
-  }, { spend: 0, clicks: 0, impressions: 0 });
-}
-
-async function fetchShopifyTopline(
-  storeId: string,
-  since: string,
-  until: string,
-  timezone: string
-): Promise<{ revenue: number; orders: number }> {
-  const token = await getShopifyToken(storeId);
-  if (!token?.accessToken || !token?.shopDomain) return { revenue: 0, orders: 0 };
-
-  const createdAtMin = startOfStoreDayInTz(since, timezone).toISOString();
-  const createdAtMax = endOfStoreDayInTz(until, timezone).toISOString();
-  let sinceId = '0';
-  let totalRevenue = 0;
-  let totalOrders = 0;
-  let pagesLeft = 40; // 10,000 orders max per request window
-
-  while (pagesLeft > 0) {
-    const orders = await fetchShopifyOrders(token.accessToken, token.shopDomain, {
-      status: 'any',
-      limit: 250,
-      sinceId,
-      createdAtMin,
-      createdAtMax,
-    });
-
-    if (orders.length === 0) break;
-
-    for (const order of orders) {
-      // Match P&L logic: exclude fully refunded orders from revenue.
-      if (order.financialStatus !== 'refunded') {
-        totalRevenue += parseFloat(order.totalPrice || '0');
-      }
-      totalOrders += 1;
-    }
-
-    if (orders.length < 250) break;
-    sinceId = String(orders[orders.length - 1].id);
-    pagesLeft -= 1;
+  if (isValidDateParam(sinceParam) && isValidDateParam(untilParam)) {
+    const since = sinceParam <= untilParam ? sinceParam : untilParam;
+    const until = sinceParam <= untilParam ? untilParam : sinceParam;
+    const preset = requestedPreset ? parsePreset(requestedPreset) : 'custom';
+    return { preset, since, until };
   }
 
-  return { revenue: totalRevenue, orders: totalOrders };
-}
-
-interface ShopifyCostTotals {
-  fees: number;
-  refunds: number;
-  fullRefundAmount: number;
-  partialRefundAmount: number;
-}
-
-async function fetchShopifyCosts(
-  storeId: string,
-  since: string,
-  until: string,
-  timezone: string
-): Promise<ShopifyCostTotals> {
-  const token = await getShopifyToken(storeId);
-  if (!token?.accessToken || !token?.shopDomain) {
-    return { fees: 0, refunds: 0, fullRefundAmount: 0, partialRefundAmount: 0 };
+  const preset = parsePreset(requestedPreset);
+  if (preset === 'custom') {
+    const fallbackPreset: DateRangePreset = 'today';
+    const displayRange = getDateRangeInTimezone(fallbackPreset, STORE_REPORTING_TIMEZONE);
+    return {
+      preset: fallbackPreset,
+      since: formatDateInTimezone(displayRange.start, STORE_REPORTING_TIMEZONE),
+      until: formatDateInTimezone(displayRange.end, STORE_REPORTING_TIMEZONE),
+    };
   }
 
-  const startUtc = startOfStoreDayInTz(since, timezone);
-  const endUtc = endOfStoreDayInTz(until, timezone);
-
-  // 1) Orders in selected window for fee attribution
-  let sinceId = '0';
-  let pagesLeft = 40;
-  const allWindowOrders: Awaited<ReturnType<typeof fetchShopifyOrders>> = [];
-  while (pagesLeft > 0) {
-    const orders = await fetchShopifyOrders(token.accessToken, token.shopDomain, {
-      status: 'any',
-      limit: 250,
-      sinceId,
-      createdAtMin: startUtc.toISOString(),
-      createdAtMax: endUtc.toISOString(),
-    });
-    if (orders.length === 0) break;
-    allWindowOrders.push(...orders);
-    if (orders.length < 250) break;
-    sinceId = String(orders[orders.length - 1].id);
-    pagesLeft -= 1;
-  }
-
-  // 2) Older refunded orders updated inside window (captures refund-date-based totals)
-  const refundedMap = new Map<number, (typeof allWindowOrders)[number]>();
-  for (const o of allWindowOrders) refundedMap.set(o.id, o);
-
-  let refundSinceId = '0';
-  let refundPagesLeft = 20;
-  while (refundPagesLeft > 0) {
-    const olderRefunded = await fetchShopifyOrders(token.accessToken, token.shopDomain, {
-      status: 'any',
-      financialStatus: 'refunded',
-      limit: 250,
-      sinceId: refundSinceId,
-      createdAtMax: startUtc.toISOString(),
-      updatedAtMin: startUtc.toISOString(),
-      updatedAtMax: endUtc.toISOString(),
-    });
-    if (olderRefunded.length === 0) break;
-    for (const order of olderRefunded) refundedMap.set(order.id, order);
-    if (olderRefunded.length < 250) break;
-    refundSinceId = String(olderRefunded[olderRefunded.length - 1].id);
-    refundPagesLeft -= 1;
-  }
-
-  refundSinceId = '0';
-  refundPagesLeft = 20;
-  while (refundPagesLeft > 0) {
-    const olderPartials = await fetchShopifyOrders(token.accessToken, token.shopDomain, {
-      status: 'any',
-      financialStatus: 'partially_refunded',
-      limit: 250,
-      sinceId: refundSinceId,
-      createdAtMax: startUtc.toISOString(),
-      updatedAtMin: startUtc.toISOString(),
-      updatedAtMax: endUtc.toISOString(),
-    });
-    if (olderPartials.length === 0) break;
-    for (const order of olderPartials) refundedMap.set(order.id, order);
-    if (olderPartials.length < 250) break;
-    refundSinceId = String(olderPartials[olderPartials.length - 1].id);
-    refundPagesLeft -= 1;
-  }
-
-  // 3) Real payment fees by order id (fallback: 3%)
-  const feesByOrderId = new Map<number, number>();
-  try {
-    let lastId: string | undefined;
-    let txnPagesLeft = 8;
-    let reachedOld = false;
-    while (txnPagesLeft > 0 && !reachedOld) {
-      const txns = await fetchBalanceTransactions(token.accessToken, token.shopDomain, {
-        limit: 250,
-        lastId,
-      });
-      if (txns.length === 0) break;
-      for (const tx of txns) {
-        if (tx.type !== 'charge' || !tx.sourceOrderId) continue;
-        const txDate = shopifyDateToStoreDayDate(tx.processedAt, timezone);
-        if (txDate < since) {
-          reachedOld = true;
-          continue;
-        }
-        if (txDate > until) continue;
-        const fee = Math.max(parseFloat(tx.fee || '0'), 0);
-        feesByOrderId.set(tx.sourceOrderId, (feesByOrderId.get(tx.sourceOrderId) || 0) + fee);
-      }
-      if (txns.length < 250) break;
-      lastId = String(txns[txns.length - 1].id);
-      txnPagesLeft -= 1;
-    }
-  } catch {
-    // If Shopify Payments scope is unavailable, fallback math below is used.
-  }
-
-  let fees = 0;
-  for (const order of allWindowOrders) {
-    if (order.financialStatus === 'refunded') continue;
-    if (feesByOrderId.has(order.id)) {
-      fees += feesByOrderId.get(order.id) || 0;
-      continue;
-    }
-    fees += parseFloat(order.totalPrice || '0') * 0.03;
-  }
-
-  let refunds = 0;
-  let fullRefundAmount = 0;
-  let partialRefundAmount = 0;
-  for (const order of refundedMap.values()) {
-    if (!order.refunds || order.refunds.length === 0) continue;
-    for (const refund of order.refunds) {
-      if (!refund.totalAmount || refund.totalAmount <= 0) continue;
-      const refundDate = shopifyDateToStoreDayDate(refund.createdAt, timezone);
-      if (refundDate < since || refundDate > until) continue;
-      refunds += refund.totalAmount;
-      if (order.financialStatus === 'refunded') {
-        fullRefundAmount += refund.totalAmount;
-      } else {
-        partialRefundAmount += refund.totalAmount;
-      }
-    }
-  }
-
-  return { fees, refunds, fullRefundAmount, partialRefundAmount };
+  const displayRange = getDateRangeInTimezone(preset, STORE_REPORTING_TIMEZONE);
+  return {
+    preset,
+    since: formatDateInTimezone(displayRange.start, STORE_REPORTING_TIMEZONE),
+    until: formatDateInTimezone(displayRange.end, STORE_REPORTING_TIMEZONE),
+  };
 }
 
 export async function GET(request: NextRequest) {
@@ -449,10 +283,7 @@ export async function GET(request: NextRequest) {
     }
 
     const { searchParams } = new URL(request.url);
-    const preset = parsePreset(searchParams.get('preset'));
-    const displayRange = getDateRangeInTimezone(preset, STORE_REPORTING_TIMEZONE);
-    const since = formatDateInTimezone(displayRange.start, STORE_REPORTING_TIMEZONE);
-    const until = formatDateInTimezone(displayRange.end, STORE_REPORTING_TIMEZONE);
+    const { preset, since, until } = resolveRequestRange(searchParams);
 
     const useSupabase = isSupabasePersistenceEnabled();
     const allStores = useSupabase ? await listPersistentStores() : getAllStores();
@@ -465,134 +296,92 @@ export async function GET(request: NextRequest) {
       ? allStores.filter((store) => allowedStoreIds.has(store.id))
       : allStores;
 
-    const rows: StoreOverviewRow[] = [];
-
-    for (const store of visibleStores) {
-      const storeTz = STORE_REPORTING_TIMEZONE;
-      const storeRange = getDateRangeInTimezone(preset, storeTz);
-      const storeSince = storeDayInTimezone(storeRange.start, storeTz);
-      const storeUntil = storeDayInTimezone(storeRange.end, storeTz);
+    const rows: StoreOverviewRow[] = await Promise.all(visibleStores.map(async (store) => {
+      const storeSince = since;
+      const storeUntil = until;
       const exactVariant = `range:since:${storeSince}|until:${storeUntil}|strict:1`;
-      const metaPreset = mapPresetToMeta(preset);
-      const storeSettings = useSupabase
-        ? await getPersistentPnlStoreSettings(store.id)
-        : getPnlStoreSettings(store.id);
-      const productType: 'physical' | 'digital' = storeSettings?.product_type === 'digital' ? 'digital' : 'physical';
-
-      const pnlRows = useSupabase
-        ? await getPersistentCachedPnLDays(store.id, storeSince, storeUntil)
-        : getCachedPnLDays(store.id, storeSince, storeUntil);
-
-      // Primary source remains store-scoped P&L cache; we can override revenue/orders
-      // with live Shopify topline to keep parity with current P&L page values.
-      let revenue = pnlRows.reduce((sum, row) => sum + (row.revenue || 0), 0);
-      let adSpend = pnlRows.reduce((sum, row) => sum + (row.ad_spend || 0), 0);
-      const cogsRaw = pnlRows.reduce((sum, row) => sum + (row.cogs || 0), 0);
-      let fees = pnlRows.reduce((sum, row) => sum + (row.fees || 0), 0);
-      const shippingRaw = pnlRows.reduce((sum, row) => sum + (row.shipping || 0), 0);
-      let refunds = pnlRows.reduce((sum, row) => sum + (row.refunds || 0), 0);
-      let fullRefundAmount = pnlRows.reduce((sum, row) => sum + (row.full_refund_amount || 0), 0);
-      let partialRefundAmount = pnlRows.reduce((sum, row) => sum + (row.partial_refund_amount || 0), 0);
-      let netProfit = pnlRows.reduce((sum, row) => sum + (row.net_profit || 0), 0);
-      let orders = pnlRows.reduce((sum, row) => sum + (row.order_count || 0), 0);
-      let cogs = productType === 'digital' ? 0 : cogsRaw;
-      let shipping = productType === 'digital' ? 0 : shippingRaw;
-      const storeCurrency = await getStoreCurrency(store.id);
-      const storeToDashboardRate = await getExchangeRate(storeCurrency, DASHBOARD_CURRENCY, storeUntil);
-
       const activeAccountIds = (store.adAccounts || [])
         .filter((a) => Number(a.is_active) === 1)
         .map((a) => a.ad_account_id);
       const scopeId = buildScopeId(activeAccountIds);
 
+      const [storeSettings, snapshotRows, exactSnap] = await Promise.all([
+        useSupabase
+          ? getPersistentPnlStoreSettings(store.id)
+          : Promise.resolve(getPnlStoreSettings(store.id)),
+        useSupabase
+          ? getDailyPnlSnapshots(store.id, storeSince, storeUntil)
+          : Promise.resolve([] as DailyPnlSnapshotRow[]),
+        scopeId !== 'accounts:'
+          ? (
+              useSupabase
+                ? getPersistentMetaEndpointSnapshot<Campaign[]>(store.id, 'campaigns', scopeId, exactVariant)
+                : Promise.resolve(getMetaEndpointSnapshot<Campaign[]>(store.id, 'campaigns', scopeId, exactVariant))
+            )
+          : Promise.resolve(null),
+      ]);
+
+      const productType: 'physical' | 'digital' = storeSettings?.product_type === 'digital' ? 'digital' : 'physical';
+      const hasDailySnapshots = snapshotRows.length > 0;
+      const pnlRows = hasDailySnapshots
+        ? []
+        : (
+            useSupabase
+              ? await getPersistentCachedPnLDays(store.id, storeSince, storeUntil)
+              : getCachedPnLDays(store.id, storeSince, storeUntil)
+          );
+      const hasCachedRangeRows = hasDailySnapshots || pnlRows.length > 0;
+
+      // Store Overview must stay fast and range-strict, so it only reads cached
+      // store P&L plus exact-range Meta snapshots instead of live-scanning Shopify.
+      let revenue = hasDailySnapshots
+        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.revenue), 0)
+        : pnlRows.reduce((sum, row) => sum + (row.revenue || 0), 0);
+      let adSpend = hasDailySnapshots
+        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.ad_spend), 0)
+        : pnlRows.reduce((sum, row) => sum + (row.ad_spend || 0), 0);
+      const cogsRaw = hasDailySnapshots
+        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.cogs), 0)
+        : pnlRows.reduce((sum, row) => sum + (row.cogs || 0), 0);
+      let fees = hasDailySnapshots
+        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.transaction_fees), 0)
+        : pnlRows.reduce((sum, row) => sum + (row.fees || 0), 0);
+      const shippingRaw = hasDailySnapshots
+        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.shipping_cost), 0)
+        : pnlRows.reduce((sum, row) => sum + (row.shipping || 0), 0);
+      let refunds = hasDailySnapshots
+        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.refunds) + asNumber(row.chargeback_loss), 0)
+        : pnlRows.reduce((sum, row) => sum + (row.refunds || 0), 0);
+      let fullRefundAmount = hasDailySnapshots
+        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.full_refund_amount), 0)
+        : pnlRows.reduce((sum, row) => sum + (row.full_refund_amount || 0), 0);
+      let partialRefundAmount = hasDailySnapshots
+        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.partial_refund_amount), 0)
+        : pnlRows.reduce((sum, row) => sum + (row.partial_refund_amount || 0), 0);
+      let netProfit = hasDailySnapshots
+        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.net_profit), 0)
+        : pnlRows.reduce((sum, row) => sum + (row.net_profit || 0), 0);
+      let orders = hasDailySnapshots
+        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.order_count), 0)
+        : pnlRows.reduce((sum, row) => sum + (row.order_count || 0), 0);
+      let cogs = productType === 'digital' ? 0 : cogsRaw;
+      let shipping = productType === 'digital' ? 0 : shippingRaw;
+      const storeCurrency = await getStoreCurrency(store.id);
+      const storeToDashboardRate = await getExchangeRate(storeCurrency, DASHBOARD_CURRENCY, storeUntil);
+
       let campaignSnapshot: Campaign[] = [];
       let campaignSyncedAt: string | null = null;
-
-      if (scopeId !== 'accounts:') {
-        const exactSnap = useSupabase
-          ? await getPersistentMetaEndpointSnapshot<Campaign[]>(store.id, 'campaigns', scopeId, exactVariant)
-          : getMetaEndpointSnapshot<Campaign[]>(store.id, 'campaigns', scopeId, exactVariant);
-
-        if (exactSnap?.data?.length) {
-          campaignSnapshot = exactSnap.data;
-          campaignSyncedAt = exactSnap.updatedAt;
-        }
-      }
-
-      // Fallback: if no campaign snapshot exists for the store, fetch a lightweight live campaign set.
-      if (campaignSnapshot.length === 0 && activeAccountIds.length > 0) {
-        try {
-          const token = await getMetaToken(store.id);
-          if (token) {
-            const fresh = await Promise.all(
-              activeAccountIds.map((id) =>
-                fetchMetaCampaigns(token.accessToken, id, { since: storeSince, until: storeUntil }, { disableDateFallback: true }).catch(() => [])
-              )
-            );
-            const map = new Map<string, Campaign>();
-            for (const group of fresh) {
-              for (const c of group) map.set(c.id, c);
-            }
-            campaignSnapshot = Array.from(map.values());
-          }
-        } catch {
-          // best-effort fallback only
-        }
+      if (exactSnap?.data?.length) {
+        campaignSnapshot = exactSnap.data;
+        campaignSyncedAt = exactSnap.updatedAt;
       }
 
       const campaignTraffic = sumCampaignTraffic(campaignSnapshot);
       const campaignSpend = campaignSnapshot.reduce((sum, c) => sum + (c.metrics?.spend || 0), 0);
-      let insightTotals: InsightTotals = { spend: 0, clicks: 0, impressions: 0 };
-
-      try {
-        insightTotals = await fetchInsightTotalsForStore(
-          store.id,
-          activeAccountIds,
-          metaPreset,
-          storeSince,
-          storeUntil
-        );
-      } catch {
-        // fall back to campaign-level aggregates below
-      }
 
       // Keep range strict; if P&L cache is missing for selected dates, fill from exact-range sources only.
-      if (pnlRows.length === 0) {
-        adSpend = insightTotals.spend > 0 ? insightTotals.spend : campaignSpend;
-      }
-
-      // For today's store-day window, cached daily rows can include the old
-      // midnight-based day. Live Shopify is the source of truth.
-      const shouldUseLiveShopifyTopline = preset === 'today' || pnlRows.length === 0;
-      if (shouldUseLiveShopifyTopline) {
-        try {
-          const shopify = await fetchShopifyTopline(store.id, storeSince, storeUntil, storeTz);
-          revenue = shopify.revenue;
-          orders = shopify.orders;
-        } catch {
-          // keep cache-derived values
-        }
-      }
-
-      // Refunds can remain zero in cache even when fee rows are present; backfill refunds
-      // (and optionally fees) from Shopify for recent presets.
-      const shouldBackfillRefunds =
-        preset === 'today'
-        ||
-        (refunds === 0 && (preset === 'yesterday' || preset === 'last7' || preset === 'last7today' || preset === 'last14'))
-        || (pnlRows.length === 0 && fees === 0 && refunds === 0);
-      if (shouldBackfillRefunds) {
-        try {
-          const shopifyCosts = await fetchShopifyCosts(store.id, storeSince, storeUntil, storeTz);
-          if (preset === 'today' || fees === 0) {
-            fees = shopifyCosts.fees;
-          }
-          refunds = shopifyCosts.refunds;
-          fullRefundAmount = shopifyCosts.fullRefundAmount;
-          partialRefundAmount = shopifyCosts.partialRefundAmount;
-        } catch {
-          // keep cache-derived values
-        }
+      if (!hasCachedRangeRows) {
+        adSpend = campaignSpend;
       }
 
       if (storeCurrency !== DASHBOARD_CURRENCY && storeToDashboardRate > 0) {
@@ -605,9 +394,9 @@ export async function GET(request: NextRequest) {
         partialRefundAmount *= storeToDashboardRate;
       }
 
-      const clicks = insightTotals.clicks > 0 ? insightTotals.clicks : campaignTraffic.clicks;
-      const impressions = insightTotals.impressions > 0 ? insightTotals.impressions : campaignTraffic.impressions;
-      const trafficSpend = insightTotals.spend > 0 ? insightTotals.spend : adSpend;
+      const clicks = campaignTraffic.clicks;
+      const impressions = campaignTraffic.impressions;
+      const trafficSpend = adSpend;
 
       netProfit = revenue - cogs - adSpend - shipping - fees - refunds;
 
@@ -617,11 +406,16 @@ export async function GET(request: NextRequest) {
       const cpc = clicks > 0 ? trafficSpend / clicks : 0;
       const cpm = impressions > 0 ? (trafficSpend * 1000) / impressions : 0;
 
-      const pnlSyncedAt = useSupabase
-        ? await getPersistentPnlCacheLastSynced(store.id)
-        : getPnlCacheLastSynced(store.id);
+      const snapshotSyncedAt = maxIsoTimestamp(snapshotRows.map((row) => row.synced_at));
+      const pnlSyncedAt = snapshotSyncedAt || campaignSyncedAt
+        ? null
+        : (
+            useSupabase
+              ? await getPersistentPnlCacheLastSynced(store.id)
+              : getPnlCacheLastSynced(store.id)
+          );
 
-      rows.push({
+      return {
         storeId: store.id,
         storeName: store.name,
         domain: store.domain,
@@ -643,9 +437,9 @@ export async function GET(request: NextRequest) {
         cpm: toMoney(cpm),
         clicks,
         impressions,
-        lastSyncedAt: campaignSyncedAt || pnlSyncedAt || null,
-      });
-    }
+        lastSyncedAt: campaignSyncedAt || snapshotSyncedAt || pnlSyncedAt || null,
+      };
+    }));
 
     const totalsBase = rows.reduce(
       (acc, row) => {

@@ -7,9 +7,9 @@ import type { DateRange, DateRangePreset } from '@/types/analytics';
 import { DateRangePicker } from '@/components/ui/DateRangePicker';
 import { getDateRange } from '@/lib/dateUtils';
 import { formatDateInTimezone } from '@/lib/timezone';
-import { formatCurrency } from '@/lib/utils';
 import { calculateExpenses } from '@/lib/pnl/expenseEngine';
 import type { CustomExpense } from '@/types/pnlSettings';
+import { getDailyPnLForRange } from '@/services/pnl';
 import { useStoreStore } from '@/stores/storeStore';
 import { PnLSummaryCards } from '@/components/pnl/PnLSummaryCards';
 import { PnLWaterfallChart } from '@/components/pnl/PnLWaterfallChart';
@@ -21,7 +21,6 @@ import { LivePulseRow } from '@/components/pnl/LivePulseRow';
 import { PnLHourlyTrend } from '@/components/pnl/PnLHourlyTrend';
 import { RefundBreakdown } from '@/components/pnl/RefundBreakdown';
 import { ChargebackSection } from '@/components/pnl/ChargebackSection';
-import { AOVSummary } from '@/components/pnl/AOVSummary';
 import { MetricsBar } from '@/components/pnl/MetricsBar';
 import { SectionWrapper } from '@/components/pnl/SectionWrapper';
 import { ExpenseBreakdownRow } from '@/components/pnl/ExpenseBreakdownRow';
@@ -37,6 +36,17 @@ interface PnLDashboardClientProps {
   refreshKey?: number;
 }
 
+interface CustomExpenseRow {
+  id: number | string;
+  name: string;
+  category: CustomExpense['category'];
+  amount: number | string;
+  frequency: CustomExpense['frequency'];
+  distribution: CustomExpense['distribution'];
+  start_date?: string;
+  end_date?: string;
+  is_active: boolean;
+}
 
 function computeEntryFromDaily(dailyPnL: PnLEntry[], range: DateRange, expenses?: CustomExpense[]): PnLEntry {
   const startStr = formatDateInTimezone(range.start);
@@ -92,8 +102,6 @@ function computeEntryFromDaily(dailyPnL: PnLEntry[], range: DateRange, expenses?
 export function PnLDashboardClient({
   summary,
   dailyPnL,
-  products,
-  productPnL = [],
   productType = 'physical',
   hourlyPnL = [],
   currency = 'USD',
@@ -103,6 +111,10 @@ export function PnLDashboardClient({
   const [customRange, setCustomRange] = useState<DateRange | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date>(() => new Date());
   const [customExpensesList, setCustomExpensesList] = useState<CustomExpense[]>([]);
+  const [periodDailyPnL, setPeriodDailyPnL] = useState<PnLEntry[] | null>(null);
+  const [periodLoading, setPeriodLoading] = useState(false);
+  const [periodError, setPeriodError] = useState<string | null>(null);
+  const activeStoreId = useStoreStore((s) => s.activeStoreId);
 
   // Update the timestamp whenever new data props arrive
   useEffect(() => {
@@ -114,15 +126,58 @@ export function PnLDashboardClient({
   const dateRange = useMemo(() => {
     if (datePreset === 'custom' && customRange) return customRange;
     return getDateRange(datePreset);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [datePreset, customRange, dailyPnL]);
+  }, [datePreset, customRange]);
 
   const handleDateRangeChange = (range: DateRange) => {
+    setPeriodLoading(true);
+    setPeriodDailyPnL(null);
+    setPeriodError(null);
     if (range.preset === 'custom') {
       setCustomRange(range);
     }
     setDatePreset(range.preset || 'custom');
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    const from = formatDateInTimezone(dateRange.start);
+    const to = formatDateInTimezone(dateRange.end);
+
+    setPeriodError(null);
+
+    if (!activeStoreId) {
+      setPeriodDailyPnL([]);
+      setPeriodLoading(false);
+      return;
+    }
+
+    if (datePreset === 'today') {
+      setPeriodDailyPnL(summary.today.date ? [summary.today] : []);
+      setPeriodLoading(false);
+      return;
+    }
+
+    setPeriodLoading(true);
+    setPeriodDailyPnL(null);
+
+    getDailyPnLForRange(from, to)
+      .then((entries) => {
+        if (cancelled) return;
+        setPeriodDailyPnL(entries);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setPeriodError(err instanceof Error ? err.message : 'Failed to load period data');
+        setPeriodDailyPnL([]);
+      })
+      .finally(() => {
+        if (!cancelled) setPeriodLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeStoreId, dateRange, datePreset, summary.today]);
 
   // Count non-zero fields to determine which entry has richer data
   const richness = (e: PnLEntry) =>
@@ -131,14 +186,15 @@ export function PnLDashboardClient({
     (e.refunds !== 0 ? 1 : 0) + (e.netProfit !== 0 ? 1 : 0) +
     ((e.chargebackLoss ?? 0) !== 0 ? 1 : 0) + (e.shipping !== 0 ? 1 : 0);
 
+  const currentPeriodRows = useMemo(() => periodDailyPnL ?? [], [periodDailyPnL]);
   const activeEntry = useMemo(() => {
-    const entry = computeEntryFromDaily(dailyPnL, dateRange, customExpensesList);
+    const entry = computeEntryFromDaily(currentPeriodRows, dateRange, customExpensesList);
     // For 'today': prefer whichever entry (computed vs summary) has richer data
     if (datePreset === 'today' && richness(summary.today) > richness(entry)) {
       return summary.today;
     }
     return entry;
-  }, [dailyPnL, dateRange, customExpensesList, datePreset, summary.today]);
+  }, [currentPeriodRows, dateRange, customExpensesList, datePreset, summary.today]);
 
   const todayEntry = useMemo(() => {
     const todayRange = getDateRange('today');
@@ -154,8 +210,8 @@ export function PnLDashboardClient({
   const filteredDailyPnL = useMemo(() => {
     const startStr = formatDateInTimezone(dateRange.start);
     const endStr = formatDateInTimezone(dateRange.end);
-    return dailyPnL.filter((day) => day.date >= startStr && day.date <= endStr);
-  }, [dailyPnL, dateRange]);
+    return currentPeriodRows.filter((day) => day.date >= startStr && day.date <= endStr);
+  }, [currentPeriodRows, dateRange]);
 
   const filteredHourlyPnL = useMemo(() => {
     const startStr = formatDateInTimezone(dateRange.start);
@@ -199,7 +255,6 @@ export function PnLDashboardClient({
   }, [hourlyPnL, dateRange]);
 
   // ── Scroll to top on store switch ──────────────────────────────────────────
-  const activeStoreId = useStoreStore((s) => s.activeStoreId);
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   }, [activeStoreId]);
@@ -216,10 +271,13 @@ export function PnLDashboardClient({
       .then(r => r.json())
       .then(json => {
         if (json.ok && json.data) {
-          setCustomExpensesList(json.data.filter((e: any) => e.is_active).map((e: any) => ({
-            id: e.id, name: e.name, category: e.category, amount: Number(e.amount),
+          setCustomExpensesList((json.data as CustomExpenseRow[]).filter((e) => e.is_active).map((e) => ({
+            id: typeof e.id === 'number' ? e.id : Number(e.id) || undefined,
+            name: e.name,
+            category: e.category,
+            amount: Number(e.amount),
             frequency: e.frequency, distribution: e.distribution,
-            startDate: e.start_date, endDate: e.end_date, isActive: e.is_active,
+            startDate: e.start_date ?? null, endDate: e.end_date ?? null, isActive: e.is_active,
           })));
         }
       })
@@ -350,28 +408,49 @@ export function PnLDashboardClient({
 
       {/* S2: Period View */}
       <SectionWrapper label="Period View">
-        {/* KPI summary cards */}
-        <PnLSummaryCards entry={activeEntry} comparison={previousEntry} isDigital={isDigital} lastUpdated={lastUpdated} currency={currency} />
-
-        {/* Waterfall + Margin row */}
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-4 mt-5">
-          <div className="lg:col-span-3">
-            <PnLWaterfallChart entry={activeEntry} isDigital={isDigital} currency={currency} />
-          </div>
-          <div className="lg:col-span-1">
-            <div className="apple-card p-5 h-full flex flex-col justify-center">
-              <MarginIndicator margin={activeEntry.margin} netProfit={activeEntry.netProfit} currency={currency} />
+        {periodLoading ? (
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+              {[1, 2, 3, 4, 5].map((item) => (
+                <div key={item} className="h-28 animate-pulse rounded-xl border border-border bg-surface-secondary/60" />
+              ))}
+            </div>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
+              <div className="h-64 animate-pulse rounded-xl border border-border bg-surface-secondary/60 lg:col-span-3" />
+              <div className="h-64 animate-pulse rounded-xl border border-border bg-surface-secondary/60" />
             </div>
           </div>
-        </div>
+        ) : periodError ? (
+          <div className="apple-card p-10 text-center">
+            <p className="text-sm font-medium text-red-400">Failed to load period data</p>
+            <p className="mt-1.5 text-xs text-text-secondary/50">{periodError}</p>
+          </div>
+        ) : (
+          <>
+            {/* KPI summary cards */}
+            <PnLSummaryCards entry={activeEntry} comparison={previousEntry} isDigital={isDigital} lastUpdated={lastUpdated} currency={currency} />
 
-        {(activeEntry.customExpenses || 0) > 0 && (
-          <ExpenseBreakdownRow
-            totalExpenses={activeEntry.customExpenses || 0}
-            revenue={activeEntry.revenue}
-            breakdown={activeEntry.expenseBreakdown || []}
-            currency={currency}
-          />
+            {/* Waterfall + Margin row */}
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-4 mt-5">
+              <div className="lg:col-span-3">
+                <PnLWaterfallChart entry={activeEntry} isDigital={isDigital} currency={currency} />
+              </div>
+              <div className="lg:col-span-1">
+                <div className="apple-card p-5 h-full flex flex-col justify-center">
+                  <MarginIndicator margin={activeEntry.margin} netProfit={activeEntry.netProfit} currency={currency} />
+                </div>
+              </div>
+            </div>
+
+            {(activeEntry.customExpenses || 0) > 0 && (
+              <ExpenseBreakdownRow
+                totalExpenses={activeEntry.customExpenses || 0}
+                revenue={activeEntry.revenue}
+                breakdown={activeEntry.expenseBreakdown || []}
+                currency={currency}
+              />
+            )}
+          </>
         )}
 
       </SectionWrapper>

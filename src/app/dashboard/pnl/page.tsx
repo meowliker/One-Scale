@@ -29,21 +29,6 @@ function getPnLCacheKey(storeId: string): string {
   return `pnl:cache:${storeId}`;
 }
 
-function readPnLCache(storeId: string): PnLCachePayload | null {
-  try {
-    const raw = localStorage.getItem(getPnLCacheKey(storeId));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as PnLCachePayload;
-    if (parsed.version !== PNL_CACHE_VERSION) {
-      localStorage.removeItem(getPnLCacheKey(storeId));
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
 function writePnLCache(storeId: string, payload: PnLCachePayload): void {
   try {
     localStorage.setItem(getPnLCacheKey(storeId), JSON.stringify({
@@ -133,23 +118,18 @@ export default function PnLPage() {
   // ── Store switch: keep showing old data with loading indicator, don't wipe ──
   useEffect(() => {
     if (prevStoreIdRef.current && prevStoreIdRef.current !== activeStoreId) {
-      // Don't clear data — keep showing previous store's data as skeleton
-      // New data replaces it as soon as it arrives (no blank screen)
+      // Financial data must never bleed between stores. Show a loader until
+      // the active store has finished fetching fresh values.
       setLoading(true);
       setEmptyReason(null);
-
-      // Try to instantly show cached data for the new store
-      if (activeStoreId) {
-        const cached = readPnLCache(activeStoreId);
-        if (cached) {
-          setSummary(cached.summary);
-          setDailyPnL(cached.dailyPnL);
-          setProducts(cached.products);
-          setProductPnL(cached.productPnL);
-          if (cached.currency) setCurrency(cached.currency);
-          setLoading(false);
-        }
-      }
+      setSummary(emptySummary);
+      setDailyPnL([]);
+      setProducts([]);
+      setProductPnL([]);
+      setHourlyPnL([]);
+      setCurrency('USD');
+      setLastRefreshed(null);
+      setLastRefreshedLabel('');
     }
     prevStoreIdRef.current = activeStoreId;
   }, [activeStoreId]);
@@ -177,23 +157,6 @@ export default function PnLPage() {
     latestLastRefreshedRef.current = lastRefreshed;
   }, [lastRefreshed]);
 
-  // Hydrate from last fetched local cache first for instant paint on load.
-  useEffect(() => {
-    if (!connectionReady || !activeStoreId) return;
-    const cached = readPnLCache(activeStoreId);
-    if (!cached) return;
-
-    setSummary(cached.summary);
-    setDailyPnL(cached.dailyPnL);
-    setProducts(cached.products);
-    setProductPnL(cached.productPnL);
-    if (cached.currency) setCurrency(cached.currency);
-    const refreshedDate = cached.lastRefreshedIso ? new Date(cached.lastRefreshedIso) : null;
-    setLastRefreshed(refreshedDate);
-    setLastRefreshedLabel(formatLastRefreshed(refreshedDate));
-    setLoading(false);
-  }, [connectionReady, activeStoreId]);
-
   const fetchData = useCallback(async (isManualRefresh = false) => {
     if (!activeStoreId) return;
 
@@ -205,6 +168,11 @@ export default function PnLPage() {
       setIsRefreshing(true);
     } else {
       setLoading(true);
+      setSummary(emptySummary);
+      setDailyPnL([]);
+      setProducts([]);
+      setProductPnL([]);
+      setHourlyPnL([]);
     }
     setEmptyReason(null);
 
@@ -453,7 +421,7 @@ export default function PnLPage() {
     }
   };
 
-  if ((!connectionReady || loading) && dailyPnL.length === 0 && !emptyReason) {
+  if ((!connectionReady || loading) && !emptyReason) {
     return (
       <div className="space-y-5 animate-pulse">
         {/* Skeleton: summary cards */}

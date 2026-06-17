@@ -75,14 +75,16 @@ function getFirstDayOfWeek(year: number, month: number): number {
 function formatTriggerLabel(start: Date, end: Date, preset?: DateRangePreset, tz?: string): string {
   if (preset && preset !== 'custom' && presetLabels[preset]) return presetLabels[preset];
   const timezone = tz || STORE_REPORTING_TIMEZONE;
-  const startStr = formatDateInTimezone(start, timezone);
-  const endStr = formatDateInTimezone(end, timezone);
-  if (startStr === endStr) return formatInTimezone(start, 'MMM d, yyyy', timezone);
-  const startYear = toZonedTime(start, timezone).getFullYear();
-  const endYear = toZonedTime(end, timezone).getFullYear();
+  const startStr = storeDayInTimezone(start, timezone);
+  const endStr = storeDayInTimezone(end, timezone);
+  const startDisplayDate = fromZonedTime(`${startStr}T12:00:00`, timezone);
+  const endDisplayDate = fromZonedTime(`${endStr}T12:00:00`, timezone);
+  if (startStr === endStr) return formatInTimezone(startDisplayDate, 'MMM d, yyyy', timezone);
+  const startYear = toZonedTime(startDisplayDate, timezone).getFullYear();
+  const endYear = toZonedTime(endDisplayDate, timezone).getFullYear();
   if (startYear === endYear)
-    return `${formatInTimezone(start, 'MMM d', timezone)} – ${formatInTimezone(end, 'MMM d', timezone)}`;
-  return `${formatInTimezone(start, 'MMM d, yyyy', timezone)} – ${formatInTimezone(end, 'MMM d, yyyy', timezone)}`;
+    return `${formatInTimezone(startDisplayDate, 'MMM d', timezone)} – ${formatInTimezone(endDisplayDate, 'MMM d', timezone)}`;
+  return `${formatInTimezone(startDisplayDate, 'MMM d, yyyy', timezone)} – ${formatInTimezone(endDisplayDate, 'MMM d, yyyy', timezone)}`;
 }
 
 function formatCompact(date: Date, tz: string): string {
@@ -100,8 +102,8 @@ function getSelectionLabels(
     };
   }
   return {
-    start: formatDateInTimezone(range.start, tz),
-    end: formatDateInTimezone(range.end, tz),
+    start: storeDayInTimezone(range.start, tz),
+    end: storeDayInTimezone(range.end, tz),
   };
 }
 
