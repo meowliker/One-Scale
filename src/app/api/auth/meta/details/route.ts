@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getMetaToken } from '@/app/api/lib/tokens';
 import { getConnection, getStoreAdAccounts } from '@/app/api/lib/db';
+import { canWorkspaceAccessStore } from '@/app/api/lib/auth-users';
 import {
   isSupabasePersistenceEnabled,
   getPersistentConnection,
   listPersistentStoreAdAccounts,
 } from '@/app/api/lib/supabase-persistence';
+import { readSessionFromRequest } from '@/lib/auth/request-session';
 
 const GRAPH_BASE = 'https://graph.facebook.com/v21.0';
+const META_FETCH_TIMEOUT_MS = 6_000;
+const META_PAGE_LIMIT = 5;
 
 interface MetaUserInfo {
   id: string;
@@ -31,22 +35,62 @@ interface MetaAdAccountRaw {
   business?: { id: string; name: string };
 }
 
-/**
- * Fetch all pages of a paginated Graph API endpoint
- */
-async function fetchAllPages<T>(url: string): Promise<T[]> {
+class MetaGraphError extends Error {
+  constructor(message: string, public status: number, public code?: number) {
+    super(message);
+  }
+}
+
+function parseMetaError(label: string, status: number, body: string): MetaGraphError {
+  try {
+    const parsed = JSON.parse(body) as {
+      error?: { message?: string; code?: number; error_user_msg?: string; error_user_title?: string };
+    };
+    const fbError = parsed.error;
+    if (fbError?.code === 190) {
+      return new MetaGraphError('Meta connection expired or was revoked. Please reconnect Meta Ads.', 401, fbError.code);
+    }
+    const message = fbError?.error_user_msg || fbError?.message || body || `HTTP ${status}`;
+    return new MetaGraphError(`${label} failed: ${message}`, status, fbError?.code);
+  } catch {
+    return new MetaGraphError(`${label} failed: ${body || `HTTP ${status}`}`, status);
+  }
+}
+
+async function fetchGraphJson<T>(url: string, label: string): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), META_FETCH_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, { signal: controller.signal, cache: 'no-store' });
+    const text = await response.text();
+    if (!response.ok) {
+      throw parseMetaError(label, response.status, text);
+    }
+    return text ? JSON.parse(text) as T : {} as T;
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new MetaGraphError(`${label} timed out. Try refreshing or reconnecting Meta Ads.`, 504);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchAllPages<T>(url: string, label: string): Promise<T[]> {
   const items: T[] = [];
   let nextUrl: string | null = url;
+  let pageCount = 0;
 
-  while (nextUrl) {
-    const response: Response = await fetch(nextUrl);
-    if (!response.ok) break;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const data: { data?: T[]; paging?: { next?: string } } = await response.json() as any;
+  while (nextUrl && pageCount < META_PAGE_LIMIT) {
+    const pageUrl = nextUrl;
+    const data: { data?: T[]; paging?: { next?: string } } = await fetchGraphJson(pageUrl, label);
     if (data.data) {
       items.push(...data.data);
     }
     nextUrl = data.paging?.next || null;
+    pageCount += 1;
   }
 
   return items;
@@ -54,15 +98,23 @@ async function fetchAllPages<T>(url: string): Promise<T[]> {
 
 /**
  * GET /api/auth/meta/details?storeId=xxx
- * Returns the connected Meta user info, businesses, and ALL ad accounts
- * (personal + from every Business Manager the user has access to).
+ * Returns the connected Meta user info, businesses, and accessible ad accounts.
  */
 export async function GET(request: NextRequest) {
+  const session = await readSessionFromRequest(request);
+  if (!session.authenticated) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { searchParams } = new URL(request.url);
   const storeId = searchParams.get('storeId');
 
   if (!storeId) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
+  }
+
+  if (!session.legacy && session.workspaceId && !(await canWorkspaceAccessStore(session.workspaceId, storeId))) {
+    return NextResponse.json({ error: 'Store not found' }, { status: 404 });
   }
 
   const token = await getMetaToken(storeId);
@@ -75,73 +127,28 @@ export async function GET(request: NextRequest) {
   const at = token.accessToken;
 
   const adAccountFields = 'id,name,account_id,currency,timezone_name,account_status,amount_spent,business{id,name}';
+  const tokenParam = encodeURIComponent(at);
 
   try {
-    // Step 1: Fetch user info, businesses, and personal ad accounts in parallel
-    const [userRes, bizRes, personalAccounts] = await Promise.all([
-      fetch(`${GRAPH_BASE}/me?fields=id,name,email&access_token=${at}`),
-      fetch(`${GRAPH_BASE}/me/businesses?fields=id,name&limit=100&access_token=${at}`),
+    // /me/adaccounts returns the ad accounts this user can access, including
+    // business info. Avoid per-business fan-out, which can time out on Vercel.
+    const [user, businessData, personalAccounts] = await Promise.all([
+      fetchGraphJson<MetaUserInfo>(`${GRAPH_BASE}/me?fields=id,name,email&access_token=${tokenParam}`, 'Meta user'),
+      fetchGraphJson<{ data?: MetaBusinessInfo[] }>(
+        `${GRAPH_BASE}/me/businesses?fields=id,name&limit=100&access_token=${tokenParam}`,
+        'Meta businesses'
+      ).catch(() => ({ data: [] as MetaBusinessInfo[] })),
       fetchAllPages<MetaAdAccountRaw>(
-        `${GRAPH_BASE}/me/adaccounts?fields=${adAccountFields}&limit=100&access_token=${at}`
+        `${GRAPH_BASE}/me/adaccounts?fields=${encodeURIComponent(adAccountFields)}&limit=100&access_token=${tokenParam}`,
+        'Meta ad accounts'
       ),
     ]);
 
-    let user: MetaUserInfo | null = null;
-    let businesses: MetaBusinessInfo[] = [];
-
-    if (userRes.ok) {
-      user = await userRes.json();
-    }
-
-    if (bizRes.ok) {
-      const bizData = await bizRes.json();
-      businesses = bizData.data || [];
-    }
-
-    // Step 2: For each Business Manager, fetch their ad accounts
-    // This gets ad accounts that are owned by the BM (not just personal ones)
-    const bmAccountPromises = businesses.map((biz) =>
-      fetchAllPages<MetaAdAccountRaw>(
-        `${GRAPH_BASE}/${biz.id}/owned_ad_accounts?fields=${adAccountFields}&limit=100&access_token=${at}`
-      ).catch(() => [] as MetaAdAccountRaw[])
-    );
-
-    // Also fetch client ad accounts from each BM
-    const bmClientAccountPromises = businesses.map((biz) =>
-      fetchAllPages<MetaAdAccountRaw>(
-        `${GRAPH_BASE}/${biz.id}/client_ad_accounts?fields=${adAccountFields}&limit=100&access_token=${at}`
-      ).catch(() => [] as MetaAdAccountRaw[])
-    );
-
-    const [bmOwnedResults, bmClientResults] = await Promise.all([
-      Promise.all(bmAccountPromises),
-      Promise.all(bmClientAccountPromises),
-    ]);
-
-    // Step 3: Merge all ad accounts and deduplicate by ID
+    const businesses = businessData.data || [];
     const allAccountsMap = new Map<string, MetaAdAccountRaw>();
 
-    // Add personal accounts
     for (const acc of personalAccounts) {
       allAccountsMap.set(acc.id, acc);
-    }
-
-    // Add BM owned accounts
-    for (const bmAccounts of bmOwnedResults) {
-      for (const acc of bmAccounts) {
-        if (!allAccountsMap.has(acc.id)) {
-          allAccountsMap.set(acc.id, acc);
-        }
-      }
-    }
-
-    // Add BM client accounts
-    for (const bmAccounts of bmClientResults) {
-      for (const acc of bmAccounts) {
-        if (!allAccountsMap.has(acc.id)) {
-          allAccountsMap.set(acc.id, acc);
-        }
-      }
     }
 
     const allAccounts = Array.from(allAccountsMap.values());
@@ -170,12 +177,13 @@ export async function GET(request: NextRequest) {
       selectedAccounts: selectedAdAccounts
         .filter((a) => a.platform === 'meta')
         .map((a) => ({ id: a.ad_account_id, name: a.ad_account_name })),
-      connectedAt: conn?.connected_at,
-      lastSynced: conn?.last_synced,
+      connectedAt: conn?.connected_at ?? null,
+      lastSynced: conn?.last_synced ?? null,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to fetch Meta details';
-    return NextResponse.json({ error: message }, { status: 500 });
+    const status = err instanceof MetaGraphError && [401, 504].includes(err.status) ? err.status : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }
 
