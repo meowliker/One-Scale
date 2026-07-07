@@ -77,11 +77,13 @@ export function MetaConnectionDetails({
         `/api/auth/meta/details?storeId=${encodeURIComponent(storeId)}`
       );
       if (!res.ok) {
+        const body = await res.json().catch(() => null) as { error?: string } | null;
+        const message = body?.error || `Failed to fetch Meta details (${res.status})`;
         if (res.status === 401) {
-          setError('Not connected');
+          setError(message === 'Unauthorized' ? 'Not connected' : message);
           return;
         }
-        throw new Error('Failed to fetch');
+        throw new Error(message);
       }
       let data: MetaDetails | null = null;
       try {
