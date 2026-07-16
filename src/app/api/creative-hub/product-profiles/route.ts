@@ -115,6 +115,10 @@ function countCampaignStatuses(
   return { activeCampaignCount: active, inactiveCampaignCount: inactive };
 }
 
+function normalizeAdAccountId(value?: string): string {
+  return (value || '').replace(/^act_/, '');
+}
+
 // GET /api/creative-hub/product-profiles?storeId=X
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -142,8 +146,14 @@ export async function GET(request: NextRequest) {
         const campaignLinks = rawLinks.map((link) => {
           const budget = budgetMap.get(link.campaignId);
           const metaStatus = statusMap.get(link.campaignId);
+          const sameProfileAccount =
+            normalizeAdAccountId(link.adAccountId) === normalizeAdAccountId(profile.adAccountId);
           return {
             ...link,
+            pageId: link.pageId || (sameProfileAccount ? profile.pageId : undefined),
+            pageName: link.pageName || (sameProfileAccount ? profile.pageName : undefined),
+            pixelId: link.pixelId || (sameProfileAccount ? profile.pixelId : undefined),
+            pixelName: link.pixelName || (sameProfileAccount ? profile.pixelName : undefined),
             campaignDailyBudget: budget?.dailyBudget,
             campaignBidStrategy: budget?.bidStrategy,
             effectiveStatus: metaStatus || link.effectiveStatus,
