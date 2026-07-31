@@ -126,6 +126,58 @@ async function fetchLaunchInstagramAccounts(
     .filter((account) => account.id);
 }
 
+async function resolveLaunchPixelId(args: {
+  accessToken: string;
+  accountNode: string;
+  pixelId?: string | null;
+  pixelName?: string | null;
+}): Promise<string> {
+  const requestedPixelId = asString(args.pixelId) || '';
+  const requestedPixelName = asString(args.pixelName) || '';
+  if (!requestedPixelId && !requestedPixelName) return '';
+
+  try {
+    const response = await fetchFromMeta<{ data?: Array<Record<string, unknown>> }>(
+      args.accessToken,
+      `/${args.accountNode}/adspixels`,
+      { fields: 'id,name', limit: '200' },
+      10000,
+      1,
+    );
+    const pixels = (response.data || [])
+      .map((pixel) => ({
+        id: asString(pixel.id) || '',
+        name: asString(pixel.name) || '',
+      }))
+      .filter((pixel) => pixel.id);
+
+    if (requestedPixelId && pixels.some((pixel) => pixel.id === requestedPixelId)) {
+      return requestedPixelId;
+    }
+
+    const normalizedRequestedName = requestedPixelName.toLowerCase();
+    const nameMatch = normalizedRequestedName
+      ? pixels.find((pixel) => pixel.name.toLowerCase() === normalizedRequestedName)
+      : undefined;
+    if (nameMatch?.id) {
+      if (requestedPixelId && requestedPixelId !== nameMatch.id) {
+        console.warn('[launch] resolved stale profile pixel id by matching pixel name', {
+          accountNode: args.accountNode,
+          requestedPixelId,
+          resolvedPixelId: nameMatch.id,
+          pixelName: requestedPixelName,
+        });
+      }
+      return nameMatch.id;
+    }
+  } catch {
+    // Best effort guard. If Meta setup lookup fails, keep the stored id so launch
+    // behavior matches the user's saved profile rather than silently dropping it.
+  }
+
+  return requestedPixelId;
+}
+
 function generateId(): string {
   return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -3012,6 +3064,12 @@ export async function POST(request: NextRequest) {
     const defaultTargetingCountries = [
       inferDefaultCountryFromStore(storeCurrency, resolvedDestinationUrl),
     ];
+    const resolvedLaunchPixelId = await resolveLaunchPixelId({
+      accessToken: token.accessToken,
+      accountNode,
+      pixelId: launchConfig.pixelId || profile.pixelId,
+      pixelName: profile.pixelName,
+    });
 
     const launchProfileContext = {
       pageId: resolvedPageId || undefined,
@@ -3539,11 +3597,10 @@ export async function POST(request: NextRequest) {
           }
 
           // Promoted object for conversion campaigns
-          const pixelId = launchConfig.pixelId || profile.pixelId;
           const conversionEvent = launchConfig.conversionEvent || profile.conversionEvent;
-          if (pixelId) {
+          if (resolvedLaunchPixelId) {
             adsetBody.promoted_object = JSON.stringify({
-              pixel_id: pixelId,
+              pixel_id: resolvedLaunchPixelId,
               custom_event_type: conversionEvent || 'PURCHASE',
             });
           }
@@ -3750,11 +3807,10 @@ export async function POST(request: NextRequest) {
         }
 
         // Promoted object for conversion campaigns
-        const pixelId = launchConfig.pixelId || profile.pixelId;
         const conversionEvent = launchConfig.conversionEvent || profile.conversionEvent;
-        if (pixelId) {
+        if (resolvedLaunchPixelId) {
           adsetBody.promoted_object = JSON.stringify({
-            pixel_id: pixelId,
+            pixel_id: resolvedLaunchPixelId,
             custom_event_type: conversionEvent || 'PURCHASE',
           });
         }
