@@ -138,7 +138,7 @@ function CreativeCard({ creative, isSelected, onToggle }: CreativeCardProps) {
         <p className="truncate text-xs font-semibold text-text-primary">{creative.name}</p>
 
         {/* Hook */}
-        <p className="truncate text-[11px] italic text-text-muted">"{creative.hook}"</p>
+        <p className="truncate text-[11px] italic text-text-muted">{`"${creative.hook}"`}</p>
 
         {/* Angle pill */}
         <span className="inline-flex items-center rounded-full bg-surface-hover px-2 py-0.5 text-[10px] font-medium text-text-secondary">

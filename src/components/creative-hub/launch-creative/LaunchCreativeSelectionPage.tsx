@@ -26,6 +26,7 @@ import {
   Upload,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { isAccountOnlyCampaignLink } from '@/lib/creative-hub/account-links';
 import { CreativePreviewModal } from '@/components/creative-hub/CreativePreviewModal';
 import {
   ExternalLaunchErrorPage,
@@ -1698,7 +1699,9 @@ export default function LaunchCreativeSelectionPage() {
     (initialProductId !== 'all' ? initialProductId : undefined);
   const selectedProfile = profiles.find((profile) => profile.id === launchProductId);
   const selectedCampaign = campaigns.find((campaign) => campaign.campaignId === selectedCampaignId);
-  const selectedCampaignLink = selectedProfile?.campaignLinks?.find((link) => link.campaignId === selectedCampaignId);
+  const selectedCampaignLink = selectedProfile?.campaignLinks?.find(
+    (link) => !isAccountOnlyCampaignLink(link) && link.campaignId === selectedCampaignId,
+  );
   const selectedCampaignAccountId = normalizeMetaAdAccountId(
     selectedCampaign?.adAccountId || selectedCampaignLink?.adAccountId,
   );
@@ -2181,6 +2184,7 @@ export default function LaunchCreativeSelectionPage() {
       const requestScopeKey = `${campaignMode}:${campaignAccountIds.join(',')}`;
       if (campaignMode !== 'new') {
         for (const link of selectedProfile.campaignLinks || []) {
+          if (isAccountOnlyCampaignLink(link)) continue;
           if (!link.campaignId) continue;
           const linkAccountId = normalizeMetaAdAccountId(link.adAccountId || selectedProfile.adAccountId);
           rowsById.set(link.campaignId, {

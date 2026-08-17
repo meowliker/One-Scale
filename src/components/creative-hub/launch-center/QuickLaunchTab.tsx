@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { isAccountOnlyCampaignLink } from '@/lib/creative-hub/account-links';
 import {
   WORLDWIDE_COUNTRY_VALUE,
   getCountryLabel,
@@ -430,7 +431,9 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
   const selectedCampaignSummary = useMemo(
     () =>
       selectedProfile?.campaignLinks?.find(
-        (campaign) => campaign.campaignId === launchConfig.existingCampaignId,
+        (campaign) =>
+          !isAccountOnlyCampaignLink(campaign) &&
+          campaign.campaignId === launchConfig.existingCampaignId,
       ),
     [launchConfig.existingCampaignId, selectedProfile],
   );
@@ -484,7 +487,9 @@ export function QuickLaunchTab({ storeId }: QuickLaunchTabProps) {
       patch.bidStrategy = 'LOWEST_COST_WITHOUT_CAP';
     }
     if (!launchConfig.existingCampaignId) {
-      const existingCampaignId = selectedProfile.campaignLinks?.[0]?.campaignId;
+      const existingCampaignId = selectedProfile.campaignLinks?.find(
+        (campaign) => !isAccountOnlyCampaignLink(campaign),
+      )?.campaignId;
       if (existingCampaignId) {
         patch.existingCampaignId = existingCampaignId;
       }

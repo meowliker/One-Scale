@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
+import { isAccountOnlyCampaignLink } from '@/lib/creative-hub/account-links';
 import type {
   CreativeHubTab,
   LaunchWizardStep,
@@ -231,7 +232,9 @@ function getCreativesByIds(creatives: InboxCreative[], ids: string[]): InboxCrea
 
 function getActiveCampaigns(profile?: ProductProfile): NonNullable<ProductProfile['campaignLinks']> {
   return (profile?.campaignLinks ?? []).filter(
-    (campaign) => campaign.effectiveStatus === 'ACTIVE' || (!campaign.effectiveStatus && campaign.isActive),
+    (campaign) =>
+      !isAccountOnlyCampaignLink(campaign) &&
+      (campaign.effectiveStatus === 'ACTIVE' || (!campaign.effectiveStatus && campaign.isActive)),
   );
 }
 

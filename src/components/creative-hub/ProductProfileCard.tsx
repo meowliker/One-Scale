@@ -25,6 +25,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { isAccountOnlyCampaignLink } from '@/lib/creative-hub/account-links';
 import { useStoreStore } from '@/stores/storeStore';
 import type { ProductProfile, ProductCampaignLink, CampaignLinkType } from '@/types/creativeHub';
 
@@ -56,6 +57,11 @@ const campaignTypeBadge: Record<CampaignLinkType, { label: string; className: st
     label: 'Retarget',
     className: 'bg-purple-50 text-purple-700 border border-purple-200',
     Icon: RefreshCw,
+  },
+  account: {
+    label: 'Account',
+    className: 'bg-gray-50 text-gray-700 border border-gray-200',
+    Icon: DollarSign,
   },
 };
 
@@ -100,10 +106,12 @@ export function ProductProfileCard({
   const { stores, activeStoreId } = useStoreStore();
   const activeStore = stores.find(s => s.id === activeStoreId);
 
+  const realCampaignLinks = linkedCampaigns.filter((link) => !isAccountOnlyCampaignLink(link));
+
   // Use Meta-derived counts from API if available, fallback to DB isActive flag
-  const activeCampaignCount = profile.activeCampaignCount ?? linkedCampaigns.filter(c => c.isActive).length;
-  const inactiveCampaignCount = profile.inactiveCampaignCount ?? linkedCampaigns.filter(c => !c.isActive).length;
-  const isTesting = linkedCampaigns.length > 0 && activeCampaignCount > 0;
+  const activeCampaignCount = profile.activeCampaignCount ?? realCampaignLinks.filter(c => c.isActive).length;
+  const inactiveCampaignCount = profile.inactiveCampaignCount ?? realCampaignLinks.filter(c => !c.isActive).length;
+  const isTesting = realCampaignLinks.length > 0 && activeCampaignCount > 0;
 
   // Priority: profile-level name > campaign link names > ID > "Not set"
   // Profile-level name is set by user in Edit Profile, so it takes priority
@@ -190,17 +198,17 @@ export function ProductProfileCard({
                 'rounded-full px-2.5 py-0.5 text-xs font-medium flex-shrink-0',
                 isTesting
                   ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                  : linkedCampaigns.length > 0
+                  : realCampaignLinks.length > 0
                     ? 'bg-amber-50 text-amber-700 border border-amber-200'
                     : 'bg-gray-100 text-gray-500 border border-gray-200'
               )}
             >
-              {isTesting ? 'Active' : linkedCampaigns.length > 0 ? 'Not Testing' : 'No Campaigns'}
+              {isTesting ? 'Active' : realCampaignLinks.length > 0 ? 'Not Testing' : 'No Campaigns'}
             </span>
           </div>
 
           <p className="text-xs text-text-secondary mt-0.5">
-            {linkedCampaigns.length === 0
+            {realCampaignLinks.length === 0
               ? 'No linked campaigns'
               : activeCampaignCount > 0 && inactiveCampaignCount > 0
                 ? `${activeCampaignCount} active · ${inactiveCampaignCount} paused`
@@ -299,7 +307,7 @@ export function ProductProfileCard({
       </div>
 
       {/* Linked campaigns (collapsed by default) */}
-      {linkedCampaigns.length > 0 && (
+      {realCampaignLinks.length > 0 && (
         <div className="border-t border-border mt-4 pt-4">
           <button
             onClick={() => setCampaignsExpanded(!campaignsExpanded)}
@@ -318,7 +326,7 @@ export function ProductProfileCard({
 
           {campaignsExpanded && (
             <div className="mt-2.5 space-y-2">
-              {linkedCampaigns.map((link) => {
+              {realCampaignLinks.map((link) => {
                 const badge = campaignTypeBadge[link.campaignType];
                 const isLinkActive = link.effectiveStatus === 'ACTIVE' || (!link.effectiveStatus && link.isActive);
                 return (

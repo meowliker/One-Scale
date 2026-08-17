@@ -25,6 +25,7 @@ import {
   Image as ImageIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { isAccountOnlyCampaignLink } from '@/lib/creative-hub/account-links';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
 import { useStoreStore } from '@/stores/storeStore';
 import type {
@@ -140,6 +141,7 @@ export function EditProductProfileModal({
 
   // Link account dropdown state
   const [showLinkDropdown, setShowLinkDropdown] = useState(false);
+  const [linkingAccountId, setLinkingAccountId] = useState<string | null>(null);
   const [unlinkingAccountId, setUnlinkingAccountId] = useState<string | null>(null);
   const [unlinkedAccountIds, setUnlinkedAccountIds] = useState<Set<string>>(new Set());
   const linkDropdownRef = useRef<HTMLDivElement>(null);
@@ -176,7 +178,7 @@ export function EditProductProfileModal({
       if (unlinkedAccountIds.has(link.adAccountId)) return;
       const existing = accountMap.get(link.adAccountId);
       if (existing) {
-        existing.campaignCount++;
+        if (!isAccountOnlyCampaignLink(link)) existing.campaignCount++;
       } else {
         // Find name from store ad accounts
         const storeAccount = adAccounts.find((a) => a.accountId === link.adAccountId);
@@ -184,7 +186,7 @@ export function EditProductProfileModal({
           accountId: link.adAccountId,
           name: storeAccount?.name || link.adAccountId,
           currency: storeAccount?.currency || 'USD',
-          campaignCount: 1,
+          campaignCount: isAccountOnlyCampaignLink(link) ? 0 : 1,
         });
       }
     });
@@ -208,6 +210,11 @@ export function EditProductProfileModal({
   const availableAccountsToLink = useMemo(() => {
     return adAccounts.filter((a) => !linkedAccountIds.has(a.accountId));
   }, [adAccounts, linkedAccountIds]);
+
+  const realLinkedCampaigns = useMemo(
+    () => linkedCampaigns.filter((link) => !isAccountOnlyCampaignLink(link)),
+    [linkedCampaigns],
+  );
 
   // Merged setup options across all linked accounts
   const mergedSetupOptions = useMemo(() => {
@@ -251,6 +258,7 @@ export function EditProductProfileModal({
       setExpandedSections(new Set(['meta', 'clickup', 'destination']));
       setSetupOptionsMap({});
       setUnlinkedAccountIds(new Set());
+      setLinkingAccountId(null);
       setUnlinkingAccountId(null);
     }
   }, [isOpen, profile]);
@@ -392,16 +400,43 @@ export function EditProductProfileModal({
     }));
   };
 
-  const handleLinkAccount = (accountId: string, currency: string) => {
+  const handleLinkAccount = async (accountId: string, currency: string) => {
     setUnlinkedAccountIds((prev) => {
       if (!prev.has(accountId)) return prev;
       const next = new Set(prev);
       next.delete(accountId);
       return next;
     });
-    if (form.adAccountId !== accountId) {
+
+    if (!profile?.id) {
       updateField('adAccountId', accountId);
       updateField('adAccountCurrency', currency);
+      setShowLinkDropdown(false);
+      return;
+    }
+
+    if (linkingAccountId) return;
+    setLinkingAccountId(accountId);
+    try {
+      const account = adAccounts.find((item) => item.accountId === accountId);
+      const res = await fetch('/api/creative-hub/product-profiles/campaign-links', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productProfileId: profile.id,
+          adAccountId: accountId,
+          accountName: account?.name || accountId,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to link ad account');
+      }
+      await fetchProfiles(storeId);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Failed to link ad account');
+    } finally {
+      setLinkingAccountId(null);
     }
     setShowLinkDropdown(false);
   };
@@ -646,9 +681,14 @@ export function EditProductProfileModal({
                                           key={account.id}
                                           type="button"
                                           onClick={() => handleLinkAccount(account.accountId, account.currency)}
-                                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-hover transition-colors"
+                                          disabled={!!linkingAccountId}
+                                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-hover transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                                         >
-                                          <Plus className="h-3.5 w-3.5 text-text-dimmed flex-shrink-0" />
+                                          {linkingAccountId === account.accountId ? (
+                                            <Loader2 className="h-3.5 w-3.5 text-text-dimmed flex-shrink-0 animate-spin" />
+                                          ) : (
+                                            <Plus className="h-3.5 w-3.5 text-text-dimmed flex-shrink-0" />
+                                          )}
                                           <span className="truncate flex-1 text-text-primary">
                                             {account.name || account.accountId}
                                           </span>
@@ -1098,10 +1138,10 @@ export function EditProductProfileModal({
 
                     {id === 'campaigns' && (
                       <div className="space-y-2">
-                        {linkedCampaigns.length === 0 && (
+                        {realLinkedCampaigns.length === 0 && (
                           <p className="text-sm text-text-dimmed italic">No campaigns linked to this profile.</p>
                         )}
-                        {linkedCampaigns.map((link) => (
+                        {realLinkedCampaigns.map((link) => (
                           <div
                             key={link.id}
                             className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5 bg-surface"

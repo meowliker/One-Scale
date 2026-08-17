@@ -9,6 +9,7 @@ import { isSupabasePersistenceEnabled } from '@/app/api/lib/supabase-persistence
 import {
   getRecentPersistentMetaEndpointSnapshots,
 } from '@/app/api/lib/supabase-tracking';
+import { isAccountOnlyCampaignLink } from '@/lib/creative-hub/account-links';
 import type { Campaign } from '@/types/campaign';
 import type { ProductCampaignLink } from '@/types/creativeHub';
 
@@ -94,6 +95,7 @@ function countCampaignStatuses(
   let inactive = 0;
 
   for (const link of links) {
+    if (isAccountOnlyCampaignLink(link)) continue;
     const metaStatus = statusMap.get(link.campaignId);
     if (metaStatus) {
       // Use real Meta status
@@ -144,6 +146,7 @@ export async function GET(request: NextRequest) {
         const rawLinks = await getProductCampaignLinks(profile.id);
         // Enrich each link with campaign-level budget/bid data for CBO/ABO detection
         const campaignLinks = rawLinks.map((link) => {
+          if (isAccountOnlyCampaignLink(link)) return link;
           const budget = budgetMap.get(link.campaignId);
           const metaStatus = statusMap.get(link.campaignId);
           const sameProfileAccount =

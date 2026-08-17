@@ -6,7 +6,7 @@ import { Plus, Upload, Download, Pencil, Trash2, ChevronDown, Receipt, DollarSig
 import { useStoreStore } from '@/stores/storeStore';
 import { formatCurrency } from '@/lib/utils';
 import { ExpensePanel } from '@/components/pnl/ExpensePanel';
-import type { CustomExpense, ExpenseCategory, ExpenseFrequency } from '@/types/pnlSettings';
+import type { CustomExpense, ExpenseCategory, ExpenseDistribution, ExpenseFrequency } from '@/types/pnlSettings';
 import toast from 'react-hot-toast';
 
 interface DbExpense {
@@ -95,7 +95,7 @@ export default function ExpensesPage() {
       category: exp.category,
       amount: exp.amount,
       frequency: exp.frequency,
-      distribution: exp.distribution as any,
+      distribution: exp.distribution as ExpenseDistribution,
       startDate: exp.start_date,
       endDate: exp.end_date,
       isActive: exp.is_active,

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getCreativeTests, getProductProfile, getProductCampaignLinks } from '@/app/api/lib/creative-hub-db';
 import { getMetaToken } from '@/app/api/lib/tokens';
 import { fetchFromMeta } from '@/app/api/lib/meta-client';
+import { isAccountOnlyCampaignLink } from '@/lib/creative-hub/account-links';
 import type { CreativeTest } from '@/types/creativeHub';
 
 export const maxDuration = 120;
@@ -1105,11 +1106,12 @@ export async function POST(request: NextRequest) {
     const metaToken = await getMetaToken(storeId);
 
     // 1. Get product profile, campaign links, and creative history
-    const [profile, campaignLinks, tests] = await Promise.all([
+    const [profile, rawCampaignLinks, tests] = await Promise.all([
       getProductProfile(productProfileId),
       getProductCampaignLinks(productProfileId),
       getCreativeTests(storeId),
     ]);
+    const campaignLinks = rawCampaignLinks.filter((link) => !isAccountOnlyCampaignLink(link));
 
     if (!profile) {
       return NextResponse.json(

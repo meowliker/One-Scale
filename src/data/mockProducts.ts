@@ -8,19 +8,19 @@ function makeProduct(
   requiresShipping = true,
   vendor = 'Mock Vendor',
   productType = '',
-): any {
+): ProductCOGS {
+  const costPerUnit = requiresShipping ? cost : 0;
   return {
-    id,
-    title,
-    image: null,
-    product_type: productType || null,
-    requires_shipping: requiresShipping,
-    vendor,
-    status: 'active',
-    variant_count: 1,
-    cost: requiresShipping ? cost : 0,
-    price,
-    currency: 'USD',
+    productId: id,
+    productName: title,
+    sku: [vendor, productType, id]
+      .filter(Boolean)
+      .join('-')
+      .replace(/\s+/g, '-')
+      .toUpperCase(),
+    costPerUnit,
+    sellingPrice: price,
+    margin: price > 0 ? ((price - costPerUnit) / price) * 100 : 0,
   };
 }
 

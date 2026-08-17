@@ -5,6 +5,7 @@ import {
   getProductProfile,
   getProductCampaignLinks,
 } from '@/app/api/lib/creative-hub-db';
+import { isAccountOnlyCampaignLink } from '@/lib/creative-hub/account-links';
 
 /**
  * GET /api/creative-hub/ai-analysis?storeId=...&productProfileId=...
@@ -446,7 +447,11 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const linkedCampaignIds = new Set(campaignLinks.map((l) => l.campaignId));
+    const linkedCampaignIds = new Set(
+      campaignLinks
+        .filter((link) => !isAccountOnlyCampaignLink(link))
+        .map((l) => l.campaignId),
+    );
 
     // 3. Fetch ads from Supabase snapshots
     if (!SUPABASE_URL || !SUPABASE_KEY) {

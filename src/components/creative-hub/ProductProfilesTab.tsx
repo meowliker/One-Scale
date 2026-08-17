@@ -22,6 +22,7 @@ import { EditProductProfileModal } from '@/components/creative-hub/EditProductPr
 import { UnmappedCampaignCard } from '@/components/creative-hub/UnmappedCampaignCard';
 import { InboxCreativeRow } from '@/components/creative-hub/InboxCreativeRow';
 import { CreativePreviewModal } from '@/components/creative-hub/CreativePreviewModal';
+import { isAccountOnlyCampaignLink } from '@/lib/creative-hub/account-links';
 import type { ProductProfile, ProductCampaignLink, InboxCreative } from '@/types/creativeHub';
 
 interface ProductProfilesTabProps {
@@ -151,17 +152,18 @@ export function ProductProfilesTab({ storeId }: ProductProfilesTabProps) {
     const active: ProductProfile[] = [];
     const inactive: ProductProfile[] = [];
     for (const p of profiles) {
-      const campaignCount = (p.campaignLinks ?? []).length + (p.activeCampaignCount ?? 0);
+      const realCampaignLinks = (p.campaignLinks ?? []).filter((link) => !isAccountOnlyCampaignLink(link));
+      const campaignCount = realCampaignLinks.length + (p.activeCampaignCount ?? 0);
       // Skip products with zero campaigns entirely
-      if (campaignCount === 0 && !(p.campaignLinks ?? []).length) continue;
+      if (campaignCount === 0 && realCampaignLinks.length === 0) continue;
 
       const hasActiveCampaigns = (p.activeCampaignCount ?? 0) > 0 ||
-        (p.campaignLinks ?? []).some((l) =>
+        realCampaignLinks.some((l) =>
           l.effectiveStatus === 'ACTIVE' || (!l.effectiveStatus && l.isActive)
         );
       if (hasActiveCampaigns) {
         active.push(p);
-      } else if ((p.campaignLinks ?? []).length > 0) {
+      } else if (realCampaignLinks.length > 0) {
         // Only show in inactive if it has campaigns (all inactive)
         inactive.push(p);
       }

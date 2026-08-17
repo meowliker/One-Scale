@@ -325,7 +325,7 @@ export async function GET(request: NextRequest) {
       sortedTargetIds.map((id) => {
         if (timeRange) {
           // Use time_range for specific date ranges (e.g., from PnL sync)
-          return fetchFromMeta<{ data: Record<string, any>[] }>(
+          return fetchFromMeta<{ data: Array<Parameters<typeof mapInsightsToMetrics>[0]> }>(
             token.accessToken,
             `/${id}/insights`,
             {

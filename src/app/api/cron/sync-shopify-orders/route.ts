@@ -141,7 +141,7 @@ export async function GET(req: NextRequest) {
       const sinceDate = new Date(Date.now() - sinceMs).toISOString();
 
       // Always paginate to handle large gaps
-      let allOrders: ShopifyOrderRaw[] = [];
+      const allOrders: ShopifyOrderRaw[] = [];
       // Start at 0 so Shopify paginates forward by ID for historical backfills.
       // Without this, the first page can default to newest-first and the next
       // since_id cursor misses the older rows we are trying to backfill.
@@ -192,7 +192,6 @@ export async function GET(req: NextRequest) {
         let refundTotal = 0;
         if (order.refunds && order.refunds.length > 0) {
           for (const refund of order.refunds) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             for (const transaction of refund.transactions || []) {
               refundTotal += parseFloat(transaction.amount || '0');
             }

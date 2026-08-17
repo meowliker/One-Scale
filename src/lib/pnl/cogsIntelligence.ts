@@ -129,8 +129,11 @@ async function inferIsDigital(
   let productOrdersTotal = 0;
   for (const order of orders) {
     try {
-      const items = typeof order.line_items === 'string' ? JSON.parse(order.line_items) : order.line_items || [];
-      const hasProduct = items.some((i: any) => String(i.product_id) === productId);
+      const parsedItems = typeof order.line_items === 'string' ? JSON.parse(order.line_items) : order.line_items || [];
+      const items = Array.isArray(parsedItems)
+        ? (parsedItems as Array<{ product_id?: string | number }>)
+        : [];
+      const hasProduct = items.some((item) => String(item.product_id) === productId);
       if (hasProduct) {
         productOrdersTotal++;
         if ((order.total_shipping_price || 0) > 0) productOrdersWithShipping++;

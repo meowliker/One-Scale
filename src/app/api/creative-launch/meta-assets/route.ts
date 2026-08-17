@@ -63,6 +63,22 @@ interface MetaInsights {
   purchase_roas?: Array<{ value: string }>;
 }
 
+interface CachedMetaAd {
+  id?: string;
+  name?: string;
+  metrics?: {
+    roas?: string | number;
+    purchase_roas?: string | number;
+    spend?: string | number;
+  };
+  creative?: {
+    body?: string;
+    title?: string;
+    headline?: string;
+    call_to_action?: { type?: string };
+  };
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const storeId = searchParams.get('storeId') || '';
@@ -190,12 +206,11 @@ export async function GET(request: NextRequest) {
     try {
       const adsSnapshot = getLatestMetaEndpointSnapshot(storeId, 'ads', '');
       if (adsSnapshot?.data && Array.isArray(adsSnapshot.data)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const allAdsWithCopy: WinnerCopy[] = [];
-        
-        for (const ad of adsSnapshot.data as any[]) {
-          const roas = parseFloat(ad.metrics?.roas ?? ad.metrics?.purchase_roas ?? '0');
-          const spend = parseFloat(ad.metrics?.spend ?? '0');
+
+        for (const ad of adsSnapshot.data as CachedMetaAd[]) {
+          const roas = parseFloat(String(ad.metrics?.roas ?? ad.metrics?.purchase_roas ?? '0'));
+          const spend = parseFloat(String(ad.metrics?.spend ?? '0'));
 
           const creative = ad.creative?.body || ad.name || '';
           const headline = ad.creative?.title || ad.creative?.headline || '';
@@ -204,7 +219,7 @@ export async function GET(request: NextRequest) {
           if (!creative && !headline) continue;
 
           allAdsWithCopy.push({
-            id: ad.id,
+            id: ad.id || ad.name || `cached-ad-${allAdsWithCopy.length}`,
             primaryText: creative,
             headline: headline || creative.split('\n')[0] || '',
             cta: ad.creative?.call_to_action?.type || 'SHOP_NOW',

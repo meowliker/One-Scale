@@ -12,6 +12,7 @@ import {
   Info,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { isAccountOnlyCampaignLink } from '@/lib/creative-hub/account-links';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
 import { useStoreStore } from '@/stores/storeStore';
 import type {
@@ -88,7 +89,8 @@ export function LaunchStep1Campaign() {
 
   // Get the campaign links from the selected product profile — only show campaigns with ACTIVE effective status
   const linkedCampaigns: ProductCampaignLink[] = (selectedProfile?.campaignLinks ?? []).filter(
-    (link) => link.effectiveStatus === 'ACTIVE' || (!link.effectiveStatus && link.isActive)
+    (link) => !isAccountOnlyCampaignLink(link) &&
+      (link.effectiveStatus === 'ACTIVE' || (!link.effectiveStatus && link.isActive))
   );
 
   // Detect CBO vs ABO for selected existing campaign
@@ -183,7 +185,7 @@ export function LaunchStep1Campaign() {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {profiles.map((profile) => {
               const isSelected = launchConfig.productProfileId === profile.id;
-              const profileLinks = profile.campaignLinks ?? [];
+              const profileLinks = (profile.campaignLinks ?? []).filter((link) => !isAccountOnlyCampaignLink(link));
 
               return (
                 <button

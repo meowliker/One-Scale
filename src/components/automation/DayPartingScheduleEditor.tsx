@@ -133,7 +133,7 @@ export function DayPartingScheduleEditor({ schedule, onChange }: DayPartingSched
       const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % MULTIPLIER_CYCLE.length;
       const newMultiplier = MULTIPLIER_CYCLE[nextIndex];
 
-      let updated = schedule.filter(
+      const updated = schedule.filter(
         (r) => !r.days.includes(dayKey)
       );
 
@@ -161,7 +161,7 @@ export function DayPartingScheduleEditor({ schedule, onChange }: DayPartingSched
       const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % MULTIPLIER_CYCLE.length;
       const newMultiplier = MULTIPLIER_CYCLE[nextIndex];
 
-      let updated = schedule.filter((r) => r.hour !== hour);
+      const updated = schedule.filter((r) => r.hour !== hour);
 
       if (newMultiplier !== 1.0) {
         for (const dk of DAY_KEYS) {

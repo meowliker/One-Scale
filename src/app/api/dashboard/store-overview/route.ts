@@ -361,7 +361,7 @@ export async function GET(request: NextRequest) {
       let netProfit = hasDailySnapshots
         ? snapshotRows.reduce((sum, row) => sum + asNumber(row.net_profit), 0)
         : pnlRows.reduce((sum, row) => sum + (row.net_profit || 0), 0);
-      let orders = hasDailySnapshots
+      const orders = hasDailySnapshots
         ? snapshotRows.reduce((sum, row) => sum + asNumber(row.order_count), 0)
         : pnlRows.reduce((sum, row) => sum + (row.order_count || 0), 0);
       let cogs = productType === 'digital' ? 0 : cogsRaw;

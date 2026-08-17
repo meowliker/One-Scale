@@ -2,6 +2,7 @@ export const maxDuration = 60;
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getProductCampaignLinks, getProductProfile } from '@/app/api/lib/creative-hub-db';
+import { isAccountOnlyCampaignLink } from '@/lib/creative-hub/account-links';
 
 // ── Supabase REST helper ──
 
@@ -843,10 +844,11 @@ export async function GET(request: NextRequest) {
 
     // 1. Get product context and linked campaign IDs. Linked campaign rows can be
     // stale, so we also use the product destination URL as a safe warehouse fallback.
-    const [profile, campaignLinks] = await Promise.all([
+    const [profile, rawCampaignLinks] = await Promise.all([
       getProductProfile(productProfileId),
       getProductCampaignLinks(productProfileId),
     ]);
+    const campaignLinks = rawCampaignLinks.filter((link) => !isAccountOnlyCampaignLink(link));
 
     const campaignLinksForRanking = activeOnly
       ? campaignLinks.filter((link) => {

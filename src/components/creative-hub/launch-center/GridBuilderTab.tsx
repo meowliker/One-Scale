@@ -7,6 +7,7 @@ import {
   getCountryLabel,
   normalizeCountryCode,
 } from '@/lib/countryOptions';
+import { isAccountOnlyCampaignLink } from '@/lib/creative-hub/account-links';
 import { cn } from '@/lib/utils';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
 import { useStoreStore } from '@/stores/storeStore';
@@ -80,7 +81,9 @@ export function GridBuilderTab() {
   const selectedCampaignSummary = useMemo(
     () =>
       selectedProfile?.campaignLinks?.find(
-        (campaign) => campaign.campaignId === launchConfig.existingCampaignId,
+        (campaign) =>
+          !isAccountOnlyCampaignLink(campaign) &&
+          campaign.campaignId === launchConfig.existingCampaignId,
       ),
     [launchConfig.existingCampaignId, selectedProfile],
   );

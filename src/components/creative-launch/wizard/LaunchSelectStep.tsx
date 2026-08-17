@@ -272,7 +272,7 @@ export function LaunchSelectStep({
           <div className="text-center py-12">
             <p className="text-slate-500">No creatives available to launch.</p>
             <p className="text-sm text-slate-400 mt-1">
-              Add creatives in ClickUp with "Ready to Launch" status.
+              Add creatives in ClickUp with &quot;Ready to Launch&quot; status.
             </p>
           </div>
         )}

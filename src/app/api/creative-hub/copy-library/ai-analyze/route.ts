@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCopyLibrary, getProductProfile, getProductCampaignLinks } from '@/app/api/lib/creative-hub-db';
 import { autoPopulateCopyLibrary } from '@/app/api/creative-hub/copy-library/auto-populate/route';
+import { isAccountOnlyCampaignLink } from '@/lib/creative-hub/account-links';
 
 /**
  * POST /api/creative-hub/copy-library/ai-analyze
@@ -213,7 +214,8 @@ export async function POST(request: NextRequest) {
     }
 
     const copies = await getCopyLibrary(productProfileId);
-    const campaignLinks = await getProductCampaignLinks(productProfileId);
+    const campaignLinks = (await getProductCampaignLinks(productProfileId))
+      .filter((link) => !isAccountOnlyCampaignLink(link));
 
     // Try Claude AI analysis first
     let rankedCopies: RankedCopy[] | null = null;

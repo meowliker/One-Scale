@@ -177,7 +177,7 @@ export function LaunchBudgetStep({
                 <p className="text-xs text-slate-500 mt-1">
                   {config.budgetType === 'daily' ? (
                     <>
-                      You'll spend approximately <strong>${config.dailyBudget}/day</strong>.
+                      You&apos;ll spend approximately <strong>${config.dailyBudget}/day</strong>.
                       {!config.noEndDate && config.endDate && config.startDate && (
                         <>
                           {' '}Total estimated spend: <strong>

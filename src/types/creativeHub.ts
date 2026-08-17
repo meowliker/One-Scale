@@ -101,7 +101,7 @@ export type BidStrategy =
   | 'LOWEST_COST_WITH_MIN_ROAS'
   | 'MINIMUM_ROAS';
 
-export type CampaignLinkType = 'testing' | 'scaling' | 'retargeting';
+export type CampaignLinkType = 'testing' | 'scaling' | 'retargeting' | 'account';
 
 export interface ProductCampaignLink {
   id: string;

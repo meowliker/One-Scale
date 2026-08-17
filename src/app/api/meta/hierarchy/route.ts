@@ -68,7 +68,7 @@ export async function GET(request: NextRequest) {
   }
 
   const campaigns = campaignsSnapshot?.data || [];
-  let snapshotAt = campaignsSnapshot?.updatedAt || null;
+  const snapshotAt = campaignsSnapshot?.updatedAt || null;
 
   // Batch load all ad sets and ads in parallel (much faster than sequential)
   if (useSupabase) {

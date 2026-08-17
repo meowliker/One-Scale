@@ -128,7 +128,7 @@ export function LaunchTargetingStep({
           <div>
             <p className="text-sm font-medium text-blue-800">Auto-populated from ad set</p>
             <p className="text-xs text-blue-600 mt-0.5">
-              Targeting settings copied from "{selectedAdset.name}". You can modify as needed.
+              Targeting settings copied from {`"${selectedAdset.name}"`}. You can modify as needed.
             </p>
           </div>
         </div>

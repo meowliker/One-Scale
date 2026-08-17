@@ -21,6 +21,7 @@ import {
   parseCountryInput,
 } from '@/lib/countryOptions';
 import { cn } from '@/lib/utils';
+import { isAccountOnlyCampaignLink } from '@/lib/creative-hub/account-links';
 import { useCreativeHubStore } from '@/stores/creativeHubStore';
 import { useStoreStore } from '@/stores/storeStore';
 import type {
@@ -401,6 +402,7 @@ export function LaunchConfigPanel({
     const byCampaignId = new Map<string, ProductCampaignLink>();
 
     for (const campaign of selectedProfile?.campaignLinks ?? []) {
+      if (isAccountOnlyCampaignLink(campaign)) continue;
       if (!campaign.campaignId) continue;
       byCampaignId.set(campaign.campaignId, campaign);
     }

@@ -201,7 +201,7 @@ export async function GET(request: NextRequest) {
 
   // Deduplicate by task id
   const seenIds = new Set<string>();
-  let tasks: ClickUpTask[] = [];
+  const tasks: ClickUpTask[] = [];
   for (const arr of allTaskArrays) {
     for (const t of arr) {
       if (!seenIds.has(t.id)) { seenIds.add(t.id); tasks.push(t); }

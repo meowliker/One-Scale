@@ -97,7 +97,7 @@ export async function detectStoreModel(storeId: string): Promise<StoreModel> {
   let freeItemOrders = 0;
   let subscriptionOrders = 0;
   let partiallyPaidOrders = 0;
-  let draftOrders = 0;
+  const draftOrders = 0;
   let highQtyOrders = 0;
   let mysteryTitleOrders = 0;
   let physicalItems = 0;

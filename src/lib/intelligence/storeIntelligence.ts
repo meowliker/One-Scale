@@ -96,7 +96,7 @@ export async function initializeStore(
     financial_status: string;
   }> = [];
 
-  let shopData: { currency: string; enabled_presentment_currencies?: string[]; plan_name?: string; timezone?: string } = {
+  const shopData: { currency: string; enabled_presentment_currencies?: string[]; plan_name?: string; timezone?: string } = {
     currency: 'USD',
   };
 

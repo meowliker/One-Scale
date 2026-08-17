@@ -4,26 +4,42 @@ import {
   deleteCampaignLinksForProfileAccount,
   upsertProductCampaignLink,
 } from '@/app/api/lib/creative-hub-db';
+import {
+  ACCOUNT_ONLY_CAMPAIGN_TYPE,
+  buildAccountOnlyCampaignId,
+  normalizeAccountOnlyAdAccountId,
+} from '@/lib/creative-hub/account-links';
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { productProfileId, campaignId, campaignName, adAccountId } = body;
+    const { productProfileId, campaignId, campaignName, adAccountId, accountName } = body;
 
-    if (!productProfileId || !campaignId || !adAccountId) {
+    if (!productProfileId || !adAccountId) {
       return NextResponse.json(
-        { error: 'Missing required fields: productProfileId, campaignId, adAccountId' },
+        { error: 'Missing required fields: productProfileId and adAccountId' },
         { status: 400 },
       );
     }
 
-    const linkId = randomUUID();
+    const isAccountOnly = !campaignId;
+    const normalizedAccountId = normalizeAccountOnlyAdAccountId(adAccountId);
+    const accountOnlyCampaignId = buildAccountOnlyCampaignId(adAccountId);
+    const linkId = isAccountOnly
+      ? `account:${productProfileId}:${normalizedAccountId || adAccountId}`
+      : randomUUID();
+    const resolvedCampaignId = isAccountOnly ? accountOnlyCampaignId : campaignId;
+    const resolvedCampaignName = isAccountOnly
+      ? accountName || `Linked ad account ${adAccountId}`
+      : campaignName || '';
+    const campaignType = isAccountOnly ? ACCOUNT_ONLY_CAMPAIGN_TYPE : 'testing';
+
     await upsertProductCampaignLink({
       id: linkId,
       productProfileId,
-      campaignId,
-      campaignName: campaignName || '',
-      campaignType: 'testing',
+      campaignId: resolvedCampaignId,
+      campaignName: resolvedCampaignName,
+      campaignType,
       adAccountId,
       isActive: true,
     });
@@ -33,9 +49,9 @@ export async function POST(request: NextRequest) {
       link: {
         id: linkId,
         productProfileId,
-        campaignId,
-        campaignName,
-        campaignType: 'testing',
+        campaignId: resolvedCampaignId,
+        campaignName: resolvedCampaignName,
+        campaignType,
         adAccountId,
         isActive: true,
         linkedAt: new Date().toISOString(),

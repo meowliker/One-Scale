@@ -9,6 +9,7 @@ import {
   getCopyLibrary,
   saveCopyToLibrary,
 } from '@/app/api/lib/creative-hub-db';
+import { isAccountOnlyCampaignLink } from '@/lib/creative-hub/account-links';
 
 // ── Supabase REST helper (same pattern as auto-discover) ──
 
@@ -111,7 +112,8 @@ export async function autoPopulateCopyLibrary(
   }
 
   // 2. Get linked campaigns
-  const campaignLinks = await getProductCampaignLinks(productProfileId);
+  const campaignLinks = (await getProductCampaignLinks(productProfileId))
+    .filter((link) => !isAccountOnlyCampaignLink(link));
   if (campaignLinks.length === 0) {
     return { saved: 0, skipped: 0, total: 0, errors: ['No campaigns linked to this product profile'] };
   }
