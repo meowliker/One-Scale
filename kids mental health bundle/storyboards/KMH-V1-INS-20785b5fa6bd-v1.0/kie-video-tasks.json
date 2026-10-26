@@ -1,0 +1,34 @@
+{
+ "route": "Kie.ai",
+ "model": "grok-imagine-video-1-5-preview",
+ "resolution": "720p",
+ "aspect_ratio": "9:16",
+ "credit_before": 1492.8,
+ "credit_after": 1443.3,
+ "clips": {
+  "VID-S01-01": {
+   "start_frame": "KF-S01-01",
+   "duration_s": 3,
+   "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Static split screen with a thin vertical white divider. On the dark-red left side, the small yellow glow inside the kid's head grows steadily into a large red-orange storm sphere while the mom stays hunched with a hand on her forehead. On the teal right side the calm mom and kid stay still with a faint blue glow. Camera locked off, no movement. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
+   "kie_task_id": "64379275223a4372a716413d81da897a",
+   "state": "success",
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/ebd0ae7d-47fb-4691-a908-1230947b6af5/generated/6fb31f9f-9a2c-462c-a099-5de34c2bee88/generated_video.mp4"
+  },
+  "VID-S17-01": {
+   "start_frame": "KF-S17-01",
+   "duration_s": 3,
+   "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Bright white bedroom. Mom and kid sit on the bed holding a printed feelings chart; the kid points at one drawn face and looks up at mom, who smiles; a soft calm blue glow gently brightens inside the kid's see-through head. Static camera, high angle. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
+   "kie_task_id": "e9d1303c133b1d536d1748450820623e",
+   "state": "success",
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/a5d2238a-1133-4c13-ad67-6d3effdfe12a/generated/1e409713-5cfe-4c20-98e8-f6767fe59f2f/generated_video.mp4"
+  },
+  "VID-S27-01": {
+   "start_frame": "KF-S27-01",
+   "duration_s": 2,
+   "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Bright white tiled room. The mom lifts the closed plain cream workbook slightly higher at shoulder height and smiles at camera; the kid beside her smiles with a calm blue glow in the head. The book cover stays plain. Static frontal camera. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
+   "kie_task_id": "37ee874a36f102f35b7404bcd5acea58",
+   "state": "success",
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/dc2e2e4e-5663-46d6-bccc-c20e801cefaa/generated/30dd1944-f683-4a46-bd63-f170235575e6/generated_video.mp4"
+  }
+ }
+}
