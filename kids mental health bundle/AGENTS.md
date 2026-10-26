@@ -26,3 +26,10 @@ Project skills live in two mirrored folders: `.agents/skills/` (read by Codex) a
 
 - `inspiration-breakdown` (Skill 1): analyzes a reference video ad into a timecoded breakdown and Reference Rules Sheet.
 - `data-informed-adaptation` (Skill 2): uses product-scoped Meta Ads data, audience research, and the Skill 1 breakdown to write 5 ranked ad variations.
+- `storyboard-approval` (Skill 3): turns the chosen Skill 2 variation into a shot-by-shot storyboard with review keyframes, audio previews, generation prompts, and an approval package. It refers to `assets/approval-package-template.md`, which is not included yet; until it is added, use the package sections described in the skill itself.
+
+## Workflow files
+
+- Skill 1 outputs: `inspiration-breakdowns/` (for example `INS-20785b5fa6bd-breakdown.md`).
+- Skill 2 outputs: `adaptations/` (for example `INS-20785b5fa6bd-KMH-adaptation.md`). Skill 2 itself only prints tables in chat; save a copy here so Skill 3 can read it.
+- Skill 3 outputs: `storyboards/`.
