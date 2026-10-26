@@ -1,0 +1,474 @@
+import { checkMetaConnection } from "./meta-connection-health";
+import { loadExclusions } from "./profit-sheet-exclusions";
+import { randomUUID } from "crypto";
+import { rest } from "./supabase-persistence";
+import { loadConfig } from "./profit-sheet-repository";
+import { getShopifyToken } from "./tokens";
+import { fetchFromShopify } from "./shopify-client";
+import { shopifyGraphQL } from "./shopify-graphql";
+import { encryptSecret } from "./crypto";
+import { safeSheetError } from "./profit-sheet-access";
+import {
+  connectedAccounts,
+  recentCreatives,
+} from "./profit-sheet-meta-discovery";
+import { addDays } from "@/lib/profit-sheet";
+import {
+  dayWindow,
+  reportingDay,
+  validateProducts,
+  type SheetProduct,
+} from "@/lib/profit-sheet/model";
+import {
+  creativeLinks,
+  productHandle,
+  assignmentMatches,
+  type DiscoveryFinding,
+} from "@/lib/profit-sheet/discovery";
+type Job = { store_id: string; lease: string; run_day: string };
+type Product = {
+  id: number | string;
+  handle: string;
+  title: string;
+  status: string;
+};
+type Sale = {
+  id: string | number;
+  test: boolean;
+  financial_status: string;
+  line_items: Array<{ product_id: string | number | null }>;
+};
+const check = (deadline: number) => {
+  if (Date.now() > deadline) throw new Error("Sync time budget exceeded");
+};
+async function restPages<T extends { id: string | number }>(
+  token: string,
+  domain: string,
+  endpoint: string,
+  key: string,
+  params: Record<string, string>,
+  deadline: number,
+) {
+  const all: T[] = [];
+  let since: string | undefined;
+  const seen = new Set<string>();
+  for (let i = 0; i < 200; i++) {
+    check(deadline);
+    const r = await fetchFromShopify<Record<string, T[]>>(
+      token,
+      domain,
+      endpoint,
+      { ...params, limit: "250", ...(since ? { since_id: since } : {}) },
+    );
+    const page = r[key];
+    if (!Array.isArray(page)) throw new Error("Missing Shopify records");
+    for (const x of page) {
+      if (seen.has(String(x.id)))
+        throw new Error("Incomplete Shopify pagination");
+      seen.add(String(x.id));
+      all.push(x);
+    }
+    if (page.length < 250) return all;
+    since = String(page.at(-1)!.id);
+  }
+  throw new Error("Shopify pagination limit exceeded");
+}
+export async function runDiscovery(job: Job) {
+  const storeId = job.store_id,
+    deadline = Date.now() + 230000;
+  try {
+    // Validation is read-only at Meta; revoked tokens stay saved with a clear status.
+    try { await checkMetaConnection(storeId); } catch { /* Provider retry is surfaced by account discovery below. */ }
+    const config = await loadConfig(storeId);
+    const token = await getShopifyToken(storeId);
+    if (!token?.shopDomain) throw new Error("Missing Shopify connection");
+    const day = job.run_day,
+      from = addDays(day, -5),
+      to = addDays(day, -1);
+    const warnings: string[] = [],
+      findings: DiscoveryFinding[] = [];
+    const { shop } = await fetchFromShopify<{
+      shop: { domain: string; myshopify_domain: string };
+    }>(token.accessToken, token.shopDomain, "/shop.json", {
+      fields: "domain,myshopify_domain",
+    });
+    const domains = new Set(
+      [shop.domain, shop.myshopify_domain, token.shopDomain]
+        .filter(Boolean)
+        .map((d) => d.toLowerCase().replace(/^www\./, "")),
+    );
+    const [catalog, orders, excluded] = await Promise.all([
+      restPages<Product>(
+        token.accessToken,
+        token.shopDomain,
+        "/products.json",
+        "products",
+        { fields: "id,handle,title,status" },
+        deadline,
+      ),
+      restPages<Sale>(
+        token.accessToken,
+        token.shopDomain,
+        "/orders.json",
+        "orders",
+        {
+          status: "any",
+          created_at_min: dayWindow(from).start,
+          created_at_max: new Date(
+            Date.parse(dayWindow(day).start) - 1,
+          ).toISOString(),
+          fields: "id,test,financial_status,line_items",
+        },
+        deadline,
+      ),
+      loadExclusions(storeId),
+    ]);
+    const excludedKeys = new Set(excluded.map((x) => x.key));
+    const sales = new Map<string, number>();
+    for (const o of orders)
+      if (
+        !o.test &&
+        ["paid", "partially_paid", "partially_refunded", "refunded"].includes(
+          o.financial_status,
+        )
+      )
+        for (const id of new Set(o.line_items.map((l) => String(l.product_id))))
+          sales.set(id, (sales.get(id) || 0) + 1);
+    const activity = new Map<
+      string,
+      { sessions: number; days: Set<string>; links: Set<string> }
+    >();
+    let analyticsComplete = true;
+    try {
+      let complete = false;
+      for (let page = 0; page < 100; page++) {
+        check(deadline);
+        // UTC-6 midnight is exactly 11:30 IST year-round; no DST or half-hour rounding.
+        const query = `FROM sessions SHOW sessions GROUP BY landing_page_path, day WITH TIMEZONE 'Etc/GMT+6' SINCE ${from} UNTIL ${to} ORDER BY landing_page_path, day LIMIT 1000 OFFSET ${page * 1000}`;
+        const r = await shopifyGraphQL<{
+          shopifyqlQuery: {
+            parseErrors: string[];
+            tableData: {
+              rows: Array<{
+                landing_page_path: string;
+                day: string;
+                sessions: string;
+              }>;
+            } | null;
+          };
+        }>(
+          storeId,
+          "query Activity($query:String!){shopifyqlQuery(query:$query){parseErrors tableData{rows}}}",
+          { query },
+        );
+        if (r.shopifyqlQuery.parseErrors.length || !r.shopifyqlQuery.tableData)
+          throw new Error("Shopify analytics query unavailable");
+        const rows = r.shopifyqlQuery.tableData.rows;
+        for (const row of rows) {
+          const handle = productHandle(row.landing_page_path);
+          if (!handle || Number(row.sessions) <= 0) continue;
+          const item = activity.get(handle) || {
+            sessions: 0,
+            days: new Set<string>(),
+            links: new Set<string>(),
+          };
+          item.sessions += Number(row.sessions);
+          item.days.add(row.day);
+          item.links.add(`https://${shop.domain}${row.landing_page_path}`);
+          activity.set(handle, item);
+        }
+        if (rows.length < 1000) {
+          complete = true;
+          break;
+        }
+      }
+      if (!complete) throw new Error("Analytics pagination limit exceeded");
+    } catch {
+      analyticsComplete = false;
+      activity.clear();
+      warnings.push(
+        "Shopify landing-page analytics could not be read. Check read_reports and analytics access. Existing products remain saved; no products were automatically activated from incomplete sessions.",
+      );
+    }
+    const products: SheetProduct[] = structuredClone(config.products);
+    for (const p of catalog) {
+      const id = String(p.id),
+        a = activity.get(p.handle);
+      if (!a) continue;
+      const sold = sales.get(id) || 0,
+        existing = products.find((x) => x.shopifyIds.includes(id)),
+        blocked = excludedKeys.has(`product:${id}`);
+      const qualifies =
+        analyticsComplete &&
+        a.days.size >= 3 &&
+        sold > 0 &&
+        p.status === "active";
+      findings.push({
+        key: `product:${id}`,
+        kind: "product",
+        productId: id,
+        title: p.title,
+        status: blocked ? "excluded" : qualifies ? "active" : "candidate",
+        sessions: a.sessions,
+        activeDays: a.days.size,
+        sales: sold,
+        links: [...a.links],
+        detail: blocked
+          ? "Unlinked by you; automatic discovery will not add it again."
+          : `${a.sessions} sessions on ${a.days.size}/5 reporting days; ${sold} orders containing this product.`,
+      });
+      if (blocked) continue;
+      if (existing) {
+        if (existing.source === "auto" && !existing.manualOverride)
+          existing.discovery = {
+            sessions: a.sessions,
+            activeDays: a.days.size,
+            sales: sold,
+            checkedAt: new Date().toISOString(),
+          };
+        continue;
+      }
+      if (qualifies && products.length < 30)
+        products.push({
+          id: randomUUID(),
+          source: "auto",
+          manualOverride: false,
+          name: p.title,
+          links: [...a.links],
+          shopifyIds: [id],
+          startDate: day,
+          assignments: [],
+          discovery: {
+            sessions: a.sessions,
+            activeDays: a.days.size,
+            sales: sold,
+            checkedAt: new Date().toISOString(),
+          },
+        });
+    }
+    try {
+      await connectedAccounts(storeId, deadline);
+    } catch (e) {
+      warnings.push(
+        `Connected Meta account discovery: ${safeSheetError(e).replace("Update it in Manage ad accounts.", "Reconnect Meta in Settings → Integrations.")} Saved manual accounts can still be scanned.`,
+      );
+    }
+    for (const account of config.accounts) {
+      check(deadline);
+      try {
+        const ads = await recentCreatives(
+          account.accessToken,
+          account.adAccountId,
+          addDays(from, -1),
+          day,
+          deadline,
+        );
+        const proposed = new Map<
+          string,
+          Array<{ adId: string; campaignId: string; from: string; to?: string }>
+        >();
+        for (const ad of ads) {
+          const links = creativeLinks(ad.creative || {});
+          const handles = links.map((l) => productHandle(l, domains));
+          const ids = new Set(
+            handles
+              .filter(Boolean)
+              .flatMap((h) =>
+                catalog.filter((p) => p.handle === h).map((p) => String(p.id)),
+              ),
+          );
+          const owners = products.filter((p) =>
+            p.shopifyIds.some((id) => ids.has(id)),
+          );
+          // Close prior observation periods when a fully read creative changes destination.
+          // Old periods remain available for historical reports; never backdate the new URL.
+          for (const product of products)
+            if (product.source === "auto" && !product.manualOverride) {
+              const assignment = product.assignments.find(
+                (a) => a.accountId === account.adAccountId,
+              );
+              for (const link of assignment?.adLinks || [])
+                if (
+                  link.adId === ad.id &&
+                  !link.to &&
+                  (owners.length !== 1 ||
+                    owners[0].id !== product.id ||
+                    handles.some((h) => !h) ||
+                    ids.size !== 1)
+                )
+                  link.to = addDays(day, -1);
+            }
+          const relevant = links.some((l) => {
+            try {
+              return domains.has(new URL(l).hostname.replace(/^www\./, ""));
+            } catch {
+              return false;
+            }
+          });
+          if (
+            owners.length !== 1 ||
+            handles.some((h) => !h) ||
+            ids.size !== 1
+          ) {
+            if (relevant || !links.length)
+              findings.push({
+                key: `ad:${account.adAccountId}:${ad.id}`,
+                kind: "ad",
+                status: "review",
+                title: ad.name,
+                accountId: account.adAccountId,
+                campaignId: ad.campaign_id,
+                adId: ad.id,
+                detail: !links.length
+                  ? "No readable destination; may use a catalog or existing post. No automatic spend allocation."
+                  : "Destination is shared, unrecognized, or not a qualifying product. No automatic spend allocation.",
+              });
+            continue;
+          }
+          const owner = owners[0];
+          if (owner.source !== "auto" || owner.manualOverride) continue;
+          if (
+            excludedKeys.has(`account:${owner.id}:${account.adAccountId}`) ||
+            excludedKeys.has(
+              `campaign:${owner.id}:${account.adAccountId}:${ad.campaign_id}`,
+            )
+          )
+            continue;
+          const conflict = products.find(
+            (p) =>
+              p.id !== owner.id &&
+              p.assignments.some((a) =>
+                assignmentMatches(
+                  a,
+                  {
+                    accountId: account.adAccountId,
+                    campaignId: ad.campaign_id,
+                    adId: ad.id,
+                  },
+                  day,
+                ),
+              ),
+          );
+          if (conflict) {
+            findings.push({
+              key: `ad:${account.adAccountId}:${ad.id}`,
+              kind: "ad",
+              status: "review",
+              title: ad.name,
+              accountId: account.adAccountId,
+              campaignId: ad.campaign_id,
+              adId: ad.id,
+              detail: `Already assigned to ${conflict.name}; kept existing mapping. Unlink it there before assigning to ${owner.name}.`,
+            });
+            continue;
+          }
+          const previous = owner.assignments
+            .find((a) => a.accountId === account.adAccountId)
+            ?.adLinks?.find((l) => l.adId === ad.id && !l.to);
+          const list = proposed.get(owner.id) || [];
+          list.push({
+            adId: ad.id,
+            campaignId: ad.campaign_id,
+            from: previous?.from || day,
+          });
+          proposed.set(owner.id, list);
+        }
+        for (const product of products) {
+          if (product.source !== "auto" || product.manualOverride) continue;
+          const links = proposed.get(product.id) || [];
+          const previous = product.assignments.find(
+            (a) => a.accountId === account.adAccountId,
+          );
+          // Preserve earlier mappings and surface conflicts rather than rewrite history on URL changes.
+          const merged = [
+            ...new Map(
+              [...(previous?.adLinks || []), ...links].map((l) => [
+                `${l.adId}:${l.from}`,
+                l,
+              ]),
+            ).values(),
+          ];
+          if (!merged.length) continue;
+          const assignment = {
+            accountId: account.adAccountId,
+            mode: "ads" as const,
+            campaignIds: [...new Set(merged.map((l) => l.campaignId))],
+            adLinks: merged,
+            excludedCampaignIds: previous?.excludedCampaignIds || [],
+          };
+          product.assignments = [
+            ...product.assignments.filter(
+              (a) => a.accountId !== account.adAccountId,
+            ),
+            assignment,
+          ];
+        }
+      } catch (e) {
+        warnings.push(
+          `${account.name}: creative discovery failed. Existing assignments retained. ${safeSheetError(e)}`,
+        );
+      }
+    }
+    validateProducts(products, config.accounts);
+    const changed =
+      JSON.stringify(products.map((p) => ({ ...p, discovery: undefined }))) !==
+      JSON.stringify(
+        config.products.map((p) => ({ ...p, discovery: undefined })),
+      );
+    const report = {
+      from,
+      to,
+      reportingTimezone: "Etc/GMT+6",
+      checkedAt: new Date().toISOString(),
+      findings,
+      warnings,
+      productsAdded: products.length - config.products.length,
+      analyticsComplete,
+    };
+    await rest("/rpc/profit_sheet_finish_discovery", {
+      method: "POST",
+      body: JSON.stringify({
+        p_store: storeId,
+        p_lease: job.lease,
+        p_version: config.version,
+        p_accounts: config.accounts.map(({ accessToken, ...a }) => ({
+          ...a,
+          tokenCiphertext: encryptSecret(accessToken),
+        })),
+        p_products: changed ? products : null,
+        p_report: report,
+      }),
+    });
+    return { ok: true, ...report };
+  } catch (e) {
+    const error = safeSheetError(e);
+    await rest(
+      `/profit_sheet_discovery?store_id=eq.${encodeURIComponent(storeId)}&lease=eq.${job.lease}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          status: "error",
+          lease_until: null,
+          error,
+          checked_at: new Date().toISOString(),
+        }),
+      },
+    );
+    return { ok: false, error };
+  }
+}
+export async function queueDiscovery(storeId?: string) {
+  await rest("/rpc/profit_sheet_queue_discovery", {
+    method: "POST",
+    body: JSON.stringify({ p_day: reportingDay(), p_store: storeId || null }),
+  });
+}
+export async function processDiscovery(storeId?: string) {
+  const job = (
+    await rest<Job[]>("/rpc/profit_sheet_claim_discovery", {
+      method: "POST",
+      body: JSON.stringify({ p_store: storeId || null }),
+    })
+  )[0];
+  return job ? runDiscovery(job) : { ok: true, idle: true };
+}

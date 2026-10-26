@@ -5,7 +5,7 @@ import {
   getPersistentAppCredentials,
   consumePersistentOAuthState,
 } from '@/app/api/lib/supabase-persistence';
-import { setMetaToken } from '@/app/api/lib/tokens';
+import { saveVerifiedMetaToken } from '@/app/api/lib/meta-connection-health';
 import { getAppUrl } from '@/app/api/lib/url';
 import type { MetaTokenPayload } from '@/types/auth';
 
@@ -73,7 +73,7 @@ export async function GET(request: NextRequest) {
     tokenUrl.searchParams.set('redirect_uri', redirectUri);
     tokenUrl.searchParams.set('code', code);
 
-    const tokenResponse = await fetch(tokenUrl.toString());
+    const tokenResponse = await fetch(tokenUrl.toString(), {signal: AbortSignal.timeout(15000),cache:"no-store"});
     if (!tokenResponse.ok) {
       const errBody = await tokenResponse.text();
       throw new Error(`Token exchange failed: ${errBody}`);
@@ -87,27 +87,24 @@ export async function GET(request: NextRequest) {
     longLivedUrl.searchParams.set('client_secret', appSecret);
     longLivedUrl.searchParams.set('fb_exchange_token', shortLivedToken.access_token);
 
-    const longLivedResponse = await fetch(longLivedUrl.toString());
+    const longLivedResponse = await fetch(longLivedUrl.toString(), {signal: AbortSignal.timeout(15000),cache:"no-store"});
     if (!longLivedResponse.ok) {
       const errBody = await longLivedResponse.text();
       throw new Error(`Long-lived token exchange failed: ${errBody}`);
     }
     const longLivedToken: MetaTokenPayload = await longLivedResponse.json();
 
-    // Store token in database
-    await setMetaToken(storeId, {
-      accessToken: longLivedToken.access_token,
-      platform: 'meta',
-      storeId,
-      expiresAt: Date.now() + longLivedToken.expires_in * 1000,
-    });
+    // Meta's token debugger is authoritative about expiry, including system tokens
+    // with no scheduled expiry. Persist successfully before acknowledging connection.
+    await saveVerifiedMetaToken(storeId, longLivedToken.access_token);
 
     // Redirect to popup callback page (closes popup and notifies parent)
     return NextResponse.redirect(
       `${appUrl}/auth/callback?platform=meta&status=connected`
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
+    void err;
+    const message = 'Meta connection could not be verified and saved. Retry connecting; your previously saved connection was kept.';
     return NextResponse.redirect(
       `${appUrl}/auth/callback?platform=meta&status=error&message=${encodeURIComponent(message)}`
     );

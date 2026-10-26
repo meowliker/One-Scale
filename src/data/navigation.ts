@@ -21,6 +21,7 @@ import {
   Receipt,
   Rocket,
   Sparkles,
+  Table2,
 } from 'lucide-react';
 import type { SidebarConfig } from '@/types/navigation';
 
@@ -31,6 +32,7 @@ export const sidebarConfig: SidebarConfig = {
   },
   topItems: [
     { label: 'Summary', href: '/dashboard/summary', icon: LayoutDashboard },
+    { label: 'Profit Sheet', href: '/dashboard/profit-sheet', icon: Table2 },
     { label: 'Store Overview', href: '/dashboard/store-overview', icon: BarChart3 },
     { label: 'Ads Manager', href: '/dashboard/ads-manager', icon: Megaphone },
     { label: 'P&L Tracking', href: '/dashboard/pnl', icon: DollarSign },

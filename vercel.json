@@ -2,6 +2,12 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "functions": {
+    "src/app/api/profit-sheet/discovery/route.ts": {
+      "maxDuration": 300
+    },
+    "src/app/api/profit-sheet/sync/route.ts": {
+      "maxDuration": 300
+    },
     "src/app/api/creative-hub/launch/execute/route.ts": {
       "maxDuration": 300
     },
@@ -29,22 +35,71 @@
     }
   },
   "crons": [
-    { "path": "/api/sync/cron", "schedule": "*/10 * * * *" },
-    { "path": "/api/cron/materialize-meta-entities", "schedule": "0 */2 * * *" },
-    { "path": "/api/cron/refresh-clickup", "schedule": "*/30 * * * *" },
-    { "path": "/api/cron/sync-orders-dispatch", "schedule": "*/30 * * * *" },
-    { "path": "/api/cron/sync-balance-transactions", "schedule": "30 */2 * * *" },
-    { "path": "/api/cron/sync-meta-spend", "schedule": "*/10 * * * *" },
-    { "path": "/api/cron/daily-pnl-dispatch", "schedule": "30 7 * * *" }
+    {
+      "path": "/api/sync/cron",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/materialize-meta-entities",
+      "schedule": "0 */2 * * *"
+    },
+    {
+      "path": "/api/cron/refresh-clickup",
+      "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/sync-orders-dispatch",
+      "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/sync-balance-transactions",
+      "schedule": "30 */2 * * *"
+    },
+    {
+      "path": "/api/cron/sync-meta-spend",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/daily-pnl-dispatch",
+      "schedule": "30 7 * * *"
+    },
+    {
+      "path": "/api/cron/profit-sheet?enqueue=1",
+      "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/profit-sheet",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/profit-sheet-discovery?enqueue=1",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/profit-sheet-discovery",
+      "schedule": "* * * * *"
+    }
   ],
   "headers": [
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "X-Frame-Options", "value": "SAMEORIGIN" },
-        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=()" }
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "SAMEORIGIN"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=()"
+        }
       ]
     }
   ]

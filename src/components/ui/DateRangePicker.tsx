@@ -1,24 +1,34 @@
-'use client';
+"use client";
 
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { Calendar, ChevronLeft, ChevronRight, Check } from 'lucide-react';
-import { cn } from '@/lib/utils';
-import { getDateRange } from '@/lib/dateUtils';
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { Calendar, ChevronLeft, ChevronRight, Check } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { getDateRange } from "@/lib/dateUtils";
 import {
   STORE_REPORTING_TIMEZONE,
+  getDateRangeInTimezone,
   endOfStoreDayInTz,
   formatInTimezone,
   formatDateInTimezone,
   startOfStoreDayInTz,
   storeDayInTimezone,
   todayStoreDayInTimezone,
-} from '@/lib/timezone';
-import { fromZonedTime, toZonedTime } from 'date-fns-tz';
-import type { DateRangePreset } from '@/types/analytics';
+} from "@/lib/timezone";
+import { fromZonedTime, toZonedTime } from "date-fns-tz";
+import type { DateRangePreset } from "@/types/analytics";
 
 export interface DateRangePickerProps {
+  timezone?: string;
+  calendarDays?: boolean;
+  /** Calendar label treated as today, for custom reporting-day boundaries. */
+  currentDay?: string;
+  align?: "left" | "right";
   dateRange: { start: Date; end: Date; preset?: DateRangePreset };
-  onRangeChange: (range: { start: Date; end: Date; preset?: DateRangePreset }) => void;
+  onRangeChange: (range: {
+    start: Date;
+    end: Date;
+    preset?: DateRangePreset;
+  }) => void;
 }
 
 // ── Presets ──────────────────────────────────────────────────────────────────
@@ -30,36 +40,46 @@ interface PresetDef {
 }
 
 const presets: PresetDef[] = [
-  { label: 'Today', value: 'today', shortLabel: 'Today' },
-  { label: 'Yesterday', value: 'yesterday', shortLabel: 'Yest.' },
-  { label: 'Last 7 days', value: 'last7', shortLabel: '7D' },
-  { label: 'Last 14 days', value: 'last14', shortLabel: '14D' },
-  { label: 'Last 28 days', value: 'last28', shortLabel: '28D' },
-  { label: 'Last 30 days', value: 'last30', shortLabel: '30D' },
-  { label: 'This month', value: 'thisMonth', shortLabel: 'MTD' },
-  { label: 'Last month', value: 'lastMonth', shortLabel: 'Prev.' },
+  { label: "Today", value: "today", shortLabel: "Today" },
+  { label: "Yesterday", value: "yesterday", shortLabel: "Yest." },
+  { label: "Last 7 days", value: "last7", shortLabel: "7D" },
+  { label: "Last 14 days", value: "last14", shortLabel: "14D" },
+  { label: "Last 28 days", value: "last28", shortLabel: "28D" },
+  { label: "Last 30 days", value: "last30", shortLabel: "30D" },
+  { label: "This month", value: "thisMonth", shortLabel: "MTD" },
+  { label: "Last month", value: "lastMonth", shortLabel: "Prev." },
 ];
 
 const presetLabels: Record<string, string> = {
-  today: 'Today',
-  yesterday: 'Yesterday',
-  last3: 'Last 3 Days',
-  last7: 'Last 7 Days',
-  last7today: '7D + Today',
-  last14: 'Last 14 Days',
-  last28: 'Last 28 Days',
-  last30: 'Last 30 Days',
-  thisMonth: 'This Month',
-  lastMonth: 'Last Month',
+  today: "Today",
+  yesterday: "Yesterday",
+  last3: "Last 3 Days",
+  last7: "Last 7 Days",
+  last7today: "7D + Today",
+  last14: "Last 14 Days",
+  last28: "Last 28 Days",
+  last30: "Last 30 Days",
+  thisMonth: "This Month",
+  lastMonth: "Last Month",
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 const MONTH_NAMES = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
 ];
-const DAY_LABELS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+const DAY_LABELS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
 
 function getDaysInMonth(year: number, month: number): number {
   // Use UTC to avoid timezone edge cases
@@ -72,30 +92,48 @@ function getFirstDayOfWeek(year: number, month: number): number {
   return d === 0 ? 6 : d - 1;
 }
 
-function formatTriggerLabel(start: Date, end: Date, preset?: DateRangePreset, tz?: string): string {
-  if (preset && preset !== 'custom' && presetLabels[preset]) return presetLabels[preset];
+function formatTriggerLabel(
+  start: Date,
+  end: Date,
+  preset?: DateRangePreset,
+  tz?: string,
+  calendarDays = false,
+): string {
+  if (preset && preset !== "custom" && presetLabels[preset])
+    return presetLabels[preset];
   const timezone = tz || STORE_REPORTING_TIMEZONE;
-  const startStr = storeDayInTimezone(start, timezone);
-  const endStr = storeDayInTimezone(end, timezone);
+  const startStr = calendarDays
+    ? formatDateInTimezone(start, timezone)
+    : storeDayInTimezone(start, timezone);
+  const endStr = calendarDays
+    ? formatDateInTimezone(end, timezone)
+    : storeDayInTimezone(end, timezone);
   const startDisplayDate = fromZonedTime(`${startStr}T12:00:00`, timezone);
   const endDisplayDate = fromZonedTime(`${endStr}T12:00:00`, timezone);
-  if (startStr === endStr) return formatInTimezone(startDisplayDate, 'MMM d, yyyy', timezone);
+  if (startStr === endStr)
+    return formatInTimezone(startDisplayDate, "MMM d, yyyy", timezone);
   const startYear = toZonedTime(startDisplayDate, timezone).getFullYear();
   const endYear = toZonedTime(endDisplayDate, timezone).getFullYear();
   if (startYear === endYear)
-    return `${formatInTimezone(startDisplayDate, 'MMM d', timezone)} – ${formatInTimezone(endDisplayDate, 'MMM d', timezone)}`;
-  return `${formatInTimezone(startDisplayDate, 'MMM d, yyyy', timezone)} – ${formatInTimezone(endDisplayDate, 'MMM d, yyyy', timezone)}`;
+    return `${formatInTimezone(startDisplayDate, "MMM d", timezone)} – ${formatInTimezone(endDisplayDate, "MMM d", timezone)}`;
+  return `${formatInTimezone(startDisplayDate, "MMM d, yyyy", timezone)} – ${formatInTimezone(endDisplayDate, "MMM d, yyyy", timezone)}`;
 }
 
 function formatCompact(date: Date, tz: string): string {
-  return formatInTimezone(date, 'MMM d, yyyy', tz);
+  return formatInTimezone(date, "MMM d, yyyy", tz);
 }
 
 function getSelectionLabels(
   range: { start: Date; end: Date; preset?: DateRangePreset },
   tz: string,
+  calendarDays = false,
 ): { start: string; end: string } {
-  if (range.preset && range.preset !== 'custom') {
+  if (calendarDays)
+    return {
+      start: formatDateInTimezone(range.start, tz),
+      end: formatDateInTimezone(range.end, tz),
+    };
+  if (range.preset && range.preset !== "custom") {
     return {
       start: storeDayInTimezone(range.start, tz),
       end: storeDayInTimezone(range.end, tz),
@@ -113,21 +151,34 @@ interface CalendarGridProps {
   year: number;
   month: number;
   timezone: string;
+  calendarDays: boolean;
+  currentDay?: string;
   selectedStart: string | null; // YYYY-MM-DD
-  selectedEnd: string | null;   // YYYY-MM-DD
-  hoverDate: string | null;     // YYYY-MM-DD
+  selectedEnd: string | null; // YYYY-MM-DD
+  hoverDate: string | null; // YYYY-MM-DD
   onDateClick: (dateStr: string) => void;
   onDateHover: (dateStr: string | null) => void;
 }
 
 function CalendarGrid({
-  year, month, timezone,
-  selectedStart, selectedEnd, hoverDate,
-  onDateClick, onDateHover,
+  year,
+  month,
+  timezone,
+  calendarDays,
+  currentDay,
+  selectedStart,
+  selectedEnd,
+  hoverDate,
+  onDateClick,
+  onDateHover,
 }: CalendarGridProps) {
   const daysInMonth = getDaysInMonth(year, month);
   const firstDay = getFirstDayOfWeek(year, month);
-  const todayStr = todayStoreDayInTimezone(timezone);
+  const todayStr =
+    currentDay ||
+    (calendarDays
+      ? formatDateInTimezone(new Date(), timezone)
+      : todayStoreDayInTimezone(timezone));
 
   // Compute effective range for highlight
   const effectiveEnd = selectedEnd || hoverDate;
@@ -146,7 +197,10 @@ function CalendarGrid({
       {/* Day headers */}
       <div className="grid grid-cols-7 mb-1">
         {DAY_LABELS.map((d) => (
-          <div key={d} className="h-7 flex items-center justify-center text-[10px] font-semibold text-text-muted uppercase tracking-wider">
+          <div
+            key={d}
+            className="h-7 flex items-center justify-center text-[10px] font-semibold text-text-muted uppercase tracking-wider"
+          >
             {d}
           </div>
         ))}
@@ -157,15 +211,19 @@ function CalendarGrid({
         {cells.map((day, idx) => {
           if (day === null) return <div key={`e-${idx}`} className="h-8" />;
 
-          const m = String(month + 1).padStart(2, '0');
-          const d = String(day).padStart(2, '0');
+          const m = String(month + 1).padStart(2, "0");
+          const d = String(day).padStart(2, "0");
           const dateStr = `${year}-${m}-${d}`;
 
           const isToday = dateStr === todayStr;
           const isFuture = dateStr > todayStr;
           const isStart = dateStr === rangeStart;
           const isEnd = dateStr === rangeEnd;
-          const inRange = rangeStart && rangeEnd && dateStr > rangeStart && dateStr < rangeEnd;
+          const inRange =
+            rangeStart &&
+            rangeEnd &&
+            dateStr > rangeStart &&
+            dateStr < rangeEnd;
           const isSingle = isStart && isEnd;
           const hasRange = rangeStart && rangeEnd && rangeStart !== rangeEnd;
 
@@ -173,29 +231,48 @@ function CalendarGrid({
             <div
               key={day}
               className={cn(
-                'relative h-8 flex items-center justify-center',
+                "relative h-8 flex items-center justify-center",
                 // Range background band
-                inRange && 'bg-blue-50 dark:bg-blue-950/30',
-                isStart && hasRange && !isSingle && 'bg-gradient-to-r from-transparent via-blue-50 to-blue-50 dark:from-transparent dark:via-blue-950/30 dark:to-blue-950/30',
-                isEnd && hasRange && !isSingle && 'bg-gradient-to-l from-transparent via-blue-50 to-blue-50 dark:from-transparent dark:via-blue-950/30 dark:to-blue-950/30',
+                inRange && "bg-blue-50 dark:bg-blue-950/30",
+                isStart &&
+                  hasRange &&
+                  !isSingle &&
+                  "bg-gradient-to-r from-transparent via-blue-50 to-blue-50 dark:from-transparent dark:via-blue-950/30 dark:to-blue-950/30",
+                isEnd &&
+                  hasRange &&
+                  !isSingle &&
+                  "bg-gradient-to-l from-transparent via-blue-50 to-blue-50 dark:from-transparent dark:via-blue-950/30 dark:to-blue-950/30",
               )}
             >
               <button
                 disabled={isFuture}
+                aria-label={dateStr}
+                aria-pressed={Boolean(isStart || isEnd || inRange)}
                 onClick={() => !isFuture && onDateClick(dateStr)}
                 onMouseEnter={() => !isFuture && onDateHover(dateStr)}
                 onMouseLeave={() => onDateHover(null)}
                 className={cn(
-                  'relative z-10 h-7 w-7 rounded-full text-[13px] font-medium transition-all duration-150',
-                  isFuture && 'text-text-dimmed/40 cursor-not-allowed',
+                  "relative z-10 h-7 w-7 rounded-full text-[13px] font-medium transition-all duration-150",
+                  isFuture && "text-text-dimmed/40 cursor-not-allowed",
                   // Default
-                  !isFuture && !isStart && !isEnd && !inRange && 'text-text-primary hover:bg-surface-hover',
+                  !isFuture &&
+                    !isStart &&
+                    !isEnd &&
+                    !inRange &&
+                    "text-text-primary hover:bg-surface-hover",
                   // In range
-                  inRange && !isStart && !isEnd && 'text-blue-700 dark:text-blue-300',
+                  inRange &&
+                    !isStart &&
+                    !isEnd &&
+                    "text-blue-700 dark:text-blue-300",
                   // Endpoints
-                  (isStart || isEnd) && 'bg-blue-500 text-white font-semibold shadow-sm shadow-blue-500/30',
+                  (isStart || isEnd) &&
+                    "bg-blue-500 text-white font-semibold shadow-sm shadow-blue-500/30",
                   // Today ring
-                  isToday && !isStart && !isEnd && 'ring-1 ring-blue-400/50 font-semibold text-blue-600 dark:text-blue-400',
+                  isToday &&
+                    !isStart &&
+                    !isEnd &&
+                    "ring-1 ring-blue-400/50 font-semibold text-blue-600 dark:text-blue-400",
                 )}
               >
                 {day}
@@ -208,17 +285,55 @@ function CalendarGrid({
   );
 }
 
+// Calendar-day presets for Shopify reports, independent of operational-day resets.
+function calendarPreset(
+  preset: DateRangePreset,
+  timezone: string,
+  currentDay?: string,
+) {
+  const today = currentDay || formatDateInTimezone(new Date(), timezone);
+  const end = new Date(`${today}T12:00:00Z`);
+  const start = new Date(end);
+  if (preset === "yesterday") {
+    start.setUTCDate(start.getUTCDate() - 1);
+    end.setUTCDate(end.getUTCDate() - 1);
+  } else if (preset === "thisMonth") start.setUTCDate(1);
+  else if (preset === "lastMonth") {
+    start.setUTCDate(1);
+    start.setUTCMonth(start.getUTCMonth() - 1);
+    end.setUTCDate(0);
+  } else if (preset.startsWith("last")) {
+    const days = Number(preset.slice(4));
+    start.setUTCDate(start.getUTCDate() - days);
+    end.setUTCDate(end.getUTCDate() - 1);
+  }
+  return {
+    start: fromZonedTime(
+      `${start.toISOString().slice(0, 10)}T00:00:00`,
+      timezone,
+    ),
+    end: fromZonedTime(`${end.toISOString().slice(0, 10)}T23:59:59`, timezone),
+  };
+}
+
 // ── Main Component ──────────────────────────────────────────────────────────
 
-export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerProps) {
+export function DateRangePicker({
+  dateRange,
+  onRangeChange,
+  timezone,
+  calendarDays = false,
+  currentDay,
+  align = "right",
+}: DateRangePickerProps) {
   const [open, setOpen] = useState(false);
-  const tz = STORE_REPORTING_TIMEZONE;
+  const tz = timezone || STORE_REPORTING_TIMEZONE;
   const ref = useRef<HTMLDivElement>(null);
 
   // Calendar navigation — always derive from dateRange when not open
   const [viewMonth, setViewMonth] = useState(() => {
     const startStr = formatDateInTimezone(dateRange.start, tz);
-    const [y, m] = startStr.split('-').map(Number);
+    const [y, m] = startStr.split("-").map(Number);
     return { year: y, month: m - 1 };
   });
 
@@ -235,21 +350,33 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node))
+        setOpen(false);
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("keydown", onKey);
+    };
   }, [open]);
 
   const resetSelectionFromCurrentRange = useCallback(() => {
-    const { start: startStr, end: endStr } = getSelectionLabels(dateRange, tz);
+    const { start: startStr, end: endStr } = getSelectionLabels(
+      dateRange,
+      tz,
+      calendarDays,
+    );
     setSelStart(startStr);
     setSelEnd(endStr);
     setIsSelectingEnd(false);
     setHoverDate(null);
-    const [ey, em] = endStr.split('-').map(Number);
+    const [ey, em] = endStr.split("-").map(Number);
     setViewMonth({ year: ey, month: em - 1 });
-  }, [dateRange, tz]);
+  }, [dateRange, tz, calendarDays]);
 
   const handleTriggerClick = useCallback(() => {
     if (!open) resetSelectionFromCurrentRange();
@@ -257,34 +384,44 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
   }, [open, resetSelectionFromCurrentRange]);
 
   // ── Preset click → immediate apply ──
-  const handlePresetClick = useCallback((preset: DateRangePreset) => {
-    const range = getDateRange(preset);
-    onRangeChange({
-      start: range.start,
-      end: range.end,
-      preset,
-    });
-    setOpen(false);
-  }, [onRangeChange]);
+  const handlePresetClick = useCallback(
+    (preset: DateRangePreset) => {
+      const range = calendarDays
+        ? calendarPreset(preset, tz, currentDay)
+        : timezone
+          ? getDateRangeInTimezone(preset, timezone)
+          : getDateRange(preset);
+      onRangeChange({
+        start: range.start,
+        end: range.end,
+        preset,
+      });
+      setOpen(false);
+    },
+    [onRangeChange, timezone, calendarDays, tz, currentDay],
+  );
 
   // ── Calendar date click ──
-  const handleDateClick = useCallback((dateStr: string) => {
-    if (!isSelectingEnd || !selStart) {
-      // First click — set start
-      setSelStart(dateStr);
-      setSelEnd(null);
-      setIsSelectingEnd(true);
-    } else {
-      // Second click — set end (swap if before start)
-      if (dateStr < selStart) {
+  const handleDateClick = useCallback(
+    (dateStr: string) => {
+      if (!isSelectingEnd || !selStart) {
+        // First click — set start
         setSelStart(dateStr);
-        setSelEnd(selStart);
+        setSelEnd(null);
+        setIsSelectingEnd(true);
       } else {
-        setSelEnd(dateStr);
+        // Second click — set end (swap if before start)
+        if (dateStr < selStart) {
+          setSelStart(dateStr);
+          setSelEnd(selStart);
+        } else {
+          setSelEnd(dateStr);
+        }
+        setIsSelectingEnd(false);
       }
-      setIsSelectingEnd(false);
-    }
-  }, [isSelectingEnd, selStart]);
+    },
+    [isSelectingEnd, selStart],
+  );
 
   // ── Apply custom range ──
   const handleApply = useCallback(() => {
@@ -292,98 +429,141 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
     const endStr = selEnd || selStart;
     const rangeStart = selStart <= endStr ? selStart : endStr;
     const rangeEnd = selStart <= endStr ? endStr : selStart;
-    const currentStoreDay = todayStoreDayInTimezone(tz);
+    const currentStoreDay = calendarDays
+      ? formatDateInTimezone(new Date(), tz)
+      : todayStoreDayInTimezone(tz);
     onRangeChange({
-      start: startOfStoreDayInTz(rangeStart, tz),
-      end: rangeEnd >= currentStoreDay ? new Date() : endOfStoreDayInTz(rangeEnd, tz),
-      preset: 'custom',
+      start: calendarDays
+        ? fromZonedTime(`${rangeStart}T00:00:00`, tz)
+        : startOfStoreDayInTz(rangeStart, tz),
+      end: calendarDays
+        ? fromZonedTime(`${rangeEnd}T23:59:59`, tz)
+        : rangeEnd >= currentStoreDay
+          ? new Date()
+          : endOfStoreDayInTz(rangeEnd, tz),
+      preset: "custom",
     });
     setOpen(false);
-  }, [selStart, selEnd, tz, onRangeChange]);
+  }, [selStart, selEnd, tz, onRangeChange, calendarDays]);
 
   // ── Month navigation (clamp: don't go past current month) ──
-  const navigateMonth = useCallback((delta: number) => {
-    setViewMonth((prev) => {
-      let m = prev.month + delta;
-      let y = prev.year;
-      if (m < 0) { m = 11; y--; }
-      else if (m > 11) { m = 0; y++; }
-      // Don't allow navigating past current month
-      const nowStr = formatDateInTimezone(new Date(), tz);
-      const [ny, nm] = nowStr.split('-').map(Number);
-      if (y > ny || (y === ny && m > nm - 1)) {
-        return prev; // block forward navigation past current month
-      }
-      return { year: y, month: m };
-    });
-  }, [tz]);
+  const navigateMonth = useCallback(
+    (delta: number) => {
+      setViewMonth((prev) => {
+        let m = prev.month + delta;
+        let y = prev.year;
+        if (m < 0) {
+          m = 11;
+          y--;
+        } else if (m > 11) {
+          m = 0;
+          y++;
+        }
+        // Don't allow navigating past current month
+        const nowStr = currentDay || formatDateInTimezone(new Date(), tz);
+        const [ny, nm] = nowStr.split("-").map(Number);
+        if (y > ny || (y === ny && m > nm - 1)) {
+          return prev; // block forward navigation past current month
+        }
+        return { year: y, month: m };
+      });
+    },
+    [tz, currentDay],
+  );
 
   // ── Footer date display ──
   const footerLabel = useMemo(() => {
-    if (!selStart) return '';
+    if (!selStart) return "";
     const s = fromZonedTime(`${selStart}T12:00:00`, tz);
     if (!selEnd || selStart === selEnd) return formatCompact(s, tz);
     const e = fromZonedTime(`${selEnd}T12:00:00`, tz);
     return `${formatCompact(s, tz)}  →  ${formatCompact(e, tz)}`;
   }, [selStart, selEnd, tz]);
 
-  const hasCustomSelection = selStart && (isSelectingEnd || (selEnd && selEnd !== selStart));
+  const hasCustomSelection =
+    selStart && (isSelectingEnd || (selEnd && selEnd !== selStart));
 
   return (
     <div className="relative inline-flex items-center" ref={ref}>
       {/* ── Trigger Button ── */}
       <button
         onClick={handleTriggerClick}
+        aria-label={`Select date range: ${formatTriggerLabel(dateRange.start, dateRange.end, dateRange.preset, tz, calendarDays)}`}
+        aria-expanded={open}
         className={cn(
-          'inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-all duration-200',
+          "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-all duration-200",
           open
-            ? 'border-blue-500 bg-blue-50 text-blue-600 shadow-sm shadow-blue-500/10 dark:bg-blue-950/30 dark:text-blue-400'
-            : 'border-border bg-surface-elevated text-text-primary hover:bg-surface-hover hover:border-text-muted/30',
+            ? "border-blue-500 bg-blue-50 text-blue-600 shadow-sm shadow-blue-500/10 dark:bg-blue-950/30 dark:text-blue-400"
+            : "border-border bg-surface-elevated text-text-primary hover:bg-surface-hover hover:border-text-muted/30",
         )}
       >
         <Calendar className="h-4 w-4 opacity-60" />
-        <span className="tracking-tight">{formatTriggerLabel(dateRange.start, dateRange.end, dateRange.preset, tz)}</span>
-        <ChevronRight className={cn('h-3.5 w-3.5 opacity-40 transition-transform duration-200', open && 'rotate-90')} />
+        <span className="tracking-tight">
+          {formatTriggerLabel(
+            dateRange.start,
+            dateRange.end,
+            dateRange.preset,
+            tz,
+            calendarDays,
+          )}
+        </span>
+        <ChevronRight
+          className={cn(
+            "h-3.5 w-3.5 opacity-40 transition-transform duration-200",
+            open && "rotate-90",
+          )}
+        />
       </button>
 
       {/* ── Dropdown Panel ── */}
       {open && (
         <div
           className={cn(
-            'absolute right-0 top-full z-[100] mt-2',
-            'w-auto rounded-2xl border border-border bg-surface-elevated',
-            'shadow-2xl shadow-black/12 dark:shadow-black/40',
-            'animate-in fade-in-0 zoom-in-95 duration-150',
+            "absolute top-full z-[100] mt-2",
+            align === "left" ? "left-0" : "right-0",
+            "w-auto rounded-2xl border border-border bg-surface-elevated",
+            "shadow-2xl shadow-black/12 dark:shadow-black/40",
+            "animate-in fade-in-0 zoom-in-95 duration-150",
           )}
         >
           <div className="flex">
             {/* ── Left: Presets ── */}
             <div className="w-[160px] border-r border-border py-2 flex flex-col">
               <div className="px-3 py-1.5 mb-1">
-                <span className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Date Range</span>
+                <span className="text-[10px] font-bold text-text-muted uppercase tracking-widest">
+                  Date Range
+                </span>
               </div>
 
               <div className="flex-1 overflow-y-auto px-1.5 space-y-0.5">
                 {presets.map((p) => {
-                  const isActive = activePreset === p.value && !hasCustomSelection;
+                  const isActive =
+                    activePreset === p.value && !hasCustomSelection;
                   return (
                     <button
                       key={p.value}
                       onClick={() => handlePresetClick(p.value)}
                       className={cn(
-                        'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] font-medium transition-all duration-150 text-left group',
+                        "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] font-medium transition-all duration-150 text-left group",
                         isActive
-                          ? 'bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-400'
-                          : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary',
+                          ? "bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-400"
+                          : "text-text-secondary hover:bg-surface-hover hover:text-text-primary",
                       )}
                     >
-                      <div className={cn(
-                        'flex h-4 w-4 items-center justify-center rounded-full border-[1.5px] transition-colors shrink-0',
-                        isActive
-                          ? 'border-blue-500 bg-blue-500'
-                          : 'border-text-muted/40 group-hover:border-text-muted/60',
-                      )}>
-                        {isActive && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />}
+                      <div
+                        className={cn(
+                          "flex h-4 w-4 items-center justify-center rounded-full border-[1.5px] transition-colors shrink-0",
+                          isActive
+                            ? "border-blue-500 bg-blue-500"
+                            : "border-text-muted/40 group-hover:border-text-muted/60",
+                        )}
+                      >
+                        {isActive && (
+                          <Check
+                            className="h-2.5 w-2.5 text-white"
+                            strokeWidth={3}
+                          />
+                        )}
                       </div>
                       {p.label}
                     </button>
@@ -392,9 +572,11 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
               </div>
 
               {/* Custom range indicator */}
-              {activePreset === 'custom' && !hasCustomSelection && (
+              {activePreset === "custom" && !hasCustomSelection && (
                 <div className="px-3 pt-2 mt-auto border-t border-border">
-                  <span className="text-[10px] text-blue-500 font-semibold">Custom range active</span>
+                  <span className="text-[10px] text-blue-500 font-semibold">
+                    Custom range active
+                  </span>
                 </div>
               )}
             </div>
@@ -404,6 +586,7 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
               {/* Month header + nav */}
               <div className="flex items-center justify-between mb-3">
                 <button
+                  aria-label="Previous month"
                   onClick={() => navigateMonth(-1)}
                   className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-surface-hover transition-colors"
                 >
@@ -413,6 +596,7 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
                   {MONTH_NAMES[viewMonth.month]} {viewMonth.year}
                 </span>
                 <button
+                  aria-label="Next month"
                   onClick={() => navigateMonth(1)}
                   className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-surface-hover transition-colors"
                 >
@@ -425,6 +609,8 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
                 year={viewMonth.year}
                 month={viewMonth.month}
                 timezone={tz}
+                calendarDays={calendarDays}
+                currentDay={currentDay}
                 selectedStart={selStart}
                 selectedEnd={isSelectingEnd ? null : selEnd}
                 hoverDate={isSelectingEnd ? hoverDate : null}
@@ -436,10 +622,12 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
               <div className="flex items-center justify-between mt-4 pt-3 border-t border-border">
                 <div className="min-w-0 flex-1 mr-3">
                   <p className="text-[12px] font-semibold text-text-primary truncate tabular-nums">
-                    {footerLabel || 'Select dates'}
+                    {footerLabel || "Select dates"}
                   </p>
                   {isSelectingEnd && (
-                    <p className="text-[10px] text-blue-500 font-medium mt-0.5">Click end date</p>
+                    <p className="text-[10px] text-blue-500 font-medium mt-0.5">
+                      Click end date
+                    </p>
                   )}
                 </div>
                 <div className="flex gap-1.5 shrink-0">
@@ -453,10 +641,10 @@ export function DateRangePicker({ dateRange, onRangeChange }: DateRangePickerPro
                     onClick={handleApply}
                     disabled={!selStart || isSelectingEnd}
                     className={cn(
-                      'px-3 py-1.5 text-xs font-semibold rounded-lg transition-all duration-150',
+                      "px-3 py-1.5 text-xs font-semibold rounded-lg transition-all duration-150",
                       selStart && !isSelectingEnd
-                        ? 'bg-blue-500 text-white hover:bg-blue-600 shadow-sm shadow-blue-500/25'
-                        : 'bg-surface-hover text-text-dimmed cursor-not-allowed',
+                        ? "bg-blue-500 text-white hover:bg-blue-600 shadow-sm shadow-blue-500/25"
+                        : "bg-surface-hover text-text-dimmed cursor-not-allowed",
                     )}
                   >
                     Apply

@@ -11,6 +11,7 @@ import { useStoreStore } from '@/stores/storeStore';
 import { getWorkspaceId } from '@/lib/auth/workspace';
 import { IntegrationCard } from '@/components/integrations/IntegrationCard';
 import { ShopifyConnectModal } from '@/components/integrations/ShopifyConnectModal';
+import { MetaTokenSettings } from '@/components/integrations/MetaTokenSettings';
 import { MetaConnectionDetails } from '@/components/integrations/MetaConnectionDetails';
 import { ClickUpConnectModal } from '@/components/integrations/ClickUpConnectModal';
 import { ClickUpConnectionDetails } from '@/components/integrations/ClickUpConnectionDetails';
@@ -522,6 +523,8 @@ export function IntegrationsClient() {
           />
         ))}
       </div>
+
+      {activeStoreId && <MetaTokenSettings key={activeStoreId} storeId={activeStoreId} />}
 
       {/* Reuse Existing Meta Connection — shown when Meta is NOT connected but other stores have it */}
       {!integrations.some((i) => i.platform === 'meta' && i.status === 'connected') &&

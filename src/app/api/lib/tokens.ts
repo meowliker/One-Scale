@@ -1,3 +1,4 @@
+import { metaExpiry, effectiveMetaExpiry, type MetaTokenInfo } from "./meta-token";
 import { getConnection, upsertConnection, deleteConnection, updateConnectionAccount, getStore, getAppCredentials } from './db';
 import { getShopifyAccessToken } from './shopify-client';
 import type { OAuthTokens, OAuthPlatform } from '@/types/auth';
@@ -14,39 +15,25 @@ import { encryptSecret } from './crypto';
 
 // ------ Get Tokens ------
 
+export async function getMetaConnectionHealth(storeId: string) {
+  // Supabase is authoritative. A missing remote row must not resurrect a stale
+  // SQLite credential after an intentional disconnect or a cold start.
+  const conn = isSupabasePersistenceEnabled()
+    ? await getPersistentConnection(storeId, 'meta')
+    : getConnection(storeId, 'meta');
+  let info: Partial<MetaTokenInfo> & {validation?:string} = {};
+  try { info = conn?.metadata ? JSON.parse(conn.metadata) : {}; } catch { /* Legacy metadata */ }
+  const expiresAt = effectiveMetaExpiry(metaExpiry(conn?.expires_at), info.dataAccessExpiresAt);
+  const status = !conn ? 'missing' : info.validation === 'invalid' ? 'invalid' : expiresAt && expiresAt <= Date.now() ? 'expired' : 'connected';
+  return {conn,health:{saved:!!conn,status,expiresAt,tokenType:info.type || 'unknown',checkedAt:info.checkedAt || null,expiringSoon:status === 'connected' && !!expiresAt && expiresAt-Date.now()<7*86400000,noScheduledExpiry:status==='connected' && info.type==='SYSTEM_USER' && !expiresAt}};
+}
 export async function getMetaToken(storeId: string): Promise<OAuthTokens | null> {
-  if (isSupabasePersistenceEnabled()) {
-    await hydrateStoreFromSupabase(storeId);
-    const persistentConn = await getPersistentConnection(storeId, 'meta');
-    if (persistentConn) {
-      if (persistentConn.expires_at && persistentConn.expires_at < Date.now()) {
-        return null;
-      }
-      return {
-        accessToken: persistentConn.access_token,
-        platform: 'meta',
-        storeId: persistentConn.store_id,
-        accountId: persistentConn.account_id ?? undefined,
-        expiresAt: persistentConn.expires_at ?? undefined,
-      };
-    }
+  const {conn,health}=await getMetaConnectionHealth(storeId);
+  if(!conn || health.status !== 'connected')return null;
+  if(isSupabasePersistenceEnabled()) {
+    try { await hydrateStoreFromSupabase(storeId); } catch { /* Keep valid cloud access during local-cache failures. */ }
   }
-
-  const conn = getConnection(storeId, 'meta');
-  if (!conn) return null;
-
-  // Check if token is expired
-  if (conn.expires_at && conn.expires_at < Date.now()) {
-    return null;
-  }
-
-  return {
-    accessToken: conn.access_token,
-    platform: 'meta',
-    storeId: conn.store_id,
-    accountId: conn.account_id ?? undefined,
-    expiresAt: conn.expires_at ?? undefined,
-  };
+  return {accessToken:conn.access_token,platform:'meta',storeId:conn.store_id,accountId:conn.account_id??undefined,expiresAt:health.expiresAt??undefined};
 }
 
 export async function getShopifyToken(storeId: string): Promise<OAuthTokens | null> {
@@ -336,25 +323,19 @@ export async function setGoogleDriveToken(
 
 // ------ Set Tokens ------
 
-export async function setMetaToken(storeId: string, payload: OAuthTokens): Promise<void> {
-  upsertConnection({
-    storeId,
-    platform: 'meta',
-    accessToken: payload.accessToken,
-    refreshToken: payload.refreshToken,
-    expiresAt: payload.expiresAt,
-    accountId: payload.accountId,
-  });
-  if (isSupabasePersistenceEnabled()) {
-    await upsertPersistentConnection({
-      storeId,
-      platform: 'meta',
-      accessToken: payload.accessToken,
-      refreshToken: payload.refreshToken,
-      expiresAt: payload.expiresAt,
-      accountId: payload.accountId,
-    });
-  }
+export async function setMetaToken(storeId: string, payload: OAuthTokens & {metaInfo?:MetaTokenInfo}): Promise<void> {
+  const persistent = isSupabasePersistenceEnabled();
+  const previous = persistent ? await getPersistentConnection(storeId,'meta') : getConnection(storeId,'meta');
+  const expiresAt = payload.metaInfo ? effectiveMetaExpiry(payload.metaInfo.expiresAt,payload.metaInfo.dataAccessExpiresAt) : metaExpiry(payload.expiresAt);
+  const entry={storeId,platform:'meta' as const,accessToken:payload.accessToken,refreshToken:payload.refreshToken,expiresAt,
+    accountId:payload.accountId ?? previous?.account_id ?? undefined,accountName:previous?.account_name ?? undefined,
+    scopes:payload.metaInfo?.scopes.join(',') ?? previous?.scopes ?? undefined,
+    metadata:payload.metaInfo ? JSON.stringify({...payload.metaInfo,validation:'valid'}) : undefined};
+  // Do not report success or update the local cache until the durable write succeeds.
+  if(persistent) {
+    await upsertPersistentConnection(entry);
+    try { upsertConnection(entry); } catch { /* SQLite is only a cache on hosted instances. */ }
+  } else upsertConnection(entry);
 }
 
 export async function setShopifyToken(storeId: string, payload: OAuthTokens): Promise<void> {
@@ -377,10 +358,10 @@ export async function setShopifyToken(storeId: string, payload: OAuthTokens): Pr
 // ------ Clear Token ------
 
 export async function clearToken(platform: OAuthPlatform, storeId: string): Promise<void> {
-  deleteConnection(storeId, platform);
   if (isSupabasePersistenceEnabled()) {
     await deletePersistentConnection(storeId, platform);
-  }
+    try { deleteConnection(storeId, platform); } catch { /* Remote disconnect is authoritative. */ }
+  } else deleteConnection(storeId, platform);
 }
 
 // ------ Update Account ------

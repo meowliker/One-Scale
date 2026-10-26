@@ -176,6 +176,7 @@ export async function copyPersistentMetaConnection(fromStoreId: string, toStoreI
     accountId: source.account_id ?? undefined,
     accountName: source.account_name ?? undefined,
     scopes: source.scopes ?? undefined,
+    metadata: source.metadata ?? undefined,
   });
 }
 
@@ -228,7 +229,7 @@ export async function upsertPersistentConnection(data: {
   platform: OAuthPlatform;
   accessToken: string;
   refreshToken?: string;
-  expiresAt?: number;
+  expiresAt?: number | null;
   accountId?: string;
   accountName?: string;
   shopDomain?: string;

@@ -938,7 +938,7 @@ export function upsertConnection(data: {
   platform: OAuthPlatform;
   accessToken: string;
   refreshToken?: string;
-  expiresAt?: number;
+  expiresAt?: number | null;
   accountId?: string;
   accountName?: string;
   shopDomain?: string;
@@ -955,7 +955,7 @@ export function upsertConnection(data: {
     ON CONFLICT(store_id, platform) DO UPDATE SET
       access_token = excluded.access_token,
       refresh_token = COALESCE(excluded.refresh_token, connections.refresh_token),
-      expires_at = COALESCE(excluded.expires_at, connections.expires_at),
+      expires_at = CASE WHEN ? THEN excluded.expires_at ELSE COALESCE(excluded.expires_at, connections.expires_at) END,
       account_id = COALESCE(excluded.account_id, connections.account_id),
       account_name = COALESCE(excluded.account_name, connections.account_name),
       shop_domain = COALESCE(excluded.shop_domain, connections.shop_domain),
@@ -974,7 +974,8 @@ export function upsertConnection(data: {
     data.shopDomain ?? null,
     data.shopName ?? null,
     data.scopes ?? null,
-    data.metadata ?? null
+    data.metadata ?? null,
+    data.expiresAt === null ? 1 : 0
   );
 }
 
