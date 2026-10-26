@@ -12,10 +12,10 @@
 | Upstream | `adaptations/INS-20785b5fa6bd-KMH-adaptation.md` (Skill 2) · `adaptations/INS-20785b5fa6bd-KMH-V1-full-script.md` (V1 full script v1.0) |
 | Production route | Kie.ai — Grok Imagine Video 1.5 (preview), 720p, 9:16, image-to-video from the keyframes |
 | Editor / strategist | Role labels only — names not supplied |
-| **Package readiness** | **Draft video built (`video/KMH-V1-INS-20785b5fa6bd-v1.0-draft.mp4`, 63.15 s). All 28 keyframes and all 27 clips inspected; 12 clips redone on Kie and passed. Not final: VO runs past 55.055 s (see §15) and S27 still shows the plain placeholder book** |
+| **Package readiness** | **Draft video built and re-timed to the voiceover (`video/KMH-V1-INS-20785b5fa6bd-v1.0-draft.mp4`, 63.15 s). All 28 keyframes and all 27 clips inspected; 12 clips redone on Kie and passed. Not final: runs 63.15 s instead of the planned 55.055 s, and S27 still shows the plain placeholder book** |
 | **Creative decision** | **Awaiting strategist approval** |
 
-> **Draft status:** the V1 draft video is built and checked — see §15 for the file, clip QC, credits and VO timing. Two things keep it from being final: the stock voiceover is ~15 s longer than the 55.055 s edit at natural pace (the draft holds S27 until 63.15 s, and VO lines land up to ~9 s after their shots), and the real bundle cover (ASSET02) still needs to replace the placeholder book on S27.
+> **Draft status:** the V1 draft video is built and checked — see §15 for the file, clip QC, credits and timing. The picture is re-timed to the natural-pace voiceover, so every line plays over its own shot and the cut runs 63.15 s instead of the planned 55.055 s. Still needed for final: the real bundle cover (ASSET02) to replace the placeholder book on S27, and a call on whether 63 s is acceptable.
 
 > **V1 script approval:** the V1 full script v1.0 hasn't been approved yet. This package locks that wording; any change to it creates package v1.1.
 
@@ -564,7 +564,7 @@ Total VO: 171 words (reference 171).
 | CTA words | 3 = reference 3 ✅ | verified |
 | Shot count / cut times | 27 shots on the reference cut times ✅ | verified against Skill 1 |
 | Total duration | 55.055 s ✅ | verified (planned edit) |
-| VO fits 55 s | ❌ **No** — AUD-V1-VO speech runs 0.49–70.81 s (≈2.4 words/s). With pauses between lines capped at 0.35 s it still ends at 62.35 s (+7.3 s past 55.055); draft holds S27 to 63.15 s | measured (silencedetect + Whisper word timings) |
+| VO fits 55 s | ❌ **No** — AUD-V1-VO speech runs 0.49–70.81 s (≈2.4 words/s). With pauses between lines capped at 0.35 s it ends at 62.35 s; the picture is re-timed to it (63.15 s cut) instead of the planned 55.055 s | measured (silencedetect + Whisper word timings) |
 | Keyframe accuracy | ✅ all 28 keyframes on-model and on-brief (KF-S01-01/02 use the blue X-ray split-screen look by design) | inspected |
 | Problem/solution split | turn at 30.297, product at 33.300 (60.5%) ✅ | planned |
 
@@ -899,7 +899,7 @@ For every shot: first frame = the shot's keyframe; attach ASSET01; no audio from
 
 ## 12. Outstanding issues
 
-1. **VO overrun (decision needed):** the stock VO runs ~70.3 s of speech at natural pace vs the 55.055 s edit. The draft keeps the picture cuts, never speeds the VO, caps pauses between lines at 0.35 s and holds S27 to 63.15 s — VO lines land 2–9 s after their shots from S02 on. Options: re-record the VO faster (~3.1 words/s, like the reference), shorten the script (creates v1.1), or re-time the picture to the VO (longer shots / new clips).
+1. **Length (decision needed):** the draft is re-timed to the natural-pace VO and runs 63.15 s, not the planned 55.055 s. To get back to ~55 s, re-record the VO faster (~3.1 words/s, like the reference) or shorten the script (creates v1.1), then rebuild with `build_video.py`.
 1. **Real bundle cover** (ASSET02) to composite over the placeholder book on S27, and optionally real worksheet pages for S17/S25.
 1. **V1 script approval** (v1.0 of the full script).
 1. **Music:** the bed is a local synth preview, extended with a crossfaded repeat to 63 s; license real music for the final.
@@ -917,15 +917,15 @@ For every shot: first frame = the shot's keyframe; attach ASSET01; no audio from
 | # | Check | Status | Evidence |
 |---|---|---|---|
 | 1 | Upstream fidelity | Pass | Every VO line, headline, CTA and offer copied from V1 full script v1.0 and the Skill 2 cards; captions are the §5 groups word for word |
-| 2 | Timeline | Pass (picture) / Issue (VO) | 27 contiguous shots on the planned cuts 0.000–53.887 s; S27 extended to 63.153 s to fit the VO |
+| 2 | Timeline | Pass (re-timed) | 27 contiguous shots re-timed to the VO, 0.000–63.153 s; each cut sits in the pause before its line |
 | 3 | Counts and copy | Pass | Headline 3, hook 10, total 171, CTA 3; Whisper heard 171 VO words |
 | 4 | Visual coverage | Pass | 28 keyframes + 6 preview frames downloaded and inspected; 27 clips inspected (frames across each edit window) |
 | 5 | Visual accuracy | Pass with note | 15 first-take clips passed; 12 failed (off-model invented bald kid, faceless kid, toothy skull mom, fade to black) and passed on 1 Kie redo. S27 book is a placeholder |
-| 6 | Timing/readability | Issue | Captions follow the actual VO; VO overruns 55.055 s (see §15) |
+| 6 | Timing/readability | Pass with note | Each VO line starts 0.10–0.18 s after its own shot cut; captions follow the actual VO; total 63.15 s vs planned 55.055 s |
 | 7 | Prompt usability | Pass | Original and redo prompts saved per shot in `kie-video-tasks.json` |
 | 8 | Handoff integrity | Pass | `build_assets.sh` + `build_video.py` rebuild everything from the saved links and clips |
 | 9 | Approval integrity | Pass | Status = Awaiting strategist approval; no approval recorded |
-| 10 | Execution feasibility | Issue | VO length decision and ASSET02 still open |
+| 10 | Execution feasibility | Issue | ASSET02 still open; 63 s length needs sign-off |
 | 11 | Audio previews | Pass | 3 mixes built; draft mix VO + bed at −18 dB, −16.4 LUFS integrated, peak −1.5 dB |
 | 12 | Variation Previews | Pass | V1–V3 blocks with local frames, layout previews and audio |
 
@@ -935,10 +935,10 @@ For every shot: first frame = the shot's keyframe; attach ASSET01; no audio from
 
 | Field | Value |
 |---|---|
-| File | `video/KMH-V1-INS-20785b5fa6bd-v1.0-draft.mp4` (22.6 MB) |
+| File | `video/KMH-V1-INS-20785b5fa6bd-v1.0-draft.mp4` (24.8 MB) |
 | Specs | H.264 720x1280, 30 fps, 63.15 s (1,895 frames) · AAC 44.1 kHz 160 kb/s · −16.4 LUFS, peak −1.5 dB |
-| Picture | Each clip trimmed from its start to its edit duration and cut in shot order on the planned times (hard cuts); S27 continues, then freezes, until 63.15 s |
-| Overlays | S01 headline "Kid Always" (white Inter Bold) + "DYSREGULATED?" (gold Liberation Serif Bold caps), top ~8%, 0–2.703 s · 96 caption groups (§5), white Liberation Serif Bold Italic with soft shadow, centred at 74% height |
+| Picture | Re-timed to the VO: each shot runs from the pause before its line to the pause before the next (hard cuts). Each clip plays from its start; 7 clips shorter than their shot are slowed just enough to fill it with blended frames: S01 ×1.58, S05 ×1.10, S08 ×1.14, S17 ×1.12, S19 ×1.11, S22 ×1.02, S25 ×1.37 (only S01 and S25 are noticeably slow-motion) |
+| Overlays | S01 headline "Kid Always" (white Inter Bold) + "DYSREGULATED?" (gold Liberation Serif Bold caps), top ~8%, over all of S01 (0–4.72 s) · 96 caption groups (§5), white Liberation Serif Bold Italic with soft shadow, centred at 74% height |
 | Audio | AUD-V1-VO (stock voice, not sped up) + preview music bed at −18 dB, bed faded out over the last 1.5 s |
 | S27 product | **Plain placeholder book — real bundle cover (ASSET02) still needed** |
 | Build | `python3 build_video.py` (after `bash build_assets.sh` and the clip downloads) |
@@ -981,39 +981,38 @@ For every shot: first frame = the shot's keyframe; attach ASSET01; no audio from
 
 Redo prompts keep the original action but state the cast explicitly ("only the mom, no children" / "only the kid" / "exactly two characters") and describe the kid's messy brown hair and cartoon face; first takes had described both characters in every shot, so Grok kept adding a second, bald kid. No shot needed a second redo.
 
-### VO timing (measured)
+### Timing (re-timed to the VO)
 
-Speech in AUD-V1-VO runs 0.49–70.81 s (file 77.24 s incl. 6.3 s trailing silence). Rule used: never speed up; each line starts at its shot start or right after the previous line, with pauses between lines capped at 0.35 s (pauses inside a line kept). Captions are timed from Whisper word timestamps shifted with their line.
+Speech in AUD-V1-VO runs 0.49–70.81 s (file 77.24 s incl. 6.3 s trailing silence). The VO is never sped up; pauses between lines are capped at 0.35 s (pauses inside a line kept), so it ends at 62.35 s. Each shot cut sits at the midpoint of the pause before its line. Captions are timed from Whisper word timestamps.
 
-| Shot | Shot time (s) | VO line placed (s) | VO late by (s) |
-|---|---|---|---|
-| S01 | 0.000–2.703 | 0.49–4.55 | +0.49 |
-| S02 | 2.703–4.204 | 4.90–6.22 | +2.19 |
-| S03 | 4.204–5.939 | 6.57–7.82 | +2.36 |
-| S04 | 5.939–8.008 | 8.17–10.11 | +2.23 |
-| S05 | 8.008–10.277 | 10.46–13.48 | +2.45 |
-| S06 | 10.277–12.813 | 13.66–15.50 | +3.38 |
-| S07 | 12.813–16.450 | 15.85–19.29 | +3.04 |
-| S08 | 16.450–18.051 | 19.64–21.60 | +3.19 |
-| S09 | 18.051–18.685 | 21.88–22.39 | +3.83 |
-| S10 | 18.685–19.386 | 22.60–23.26 | +3.92 |
-| S11 | 19.386–21.021 | 23.61–24.98 | +4.22 |
-| S12 | 21.021–23.157 | 25.33–27.29 | +4.31 |
-| S13 | 23.157–25.826 | 27.64–29.85 | +4.48 |
-| S14 | 25.826–27.728 | 30.08–31.25 | +4.25 |
-| S15 | 27.728–30.297 | 31.60–34.11 | +3.87 |
-| S16 | 30.297–33.300 | 34.46–37.33 | +4.17 |
-| S17 | 33.300–35.836 | 37.68–40.71 | +4.38 |
-| S18 | 35.836–37.971 | 40.98–42.51 | +5.14 |
-| S19 | 37.971–40.607 | 42.85–45.83 | +4.88 |
-| S20 | 40.607–42.843 | 46.18–48.59 | +5.57 |
-| S21 | 42.843–45.078 | 48.95–51.44 | +6.10 |
-| S22 | 45.078–46.246 | 51.79–53.47 | +6.71 |
-| S23 | 46.246–47.547 | 53.82–54.81 | +7.57 |
-| S24 | 47.547–49.249 | 54.99–56.03 | +7.45 |
-| S25 | 49.249–51.485 | 56.38–60.16 | +7.13 |
-| S26 | 51.485–53.887 | 60.47–61.50 | +8.98 |
-| S27 | 53.887–55.055 | 61.76–62.35 | +7.87 |
+| Shot | Planned (s) | Re-timed shot (s) | VO line (s) | Clip speed |
+|---|---|---|---|---|
+| S01 | 0.000–2.703 | 0.00–4.72 | 0.49–4.55 | ×1.58 slower |
+| S02 | 2.703–4.204 | 4.72–6.39 | 4.90–6.22 | normal |
+| S03 | 4.204–5.939 | 6.39–7.99 | 6.57–7.82 | normal |
+| S04 | 5.939–8.008 | 7.99–10.28 | 8.17–10.11 | normal |
+| S05 | 8.008–10.277 | 10.28–13.57 | 10.46–13.48 | ×1.10 slower |
+| S06 | 10.277–12.813 | 13.57–15.67 | 13.66–15.50 | normal |
+| S07 | 12.813–16.450 | 15.67–19.46 | 15.85–19.29 | normal |
+| S08 | 16.450–18.051 | 19.46–21.74 | 19.64–21.60 | ×1.14 slower |
+| S09 | 18.051–18.685 | 21.74–22.50 | 21.88–22.39 | normal |
+| S10 | 18.685–19.386 | 22.50–23.43 | 22.60–23.26 | normal |
+| S11 | 19.386–21.021 | 23.43–25.15 | 23.61–24.98 | normal |
+| S12 | 21.021–23.157 | 25.15–27.46 | 25.33–27.29 | normal |
+| S13 | 23.157–25.826 | 27.46–29.96 | 27.64–29.85 | normal |
+| S14 | 25.826–27.728 | 29.96–31.43 | 30.08–31.25 | normal |
+| S15 | 27.728–30.297 | 31.43–34.29 | 31.60–34.11 | normal |
+| S16 | 30.297–33.300 | 34.29–37.50 | 34.46–37.33 | normal |
+| S17 | 33.300–35.836 | 37.50–40.84 | 37.68–40.71 | ×1.12 slower |
+| S18 | 35.836–37.971 | 40.84–42.68 | 40.98–42.51 | normal |
+| S19 | 37.971–40.607 | 42.68–46.00 | 42.85–45.83 | ×1.11 slower |
+| S20 | 40.607–42.843 | 46.00–48.77 | 46.18–48.59 | normal |
+| S21 | 42.843–45.078 | 48.77–51.61 | 48.95–51.44 | normal |
+| S22 | 45.078–46.246 | 51.61–53.64 | 51.79–53.47 | ×1.02 slower |
+| S23 | 46.246–47.547 | 53.64–54.90 | 53.82–54.81 | normal |
+| S24 | 47.547–49.249 | 54.90–56.20 | 54.99–56.03 | normal |
+| S25 | 49.249–51.485 | 56.20–60.31 | 56.38–60.16 | ×1.37 slower |
+| S26 | 51.485–53.887 | 60.31–61.63 | 60.47–61.50 | normal |
+| S27 | 53.887–55.055 | 61.63–63.15 | 61.76–62.35 | normal |
 
-**⚠ Overrun:** VO ends at 62.35 s, 7.3 s past the 55.055 s edit (natural speech would be ~15.8 s over without trimming pauses). From S02 on, lines land 2–9 s after their shots; S27 is held from 53.887 to 63.153 s, so the S22–S27 lines play over the S27 end frame. Decision needed — see §12.
-
+**Length:** 63.15 s vs the planned 55.055 s (+8.1 s). Every line now plays over its own shot. Getting back to ~55 s needs a faster VO or a shorter script — see §12.

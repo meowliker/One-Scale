@@ -1,10 +1,10 @@
 """Builds the V1 draft video from the Kie clips, the V1 voiceover and the music bed.
 
-Picture: each shot's clip is trimmed from its start to its edit duration (prompts/shots.py)
-and cut in shot order at 720x1280, 30 fps, hard cuts. S27 holds until the VO ends.
-VO: never sped up. Each line starts at its shot start, or right after the previous line
-if that line is still running (pauses between lines capped at MAX_GAP; pauses inside a
-line kept). Captions follow the placed VO using audio/AUD-V1-VO-words.json (Whisper
+Picture is re-timed to the VO: each shot runs from the pause before its VO line to the
+pause before the next line (hard cuts, 720x1280, 30 fps). Each clip plays from its start;
+a clip shorter than its shot is slowed just enough to fill it (blended frames).
+VO: never sped up; pauses between lines capped at MAX_GAP, pauses inside a line kept.
+The headline sits over S01. Captions follow the VO using audio/AUD-V1-VO-words.json (Whisper
 word timestamps of AUD-V1-VO.mp3, 171 words = the 171-word script).
 Needs: ffmpeg, python3 + Pillow.   Run:  python3 build_video.py
 """
@@ -76,13 +76,16 @@ lines[-1]["src_off"] = [s0 for s0, _ in sil if s0 > words[-1][1] - 0.3][0]
 
 prev_end = 0.0
 for i, L in enumerate(lines):
-    t = L["shot_start"] + L["src_on"] if i == 0 else max(L["shot_start"], prev_end + min(L["pause_before"], MAX_GAP))
+    t = L["src_on"] if i == 0 else prev_end + min(L["pause_before"], MAX_GAP)
     L["out_on"] = round(t, 3)
     L["shift"] = round(t - L["src_on"], 3)
     L["out_off"] = round(t + L["src_off"] - L["src_on"], 3)
-    L["drift_s"] = round(L["out_on"] - L["shot_start"], 3)
     prev_end = L["out_off"]
 final_end = round(lines[-1]["out_off"] + 0.8, 3)
+# shot cuts: midpoint of the pause before each line (or the word boundary if there is none)
+cut = [0.0] + [round((lines[i - 1]["out_off"] + lines[i]["out_on"]) / 2, 3) for i in range(1, len(lines))] + [final_end]
+for i, L in enumerate(lines):
+    L["cut_start"], L["cut_end"] = cut[i], cut[i + 1]
 
 captions = []
 for L in lines:
@@ -112,9 +115,14 @@ for s in SHOTS:
         if r.get("state") == "success" and r.get("qc") == "pass":
             f = r["file"]
     clip["selected_file"] = f
-    end = final_end if s[0] == "S27" else s[2]
-    shots_out.append({"shot": s[0], "file": f, "start": s[1], "end": round(end, 3),
-                      "frames": round(end * FPS) - round(s[1] * FPS)})
+    L = lines[len(shots_out)]
+    clip_len = float(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                                              "-of", "csv=p=0", f]))
+    need = L["cut_end"] - L["cut_start"]
+    shots_out.append({"shot": s[0], "file": f, "planned_start": s[1], "planned_end": s[2],
+                      "start": L["cut_start"], "end": L["cut_end"], "clip_s": round(clip_len, 3),
+                      "slow": round(max(1.0, need / (clip_len - 0.05)), 3),
+                      "frames": round(L["cut_end"] * FPS) - round(L["cut_start"] * FPS)})
 json.dump(tasks, open("kie-video-tasks.json", "w"), indent=1)
 
 
@@ -159,25 +167,26 @@ for i, c in enumerate(captions):
     c["png"] = f"{WORK}/cap_{i:03d}.png"
     im.save(c["png"])
 
-# image-sequence overlay track: headline 0-2.703, captions per timing, blank elsewhere
+HL_END = shots_out[0]["end"]
+# image-sequence overlay track: headline over S01, captions per timing, blank elsewhere
 with open(f"{WORK}/overlay.txt", "w") as fh:
     t = 0.0
     seq = []
-    # headline and first captions overlap 0-2.703: composite them
+    # headline and S01 captions overlap: composite them
     for i, c in enumerate(captions):
-        if c["start"] < 2.703:
+        if c["start"] < HL_END:
             im = Image.open(c["png"]).copy()
             im.alpha_composite(hl)
             c["png"] = f"{WORK}/cap_{i:03d}_hl.png"
             im.save(c["png"])
-    cuts = sorted({0.0, 2.703, final_end} | {c["start"] for c in captions} | {c["end"] for c in captions})
+    cuts = sorted({0.0, HL_END, final_end} | {c["start"] for c in captions} | {c["end"] for c in captions})
     for a, b in zip(cuts, cuts[1:]):
         if b - a <= 0:
             continue
         mid = (a + b) / 2
         cur = next((c["png"] for c in captions if c["start"] <= mid < c["end"]), None)
         if cur is None:
-            cur = f"{WORK}/headline.png" if mid < 2.703 else f"{WORK}/blank.png"
+            cur = f"{WORK}/headline.png" if mid < HL_END else f"{WORK}/blank.png"
         seq.append((cur, b - a))
     for p, d in seq:
         fh.write(f"file '{os.path.abspath(p)}'\nduration {d:.4f}\n")
@@ -191,8 +200,9 @@ n = len(shots_out)
 args += ["-f", "concat", "-safe", "0", "-i", f"{WORK}/overlay.txt", "-i", VO, "-i", BED]
 fc = []
 for i, s in enumerate(shots_out):
-    pad = ",tpad=stop_mode=clone:stop_duration=15" if s["shot"] == "S27" else ""
-    fc.append(f"[{i}:v]fps={FPS},scale={W}:{H},setsar=1{pad},trim=end_frame={s['frames']},setpts=PTS-STARTPTS[v{i}]")
+    speed = f"setpts={s['slow']}*PTS,framerate=fps={FPS}" if s["slow"] > 1 else f"fps={FPS}"
+    fc.append(f"[{i}:v]{speed},scale={W}:{H},setsar=1,tpad=stop_mode=clone:stop_duration=1,"
+              f"trim=end_frame={s['frames']},setpts=PTS-STARTPTS[v{i}]")
 fc.append("".join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[base]")
 fc.append(f"[{n}:v]fps={FPS},format=rgba,setpts=PTS-STARTPTS[ov]")
 fc.append(f"[base][ov]overlay=0:0:eof_action=pass:format=auto,format=yuv420p,trim=end={final_end}[vout]")
@@ -220,7 +230,7 @@ run(*args)
 
 json.dump({"fps": FPS, "size": [W, H], "planned_end": SHOTS[-1][2], "final_end": final_end, "max_gap_s": MAX_GAP,
            "bed_db": BED_DB, "shots": shots_out,
-           "vo_lines": [{k: L[k] for k in ("shot", "text", "shot_start", "shot_end", "out_on", "out_off", "drift_s",
+           "vo_lines": [{k: L[k] for k in ("shot", "text", "cut_start", "cut_end", "out_on", "out_off",
                                             "src_on", "src_off")} for L in lines],
            "captions": [{k: c[k] for k in ("shot", "text", "start", "end")} for c in captions]},
           open(TIMELINE, "w"), indent=1)
