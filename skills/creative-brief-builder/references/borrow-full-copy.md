@@ -26,7 +26,7 @@ Our product often solves a **different problem** from theirs (they sell a bloati
 | "Always Feeling **BLOATED**?" | Always Feeling [PAIN]? | bloated → dysregulated | "Always Feeling **DYSREGULATED**?" |
 | "Every time you **eat**, it starts with a little **bloating**." | Every time you [TRIGGER], it starts with a little [FIRST SYMPTOM]. | eat → get stressed · bloating → tension | "Every time you **get stressed**, it starts with a little **tension**." |
 | "Your **jeans feel tighter**. Your **stomach feels rock hard**." | Your [SYMPTOM 1]. Your [SYMPTOM 2]. | body symptoms → ours, same escalation | "Your **shoulders feel tighter**. Your **chest feels heavy**." |
-| "Just **2 to 3 drops in your navel** every day…" | Just [USAGE] every day… | their usage → our real usage | "Just **5 minutes of this routine** every day…" |
+| "Just **2 to 3 drops in your navel** every day…" | Just [USAGE] every day… | their usage → our usage from the product file | "Just **[our real usage]** every day…" |
 
 Rules:
 - **Slots to swap:** pain, trigger, symptoms, life impact, cause, mechanism, product, usage, benefits, outcome, proof, offer, CTA. Everything else (sentence frame, rhythm, punctuation, CAPS on the same word, the number of items in a list, the question or negation pattern) stays as theirs.
@@ -64,7 +64,7 @@ The centrepiece, mirroring the beat table so the strategist can compare row by r
 | Beat | Start–end (s) | Shots | Theirs | Ours: text / VO | Ours: visual | Changed? |
 |---|---|---|---|---|---|---|
 | B01 | 0.000–2.703 | S01 | Headline "Always Feeling BLOATED?" + VO "Every time you eat, it starts with a little bloating." | Headline "Always Feeling **DYSREGULATED**?" + VO "Every time you **get stressed**, it starts with a little **tension**." | Same split screen: hunched, tense skeleton with a red glow along the spine vs. upright, calm skeleton | ✏️ pain slots swapped (pain map) |
-| B06 | 33.300–40.607 | S17–S19 | VO "Just 2 to 3 drops in your navel every day…" Dropper over navel → glowing path | VO "Just **5 minutes of this routine** every day…" | Same glowing path, travelling along the nervous system instead of the gut | ✏️ usage swapped to ours |
+| B06 | 33.300–40.607 | S17–S19 | VO "Just 2 to 3 drops in your navel every day…" Dropper over navel → glowing path | VO "Just **[our real usage]** every day…" | Same glowing path, travelling along the nervous system instead of the gut | ✏️ usage swapped to ours |
 
 **Bold the swapped words** in the "Ours" column so the strategist can see exactly what changed and that everything else is theirs.
 
@@ -77,13 +77,13 @@ The centrepiece, mirroring the beat table so the strategist can compare row by r
 ### 4. Options
 Keep this short. In close mode, the conversion table is the main deliverable:
 - **Hooks H1–H5:** H1 = their hook with only the pain slots swapped (from the pain map). H2–H5 = same mechanism and word count, each leaning on a different pain or customer phrase from our data.
-- **Body:** B1 = the close conversion above. Optionally add **B2 = data-tuned**: same structure, but symptoms and benefits re-ranked toward what our data says converts. Show only the rows that differ from B1.
+- **Body:** SC1 = the close conversion above. Optionally add **SC2 = data-tuned**: same structure, but symptoms and benefits re-ranked toward what our data says converts. Show only the rows that differ from SC1.
 - Visual notes stay "same as their S##" unless a change is needed.
 - No separate bridge table: in close mode the bridge is their own transition beat, converted in the table above.
 - **Q-calls (`Q1…`):** every ⚠️ row gets one line in a `⚠️ Calls needed` table (`ID | Question | Options a/b`), each option short and with the safer choice first.
 
 ### 5. Stop and ask for picks
-Hooks (one, or several for V1/V2/V3), B1 or B2, plus answers to any ⚠️ rows. Then wait.
+Hooks (one, or several for V1/V2/V3), SC1 or SC2, plus answers to any ⚠️ rows. Then wait.
 
 ### 6. Brief
 Use `editor-brief-template.md`. Under "Copy from the inspiration", say clearly that this is a **close remake**, list the visual signature, and tell the editor to match the inspiration's timing shot for shot (link + timestamps). Under "Do NOT copy", list their brand, product shots, creators, music track, and any swapped claim.

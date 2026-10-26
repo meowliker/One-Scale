@@ -7,7 +7,7 @@
 | `H1…` | Hook (text and/or spoken) |
 | `VH1…` | Visual hook version |
 | `BR1…` | Bridge (+ soft product intro) |
-| `B1…` | Body script |
+| `SC1…` | Body script ("SC" so it never clashes with beat IDs B01, B02…) |
 | `F1…` | Format fill (concept) |
 | `C1…` | CTA |
 | `Q1…` | A decision only the strategist can make (from ⚠️ rows): `ID \| Question \| Options a/b` |

@@ -50,7 +50,7 @@ After the product intro, the rest of the video should be:
 ### 6. Stop and ask for picks
 Hooks (one or several for V1/V2/V3), bridge + intro, and the after-intro choice. Wait.
 
-If they pick (b), write 2 short bodies (B1–B2) and stop again for a pick before the brief.
+If they pick (b), write 2 short bodies (SC1–SC2) and stop again for a pick before the brief.
 
 ### 7. Brief
 Use `editor-brief-template.md`. For (a), the body rows come from the winner's script. If the data file doesn't have the winner's script and shots, ask the strategist for it, or describe the body as "same as [winner ad], from 0:0X onward" with the timestamp to cut from.

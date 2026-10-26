@@ -17,7 +17,7 @@ Strategists read these messages fast, often on a phone, then forward parts to ed
 - **Quotes for exact words** (`"Always Feeling BLOATED?"`), **bold** for the key word in a cell, `→` for sequences.
 - **Short cells.** Aim for under ~25 words per cell (the beat table's content column can run longer). If a cell needs more, the row is probably two beats.
 - **No walls of text.** Max 2–3 lines for any paragraph. Analysis goes into the "Narrative role", "Why", or "Changed?" columns, not into prose.
-- **IDs everywhere** (B01, S03, H2, BR1, B1) so the strategist can reply in shorthand.
+- **IDs everywhere** (B01, S03, H2, BR1, SC1, Q1) so the strategist can reply in shorthand.
 - **Times:** seconds in breakdowns and conversion (`0.000–2.703`). `m:ss` in the editor brief (`0:00–0:03`), because editors read timelines that way.
 - **Emojis only as markers:** the section headers above, plus ✅ ✏️ ⚠️ 📊 🎯 inside tables. No decorative emojis.
 - **Long breakdowns:** if the beat table and shot details make the message very long, send the breakdown first, then the options in the next part of the same reply. Never cut the breakdown short.
@@ -56,7 +56,7 @@ Strategists read these messages fast, often on a phone, then forward parts to ed
 ## Layout: message 2 (after picks)
 
 ```
-[one-line confirmation of the picks, e.g. "Locked: V1 = H2, V2 = H3, BR4, B1."]
+[one-line confirmation of the picks, e.g. "Locked: V1 = H2, V2 = H3, BR4, SC1."]
 [any one-line notes, max 2]
 
 [the editor brief, exactly per editor-brief-template.md]

@@ -96,13 +96,13 @@ The borrow file gives the specific steps. These rules apply to every borrow type
 
 **Product truth.** Use only facts, numbers, results, prices, testimonials, and credentials that appear in the product file or the strategist's message. If an option needs a proof point we don't have, write it with a `[NEED: proof]` placeholder and flag it. Respect the "claims we can't make" list completely. Invented proof creates ad rejections and refunds, and makes strategists stop trusting the tool.
 
-**Easy to pick.** Number everything with short IDs (`H1–H6` hooks, `BR1–BR3` bridges, `B1–B3` bodies, `VH1–VH3` visual hooks, `Q1…` for decisions only the strategist can make). The strategist should be able to reply "H2, H5, BR1, B2" and you know exactly what they mean. Accept edits in the reply ("H2 but softer", "mix H1 and H4") and apply them without re-running everything.
+**Easy to pick.** Number everything with short IDs (`H1–H6` hooks, `BR1–BR3` bridges, `SC1–SC3` body scripts, `VH1–VH3` visual hooks, `Q1…` for decisions only the strategist can make). The strategist should be able to reply "H2, H5, BR1, SC2" and you know exactly what they mean. Accept edits in the reply ("H2 but softer", "mix H1 and H4") and apply them without re-running everything.
 
 End the options message with a clear pick request, for example:
 
 ```
 👉 Pick what goes into the brief: hooks (one or several to test as V1/V2/V3), one bridge (if this borrow has bridges), one body, and answers to any Q-calls.
-   Edits are fine: "H3 but shorter", "B1 with the CTA from B2".
+   Edits are fine: "H3 but shorter", "SC1 with the CTA from SC2".
 ```
 
 Then stop.
