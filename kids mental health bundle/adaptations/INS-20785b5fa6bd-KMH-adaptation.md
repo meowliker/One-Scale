@@ -21,7 +21,7 @@ Skill: data-informed-adaptation (Skill 2 of 3) · Date: 2026-10-26 · Saved from
 - **ClickUp partly read.** ClickUp's daily limit stopped the read after 14 KM scripts plus winners. Not read: Minimal Free Today B–F, the KM-525 variation tasks, KM-524/515.
 - **No break-even ROAS given.** Verdicts compare each concept to the product average: 0.97 ROAS, $13.67 per sale (without broken-pixel campaigns).
 - **Timings follow the reference ad's 55-second structure**, not the skill's 12-second template: B01 = 0:00–0:03, B02 = 0:33–0:38, B03 = 0:54–0:55. Everything else in INS-20785b5fa6bd carries over: problem is 60% of the runtime, the "what if" turn, "No more" lines shown over the old problem, golden-glow payoff, captions, dark-to-bright colour shift.
-- **Full 55-second scripts were not written.** The Skill 2 card format defines only B01 (hook), B02 (product reveal) and B03 (CTA) for each variation. The other reference beats (symptom escalation, daily-life impact, low point, "what if" turn, benefits, payoff) still need adapted lines before a full storyboard can lock the script.
+- **Full 55-second script:** written for V1 in `adaptations/INS-20785b5fa6bd-KMH-V1-full-script.md` (all 20 lines, word counts matched to the reference). V2–V5 still have only B01 (hook), B02 (product reveal) and B03 (CTA).
 - **Art style:** same photoreal 3D skeleton style. The heroine is the auburn-haired skeleton mom with the headband. Her kid is a smaller skeleton with a see-through head and chest that shows a red-orange "storm" when dysregulated and a calm blue glow when settled. The reference's gross-out creature shot becomes a dark storm swirling inside the kid's head.
 
 ---
@@ -41,7 +41,7 @@ Skill: data-informed-adaptation (Skill 2 of 3) · Date: 2026-10-26 · Saved from
 
 | B01 HOOK (0:00–0:03) | B02 PRODUCT REVEAL (0:33–0:38) | B03 CTA (0:54–0:55) |
 |---|---|---|
-| Headline and VO start together from frame 1. **Headline:** "Kid Always DYSREGULATED?" (3 words; white sans + gold serif caps, top of frame). **Picture:** X-ray split screen. Red side: mom skeleton holds her head while a small skeleton kid screams, and the storm glow in its head grows yellow → red. Teal side: mom and kid sit calmly with a faint blue glow. VO above with word-by-word captions. | **VO:** "Just one printable feelings chart with your kid every day" (10) → "can help them name feelings," (5). **Picture:** bright white bedroom; mom and kid on the bed holding a printed feelings chart; cutaway: glowing path travels through the kid's see-through head, red storm fades to blue. | **VO:** "Grab yours today." (3). Mom skeleton holds the printed bundle at shoulder height, smiling. |
+| Headline and VO start together from frame 1. **Headline:** "Kid Always DYSREGULATED?" (3 words; white sans + gold serif caps, top of frame). **Picture:** X-ray split screen. Red side: mom skeleton holds her head while a small skeleton kid screams, and the storm glow in its head grows yellow → red. Teal side: mom and kid sit calmly with a faint blue glow. VO above with word-by-word captions. | **VO:** "Just one printable feelings chart with your kid every day" (10) → "can help them name feelings," (5). **Picture:** bright white bedroom; mom and kid on the bed holding a printed feelings chart; cutaway: glowing path travels through the kid's see-through head, red storm fades to blue. | **VO:** "Grab yours free." (3). Mom skeleton holds the printed bundle at shoulder height, smiling. |
 
 | META DATA EVIDENCE | AUDIENCE DATA EVIDENCE |
 |---|---|
@@ -64,7 +64,7 @@ Skill: data-informed-adaptation (Skill 2 of 3) · Date: 2026-10-26 · Saved from
 
 | B01 HOOK (0:00–0:03) | B02 PRODUCT REVEAL (0:33–0:38) | B03 CTA (0:54–0:55) |
 |---|---|---|
-| Headline "Losing Your CALM?" (3) and VO with captions start together from frame 1. **Picture:** split screen. Red side: storm glows in the mom's chest as the kid's head storm grows. Teal side: both sit calm. | **VO:** "Just five minutes of coping skills together every single day" (10) → "can help you both reset," (5). **Picture:** mom and kid on the bed doing a coping-skills page together; a glowing path runs through both see-through chests at once. | "Grab yours today." (3), held next to the mom's relieved face. |
+| Headline "Losing Your CALM?" (3) and VO with captions start together from frame 1. **Picture:** split screen. Red side: storm glows in the mom's chest as the kid's head storm grows. Teal side: both sit calm. | **VO:** "Just five minutes of coping skills together every single day" (10) → "can help you both reset," (5). **Picture:** mom and kid on the bed doing a coping-skills page together; a glowing path runs through both see-through chests at once. | "Grab yours free." (3), held next to the mom's relieved face. |
 
 | META DATA EVIDENCE | AUDIENCE DATA EVIDENCE |
 |---|---|
@@ -87,7 +87,7 @@ Skill: data-informed-adaptation (Skill 2 of 3) · Date: 2026-10-26 · Saved from
 
 | B01 HOOK (0:00–0:03) | B02 PRODUCT REVEAL (0:33–0:38) | B03 CTA (0:54–0:55) |
 |---|---|---|
-| Headline "Always Melting DOWN?" (3) and VO with captions start together from frame 1. **Picture:** split screen. Red side: kid's head glow grows as a tablet is taken away. Teal side: kid stays calm. | **VO:** "Just one printable feelings thermometer on the fridge every morning" (10) → "can help them notice feelings," (5). **Picture:** kid points at the thermometer on the fridge; a glowing path travels through the kid's head. | "Grab yours today." (3) |
+| Headline "Always Melting DOWN?" (3) and VO with captions start together from frame 1. **Picture:** split screen. Red side: kid's head glow grows as a tablet is taken away. Teal side: kid stays calm. | **VO:** "Just one printable feelings thermometer on the fridge every morning" (10) → "can help them notice feelings," (5). **Picture:** kid points at the thermometer on the fridge; a glowing path travels through the kid's head. | "Grab yours free." (3) |
 
 | META DATA EVIDENCE | AUDIENCE DATA EVIDENCE |
 |---|---|
@@ -110,7 +110,7 @@ Skill: data-informed-adaptation (Skill 2 of 3) · Date: 2026-10-26 · Saved from
 
 | B01 HOOK (0:00–0:03) | B02 PRODUCT REVEAL (0:33–0:38) | B03 CTA (0:54–0:55) |
 |---|---|---|
-| Headline "Walking On EGGSHELLS?" (3) and VO with captions start together from frame 1. **Picture:** split screen. Red side: the family tiptoes over cracked eggshells while the kid's storm grows. Teal side: a calm family dinner. | **VO:** "Just one quick reset step together before every big moment" (10) → "can help them calm down," (5). **Picture:** mom and kid do a reset step at the door; a glowing path settles the storm. | "Grab yours today." (3) |
+| Headline "Walking On EGGSHELLS?" (3) and VO with captions start together from frame 1. **Picture:** split screen. Red side: the family tiptoes over cracked eggshells while the kid's storm grows. Teal side: a calm family dinner. | **VO:** "Just one quick reset step together before every big moment" (10) → "can help them calm down," (5). **Picture:** mom and kid do a reset step at the door; a glowing path settles the storm. | "Grab yours free." (3) |
 
 | META DATA EVIDENCE | AUDIENCE DATA EVIDENCE |
 |---|---|
@@ -133,7 +133,7 @@ Skill: data-informed-adaptation (Skill 2 of 3) · Date: 2026-10-26 · Saved from
 
 | B01 HOOK (0:00–0:03) | B02 PRODUCT REVEAL (0:33–0:38) | B03 CTA (0:54–0:55) |
 |---|---|---|
-| Headline "Explodes After SCHOOL?" (3) and VO with captions start together from frame 1. **Picture:** split screen. Teal side: calm kid at a school desk. Red side: the same kid at the front door, storm glow growing. | **VO:** "Just one after-school feelings check-in with your kid every day" (10) → "can help them unpack school," (5). **Picture:** a check-in at the kitchen table; a glowing path clears the storm. | "Grab yours today." (3) |
+| Headline "Explodes After SCHOOL?" (3) and VO with captions start together from frame 1. **Picture:** split screen. Teal side: calm kid at a school desk. Red side: the same kid at the front door, storm glow growing. | **VO:** "Just one after-school feelings check-in with your kid every day" (10) → "can help them unpack school," (5). **Picture:** a check-in at the kitchen table; a glowing path clears the storm. | "Grab yours free." (3) |
 
 | META DATA EVIDENCE | AUDIENCE DATA EVIDENCE |
 |---|---|
@@ -213,11 +213,11 @@ Verdict thresholds: 🏆 ≥1.05 ROAS on ≥$1.5k · ✅ ≥1.05 · 🟡 0.90–
 - **Name and offer:** "FREE Kids Mental Health Bundle", sold as free today ("Grab it FREE today!!", "Claim yours FREE Today!!").
 - **Contents:** "feelings charts, coping skills, and quick reset steps"; "feelings thermometers, coping skills, emotional regulation activities"; "1000+ printables, calm-down tools, emotion worksheets"; cover title "KIDS MENTAL HEALTH (A Parent & Educator Guide)".
 - **Delivery:** printable digital download ("print the tools", "digital only", "Grab free digital download").
-- **Price anchors disagree:** "$27", "$29.99 → FREE", "FREE (was $99.99)", "JUST COVER A SMALL PROCESSING FEE", and a landing page noted at "$39.00 (crossed-out $99.00)". The CTA was kept as "Grab yours today." because the live offer is unconfirmed.
+- **Price anchors disagree:** "$27", "$29.99 → FREE", "FREE (was $99.99)", "JUST COVER A SMALL PROCESSING FEE", and a landing page noted at "$39.00 (crossed-out $99.00)". **Offer confirmed by the user (2026-10-26): "free today" / "FREE Kids Mental Health Bundle".** All CTAs now read "Grab yours free." (3 words). If a processing fee applies at checkout, disclose it.
 
 ## Open decisions for the strategist
 
-1. **Offer:** confirm which offer is live before "free" goes into any copy.
+1. **Offer:** confirmed as "free today" / "FREE Kids Mental Health Bundle". Check any processing fee is disclosed.
 2. **Skeleton style:** kept as briefed, but skeleton children may read as morbid in a kids' mental health ad. Check before producing all five.
 3. **Women 45-54:** 23% of sales with no persona briefed; a candidate for a later test.
-4. **Full script:** write the remaining beats of the 55-second script for the variation chosen for the storyboard (see Notes and gaps).
+4. **Full script:** V1 is written (`INS-20785b5fa6bd-KMH-V1-full-script.md`) and awaits approval; V2–V5 would need the same before their own storyboards.
