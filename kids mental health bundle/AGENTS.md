@@ -11,6 +11,11 @@ This folder is the workspace for the kids mental health bundle project.
 - Avoid unsupported mental health claims or presenting educational materials as diagnosis or treatment.
 - Do not publish, send, or share materials externally unless the user requests it.
 
+## Deliverables
+
+- Whenever a deliverable is saved as a Markdown file, also export a PDF of it with the same name next to it (for example `report.md` → `report.pdf`), and give the user the PDF.
+- Also put the key data in the chat reply, so the user can read the findings without opening a file.
+
 ## Shared agent instructions
 
 Keep shared project instructions in this file so Codex and Claude use the same guidance. The root `CLAUDE.md` imports this file.
