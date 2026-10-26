@@ -43,6 +43,7 @@ export async function POST(request: NextRequest) {
     // Call the shared handlers in-process: no fire-and-forget or nested HTTP timeout.
     const url = new URL(`/api/cron/${path}`, request.url);
     url.search = new URLSearchParams({ store_id: storeId, storeId, from, to, feeMode: 'estimate' }).toString();
+    if (step === 'report') url.searchParams.set('metaStatus', body.metaSynced === true ? 'synced' : 'unavailable');
     const internal = new NextRequest(url, { headers: { authorization: `Bearer ${process.env.CRON_SECRET}` } });
     const handler = step === 'orders' ? syncOrders : step === 'meta' ? syncMeta : rebuildReport;
     const response = await handler(internal);

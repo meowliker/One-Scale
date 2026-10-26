@@ -46,6 +46,7 @@ type StoreOverviewRow = {
   hasData: boolean;
   error: string | null;
   missingDays: number;
+  adMetricsAvailable: boolean;
 };
 
 type StoreOverviewResponse = {
@@ -53,7 +54,7 @@ type StoreOverviewResponse = {
   since: string;
   until: string;
   stores: StoreOverviewRow[];
-  totals: Omit<StoreOverviewRow, 'storeId' | 'storeName' | 'domain' | 'lastSyncedAt' | 'productType' | 'hasData' | 'error' | 'missingDays'>;
+  totals: Omit<StoreOverviewRow, 'storeId' | 'storeName' | 'domain' | 'lastSyncedAt' | 'productType' | 'hasData' | 'error' | 'missingDays' | 'adMetricsAvailable'>;
   generatedAt: string;
 };
 
@@ -138,6 +139,7 @@ function writeStoreOverviewWarmCache(scopeId: string, cacheKey: string, payload:
 export default function StoreOverviewPage() {
   const [dateRange, setDateRange] = useState<StoreOverviewRange>(() => getDateRange('lastMonth'));
   const [hasHydrated, setHasHydrated] = useState(false);
+  const [includeMeta, setIncludeMeta] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshStatus, setRefreshStatus] = useState<Record<string, RefreshProgress>>({});
   const [refreshFailure, setRefreshFailure] = useState<string | null>(null);
@@ -181,22 +183,25 @@ export default function StoreOverviewPage() {
       const worker = async () => {
         while (index < targets.length && !abort.signal.aborted) {
           const store = targets[index++];
-          const warnings = new Set<string>();
           const update = (state: RefreshProgress['state'], message: string) => {
             if (!abort.signal.aborted) setRefreshStatus(previous => ({ ...previous, [store.storeId]: { state, message } }));
           };
           try {
-            await refreshStoreRange(ranges, async (step, range) => {
+            const result = await refreshStoreRange(ranges, async (step, range, metaSynced) => {
               const response = await fetch('/api/dashboard/store-overview/refresh', {
                 method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
                 signal: AbortSignal.any([abort.signal, AbortSignal.timeout(310_000)]),
-                body: JSON.stringify({ storeId: store.storeId, step, ...range }),
+                body: JSON.stringify({ storeId: store.storeId, step, ...range, metaSynced }),
               });
               const result = await response.json().catch(() => ({ error: `Sync failed (HTTP ${response.status}).` }));
               if (!response.ok || result.ok !== true) throw new Error(result.error || 'Sync did not complete.');
-              if (result.warning) warnings.add(result.warning);
-            }, message => update('syncing', message));
-            update('success', warnings.size ? `Orders and reports updated. ${[...warnings].join(' ')}` : 'Orders, ad spend and reports updated');
+              return { warning: result.warning as string | undefined };
+            }, message => update('syncing', message), includeMeta);
+            update(result.warnings.length ? 'warning' : 'success', result.warnings.length
+              ? `Shopify updated. ${result.warnings.join(' ')}`
+              : includeMeta ? 'Shopify and Meta reports updated' : 'Shopify revenue, orders and reports updated');
+            // Make each completed store visible without waiting for every store.
+            if (!abort.signal.aborted) await refetch();
           } catch (error) {
             update('error', refreshError(error));
           }
@@ -214,6 +219,7 @@ export default function StoreOverviewPage() {
 
   const stores = data?.stores || [];
   const totals = data?.totals;
+  const adTotalsAvailable = stores.every(row => row.hasData && row.adMetricsAvailable);
   const showPhysicalOnlyColumns = stores.some((row) => row.productType !== 'digital');
 
   return (
@@ -234,6 +240,10 @@ export default function StoreOverviewPage() {
                 onRangeChange={(range) => { if (!refreshLock.current) { setDateRange(range); setRefreshStatus({}); setRefreshFailure(null); } }}
               />
             </fieldset>
+            <label className="flex items-center gap-2 text-sm text-text-secondary">
+              <input type="checkbox" checked={includeMeta} disabled={refreshing} onChange={event => setIncludeMeta(event.target.checked)} />
+              Include Meta ad spend
+            </label>
             <button
               disabled={refreshing || isLoading}
               onClick={() => void handleRefresh()}
@@ -248,15 +258,15 @@ export default function StoreOverviewPage() {
 
       {(refreshFailure || Object.keys(refreshStatus).length > 0) && (
         <section aria-live="polite" className="space-y-2 rounded-2xl border border-border bg-surface p-4 text-sm">
-          <p className="font-semibold">{refreshing ? 'Syncing stores' : 'Refresh results'} · {Object.values(refreshStatus).filter(status => status.state === 'success' || status.state === 'error').length}/{Object.keys(refreshStatus).length} completed</p>
+          <p className="font-semibold">{refreshing ? 'Syncing stores' : 'Refresh results'} · {Object.values(refreshStatus).filter(status => status.state === 'success' || status.state === 'warning' || status.state === 'error').length}/{Object.keys(refreshStatus).length} completed</p>
           <p className="text-xs text-text-muted">Keep this page open until syncing finishes. Reports use estimated transaction fees; refunds use the saved payment transactions.</p>
           {refreshFailure && <p role="alert" className="text-red-600 dark:text-red-300">{refreshFailure}</p>}
           {Object.entries(refreshStatus).map(([storeId, status]) => (
             <div key={storeId} className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2">
-              <p className={status.state === 'error' ? 'text-red-600 dark:text-red-300' : 'text-text-secondary'}>
+              <p className={status.state === 'error' ? 'text-red-600 dark:text-red-300' : status.state === 'warning' ? 'text-amber-700 dark:text-amber-300' : 'text-text-secondary'}>
                 <span className="font-semibold">{stores.find(store => store.storeId === storeId)?.storeName || storeId}:</span> {status.message}
               </p>
-              {status.state === 'error' && <button disabled={refreshing} onClick={() => void handleRefresh(storeId)} className="rounded border border-border px-3 py-1 disabled:opacity-50">Retry store</button>}
+              {(status.state === 'error' || (status.state === 'warning' && includeMeta)) && <button disabled={refreshing} onClick={() => void handleRefresh(storeId)} className="rounded border border-border px-3 py-1 disabled:opacity-50">Retry store</button>}
             </div>
           ))}
         </section>
@@ -265,6 +275,12 @@ export default function StoreOverviewPage() {
       {(stores.some(store => !store.hasData || store.error || store.missingDays > 0) || Object.values(refreshStatus).some(status => status.state === 'error')) && (
         <p role="status" className="rounded-xl border border-amber-300/40 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
           Totals may be incomplete or out of date. Some stores have missing reports or could not be synced for the selected dates. Check the errors and retry.
+        </p>
+      )}
+
+      {stores.some(row => row.hasData && !row.adMetricsAvailable) && (
+        <p className="rounded-xl border border-border bg-surface p-3 text-sm text-text-secondary">
+          Shopify figures are available independently. Ad spend, net profit, margin and ad performance show “—” where Meta was not synced. Enable “Include Meta ad spend” to update them.
         </p>
       )}
 
@@ -284,9 +300,9 @@ export default function StoreOverviewPage() {
         <>
           <section className="grid grid-cols-2 gap-3 lg:grid-cols-6">
             <KpiCard icon={<CircleDollarSign className="h-4 w-4" />} label="Revenue" value={money(totals.revenue)} tone="emerald" />
-            <KpiCard icon={<Activity className="h-4 w-4" />} label="Ad Spend" value={money(totals.adSpend)} tone="sky" />
-            <KpiCard icon={<Coins className="h-4 w-4" />} label="Net Profit" value={money(totals.netProfit)} tone="amber" />
-            <KpiCard icon={<TrendingUp className="h-4 w-4" />} label="ROAS" value={ratio(totals.roas)} tone="violet" />
+            <KpiCard icon={<Activity className="h-4 w-4" />} label="Ad Spend" value={adTotalsAvailable ? money(totals.adSpend) : '—'} tone="sky" />
+            <KpiCard icon={<Coins className="h-4 w-4" />} label="Net Profit" value={adTotalsAvailable ? money(totals.netProfit) : '—'} tone="amber" />
+            <KpiCard icon={<TrendingUp className="h-4 w-4" />} label="ROAS" value={adTotalsAvailable ? ratio(totals.roas) : '—'} tone="violet" />
             <KpiCard icon={<ShoppingCart className="h-4 w-4" />} label="AOV" value={money(totals.aov)} tone="pink" />
             <KpiCard icon={<Store className="h-4 w-4" />} label="Orders" value={num(totals.orders)} tone="cyan" />
           </section>
@@ -322,7 +338,7 @@ export default function StoreOverviewPage() {
                         {(row.error || row.missingDays > 0) && <p className="mt-1 max-w-xs text-xs text-amber-700 dark:text-amber-300">{row.error || `${row.missingDays} day(s) missing reports`}</p>}
                       </td>
                       <td className="px-4 py-3 font-medium text-emerald-600 dark:text-emerald-300">{row.hasData ? money(row.revenue) : '—'}</td>
-                      <td className="px-4 py-3">{row.hasData ? money(row.adSpend) : '—'}</td>
+                      <td className="px-4 py-3">{row.hasData && row.adMetricsAvailable ? money(row.adSpend) : '—'}</td>
                       {showPhysicalOnlyColumns && <td className="px-4 py-3">{row.hasData ? money(row.cogs) : '—'}</td>}
                       <td className="px-4 py-3">{row.hasData ? money(row.fees) : '—'}</td>
                       {showPhysicalOnlyColumns && <td className="px-4 py-3">{row.hasData ? money(row.shipping) : '—'}</td>}
@@ -334,13 +350,13 @@ export default function StoreOverviewPage() {
                           </p>
                         )}
                       </td>
-                      <td className="px-4 py-3 font-semibold text-text-primary">{row.hasData ? money(row.netProfit) : '—'}</td>
-                      <td className="px-4 py-3">{row.hasData ? pct(row.margin) : '—'}</td>
-                      <td className="px-4 py-3">{row.hasData ? ratio(row.roas) : '—'}</td>
+                      <td className="px-4 py-3 font-semibold text-text-primary">{row.hasData && row.adMetricsAvailable ? money(row.netProfit) : '—'}</td>
+                      <td className="px-4 py-3">{row.hasData && row.adMetricsAvailable ? pct(row.margin) : '—'}</td>
+                      <td className="px-4 py-3">{row.hasData && row.adMetricsAvailable ? ratio(row.roas) : '—'}</td>
                       <td className="px-4 py-3">{row.hasData ? money(row.aov) : '—'}</td>
                       <td className="px-4 py-3">{row.hasData ? num(row.orders) : '—'}</td>
-                      <td className="px-4 py-3">{row.hasData ? money(row.cpc) : '—'}</td>
-                      <td className="px-4 py-3">{row.hasData ? money(row.cpm) : '—'}</td>
+                      <td className="px-4 py-3">{row.hasData && row.adMetricsAvailable ? money(row.cpc) : '—'}</td>
+                      <td className="px-4 py-3">{row.hasData && row.adMetricsAvailable ? money(row.cpm) : '—'}</td>
                       <td className="px-4 py-3 text-xs text-text-muted">{relativeDate(row.lastSyncedAt)}</td>
                     </tr>
                   ))}
@@ -362,7 +378,7 @@ export default function StoreOverviewPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-sm text-text-secondary">
                   <p>Revenue: <span className="font-semibold text-emerald-600 dark:text-emerald-300">{row.hasData ? money(row.revenue) : '—'}</span></p>
-                  <p>Ad Spend: <span className="font-medium">{row.hasData ? money(row.adSpend) : '—'}</span></p>
+                  <p>Ad Spend: <span className="font-medium">{row.hasData && row.adMetricsAvailable ? money(row.adSpend) : '—'}</span></p>
                   {showPhysicalOnlyColumns && (
                     <p>COGS: <span className="font-medium">{row.hasData ? money(row.cogs) : '—'}</span></p>
                   )}
@@ -371,13 +387,13 @@ export default function StoreOverviewPage() {
                     <p>Shipping: <span className="font-medium">{row.hasData ? money(row.shipping) : '—'}</span></p>
                   )}
                   <p>Refunds: <span className="font-medium">{row.hasData ? money(row.refunds) : '—'}</span></p>
-                  <p>Net Profit: <span className="font-medium">{row.hasData ? money(row.netProfit) : '—'}</span></p>
-                  <p>Margin: <span className="font-medium">{row.hasData ? pct(row.margin) : '—'}</span></p>
-                  <p>ROAS: <span className="font-medium">{row.hasData ? ratio(row.roas) : '—'}</span></p>
+                  <p>Net Profit: <span className="font-medium">{row.hasData && row.adMetricsAvailable ? money(row.netProfit) : '—'}</span></p>
+                  <p>Margin: <span className="font-medium">{row.hasData && row.adMetricsAvailable ? pct(row.margin) : '—'}</span></p>
+                  <p>ROAS: <span className="font-medium">{row.hasData && row.adMetricsAvailable ? ratio(row.roas) : '—'}</span></p>
                   <p>AOV: <span className="font-medium">{row.hasData ? money(row.aov) : '—'}</span></p>
                   <p>Orders: <span className="font-medium">{row.hasData ? num(row.orders) : '—'}</span></p>
-                  <p>CPC: <span className="font-medium">{row.hasData ? money(row.cpc) : '—'}</span></p>
-                  <p>CPM: <span className="font-medium">{row.hasData ? money(row.cpm) : '—'}</span></p>
+                  <p>CPC: <span className="font-medium">{row.hasData && row.adMetricsAvailable ? money(row.cpc) : '—'}</span></p>
+                  <p>CPM: <span className="font-medium">{row.hasData && row.adMetricsAvailable ? money(row.cpm) : '—'}</span></p>
                 </div>
               </div>
             ))}

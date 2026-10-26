@@ -66,13 +66,13 @@ test('report rebuild follows successful source syncs for each date batch', async
   assert.deepEqual(calls, [['orders', '2026-10-01'], ['meta', '2026-10-01'], ['report', '2026-10-01'], ['orders', '2026-10-08'], ['meta', '2026-10-08'], ['report', '2026-10-08']]);
 });
 
-test('failed source prevents a fresh report while still checking the other source', async () => {
+test('Shopify failure prevents report rebuild', async () => {
   const calls = [];
   await assert.rejects(refreshStoreRange(refreshRanges('2026-10-26', '2026-10-26'), async step => {
     calls.push(step);
     if (step === 'orders') throw new Error('No Shopify connection');
   }, () => {}), /Reconnect Shopify/);
-  assert.deepEqual(calls, ['orders', 'meta']);
+  assert.deepEqual(calls, ['orders']);
 });
 
 test('errors are actionable and raw HTML/token values are not exposed', () => {
@@ -152,4 +152,75 @@ test('manual Meta refresh uses historical dates and follows every page', async (
   assert.equal(calls[0].time_range, JSON.stringify({ since: '2026-09-01', until: '2026-09-07' }));
   assert.equal(calls[1].after, 'cursor-2');
   assert.deepEqual(saved.map(row => row.ad_id), ['ad-1', 'ad-2']);
+});
+
+
+test('Shopify-only refresh completes every batch without contacting Meta', async () => {
+  const calls = [];
+  const result = await refreshStoreRange(refreshRanges('2026-10-01', '2026-10-08'), async (step, range, metaSynced) => {
+    calls.push([step, range.from, metaSynced]);
+  }, () => {}, false);
+  assert.deepEqual(calls, [
+    ['orders', '2026-10-01', undefined], ['report', '2026-10-01', false],
+    ['orders', '2026-10-08', undefined], ['report', '2026-10-08', false],
+  ]);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('expired Meta never blocks Shopify reports or subsequent date batches', async () => {
+  const calls = [];
+  const result = await refreshStoreRange(refreshRanges('2026-10-01', '2026-10-08'), async (step, range, metaSynced) => {
+    calls.push([step, range.from, metaSynced]);
+    if (step === 'meta') throw new Error('Meta API: token expired');
+  }, () => {}, true);
+  assert.deepEqual(calls.map(call => call[0]), ['orders', 'meta', 'report', 'orders', 'report']);
+  assert.ok(calls.filter(call => call[0] === 'report').every(call => call[2] === false));
+  assert.match(result.warnings[0], /Reconnect Meta/);
+});
+
+test('unlinked Meta is a warning, not a Shopify failure or a successful ad sync', async () => {
+  let reportMetaSynced;
+  const result = await refreshStoreRange(refreshRanges('2026-10-26', '2026-10-26'), async (step, _range, metaSynced) => {
+    if (step === 'meta') return { warning: 'No active Meta accounts' };
+    if (step === 'report') reportMetaSynced = metaSynced;
+  }, () => {}, true);
+  assert.equal(reportMetaSynced, false);
+  assert.deepEqual(result.warnings, ['No active Meta accounts']);
+});
+
+test('Shopify-only report saves revenue without reading Meta and persists unavailable status', async () => {
+  let snapshot;
+  const { GET } = loadRoute('src/app/api/cron/backfill-pnl/route.ts', {
+    '@/app/api/lib/supabase-persistence': {
+      isSupabasePersistenceEnabled: () => true,
+      rest: async (path, init) => {
+        if (init?.method === 'POST') { snapshot = JSON.parse(init.body)[0]; return; }
+        if (path.startsWith('/daily_pnl_snapshots')) return [{ cogs: 10, shipping_cost: 5, ad_spend: 20 }];
+        return [];
+      },
+    },
+    '@/app/api/lib/supabase-pagination': { fetchAllRestRows: async path => {
+      if (path.startsWith('/meta_spend_cache')) throw new Error('Meta reads must not block Shopify-only refresh');
+      if (path.startsWith('/shopify_orders_cache')) return [{ shopify_order_id: '1', total_price: 100, financial_status: 'paid', line_items: '[]' }];
+      return [];
+    } },
+    '@/lib/pnl/dateUtils': { getStoreDateRangeForPeriod: () => ({ start: '2026-10-26T00:00:00Z', end: '2026-10-26T23:59:59Z' }) },
+    '@/lib/pnl/orderFeeSync': { getOrderFees: async () => new Map() },
+  });
+  const response = await GET(new NextRequest('https://example.test/api/cron/backfill-pnl?storeId=store-1&from=2026-10-26&to=2026-10-26&feeMode=estimate&metaStatus=unavailable', { headers: { authorization: 'Bearer test-secret' } }));
+  assert.equal((await response.json()).results[0].status, 'ok');
+  assert.equal(snapshot.revenue, 100);
+  assert.equal(snapshot.order_count, 1);
+  assert.equal(snapshot.ad_spend, 20); // Keep the saved figure, but do not present it as fresh.
+  assert.equal(snapshot.meta_synced, false);
+  assert.equal(snapshot.shopify_synced, true);
+  assert.deepEqual(JSON.parse(snapshot.warnings), ['overview_meta_unavailable']);
+});
+
+test('refresh report endpoint defaults to Shopify-only and forwards explicit Meta success', async () => {
+  const route = refreshRoute({ result: { ok: true, results: [{ status: 'ok' }] } });
+  assert.equal((await route.post({ step: 'report' })).status, 200);
+  assert.equal(route.calls[0].nextUrl.searchParams.get('metaStatus'), 'unavailable');
+  assert.equal((await route.post({ step: 'report', metaSynced: true })).status, 200);
+  assert.equal(route.calls[1].nextUrl.searchParams.get('metaStatus'), 'synced');
 });

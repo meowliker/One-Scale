@@ -58,6 +58,7 @@ interface StoreOverviewRow {
   hasData: boolean;
   error: string | null;
   missingDays: number;
+  adMetricsAvailable: boolean;
 }
 
 interface StoreOverviewResponse {
@@ -65,7 +66,7 @@ interface StoreOverviewResponse {
   since: string;
   until: string;
   stores: StoreOverviewRow[];
-  totals: Omit<StoreOverviewRow, 'storeId' | 'storeName' | 'domain' | 'lastSyncedAt' | 'productType' | 'hasData' | 'error' | 'missingDays'>;
+  totals: Omit<StoreOverviewRow, 'storeId' | 'storeName' | 'domain' | 'lastSyncedAt' | 'productType' | 'hasData' | 'error' | 'missingDays' | 'adMetricsAvailable'>;
   generatedAt: string;
 }
 
@@ -85,6 +86,7 @@ interface DailyPnlSnapshotRow {
   partial_refund_amount: number | string | null;
   currency: string | null;
   synced_at: string | null;
+  warnings: string | string[] | null;
 }
 
 const DASHBOARD_CURRENCY = 'USD';
@@ -226,7 +228,7 @@ async function getDailyPnlSnapshots(
     `/daily_pnl_snapshots?store_id=eq.${encodeURIComponent(storeId)}` +
       `&date=gte.${encodeURIComponent(startDate)}` +
       `&date=lte.${encodeURIComponent(endDate)}` +
-      '&select=date,revenue,cogs,ad_spend,shipping_cost,transaction_fees,refunds,chargeback_loss,net_profit,margin,order_count,full_refund_amount,partial_refund_amount,currency,synced_at' +
+      '&select=date,revenue,cogs,ad_spend,shipping_cost,transaction_fees,refunds,chargeback_loss,net_profit,margin,order_count,full_refund_amount,partial_refund_amount,currency,synced_at,warnings' +
       '&order=date.asc',
   );
 }
@@ -309,7 +311,7 @@ export async function GET(request: NextRequest) {
           .map((a) => a.ad_account_id);
         const scopeId = buildScopeId(activeAccountIds);
 
-        const [storeSettings, snapshotRows, exactSnap, spendRows] = await Promise.all([
+        const [storeSettings, snapshotRows, exactSnap, spendResult] = await Promise.all([
           useSupabase
             ? getPersistentPnlStoreSettings(store.id)
             : Promise.resolve(getPnlStoreSettings(store.id)),
@@ -319,15 +321,21 @@ export async function GET(request: NextRequest) {
           scopeId !== 'accounts:'
             ? (
                 useSupabase
-                  ? getPersistentMetaEndpointSnapshot<Campaign[]>(store.id, 'campaigns', scopeId, exactVariant)
+                  ? getPersistentMetaEndpointSnapshot<Campaign[]>(store.id, 'campaigns', scopeId, exactVariant).catch(() => null)
                   : Promise.resolve(getMetaEndpointSnapshot<Campaign[]>(store.id, 'campaigns', scopeId, exactVariant))
               )
             : Promise.resolve(null),
           useSupabase ? fetchAllRestRows<{ spend: number; clicks: number; impressions: number; updated_at: string }>(
             `/meta_spend_cache?store_id=eq.${encodeURIComponent(store.id)}&date=gte.${since}&date=lte.${until}&select=spend,clicks,impressions,updated_at`
-          ) : Promise.resolve([]),
+          ).catch(() => null) : Promise.resolve([]),
         ]);
 
+        const spendRows = spendResult || [];
+        const adMetricsAvailable = spendResult !== null && !snapshotRows.some(row =>
+          typeof row.warnings === 'string'
+            ? row.warnings.includes('overview_meta_unavailable')
+            : row.warnings?.includes('overview_meta_unavailable')
+        );
         const productType: 'physical' | 'digital' = storeSettings?.product_type === 'digital' ? 'digital' : 'physical';
         const hasDailySnapshots = snapshotRows.length > 0;
         const pnlRows = hasDailySnapshots
@@ -442,6 +450,7 @@ export async function GET(request: NextRequest) {
           impressions,
           lastSyncedAt: snapshotSyncedAt || maxIsoTimestamp(pnlRows.map(row => row.synced_at)) || null,
           hasData: hasCachedRangeRows,
+          adMetricsAvailable,
           error: null,
           missingDays: Math.max(0, expectedDays - selectedDates.size),
         };
@@ -451,7 +460,7 @@ export async function GET(request: NextRequest) {
           revenue: 0, adSpend: 0, cogs: 0, fees: 0, shipping: 0, refunds: 0, fullRefundAmount: 0,
           partialRefundAmount: 0, netProfit: 0, margin: 0, roas: 0, aov: 0, orders: 0,
           cpc: 0, cpm: 0, clicks: 0, impressions: 0, lastSyncedAt: null,
-          hasData: false, error: refreshError(error), missingDays: 0,
+          hasData: false, adMetricsAvailable: false, error: refreshError(error), missingDays: 0,
         };
       }
     }));

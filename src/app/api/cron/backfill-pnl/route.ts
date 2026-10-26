@@ -39,6 +39,8 @@ export async function GET(req: NextRequest) {
   const to = req.nextUrl.searchParams.get('to');
   const feeMode = req.nextUrl.searchParams.get('feeMode') || 'exact';
   const useEstimatedFees = feeMode === 'estimate';
+  const metaStatus = req.nextUrl.searchParams.get('metaStatus');
+  const skipMeta = metaStatus === 'unavailable';
 
   if (!storeId || !from || !to) {
     return NextResponse.json({ error: 'storeId, from, to required' }, { status: 400 });
@@ -74,8 +76,8 @@ export async function GET(req: NextRequest) {
       const { start: tzStart, end: tzEnd } = getStoreDateRangeForPeriod(date, date, tz);
 
       // Refreshing sources must not erase costs already configured in the report.
-      const existing = await rest<Array<{ cogs: number; shipping_cost: number }>>(
-        `/daily_pnl_snapshots?store_id=eq.${enc(storeId)}&date=eq.${date}&select=cogs,shipping_cost&limit=1`
+      const existing = await rest<Array<{ cogs: number; shipping_cost: number; ad_spend: number }>>(
+        `/daily_pnl_snapshots?store_id=eq.${enc(storeId)}&date=eq.${date}&select=cogs,shipping_cost,ad_spend&limit=1`
       );
       const cogs = Number(existing[0]?.cogs) || 0;
       const shipping = Number(existing[0]?.shipping_cost) || 0;
@@ -124,10 +126,10 @@ export async function GET(req: NextRequest) {
       }
 
       // 4. Ad spend
-      const spendRows = await fetchAllRestRows<{ spend: number }>(
+      const spendRows = skipMeta ? [] : await fetchAllRestRows<{ spend: number }>(
         `/meta_spend_cache?store_id=eq.${enc(storeId)}&date=eq.${date}&select=spend`
       );
-      const totalAdSpend = spendRows.reduce((s, r) => s + (Number(r.spend) || 0), 0);
+      const totalAdSpend = skipMeta ? Number(existing[0]?.ad_spend) || 0 : spendRows.reduce((s, r) => s + (Number(r.spend) || 0), 0);
 
       // 5. Fees total
       let totalFees = 0;
@@ -192,12 +194,12 @@ export async function GET(req: NextRequest) {
           reserved_funds: totalReserve,
           net_revenue: orderRevenue - totalRefunds,
           net_profit: netProfit, margin,
-          warnings: '[]',
+          warnings: JSON.stringify(skipMeta ? ['overview_meta_unavailable'] : []),
           product_breakdown: JSON.stringify(productBreakdownArr),
           fee_method: useEstimatedFees ? 'estimated' : (orderFeeMap.size > 0 ? 'bt_exact' : 'none'),
           synced_at: new Date().toISOString(),
-          shopify_synced: paidOrders.length > 0,
-          meta_synced: totalAdSpend > 0,
+          shopify_synced: metaStatus ? true : paidOrders.length > 0,
+          meta_synced: metaStatus ? metaStatus === 'synced' : totalAdSpend > 0,
         }]),
       });
 

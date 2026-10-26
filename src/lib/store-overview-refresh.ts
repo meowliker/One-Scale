@@ -1,5 +1,5 @@
 export type RefreshStep = 'orders' | 'meta' | 'report';
-export type RefreshProgress = { state: 'queued' | 'syncing' | 'success' | 'error'; message: string };
+export type RefreshProgress = { state: 'queued' | 'syncing' | 'success' | 'warning' | 'error'; message: string };
 
 export function refreshError(value: unknown): string {
   const message = value instanceof Error ? value.message : String(value || '');
@@ -47,18 +47,35 @@ export function assertRefreshResult(body: {
 
 export async function refreshStoreRange(
   ranges: Array<{ from: string; to: string }>,
-  run: (step: RefreshStep, range: { from: string; to: string }) => Promise<void>,
+  run: (step: RefreshStep, range: { from: string; to: string }, metaSynced?: boolean) => Promise<void | { warning?: string }>,
   progress: (message: string) => void,
-): Promise<void> {
+  includeMeta = true,
+): Promise<{ warnings: string[] }> {
+  const warnings = new Set<string>();
+  let tryMeta = includeMeta;
   for (const range of ranges) {
-    const errors: string[] = [];
-    for (const step of ['orders', 'meta'] as const) {
-      progress(`${step === 'orders' ? 'Syncing Shopify orders' : 'Syncing Meta spend'} · ${range.from}–${range.to}`);
-      try { await run(step, range); } catch (error) { errors.push(refreshError(error)); }
+    progress(`Syncing Shopify orders · ${range.from}–${range.to}`);
+    // A Shopify failure must still stop the report from being overwritten.
+    try { await run('orders', range); } catch (error) { throw new Error(refreshError(error)); }
+    let metaSynced = false;
+    if (tryMeta) {
+      progress(`Syncing Meta spend · ${range.from}–${range.to}`);
+      try {
+        const result = await run('meta', range);
+        if (result?.warning) {
+          warnings.add(result.warning);
+          tryMeta = false;
+        } else {
+          metaSynced = true;
+        }
+      } catch (error) {
+        warnings.add(refreshError(error));
+        // Don't repeat a failed connection for every week in the date range.
+        tryMeta = false;
+      }
     }
-    // Never label a report fresh when one of its required sources failed.
-    if (errors.length) throw new Error(errors.join(' '));
-    progress(`Rebuilding reports · ${range.from}–${range.to}`);
-    await run('report', range);
+    progress(`Updating Shopify reports · ${range.from}–${range.to}`);
+    await run('report', range, metaSynced);
   }
+  return { warnings: [...warnings] };
 }
