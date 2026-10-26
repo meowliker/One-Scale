@@ -6,49 +6,28 @@
  * maps to the correct UTC window.
  */
 
-/**
- * Compute the UTC offset string (e.g., "-05:00", "+05:30") for an IANA timezone.
- */
-export function getTzOffset(ianaTimezone: string): string {
-  const now = new Date();
-  const utc = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }));
-  const tz = new Date(now.toLocaleString('en-US', { timeZone: ianaTimezone }));
-  const diffMinutes = (tz.getTime() - utc.getTime()) / 60000;
-  const sign = diffMinutes >= 0 ? '+' : '-';
-  const abs = Math.abs(diffMinutes);
-  const h = String(Math.floor(abs / 60)).padStart(2, '0');
-  const m = String(Math.round(abs % 60)).padStart(2, '0');
-  return `${sign}${h}:${m}`;
+import { fromZonedTime, formatInTimeZone } from 'date-fns-tz';
+
+/** Offset at the requested instant, including that date's daylight saving rules. */
+export function getTzOffset(ianaTimezone: string, at: Date = new Date()): string {
+  return formatInTimeZone(at, ianaTimezone, 'xxx');
 }
 
-/**
- * Get start-of-day and end-of-day timestamps for a single date in a timezone.
- *
- * Returns ISO strings with timezone offset (e.g., "2026-03-01T00:00:00-05:00").
- * PostgREST handles these correctly for timestamptz columns.
- */
 export function getStoreDateRange(
   date: string,
   ianaTimezone: string,
 ): { start: string; end: string } {
-  const offset = getTzOffset(ianaTimezone);
-  return {
-    start: `${date}T00:00:00${offset}`,
-    end: `${date}T23:59:59${offset}`,
-  };
+  return getStoreDateRangeForPeriod(date, date, ianaTimezone);
 }
 
-/**
- * Get start/end timestamps for a date range in a timezone.
- */
+/** Convert each boundary independently; a local day can be 23 or 25 hours. */
 export function getStoreDateRangeForPeriod(
   startDate: string,
   endDate: string,
   ianaTimezone: string,
 ): { start: string; end: string } {
-  const offset = getTzOffset(ianaTimezone);
   return {
-    start: `${startDate}T00:00:00${offset}`,
-    end: `${endDate}T23:59:59${offset}`,
+    start: fromZonedTime(`${startDate}T00:00:00.000`, ianaTimezone).toISOString(),
+    end: fromZonedTime(`${endDate}T23:59:59.999`, ianaTimezone).toISOString(),
   };
 }

@@ -3,12 +3,12 @@ import {
   rest,
   isSupabasePersistenceEnabled,
   listPersistentStores,
-  listPersistentStoreAdAccounts,
   logStoreError,
 } from '@/app/api/lib/supabase-persistence';
 import { fetchAllRestRows } from '@/app/api/lib/supabase-pagination';
 import { daysAgoInTimezone } from '@/lib/timezone';
 import { getStoreDateRangeForPeriod } from '@/lib/pnl/dateUtils';
+import { syncShopifyReportingTimezone } from '@/lib/pnl/shopifyReportingTimezone';
 import { getOrderFees } from '@/lib/pnl/orderFeeSync';
 import { runAutoSync } from '@/lib/pnl/autoProductConfig';
 import { getShopifyToken } from '@/app/api/lib/tokens';
@@ -169,9 +169,8 @@ export async function GET(req: NextRequest) {
   for (const store of stores) {
     const start = Date.now();
     try {
-      // Get store timezone from ad accounts
-      const adAccounts = await listPersistentStoreAdAccounts(store.id);
-      const tz = adAccounts[0]?.timezone || 'America/New_York';
+      // Use the same Shopify calendar boundaries as manual report refreshes.
+      const tz = await syncShopifyReportingTimezone(store.id);
 
       // Sync balance transactions FIRST — P&L depends on this data
       try {

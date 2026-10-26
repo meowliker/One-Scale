@@ -118,6 +118,7 @@ test('failed report reads never write zero snapshots over existing data', async 
     },
     '@/app/api/lib/supabase-pagination': { fetchAllRestRows: async () => { throw new Error('Supabase timeout'); } },
     '@/lib/pnl/dateUtils': { getStoreDateRangeForPeriod: () => ({ start: '2026-10-26T00:00:00Z', end: '2026-10-26T23:59:59Z' }) },
+    '@/lib/pnl/shopifyReportingTimezone': { syncShopifyReportingTimezone: async () => 'America/Guatemala' },
     '@/lib/pnl/orderFeeSync': { getOrderFees: async () => new Map() },
   });
   const response = await GET(new NextRequest('https://example.test/api/cron/backfill-pnl?storeId=store-1&from=2026-10-26&to=2026-10-26&feeMode=estimate', { headers: { authorization: 'Bearer test-secret' } }));
@@ -205,6 +206,7 @@ test('Shopify-only report saves revenue without reading Meta and persists unavai
       return [];
     } },
     '@/lib/pnl/dateUtils': { getStoreDateRangeForPeriod: () => ({ start: '2026-10-26T00:00:00Z', end: '2026-10-26T23:59:59Z' }) },
+    '@/lib/pnl/shopifyReportingTimezone': { syncShopifyReportingTimezone: async () => 'America/Guatemala' },
     '@/lib/pnl/orderFeeSync': { getOrderFees: async () => new Map() },
   });
   const response = await GET(new NextRequest('https://example.test/api/cron/backfill-pnl?storeId=store-1&from=2026-10-26&to=2026-10-26&feeMode=estimate&metaStatus=unavailable', { headers: { authorization: 'Bearer test-secret' } }));
@@ -302,4 +304,80 @@ test('server marks transient failures retryable and auth failures permanent', as
     const route = refreshRoute({ result: { results: [{ status: 'error', error }] } });
     assert.equal((await (await route.post()).json()).retryable, retryable);
   }
+});
+
+const dateUtils = loadRoute('src/lib/pnl/dateUtils.ts', { 'date-fns-tz': require('date-fns-tz') });
+function timezoneModule({ existing = [], shop = { iana_timezone: 'America/Guatemala', currency: 'USD' }, failSave = false } = {}) {
+  const writes = [];
+  const module = loadRoute('src/lib/pnl/shopifyReportingTimezone.ts', {
+    '@/app/api/lib/tokens': { getShopifyToken: async () => ({ accessToken: 'test-token', shopDomain: 'example.myshopify.com' }) },
+    '@/app/api/lib/shopify-client': { fetchFromShopify: async () => ({ shop }) },
+    '@/app/api/lib/supabase-persistence': { rest: async (path, init) => {
+      if (!init) return existing;
+      if (failSave) throw new Error('Supabase save failed');
+      writes.push({ path, method: init.method, body: JSON.parse(init.body) });
+    } },
+  });
+  return { ...module, writes };
+}
+
+test('missing store config is initialized from Shopify, and existing preferences are preserved', async () => {
+  const fresh = timezoneModule();
+  assert.equal(await fresh.syncShopifyReportingTimezone('store-1'), 'America/Guatemala');
+  assert.equal(fresh.writes[0].body.iana_timezone, 'America/Guatemala');
+  assert.equal(fresh.writes[0].body.currency, 'USD');
+  const existing = timezoneModule({ existing: [{ store_id: 'store-1', reporting_currency: 'EUR' }] });
+  await existing.syncShopifyReportingTimezone('store-1');
+  assert.equal(existing.writes[0].method, 'PATCH');
+  assert.deepEqual(existing.writes[0].body, { iana_timezone: 'America/Guatemala' });
+});
+
+test('missing or invalid Shopify timezone and failed config saves stop report generation', async () => {
+  for (const shop of [{ currency: 'USD' }, { iana_timezone: 'Invalid/Zone', currency: 'USD' }]) {
+    const module = timezoneModule({ shop });
+    await assert.rejects(module.syncShopifyReportingTimezone('store-1'), /timezone/);
+    assert.equal(module.writes.length, 0);
+  }
+  await assert.rejects(timezoneModule({ failSave: true }).syncShopifyReportingTimezone('store-1'), /save failed/);
+});
+
+test('calendar boundaries use historical offsets and include the whole DST transition day', () => {
+  const { getStoreDateRange } = dateUtils;
+  assert.equal(getStoreDateRange('2026-01-15', 'America/New_York').start, '2026-01-15T05:00:00.000Z');
+  assert.equal(getStoreDateRange('2026-07-15', 'America/New_York').start, '2026-07-15T04:00:00.000Z');
+  for (const [date, hours] of [['2026-03-08', 23], ['2026-11-01', 25]]) {
+    const { start, end } = getStoreDateRange(date, 'America/New_York');
+    assert.equal(Date.parse(end) - Date.parse(start) + 1, hours * 3600000);
+  }
+});
+
+test('Acurewell regression: exclude eight previous-day orders totaling $164.04 from Today', async () => {
+  const prices = [29.76, 38.71, 28.79, 21.93, 9.97, 5.97, 9.97, 18.94];
+  const orders = [
+    ...prices.map((total_price, i) => ({ shopify_order_id: String(i), total_price, created_at: '2026-10-25T23:00:00-06:00' })),
+    ...[18.94, 4.97, 4.97].map((total_price, i) => ({ shopify_order_id: String(i + 8), total_price, created_at: '2026-10-26T01:00:00-06:00' })),
+  ].map(o => ({ ...o, financial_status: 'paid', line_items: '[]' }));
+  assert.equal(Number(orders.reduce((sum, o) => sum + o.total_price, 0).toFixed(2)), 192.92);
+  let snapshot;
+  const { GET } = loadRoute('src/app/api/cron/backfill-pnl/route.ts', {
+    '@/app/api/lib/supabase-persistence': {
+      isSupabasePersistenceEnabled: () => true,
+      rest: async (_path, init) => { if (init?.method === 'POST') snapshot = JSON.parse(init.body)[0]; return []; },
+    },
+    '@/lib/pnl/shopifyReportingTimezone': timezoneModule(),
+    '@/lib/pnl/dateUtils': dateUtils,
+    '@/lib/pnl/orderFeeSync': { getOrderFees: async () => new Map() },
+    '@/app/api/lib/supabase-pagination': { fetchAllRestRows: async path => {
+      if (!path.startsWith('/shopify_orders_cache')) return [];
+      const query = decodeURIComponent(path);
+      const start = query.match(/created_at.gte.([^,]+)/)[1];
+      const end = query.match(/created_at.lte.([^\)]+)/)[1];
+      assert.equal(start, '2026-10-26T06:00:00.000Z');
+      return orders.filter(o => Date.parse(o.created_at) >= Date.parse(start) && Date.parse(o.created_at) <= Date.parse(end));
+    } },
+  });
+  const response = await GET(new NextRequest('https://example.test/api/cron/backfill-pnl?storeId=store-1&from=2026-10-26&to=2026-10-26&feeMode=estimate&metaStatus=unavailable', { headers: { authorization: 'Bearer test-secret' } }));
+  assert.equal((await response.json()).results[0].status, 'ok');
+  assert.equal(snapshot.order_count, 3);
+  assert.equal(Number(snapshot.revenue.toFixed(2)), 28.88);
 });

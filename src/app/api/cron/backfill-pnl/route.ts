@@ -20,6 +20,7 @@ import {
 import { fetchAllRestRows } from '@/app/api/lib/supabase-pagination';
 import { getStoreDateRangeForPeriod } from '@/lib/pnl/dateUtils';
 import { getOrderFees } from '@/lib/pnl/orderFeeSync';
+import { syncShopifyReportingTimezone } from '@/lib/pnl/shopifyReportingTimezone';
 
 export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
@@ -46,14 +47,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'storeId, from, to required' }, { status: 400 });
   }
 
-  // Get store timezone
-  const tzRows = await rest<Array<{ timezone: string | null }>>(
-    `/store_ad_accounts?store_id=eq.${enc(storeId)}&is_active=eq.true&select=timezone&limit=1`
-  );
-  const config = await rest<Array<{ iana_timezone: string | null }>>(
-    `/store_config?store_id=eq.${enc(storeId)}&select=iana_timezone&limit=1`
-  );
-  const tz = config[0]?.iana_timezone || tzRows[0]?.timezone || 'America/New_York';
+  const tz = await syncShopifyReportingTimezone(storeId);
 
   // Get product_config for classification
   const productConfigRows = await rest<Array<{ product_id: string }>>(
