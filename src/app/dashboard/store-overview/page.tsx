@@ -17,7 +17,7 @@ import type { DateRangePreset } from '@/types/analytics';
 import { DateRangePicker } from '@/components/ui/DateRangePicker';
 import { getDateRange } from '@/lib/dateUtils';
 import { STORE_REPORTING_TIMEZONE, storeDayInTimezone } from '@/lib/timezone';
-import { refreshError, refreshRanges, refreshStoreRange, type RefreshProgress } from '@/lib/store-overview-refresh';
+import { createRefreshRunner, refreshError, refreshRanges, refreshStoreRange, type RefreshProgress } from '@/lib/store-overview-refresh';
 import { useStoreStore } from '@/stores/storeStore';
 
 type StoreOverviewRow = {
@@ -144,6 +144,8 @@ export default function StoreOverviewPage() {
   const [refreshStatus, setRefreshStatus] = useState<Record<string, RefreshProgress>>({});
   const [refreshFailure, setRefreshFailure] = useState<string | null>(null);
   const refreshLock = useRef(false);
+  const completedBatches = useRef(new Map<string, { warning?: string }>());
+  const checkpointScope = useRef('');
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
@@ -175,6 +177,9 @@ export default function StoreOverviewPage() {
     controller.current = abort;
     try {
       const ranges = refreshRanges(rangeStart(dateRange), rangeEnd(dateRange));
+      const scope = `${cacheKey}:${includeMeta}`;
+      if (!onlyStoreId || checkpointScope.current !== scope) completedBatches.current.clear();
+      checkpointScope.current = scope;
       const latest = await refetch();
       if (latest.error || !latest.data) throw latest.error || new Error('Could not load stores.');
       const targets = latest.data.stores.filter(store => !onlyStoreId || store.storeId === onlyStoreId);
@@ -186,28 +191,25 @@ export default function StoreOverviewPage() {
           const update = (state: RefreshProgress['state'], message: string) => {
             if (!abort.signal.aborted) setRefreshStatus(previous => ({ ...previous, [store.storeId]: { state, message } }));
           };
+          let phase = 'Starting sync';
+          const run = createRefreshRunner(completedBatches.current, abort.signal,
+            attempt => update('syncing', `${phase} · Temporary failure, retrying (${attempt}/3)`));
           try {
-            const result = await refreshStoreRange(ranges, async (step, range, metaSynced) => {
-              const response = await fetch('/api/dashboard/store-overview/refresh', {
-                method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-                signal: AbortSignal.any([abort.signal, AbortSignal.timeout(310_000)]),
-                body: JSON.stringify({ storeId: store.storeId, step, ...range, metaSynced }),
-              });
-              const result = await response.json().catch(() => ({ error: `Sync failed (HTTP ${response.status}).` }));
-              if (!response.ok || result.ok !== true) throw new Error(result.error || 'Sync did not complete.');
-              return { warning: result.warning as string | undefined };
-            }, message => update('syncing', message), includeMeta);
+            const result = await refreshStoreRange(ranges, (step, range, metaSynced) =>
+              run({ storeId: store.storeId, step, ...range, metaSynced }),
+            message => { phase = message; update('syncing', message); }, includeMeta);
             update(result.warnings.length ? 'warning' : 'success', result.warnings.length
               ? `Shopify updated. ${result.warnings.join(' ')}`
               : includeMeta ? 'Shopify and Meta reports updated' : 'Shopify revenue, orders and reports updated');
             // Make each completed store visible without waiting for every store.
             if (!abort.signal.aborted) await refetch();
           } catch (error) {
-            update('error', refreshError(error));
+            update('error', `${phase}: ${refreshError(error)}`);
           }
         }
       };
-      await Promise.all([worker(), worker()]);
+      // Keep one store in flight to avoid bursts of long-running sync requests.
+      await worker();
       if (!abort.signal.aborted) await refetch();
     } catch (error) {
       if (!abort.signal.aborted) setRefreshFailure(refreshError(error));
@@ -217,6 +219,11 @@ export default function StoreOverviewPage() {
     }
   }
 
+  const statuses = Object.values(refreshStatus);
+  const syncedCount = statuses.filter(status => status.state === 'success' || status.state === 'warning').length;
+  const failedCount = statuses.filter(status => status.state === 'error').length;
+  const warningCount = statuses.filter(status => status.state === 'warning').length;
+  const pendingCount = statuses.length - syncedCount - failedCount;
   const stores = data?.stores || [];
   const totals = data?.totals;
   const adTotalsAvailable = stores.every(row => row.hasData && row.adMetricsAvailable);
@@ -258,7 +265,7 @@ export default function StoreOverviewPage() {
 
       {(refreshFailure || Object.keys(refreshStatus).length > 0) && (
         <section aria-live="polite" className="space-y-2 rounded-2xl border border-border bg-surface p-4 text-sm">
-          <p className="font-semibold">{refreshing ? 'Syncing stores' : 'Refresh results'} · {Object.values(refreshStatus).filter(status => status.state === 'success' || status.state === 'warning' || status.state === 'error').length}/{Object.keys(refreshStatus).length} completed</p>
+          <p className="font-semibold">{refreshing ? 'Syncing stores' : 'Refresh results'} · {syncedCount}/{statuses.length} synced{warningCount > 0 && ` · ${warningCount} with warnings`}{failedCount > 0 && ` · ${failedCount} failed`}{pendingCount > 0 && ` · ${pendingCount} remaining`}</p>
           <p className="text-xs text-text-muted">Keep this page open until syncing finishes. Reports use estimated transaction fees; refunds use the saved payment transactions.</p>
           {refreshFailure && <p role="alert" className="text-red-600 dark:text-red-300">{refreshFailure}</p>}
           {Object.entries(refreshStatus).map(([storeId, status]) => (

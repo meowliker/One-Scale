@@ -4,11 +4,11 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import ts from 'typescript';
-import { assertRefreshResult, refreshError, refreshRanges, refreshStoreRange } from '../src/lib/store-overview-refresh.ts';
+import { assertRefreshResult, createRefreshRunner, isTransientRefreshError, refreshError, refreshRanges, refreshStoreRange } from '../src/lib/store-overview-refresh.ts';
 
 const require = createRequire(import.meta.url);
 const { NextRequest, NextResponse } = require('next/server');
-const helper = { assertRefreshResult, refreshError, refreshRanges };
+const helper = { assertRefreshResult, isTransientRefreshError, refreshError, refreshRanges };
 function loadRoute(file, modules) {
   const source = fs.readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
   const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -223,4 +223,83 @@ test('refresh report endpoint defaults to Shopify-only and forwards explicit Met
   assert.equal(route.calls[0].nextUrl.searchParams.get('metaStatus'), 'unavailable');
   assert.equal((await route.post({ step: 'report', metaSynced: true })).status, 200);
   assert.equal(route.calls[1].nextUrl.searchParams.get('metaStatus'), 'synced');
+});
+
+const refreshInput = { storeId: 'store-1', step: 'orders', from: '2026-09-01', to: '2026-09-07' };
+const success = () => Response.json({ ok: true });
+
+test('interrupted transport and gateway errors retry, then checkpoint successful batches', async () => {
+  const attempts = [], retries = [], waits = [];
+  const run = createRefreshRunner(new Map(), new AbortController().signal, attempt => retries.push(attempt), async input => {
+    attempts.push(input);
+    if (attempts.length === 1) throw new TypeError('Failed to fetch');
+    if (attempts.length === 2) return new Response('Bad gateway', { status: 502 });
+    return success();
+  }, async ms => waits.push(ms));
+  await run(refreshInput);
+  await run(refreshInput);
+  assert.equal(attempts.length, 3);
+  assert.deepEqual(retries, [2, 3]);
+  assert.deepEqual(waits, [2000, 4000]);
+});
+
+test('retry store resumes the failed batch without repeating completed orders or reports', async () => {
+  const completed = new Map(), calls = [];
+  let fail = true;
+  const run = createRefreshRunner(completed, new AbortController().signal, () => {}, async (_url, init) => {
+    const input = JSON.parse(init.body);
+    calls.push([input.step, input.from]);
+    if (input.step === 'report' && input.from === '2026-09-08' && fail) {
+      return Response.json({ ok: false, error: 'database unavailable', retryable: false }, { status: 502 });
+    }
+    return success();
+  });
+  const refresh = () => refreshStoreRange(refreshRanges('2026-09-01', '2026-09-08'),
+    (step, range, metaSynced) => run({ storeId: 'store-1', step, ...range, metaSynced }), () => {}, false);
+  await assert.rejects(refresh());
+  fail = false;
+  await refresh();
+  assert.deepEqual(calls, [['orders', '2026-09-01'], ['report', '2026-09-01'], ['orders', '2026-09-08'], ['report', '2026-09-08'], ['report', '2026-09-08']]);
+});
+
+test('permanent failures and expired sessions are not retried or checkpointed', async () => {
+  for (const response of [Response.json({ error: 'Reconnect Shopify', retryable: false }, { status: 502 }), Response.json({}, { status: 401 })]) {
+    let calls = 0;
+    const completed = new Map();
+    const run = createRefreshRunner(completed, new AbortController().signal, () => assert.fail('Must not retry'), async () => { calls++; return response; });
+    await assert.rejects(run(refreshInput), /Reconnect Shopify|session expired/);
+    assert.equal(calls, 1);
+    assert.equal(completed.size, 0);
+  }
+});
+
+test('network retries are bounded and cancellation stops subsequent attempts', async () => {
+  let calls = 0;
+  const completed = new Map();
+  const abort = new AbortController();
+  const failedFetch = async () => { calls++; throw new TypeError('Failed to fetch'); };
+  const run = createRefreshRunner(completed, abort.signal, () => {}, failedFetch, async () => {});
+  await assert.rejects(run(refreshInput), /Retry store to resume/);
+  assert.equal(calls, 3);
+  assert.equal(completed.size, 0);
+  const cancelRun = createRefreshRunner(completed, abort.signal, () => abort.abort(), failedFetch);
+  await assert.rejects(cancelRun(refreshInput), { name: 'AbortError' });
+  assert.equal(calls, 4);
+});
+
+test('interrupted response body is retried instead of caching an incomplete success', async () => {
+  let calls = 0;
+  const run = createRefreshRunner(new Map(), new AbortController().signal, () => {}, async () => {
+    calls++;
+    return calls === 1 ? new Response('{') : success();
+  }, async () => {});
+  await run(refreshInput);
+  assert.equal(calls, 2);
+});
+
+test('server marks transient failures retryable and auth failures permanent', async () => {
+  for (const [error, retryable] of [['Supabase statement timeout', true], ['No Shopify connection', false]]) {
+    const route = refreshRoute({ result: { results: [{ status: 'error', error }] } });
+    assert.equal((await (await route.post()).json()).retryable, retryable);
+  }
 });

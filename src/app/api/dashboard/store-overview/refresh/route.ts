@@ -5,12 +5,14 @@ import { getPersistentStore, isSupabasePersistenceEnabled, listPersistentStoreAd
 import { GET as syncOrders } from '@/app/api/cron/sync-shopify-orders/route';
 import { GET as syncMeta } from '@/app/api/cron/sync-meta-spend/route';
 import { GET as rebuildReport } from '@/app/api/cron/backfill-pnl/route';
-import { assertRefreshResult, refreshError, refreshRanges } from '@/lib/store-overview-refresh';
+import { assertRefreshResult, isTransientRefreshError, refreshError, refreshRanges } from '@/lib/store-overview-refresh';
 
 export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
+  const startedAt = Date.now();
+  let context: Record<string, string> = {};
   try {
     const session = await readSessionFromRequest(request);
     if (!session.authenticated) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -20,6 +22,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Store, dates and sync step are required.' }, { status: 400 });
     }
     const { storeId, from, to, step } = body;
+    context = { storeId, from, to, step };
     try {
       if (refreshRanges(from, to).length !== 1) throw new Error('Each sync batch must be at most 7 days.');
     } catch (error) {
@@ -30,7 +33,7 @@ export async function POST(request: NextRequest) {
       if (!allowed.includes(storeId)) return NextResponse.json({ error: 'Store access denied.' }, { status: 403 });
     }
     if (!isSupabasePersistenceEnabled() || !process.env.CRON_SECRET) {
-      return NextResponse.json({ error: 'Store sync is not configured on this server.' }, { status: 503 });
+      return NextResponse.json({ error: 'Store sync is not configured on this server.', retryable: false }, { status: 503 });
     }
     if (!await getPersistentStore(storeId)) return NextResponse.json({ error: 'Store not found.' }, { status: 404 });
     if (step === 'meta') {
@@ -49,8 +52,12 @@ export async function POST(request: NextRequest) {
     const response = await handler(internal);
     const result = await response.json().catch(() => ({ error: `Sync failed (HTTP ${response.status}).` }));
     assertRefreshResult(result, response.ok);
+    console.info('store-overview-refresh', { ...context, status: 'success', durationMs: Date.now() - startedAt });
     return NextResponse.json({ ok: true, step, storeId, from, to });
   } catch (error) {
-    return NextResponse.json({ ok: false, error: refreshError(error) }, { status: 502 });
+    const message = refreshError(error);
+    const retryable = isTransientRefreshError(error);
+    console.error('store-overview-refresh', { ...context, status: 'error', durationMs: Date.now() - startedAt, error: message, retryable });
+    return NextResponse.json({ ok: false, error: message, retryable }, { status: 502 });
   }
 }

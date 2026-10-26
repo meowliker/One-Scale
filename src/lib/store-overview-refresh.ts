@@ -1,8 +1,78 @@
 export type RefreshStep = 'orders' | 'meta' | 'report';
 export type RefreshProgress = { state: 'queued' | 'syncing' | 'success' | 'warning' | 'error'; message: string };
 
+type RefreshResult = { warning?: string };
+type RefreshRequest = { storeId: string; step: RefreshStep; from: string; to: string; metaSynced?: boolean };
+
+export function isTransientRefreshError(value: unknown): boolean {
+  const message = value instanceof Error ? value.message : String(value || '');
+  return /failed to fetch|fetch failed|network|timeout|timed out|ECONNRESET|ETIMEDOUT|rate.?limit|429|502|503|504|520|522|524/i.test(message);
+}
+
+function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    signal.throwIfAborted();
+    const cancel = () => { clearTimeout(timer); reject(signal.reason); };
+    const timer = setTimeout(() => { signal.removeEventListener('abort', cancel); resolve(); }, ms);
+    signal.addEventListener('abort', cancel, { once: true });
+  });
+}
+
+// Only cache acknowledged successes. Retrying these cache-upsert operations is safe
+// even if a response was lost after the server finished writing the batch.
+export function createRefreshRunner(
+  completed: Map<string, RefreshResult>,
+  signal: AbortSignal,
+  onRetry: (attempt: number) => void,
+  request: typeof fetch = fetch,
+  wait = waitForRetry,
+): (input: RefreshRequest) => Promise<RefreshResult> {
+  return async input => {
+    signal.throwIfAborted();
+    const key = JSON.stringify(input);
+    const saved = completed.get(key);
+    if (saved) return saved;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      let retryable = false;
+      try {
+        let response: Response;
+        try {
+          response = await request('/api/dashboard/store-overview/refresh', {
+            method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+            signal: AbortSignal.any([signal, AbortSignal.timeout(310_000)]),
+            body: JSON.stringify(input),
+          });
+        } catch (error) {
+          retryable = error instanceof TypeError || isTransientRefreshError(error);
+          throw error;
+        }
+        retryable = [429, 502, 503, 504].includes(response.status);
+        const body = await response.json().catch(() => { retryable = response.ok || retryable; throw new Error(`Sync response was interrupted (HTTP ${response.status}).`); });
+        if (body.retryable === false) retryable = false;
+        if (!response.ok || body.ok !== true) {
+          if (response.status === 401) throw new Error('Your session expired. Sign in again, then retry.');
+          throw new Error(body.error || `Sync did not complete (HTTP ${response.status}).`);
+        }
+        const result = { warning: body.warning as string | undefined };
+        // A Meta warning can be retried after reconnecting without redoing Shopify.
+        if (!result.warning) completed.set(key, result);
+        return result;
+      } catch (error) {
+        signal.throwIfAborted();
+        if (!retryable || attempt === 3) throw new Error(refreshError(error));
+        onRetry(attempt + 1);
+        await wait(attempt * 2_000, signal);
+      }
+    }
+    throw new Error('Sync did not complete.');
+  };
+}
+
 export function refreshError(value: unknown): string {
   const message = value instanceof Error ? value.message : String(value || '');
+  if (/failed to fetch|fetch failed|network|response was interrupted/i.test(message)) {
+    return 'Connection to the sync server was interrupted. Retry store to resume unfinished batches.';
+  }
   if (/No Meta connection/i.test(message) || (/Meta|OAuthException/i.test(message) && /token|session|190/i.test(message))) {
     return 'Meta connection expired or was revoked. Reconnect Meta Ads in Settings → Integrations, then retry.';
   }
