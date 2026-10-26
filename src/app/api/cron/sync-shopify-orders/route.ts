@@ -12,8 +12,6 @@ import { fetchDisputesGraphQL, normalizeDisputeStatus } from '@/app/api/lib/shop
 export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
 
-const SHOPIFY_API_VERSION = '2024-01';
-
 // ---- Cron Log ----
 
 async function logCron(
@@ -117,7 +115,7 @@ export async function GET(req: NextRequest) {
 
       if (explicitFrom) {
         // Targeted date range backfill (e.g. ?from=2026-03-18&to=2026-03-19)
-        sinceMs = Date.now() - new Date(explicitFrom + 'T00:00:00Z').getTime();
+        sinceMs = Date.now() - (new Date(explicitFrom + 'T00:00:00Z').getTime() - 14 * 60 * 60 * 1000);
       } else if (backfillDays > 0) {
         // Explicit backfill mode
         sinceMs = backfillDays * 24 * 60 * 60 * 1000;
@@ -177,6 +175,7 @@ export async function GET(req: NextRequest) {
         if (batch.length < 250) { hasMore = false; }
         else { sinceId = String(batch[batch.length - 1].id); }
       }
+      if (hasMore) throw new Error('Order sync exceeded the page limit. Select a smaller date range.');
 
       // Deduplicate orders (Shopify pagination can return same order twice if updated mid-fetch)
       const seenOrderIds = new Set<number>();

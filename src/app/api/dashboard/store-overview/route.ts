@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { DateRangePreset } from '@/types/analytics';
+import { refreshError } from '@/lib/store-overview-refresh';
+import { fetchAllRestRows } from '@/app/api/lib/supabase-pagination';
 import type { Campaign } from '@/types/campaign';
 import {
   STORE_REPORTING_TIMEZONE,
@@ -13,12 +15,10 @@ import {
   getCachedPnLDays,
   getMetaEndpointSnapshot,
   getPnlStoreSettings,
-  getPnlCacheLastSynced,
 } from '@/app/api/lib/db';
 import {
   getPersistentCachedPnLDays,
   getPersistentPnlStoreSettings,
-  getPersistentPnlCacheLastSynced,
   isSupabasePersistenceEnabled,
   listPersistentStores,
   rest,
@@ -55,6 +55,9 @@ interface StoreOverviewRow {
   clicks: number;
   impressions: number;
   lastSyncedAt: string | null;
+  hasData: boolean;
+  error: string | null;
+  missingDays: number;
 }
 
 interface StoreOverviewResponse {
@@ -62,7 +65,7 @@ interface StoreOverviewResponse {
   since: string;
   until: string;
   stores: StoreOverviewRow[];
-  totals: Omit<StoreOverviewRow, 'storeId' | 'storeName' | 'domain' | 'lastSyncedAt' | 'productType'>;
+  totals: Omit<StoreOverviewRow, 'storeId' | 'storeName' | 'domain' | 'lastSyncedAt' | 'productType' | 'hasData' | 'error' | 'missingDays'>;
   generatedAt: string;
 }
 
@@ -110,7 +113,7 @@ function normalizeCurrencyCode(value?: string | null): string {
 async function getStoreCurrency(storeId: string): Promise<string> {
   const rows = await rest<Array<{ currency: string | null; reporting_currency?: string | null }>>(
     `/store_config?store_id=eq.${encodeURIComponent(storeId)}&select=currency,reporting_currency&limit=1`,
-  ).catch(() => []);
+  );
   return normalizeCurrencyCode(rows[0]?.currency || rows[0]?.reporting_currency);
 }
 
@@ -225,7 +228,7 @@ async function getDailyPnlSnapshots(
       `&date=lte.${encodeURIComponent(endDate)}` +
       '&select=date,revenue,cogs,ad_spend,shipping_cost,transaction_fees,refunds,chargeback_loss,net_profit,margin,order_count,full_refund_amount,partial_refund_amount,currency,synced_at' +
       '&order=date.asc',
-  ).catch(() => []);
+  );
 }
 
 function parsePreset(value: string | null): DateRangePreset {
@@ -297,148 +300,160 @@ export async function GET(request: NextRequest) {
       : allStores;
 
     const rows: StoreOverviewRow[] = await Promise.all(visibleStores.map(async (store) => {
-      const storeSince = since;
-      const storeUntil = until;
-      const exactVariant = `range:since:${storeSince}|until:${storeUntil}|strict:1`;
-      const activeAccountIds = (store.adAccounts || [])
-        .filter((a) => Number(a.is_active) === 1)
-        .map((a) => a.ad_account_id);
-      const scopeId = buildScopeId(activeAccountIds);
+      try {
+        const storeSince = since;
+        const storeUntil = until;
+        const exactVariant = `range:since:${storeSince}|until:${storeUntil}|strict:1`;
+        const activeAccountIds = (store.adAccounts || [])
+          .filter((a) => Number(a.is_active) === 1)
+          .map((a) => a.ad_account_id);
+        const scopeId = buildScopeId(activeAccountIds);
 
-      const [storeSettings, snapshotRows, exactSnap] = await Promise.all([
-        useSupabase
-          ? getPersistentPnlStoreSettings(store.id)
-          : Promise.resolve(getPnlStoreSettings(store.id)),
-        useSupabase
-          ? getDailyPnlSnapshots(store.id, storeSince, storeUntil)
-          : Promise.resolve([] as DailyPnlSnapshotRow[]),
-        scopeId !== 'accounts:'
-          ? (
+        const [storeSettings, snapshotRows, exactSnap, spendRows] = await Promise.all([
+          useSupabase
+            ? getPersistentPnlStoreSettings(store.id)
+            : Promise.resolve(getPnlStoreSettings(store.id)),
+          useSupabase
+            ? getDailyPnlSnapshots(store.id, storeSince, storeUntil)
+            : Promise.resolve([] as DailyPnlSnapshotRow[]),
+          scopeId !== 'accounts:'
+            ? (
+                useSupabase
+                  ? getPersistentMetaEndpointSnapshot<Campaign[]>(store.id, 'campaigns', scopeId, exactVariant)
+                  : Promise.resolve(getMetaEndpointSnapshot<Campaign[]>(store.id, 'campaigns', scopeId, exactVariant))
+              )
+            : Promise.resolve(null),
+          useSupabase ? fetchAllRestRows<{ spend: number; clicks: number; impressions: number; updated_at: string }>(
+            `/meta_spend_cache?store_id=eq.${encodeURIComponent(store.id)}&date=gte.${since}&date=lte.${until}&select=spend,clicks,impressions,updated_at`
+          ) : Promise.resolve([]),
+        ]);
+
+        const productType: 'physical' | 'digital' = storeSettings?.product_type === 'digital' ? 'digital' : 'physical';
+        const hasDailySnapshots = snapshotRows.length > 0;
+        const pnlRows = hasDailySnapshots
+          ? []
+          : (
               useSupabase
-                ? getPersistentMetaEndpointSnapshot<Campaign[]>(store.id, 'campaigns', scopeId, exactVariant)
-                : Promise.resolve(getMetaEndpointSnapshot<Campaign[]>(store.id, 'campaigns', scopeId, exactVariant))
-            )
-          : Promise.resolve(null),
-      ]);
+                ? await getPersistentCachedPnLDays(store.id, storeSince, storeUntil)
+                : getCachedPnLDays(store.id, storeSince, storeUntil)
+            );
+        const hasCachedRangeRows = hasDailySnapshots || pnlRows.length > 0;
 
-      const productType: 'physical' | 'digital' = storeSettings?.product_type === 'digital' ? 'digital' : 'physical';
-      const hasDailySnapshots = snapshotRows.length > 0;
-      const pnlRows = hasDailySnapshots
-        ? []
-        : (
-            useSupabase
-              ? await getPersistentCachedPnLDays(store.id, storeSince, storeUntil)
-              : getCachedPnLDays(store.id, storeSince, storeUntil)
-          );
-      const hasCachedRangeRows = hasDailySnapshots || pnlRows.length > 0;
+        // Store Overview must stay fast and range-strict, so it only reads cached
+        // store P&L plus exact-range Meta snapshots instead of live-scanning Shopify.
+        let revenue = hasDailySnapshots
+          ? snapshotRows.reduce((sum, row) => sum + asNumber(row.revenue), 0)
+          : pnlRows.reduce((sum, row) => sum + (row.revenue || 0), 0);
+        let adSpend = hasDailySnapshots
+          ? snapshotRows.reduce((sum, row) => sum + asNumber(row.ad_spend), 0)
+          : pnlRows.reduce((sum, row) => sum + (row.ad_spend || 0), 0);
+        const cogsRaw = hasDailySnapshots
+          ? snapshotRows.reduce((sum, row) => sum + asNumber(row.cogs), 0)
+          : pnlRows.reduce((sum, row) => sum + (row.cogs || 0), 0);
+        let fees = hasDailySnapshots
+          ? snapshotRows.reduce((sum, row) => sum + asNumber(row.transaction_fees), 0)
+          : pnlRows.reduce((sum, row) => sum + (row.fees || 0), 0);
+        const shippingRaw = hasDailySnapshots
+          ? snapshotRows.reduce((sum, row) => sum + asNumber(row.shipping_cost), 0)
+          : pnlRows.reduce((sum, row) => sum + (row.shipping || 0), 0);
+        let refunds = hasDailySnapshots
+          ? snapshotRows.reduce((sum, row) => sum + asNumber(row.refunds) + asNumber(row.chargeback_loss), 0)
+          : pnlRows.reduce((sum, row) => sum + (row.refunds || 0), 0);
+        let fullRefundAmount = hasDailySnapshots
+          ? snapshotRows.reduce((sum, row) => sum + asNumber(row.full_refund_amount), 0)
+          : pnlRows.reduce((sum, row) => sum + (row.full_refund_amount || 0), 0);
+        let partialRefundAmount = hasDailySnapshots
+          ? snapshotRows.reduce((sum, row) => sum + asNumber(row.partial_refund_amount), 0)
+          : pnlRows.reduce((sum, row) => sum + (row.partial_refund_amount || 0), 0);
+        let netProfit = hasDailySnapshots
+          ? snapshotRows.reduce((sum, row) => sum + asNumber(row.net_profit), 0)
+          : pnlRows.reduce((sum, row) => sum + (row.net_profit || 0), 0);
+        const orders = hasDailySnapshots
+          ? snapshotRows.reduce((sum, row) => sum + asNumber(row.order_count), 0)
+          : pnlRows.reduce((sum, row) => sum + (row.order_count || 0), 0);
+        let cogs = productType === 'digital' ? 0 : cogsRaw;
+        let shipping = productType === 'digital' ? 0 : shippingRaw;
+        const storeCurrency = await getStoreCurrency(store.id);
+        const storeToDashboardRate = await getExchangeRate(storeCurrency, DASHBOARD_CURRENCY, storeUntil);
 
-      // Store Overview must stay fast and range-strict, so it only reads cached
-      // store P&L plus exact-range Meta snapshots instead of live-scanning Shopify.
-      let revenue = hasDailySnapshots
-        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.revenue), 0)
-        : pnlRows.reduce((sum, row) => sum + (row.revenue || 0), 0);
-      let adSpend = hasDailySnapshots
-        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.ad_spend), 0)
-        : pnlRows.reduce((sum, row) => sum + (row.ad_spend || 0), 0);
-      const cogsRaw = hasDailySnapshots
-        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.cogs), 0)
-        : pnlRows.reduce((sum, row) => sum + (row.cogs || 0), 0);
-      let fees = hasDailySnapshots
-        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.transaction_fees), 0)
-        : pnlRows.reduce((sum, row) => sum + (row.fees || 0), 0);
-      const shippingRaw = hasDailySnapshots
-        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.shipping_cost), 0)
-        : pnlRows.reduce((sum, row) => sum + (row.shipping || 0), 0);
-      let refunds = hasDailySnapshots
-        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.refunds) + asNumber(row.chargeback_loss), 0)
-        : pnlRows.reduce((sum, row) => sum + (row.refunds || 0), 0);
-      let fullRefundAmount = hasDailySnapshots
-        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.full_refund_amount), 0)
-        : pnlRows.reduce((sum, row) => sum + (row.full_refund_amount || 0), 0);
-      let partialRefundAmount = hasDailySnapshots
-        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.partial_refund_amount), 0)
-        : pnlRows.reduce((sum, row) => sum + (row.partial_refund_amount || 0), 0);
-      let netProfit = hasDailySnapshots
-        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.net_profit), 0)
-        : pnlRows.reduce((sum, row) => sum + (row.net_profit || 0), 0);
-      const orders = hasDailySnapshots
-        ? snapshotRows.reduce((sum, row) => sum + asNumber(row.order_count), 0)
-        : pnlRows.reduce((sum, row) => sum + (row.order_count || 0), 0);
-      let cogs = productType === 'digital' ? 0 : cogsRaw;
-      let shipping = productType === 'digital' ? 0 : shippingRaw;
-      const storeCurrency = await getStoreCurrency(store.id);
-      const storeToDashboardRate = await getExchangeRate(storeCurrency, DASHBOARD_CURRENCY, storeUntil);
+        let campaignSnapshot: Campaign[] = [];
+        if (exactSnap?.data?.length) {
+          campaignSnapshot = exactSnap.data;
+        }
 
-      let campaignSnapshot: Campaign[] = [];
-      let campaignSyncedAt: string | null = null;
-      if (exactSnap?.data?.length) {
-        campaignSnapshot = exactSnap.data;
-        campaignSyncedAt = exactSnap.updatedAt;
+        const campaignTraffic = spendRows.length ? {
+          clicks: spendRows.reduce((sum, row) => sum + asNumber(row.clicks), 0),
+          impressions: spendRows.reduce((sum, row) => sum + asNumber(row.impressions), 0),
+        } : sumCampaignTraffic(campaignSnapshot);
+        const campaignSpend = campaignSnapshot.reduce((sum, c) => sum + (c.metrics?.spend || 0), 0);
+
+        // Keep range strict; if P&L cache is missing for selected dates, fill from exact-range sources only.
+        if (!hasCachedRangeRows) {
+          adSpend = campaignSpend;
+        }
+
+        if (storeCurrency !== DASHBOARD_CURRENCY && storeToDashboardRate > 0) {
+          revenue *= storeToDashboardRate;
+          cogs *= storeToDashboardRate;
+          fees *= storeToDashboardRate;
+          shipping *= storeToDashboardRate;
+          refunds *= storeToDashboardRate;
+          fullRefundAmount *= storeToDashboardRate;
+          partialRefundAmount *= storeToDashboardRate;
+        }
+
+        const clicks = campaignTraffic.clicks;
+        const impressions = campaignTraffic.impressions;
+        const trafficSpend = adSpend;
+
+        netProfit = revenue - cogs - adSpend - shipping - fees - refunds;
+
+        const margin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
+        const roas = adSpend > 0 ? revenue / adSpend : 0;
+        const aov = orders > 0 ? revenue / orders : 0;
+        const cpc = clicks > 0 ? trafficSpend / clicks : 0;
+        const cpm = impressions > 0 ? (trafficSpend * 1000) / impressions : 0;
+
+        const snapshotSyncedAt = maxIsoTimestamp(snapshotRows.map((row) => row.synced_at));
+        const selectedDates = new Set(hasDailySnapshots ? snapshotRows.map(row => row.date) : pnlRows.map(row => row.date));
+        const expectedDays = Math.round((Date.parse(until) - Date.parse(since)) / 86400000) + 1;
+
+        return {
+          storeId: store.id,
+          storeName: store.name,
+          domain: store.domain,
+          productType,
+          revenue: toMoney(revenue),
+          adSpend: toMoney(adSpend),
+          cogs: toMoney(cogs),
+          fees: toMoney(fees),
+          shipping: toMoney(shipping),
+          refunds: toMoney(refunds),
+          fullRefundAmount: toMoney(fullRefundAmount),
+          partialRefundAmount: toMoney(partialRefundAmount),
+          netProfit: toMoney(netProfit),
+          margin: toRate(margin),
+          roas: toRate(roas),
+          aov: toMoney(aov),
+          orders,
+          cpc: toMoney(cpc),
+          cpm: toMoney(cpm),
+          clicks,
+          impressions,
+          lastSyncedAt: snapshotSyncedAt || maxIsoTimestamp(pnlRows.map(row => row.synced_at)) || null,
+          hasData: hasCachedRangeRows,
+          error: null,
+          missingDays: Math.max(0, expectedDays - selectedDates.size),
+        };
+      } catch (error) {
+        return {
+          storeId: store.id, storeName: store.name, domain: store.domain, productType: 'physical',
+          revenue: 0, adSpend: 0, cogs: 0, fees: 0, shipping: 0, refunds: 0, fullRefundAmount: 0,
+          partialRefundAmount: 0, netProfit: 0, margin: 0, roas: 0, aov: 0, orders: 0,
+          cpc: 0, cpm: 0, clicks: 0, impressions: 0, lastSyncedAt: null,
+          hasData: false, error: refreshError(error), missingDays: 0,
+        };
       }
-
-      const campaignTraffic = sumCampaignTraffic(campaignSnapshot);
-      const campaignSpend = campaignSnapshot.reduce((sum, c) => sum + (c.metrics?.spend || 0), 0);
-
-      // Keep range strict; if P&L cache is missing for selected dates, fill from exact-range sources only.
-      if (!hasCachedRangeRows) {
-        adSpend = campaignSpend;
-      }
-
-      if (storeCurrency !== DASHBOARD_CURRENCY && storeToDashboardRate > 0) {
-        revenue *= storeToDashboardRate;
-        cogs *= storeToDashboardRate;
-        fees *= storeToDashboardRate;
-        shipping *= storeToDashboardRate;
-        refunds *= storeToDashboardRate;
-        fullRefundAmount *= storeToDashboardRate;
-        partialRefundAmount *= storeToDashboardRate;
-      }
-
-      const clicks = campaignTraffic.clicks;
-      const impressions = campaignTraffic.impressions;
-      const trafficSpend = adSpend;
-
-      netProfit = revenue - cogs - adSpend - shipping - fees - refunds;
-
-      const margin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
-      const roas = adSpend > 0 ? revenue / adSpend : 0;
-      const aov = orders > 0 ? revenue / orders : 0;
-      const cpc = clicks > 0 ? trafficSpend / clicks : 0;
-      const cpm = impressions > 0 ? (trafficSpend * 1000) / impressions : 0;
-
-      const snapshotSyncedAt = maxIsoTimestamp(snapshotRows.map((row) => row.synced_at));
-      const pnlSyncedAt = snapshotSyncedAt || campaignSyncedAt
-        ? null
-        : (
-            useSupabase
-              ? await getPersistentPnlCacheLastSynced(store.id)
-              : getPnlCacheLastSynced(store.id)
-          );
-
-      return {
-        storeId: store.id,
-        storeName: store.name,
-        domain: store.domain,
-        productType,
-        revenue: toMoney(revenue),
-        adSpend: toMoney(adSpend),
-        cogs: toMoney(cogs),
-        fees: toMoney(fees),
-        shipping: toMoney(shipping),
-        refunds: toMoney(refunds),
-        fullRefundAmount: toMoney(fullRefundAmount),
-        partialRefundAmount: toMoney(partialRefundAmount),
-        netProfit: toMoney(netProfit),
-        margin: toRate(margin),
-        roas: toRate(roas),
-        aov: toMoney(aov),
-        orders,
-        cpc: toMoney(cpc),
-        cpm: toMoney(cpm),
-        clicks,
-        impressions,
-        lastSyncedAt: campaignSyncedAt || snapshotSyncedAt || pnlSyncedAt || null,
-      };
     }));
 
     const totalsBase = rows.reduce(
@@ -504,11 +519,11 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(payload, {
       headers: {
-        'Cache-Control': 'private, max-age=60, stale-while-revalidate=120',
+        'Cache-Control': 'private, no-store',
       },
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to load store overview';
+    const message = refreshError(err);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

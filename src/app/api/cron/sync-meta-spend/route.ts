@@ -9,6 +9,7 @@ import {
 } from '@/app/api/lib/supabase-persistence';
 import { fetchFromMeta } from '@/app/api/lib/meta-client';
 import { todayInTimezone, daysAgoInTimezone } from '@/lib/timezone';
+import { refreshRanges } from '@/lib/store-overview-refresh';
 
 export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
@@ -137,6 +138,7 @@ type StoreLike = {
 };
 
 type ActiveAccount = {
+  platform?: string;
   ad_account_id: string;
   is_active: number | boolean;
   timezone?: string | null;
@@ -158,7 +160,7 @@ function parseDaysParam(raw: string | null, fallback: number): number {
 
 function normalizeActiveMetaAccounts(rows: ActiveAccount[]): ActiveAccount[] {
   return rows
-    .filter((row) => Number(row.is_active) === 1)
+    .filter((row) => (row.platform || 'meta') === 'meta' && Number(row.is_active) === 1)
     .sort((a, b) => a.ad_account_id.localeCompare(b.ad_account_id));
 }
 
@@ -259,6 +261,15 @@ export async function GET(req: NextRequest) {
   const stores = await listPersistentStores();
   const params = req.nextUrl.searchParams;
   const requestedStoreId = (params.get('storeId') || params.get('store_id') || '').trim();
+  const from = params.get('from');
+  const to = params.get('to');
+  if (from || to) {
+    try {
+      if (!requestedStoreId || !from || !to || refreshRanges(from, to).length !== 1) throw new Error('Invalid range');
+    } catch {
+      return NextResponse.json({ error: 'A store and a valid range of up to 7 days are required.' }, { status: 400 });
+    }
+  }
   const forceAll = params.get('full') === '1';
   const explicitAuto = params.get('auto') === '1';
   const isVercelCron = (req.headers.get('x-vercel-cron') || '').length > 0;
@@ -318,6 +329,29 @@ export async function GET(req: NextRequest) {
           : `act_${account.ad_account_id}`;
         const tz = account.timezone || 'America/New_York';
         const today = todayInTimezone(tz);
+
+        // Manual refresh must fetch the selected dates, including historical ranges,
+        // and exhaust pagination before claiming this account was synced.
+        if (from && to) {
+          let after: string | undefined;
+          const seen = new Set<string>();
+          do {
+            const page = await fetchFromMeta<{ data: MetaInsightRow[]; paging?: { next?: string; cursors?: { after?: string } } }>(
+              metaConn.access_token, `/${adAccountId}/insights`, {
+                time_range: JSON.stringify({ since: from, until: to }),
+                time_increment: '1',
+                fields: 'campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,actions,action_values',
+                level: 'ad', limit: '500', action_attribution_windows: '7d_click,1d_view',
+                ...(after ? { after } : {}),
+              },
+            );
+            totalRows += await upsertMetaSpendRows(store.id, adAccountId, page.data || [], from);
+            after = page.paging?.next ? page.paging.cursors?.after : undefined;
+            if (page.paging?.next && (!after || seen.has(after))) throw new Error('Meta pagination did not complete. Retry this store.');
+            if (after) seen.add(after);
+          } while (after);
+          continue;
+        }
 
         // ---- Pass 1: Fetch today's ad-level insights with attribution windows ----
         const todayData = await fetchFromMeta<{

@@ -47,13 +47,16 @@ export async function GET(req: NextRequest) {
   // Get store timezone
   const tzRows = await rest<Array<{ timezone: string | null }>>(
     `/store_ad_accounts?store_id=eq.${enc(storeId)}&is_active=eq.true&select=timezone&limit=1`
-  ).catch(() => []);
-  const tz = tzRows[0]?.timezone || 'America/New_York';
+  );
+  const config = await rest<Array<{ iana_timezone: string | null }>>(
+    `/store_config?store_id=eq.${enc(storeId)}&select=iana_timezone&limit=1`
+  );
+  const tz = config[0]?.iana_timezone || tzRows[0]?.timezone || 'America/New_York';
 
   // Get product_config for classification
   const productConfigRows = await rest<Array<{ product_id: string }>>(
     `/product_config?store_id=eq.${enc(storeId)}&is_active=eq.true&select=product_id`
-  ).catch(() => []);
+  );
   const configMainIds = new Set(productConfigRows.map(r => r.product_id));
 
   // Generate date list
@@ -70,13 +73,20 @@ export async function GET(req: NextRequest) {
     try {
       const { start: tzStart, end: tzEnd } = getStoreDateRangeForPeriod(date, date, tz);
 
+      // Refreshing sources must not erase costs already configured in the report.
+      const existing = await rest<Array<{ cogs: number; shipping_cost: number }>>(
+        `/daily_pnl_snapshots?store_id=eq.${enc(storeId)}&date=eq.${date}&select=cogs,shipping_cost&limit=1`
+      );
+      const cogs = Number(existing[0]?.cogs) || 0;
+      const shipping = Number(existing[0]?.shipping_cost) || 0;
+
       // 1. Orders for this date
       const dayOrders = await fetchAllRestRows<{
         shopify_order_id: string; total_price: number; subtotal_price: number;
         financial_status: string; line_items: string;
       }>(
         `/shopify_orders_cache?store_id=eq.${enc(storeId)}&and=(created_at.gte.${enc(tzStart)},created_at.lte.${enc(tzEnd)})&select=shopify_order_id,total_price,subtotal_price,financial_status,line_items`
-      ).catch(() => []);
+      );
 
       const paidOrders = dayOrders.filter(o => o.financial_status !== 'refunded' && o.financial_status !== 'voided');
       const orderIds = paidOrders.map(o => String(o.shopify_order_id));
@@ -94,7 +104,7 @@ export async function GET(req: NextRequest) {
       let totalRefunds = 0, totalCbLoss = 0, totalCbWon = 0, totalCbFees = 0, totalDebits = 0, totalCredits = 0, totalReserve = 0;
       const btByDate = await fetchAllRestRows<{ type: string; amount: string; fee: string; net: string }>(
         `/shopify_balance_transactions?store_id=eq.${enc(storeId)}&type=neq.charge&type=neq.payout&and=(processed_at.gte.${enc(tzStart)},processed_at.lte.${enc(tzEnd)})&select=type,amount,fee,net`
-      ).catch(() => []);
+      );
 
       for (const t of btByDate) {
         const amount = parseFloat(t.amount || '0');
@@ -114,9 +124,9 @@ export async function GET(req: NextRequest) {
       }
 
       // 4. Ad spend
-      const spendRows = await rest<Array<{ spend: number }>>(
+      const spendRows = await fetchAllRestRows<{ spend: number }>(
         `/meta_spend_cache?store_id=eq.${enc(storeId)}&date=eq.${date}&select=spend`
-      ).catch(() => []);
+      );
       const totalAdSpend = spendRows.reduce((s, r) => s + (Number(r.spend) || 0), 0);
 
       // 5. Fees total
@@ -162,7 +172,7 @@ export async function GET(req: NextRequest) {
         unitsSold: acc.units, fees: Math.round(acc.fees * 100) / 100, orders: acc.orders,
       })).sort((a, b) => b.revenue - a.revenue);
 
-      const netProfit = orderRevenue - totalFees - totalAdSpend - totalRefunds - totalCbLoss - totalCbFees - totalDebits + totalCbWon + totalCredits;
+      const netProfit = orderRevenue - cogs - shipping - totalFees - totalAdSpend - totalRefunds - totalCbLoss - totalCbFees - totalDebits + totalCbWon + totalCredits;
       const margin = orderRevenue > 0 ? (netProfit / orderRevenue) * 100 : 0;
 
       // 7. Save — every cost type separate, nothing hidden
@@ -172,7 +182,7 @@ export async function GET(req: NextRequest) {
         body: JSON.stringify([{
           store_id: storeId, date,
           revenue: orderRevenue, order_count: paidOrders.length,
-          cogs: 0, ad_spend: totalAdSpend, shipping_cost: 0,
+          cogs, ad_spend: totalAdSpend, shipping_cost: shipping,
           transaction_fees: totalFees, refunds: totalRefunds,
           full_refund_count: 0, partial_refund_count: 0,
           full_refund_amount: 0, partial_refund_amount: 0,

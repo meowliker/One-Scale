@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Activity,
@@ -17,6 +17,7 @@ import type { DateRangePreset } from '@/types/analytics';
 import { DateRangePicker } from '@/components/ui/DateRangePicker';
 import { getDateRange } from '@/lib/dateUtils';
 import { STORE_REPORTING_TIMEZONE, storeDayInTimezone } from '@/lib/timezone';
+import { refreshError, refreshRanges, refreshStoreRange, type RefreshProgress } from '@/lib/store-overview-refresh';
 import { useStoreStore } from '@/stores/storeStore';
 
 type StoreOverviewRow = {
@@ -42,6 +43,9 @@ type StoreOverviewRow = {
   clicks: number;
   impressions: number;
   lastSyncedAt: string | null;
+  hasData: boolean;
+  error: string | null;
+  missingDays: number;
 };
 
 type StoreOverviewResponse = {
@@ -49,7 +53,7 @@ type StoreOverviewResponse = {
   since: string;
   until: string;
   stores: StoreOverviewRow[];
-  totals: Omit<StoreOverviewRow, 'storeId' | 'storeName' | 'domain' | 'lastSyncedAt' | 'productType'>;
+  totals: Omit<StoreOverviewRow, 'storeId' | 'storeName' | 'domain' | 'lastSyncedAt' | 'productType' | 'hasData' | 'error' | 'missingDays'>;
   generatedAt: string;
 };
 
@@ -134,6 +138,12 @@ function writeStoreOverviewWarmCache(scopeId: string, cacheKey: string, payload:
 export default function StoreOverviewPage() {
   const [dateRange, setDateRange] = useState<StoreOverviewRange>(() => getDateRange('lastMonth'));
   const [hasHydrated, setHasHydrated] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshStatus, setRefreshStatus] = useState<Record<string, RefreshProgress>>({});
+  const [refreshFailure, setRefreshFailure] = useState<string | null>(null);
+  const refreshLock = useRef(false);
+  const controller = useRef<AbortController | null>(null);
+  useEffect(() => () => controller.current?.abort(), []);
   const activeStoreId = useStoreStore((s) => s.activeStoreId);
   const cacheKey = useMemo(() => rangeCacheKey(dateRange), [dateRange]);
 
@@ -154,6 +164,54 @@ export default function StoreOverviewPage() {
     setHasHydrated(true);
   }, []);
 
+  async function handleRefresh(onlyStoreId?: string) {
+    if (refreshLock.current) return;
+    refreshLock.current = true;
+    setRefreshing(true);
+    setRefreshFailure(null);
+    const abort = new AbortController();
+    controller.current = abort;
+    try {
+      const ranges = refreshRanges(rangeStart(dateRange), rangeEnd(dateRange));
+      const latest = await refetch();
+      if (latest.error || !latest.data) throw latest.error || new Error('Could not load stores.');
+      const targets = latest.data.stores.filter(store => !onlyStoreId || store.storeId === onlyStoreId);
+      setRefreshStatus(previous => ({ ...(onlyStoreId ? previous : {}), ...Object.fromEntries(targets.map(store => [store.storeId, { state: 'queued', message: 'Waiting to sync' }])) }));
+      let index = 0;
+      const worker = async () => {
+        while (index < targets.length && !abort.signal.aborted) {
+          const store = targets[index++];
+          const warnings = new Set<string>();
+          const update = (state: RefreshProgress['state'], message: string) => {
+            if (!abort.signal.aborted) setRefreshStatus(previous => ({ ...previous, [store.storeId]: { state, message } }));
+          };
+          try {
+            await refreshStoreRange(ranges, async (step, range) => {
+              const response = await fetch('/api/dashboard/store-overview/refresh', {
+                method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+                signal: AbortSignal.any([abort.signal, AbortSignal.timeout(310_000)]),
+                body: JSON.stringify({ storeId: store.storeId, step, ...range }),
+              });
+              const result = await response.json().catch(() => ({ error: `Sync failed (HTTP ${response.status}).` }));
+              if (!response.ok || result.ok !== true) throw new Error(result.error || 'Sync did not complete.');
+              if (result.warning) warnings.add(result.warning);
+            }, message => update('syncing', message));
+            update('success', warnings.size ? `Orders and reports updated. ${[...warnings].join(' ')}` : 'Orders, ad spend and reports updated');
+          } catch (error) {
+            update('error', refreshError(error));
+          }
+        }
+      };
+      await Promise.all([worker(), worker()]);
+      if (!abort.signal.aborted) await refetch();
+    } catch (error) {
+      if (!abort.signal.aborted) setRefreshFailure(refreshError(error));
+    } finally {
+      refreshLock.current = false;
+      if (!abort.signal.aborted) setRefreshing(false);
+    }
+  }
+
   const stores = data?.stores || [];
   const totals = data?.totals;
   const showPhysicalOnlyColumns = stores.some((row) => row.productType !== 'digital');
@@ -170,20 +228,45 @@ export default function StoreOverviewPage() {
             <p className="mt-1 text-sm text-text-secondary">A single page to track revenue, profit, spend, ROAS, AOV, CPC, CPM across all stores.</p>
           </div>
           <div className="flex items-center gap-2">
-            <DateRangePicker
-              dateRange={dateRange}
-              onRangeChange={(range) => setDateRange(range)}
-            />
+            <fieldset disabled={refreshing}>
+              <DateRangePicker
+                dateRange={dateRange}
+                onRangeChange={(range) => { if (!refreshLock.current) { setDateRange(range); setRefreshStatus({}); setRefreshFailure(null); } }}
+              />
+            </fieldset>
             <button
-              onClick={() => refetch()}
+              disabled={refreshing || isLoading}
+              onClick={() => void handleRefresh()}
               className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-surface px-3 text-sm font-semibold text-text-secondary hover:bg-surface-hover"
             >
-              <RefreshCw className={`h-4 w-4 ${hasHydrated && isFetching ? 'animate-spin' : ''}`} />
-              Refresh
+              <RefreshCw className={`h-4 w-4 ${hasHydrated && (isFetching || refreshing) ? 'animate-spin' : ''}`} />
+              {refreshing ? 'Syncing stores…' : 'Refresh'}
             </button>
           </div>
         </div>
       </section>
+
+      {(refreshFailure || Object.keys(refreshStatus).length > 0) && (
+        <section aria-live="polite" className="space-y-2 rounded-2xl border border-border bg-surface p-4 text-sm">
+          <p className="font-semibold">{refreshing ? 'Syncing stores' : 'Refresh results'} · {Object.values(refreshStatus).filter(status => status.state === 'success' || status.state === 'error').length}/{Object.keys(refreshStatus).length} completed</p>
+          <p className="text-xs text-text-muted">Keep this page open until syncing finishes. Reports use estimated transaction fees; refunds use the saved payment transactions.</p>
+          {refreshFailure && <p role="alert" className="text-red-600 dark:text-red-300">{refreshFailure}</p>}
+          {Object.entries(refreshStatus).map(([storeId, status]) => (
+            <div key={storeId} className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2">
+              <p className={status.state === 'error' ? 'text-red-600 dark:text-red-300' : 'text-text-secondary'}>
+                <span className="font-semibold">{stores.find(store => store.storeId === storeId)?.storeName || storeId}:</span> {status.message}
+              </p>
+              {status.state === 'error' && <button disabled={refreshing} onClick={() => void handleRefresh(storeId)} className="rounded border border-border px-3 py-1 disabled:opacity-50">Retry store</button>}
+            </div>
+          ))}
+        </section>
+      )}
+
+      {(stores.some(store => !store.hasData || store.error || store.missingDays > 0) || Object.values(refreshStatus).some(status => status.state === 'error')) && (
+        <p role="status" className="rounded-xl border border-amber-300/40 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
+          Totals may be incomplete or out of date. Some stores have missing reports or could not be synced for the selected dates. Check the errors and retry.
+        </p>
+      )}
 
       {hasHydrated && isLoading && (
         <div className="flex h-44 items-center justify-center rounded-2xl border border-border bg-surface-elevated">
@@ -193,11 +276,11 @@ export default function StoreOverviewPage() {
 
       {error && (
         <div className="rounded-2xl border border-red-300/35 bg-red-500/10 p-4 text-sm text-red-600 dark:text-red-300">
-          {(error as Error).message}
+          {refreshError(error)}
         </div>
       )}
 
-      {!isLoading && !error && totals && (
+      {!isLoading && totals && (
         <>
           <section className="grid grid-cols-2 gap-3 lg:grid-cols-6">
             <KpiCard icon={<CircleDollarSign className="h-4 w-4" />} label="Revenue" value={money(totals.revenue)} tone="emerald" />
@@ -236,27 +319,28 @@ export default function StoreOverviewPage() {
                       <td className="px-4 py-3">
                         <p className="font-semibold text-text-primary">{row.storeName}</p>
                         <p className="text-xs text-text-muted">{row.domain}</p>
+                        {(row.error || row.missingDays > 0) && <p className="mt-1 max-w-xs text-xs text-amber-700 dark:text-amber-300">{row.error || `${row.missingDays} day(s) missing reports`}</p>}
                       </td>
-                      <td className="px-4 py-3 font-medium text-emerald-600 dark:text-emerald-300">{money(row.revenue)}</td>
-                      <td className="px-4 py-3">{money(row.adSpend)}</td>
-                      {showPhysicalOnlyColumns && <td className="px-4 py-3">{money(row.cogs)}</td>}
-                      <td className="px-4 py-3">{money(row.fees)}</td>
-                      {showPhysicalOnlyColumns && <td className="px-4 py-3">{money(row.shipping)}</td>}
+                      <td className="px-4 py-3 font-medium text-emerald-600 dark:text-emerald-300">{row.hasData ? money(row.revenue) : '—'}</td>
+                      <td className="px-4 py-3">{row.hasData ? money(row.adSpend) : '—'}</td>
+                      {showPhysicalOnlyColumns && <td className="px-4 py-3">{row.hasData ? money(row.cogs) : '—'}</td>}
+                      <td className="px-4 py-3">{row.hasData ? money(row.fees) : '—'}</td>
+                      {showPhysicalOnlyColumns && <td className="px-4 py-3">{row.hasData ? money(row.shipping) : '—'}</td>}
                       <td className="px-4 py-3">
-                        <p>{money(row.refunds)}</p>
+                        <p>{row.hasData ? money(row.refunds) : '—'}</p>
                         {(row.fullRefundAmount > 0 || row.partialRefundAmount > 0) && (
                           <p className="text-[11px] text-text-muted">
-                            F {money(row.fullRefundAmount)} / P {money(row.partialRefundAmount)}
+                            F {row.hasData ? money(row.fullRefundAmount) : '—'} / P {row.hasData ? money(row.partialRefundAmount) : '—'}
                           </p>
                         )}
                       </td>
-                      <td className="px-4 py-3 font-semibold text-text-primary">{money(row.netProfit)}</td>
-                      <td className="px-4 py-3">{pct(row.margin)}</td>
-                      <td className="px-4 py-3">{ratio(row.roas)}</td>
-                      <td className="px-4 py-3">{money(row.aov)}</td>
-                      <td className="px-4 py-3">{num(row.orders)}</td>
-                      <td className="px-4 py-3">{money(row.cpc)}</td>
-                      <td className="px-4 py-3">{money(row.cpm)}</td>
+                      <td className="px-4 py-3 font-semibold text-text-primary">{row.hasData ? money(row.netProfit) : '—'}</td>
+                      <td className="px-4 py-3">{row.hasData ? pct(row.margin) : '—'}</td>
+                      <td className="px-4 py-3">{row.hasData ? ratio(row.roas) : '—'}</td>
+                      <td className="px-4 py-3">{row.hasData ? money(row.aov) : '—'}</td>
+                      <td className="px-4 py-3">{row.hasData ? num(row.orders) : '—'}</td>
+                      <td className="px-4 py-3">{row.hasData ? money(row.cpc) : '—'}</td>
+                      <td className="px-4 py-3">{row.hasData ? money(row.cpm) : '—'}</td>
                       <td className="px-4 py-3 text-xs text-text-muted">{relativeDate(row.lastSyncedAt)}</td>
                     </tr>
                   ))}
@@ -272,27 +356,28 @@ export default function StoreOverviewPage() {
                   <div>
                     <p className="font-semibold text-text-primary">{row.storeName}</p>
                     <p className="text-xs text-text-muted">{row.domain}</p>
+                    {(row.error || row.missingDays > 0) && <p className="mt-1 max-w-xs text-xs text-amber-700 dark:text-amber-300">{row.error || `${row.missingDays} day(s) missing reports`}</p>}
                   </div>
                   <span className="rounded-full border border-border bg-surface-hover px-2 py-0.5 text-[11px] font-semibold text-text-secondary">{relativeDate(row.lastSyncedAt)}</span>
                 </div>
                 <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-sm text-text-secondary">
-                  <p>Revenue: <span className="font-semibold text-emerald-600 dark:text-emerald-300">{money(row.revenue)}</span></p>
-                  <p>Ad Spend: <span className="font-medium">{money(row.adSpend)}</span></p>
+                  <p>Revenue: <span className="font-semibold text-emerald-600 dark:text-emerald-300">{row.hasData ? money(row.revenue) : '—'}</span></p>
+                  <p>Ad Spend: <span className="font-medium">{row.hasData ? money(row.adSpend) : '—'}</span></p>
                   {showPhysicalOnlyColumns && (
-                    <p>COGS: <span className="font-medium">{money(row.cogs)}</span></p>
+                    <p>COGS: <span className="font-medium">{row.hasData ? money(row.cogs) : '—'}</span></p>
                   )}
-                  <p>Fees: <span className="font-medium">{money(row.fees)}</span></p>
+                  <p>Fees: <span className="font-medium">{row.hasData ? money(row.fees) : '—'}</span></p>
                   {showPhysicalOnlyColumns && (
-                    <p>Shipping: <span className="font-medium">{money(row.shipping)}</span></p>
+                    <p>Shipping: <span className="font-medium">{row.hasData ? money(row.shipping) : '—'}</span></p>
                   )}
-                  <p>Refunds: <span className="font-medium">{money(row.refunds)}</span></p>
-                  <p>Net Profit: <span className="font-medium">{money(row.netProfit)}</span></p>
-                  <p>Margin: <span className="font-medium">{pct(row.margin)}</span></p>
-                  <p>ROAS: <span className="font-medium">{ratio(row.roas)}</span></p>
-                  <p>AOV: <span className="font-medium">{money(row.aov)}</span></p>
-                  <p>Orders: <span className="font-medium">{num(row.orders)}</span></p>
-                  <p>CPC: <span className="font-medium">{money(row.cpc)}</span></p>
-                  <p>CPM: <span className="font-medium">{money(row.cpm)}</span></p>
+                  <p>Refunds: <span className="font-medium">{row.hasData ? money(row.refunds) : '—'}</span></p>
+                  <p>Net Profit: <span className="font-medium">{row.hasData ? money(row.netProfit) : '—'}</span></p>
+                  <p>Margin: <span className="font-medium">{row.hasData ? pct(row.margin) : '—'}</span></p>
+                  <p>ROAS: <span className="font-medium">{row.hasData ? ratio(row.roas) : '—'}</span></p>
+                  <p>AOV: <span className="font-medium">{row.hasData ? money(row.aov) : '—'}</span></p>
+                  <p>Orders: <span className="font-medium">{row.hasData ? num(row.orders) : '—'}</span></p>
+                  <p>CPC: <span className="font-medium">{row.hasData ? money(row.cpc) : '—'}</span></p>
+                  <p>CPM: <span className="font-medium">{row.hasData ? money(row.cpm) : '—'}</span></p>
                 </div>
               </div>
             ))}
