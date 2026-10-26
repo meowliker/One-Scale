@@ -15,7 +15,9 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Static split screen with a thin vertical white divider. On the dark-red left side, the small yellow glow inside the kid's head grows steadily into a large red-orange storm sphere while the mom stays hunched with a hand on her forehead. On the teal right side the calm mom and kid stay still with a faint blue glow. Camera locked off, no movement. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "64379275223a4372a716413d81da897a",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/ebd0ae7d-47fb-4691-a908-1230947b6af5/generated/6fb31f9f-9a2c-462c-a099-5de34c2bee88/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/ebd0ae7d-47fb-4691-a908-1230947b6af5/generated/6fb31f9f-9a2c-462c-a099-5de34c2bee88/generated_video.mp4",
+   "qc": "pass",
+   "selected_file": "video/VID-S01-01.mp4"
   },
   "VID-S02-01": {
    "shot": "S02",
@@ -25,7 +27,9 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Kid tugs at shoe and sock, face scrunches; mom kneels holding the other shoe. Camera: Static medium shot, slight handheld drift. End: Kid still struggling with the shoe. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "5588cba175477d1fe6942955d38c3625",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/e5308911-5e57-4313-a264-78ed5e937b0e/generated/6ea50649-4763-4e94-bd2a-feda201acaaf/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/e5308911-5e57-4313-a264-78ed5e937b0e/generated/6ea50649-4763-4e94-bd2a-feda201acaaf/generated_video.mp4",
+   "qc": "pass",
+   "selected_file": "video/VID-S02-01.mp4"
   },
   "VID-S03-01": {
    "shot": "S03",
@@ -35,7 +39,22 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Kid stiffens, arms lock at sides, fists clench; chest storm pulses. Camera: Static medium-wide, slightly high angle. End: Kid rigid, storm visible in chest. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "6892b4126fb506d4bd568090b9afd521",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/3bb3fc95-615e-45f3-ba9b-2f0406c0f0ac/generated/f709c9c5-9a80-4e17-9bd3-5ea32484df9c/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/3bb3fc95-615e-45f3-ba9b-2f0406c0f0ac/generated/f709c9c5-9a80-4e17-9bd3-5ea32484df9c/generated_video.mp4",
+   "retries": [
+    {
+     "attempt": 1,
+     "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Exactly two characters and nobody else: a friendly cartoon skeleton mom with long wavy auburn hair, an orange terry headband, big brown cartoon eyes and a small closed-mouth smile with no visible teeth, and one small skeleton boy with messy spiky brown hair on top of a see-through glass head, big round brown cartoon eyes and a soft cartoon face inside the glass, and a see-through glass chest. The kid keeps his brown hair and cartoon face in every frame. The mom stands still beside the kid. The kid stiffens, arms lock at his sides, fists clench; an orange-red storm pulses inside his glass chest. Camera: static medium-wide, slightly high angle. End: kid rigid, storm visible in his chest. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, nothing scary, no speech.",
+     "kie_task_id": "aee0b4fb95c0beaad23f5b90a12a9cda",
+     "state": "success",
+     "result_url": "https://tempfile.aiquickdraw.com/ggg/users/412e494c-f5c9-424f-b049-8624abbb435d/generated/5229224e-cd9c-4187-80d8-60aa39e28759/generated_video.mp4",
+     "file": "video/VID-S03-02.mp4",
+     "qc": "pass",
+     "qc_note": "on-model mom/kid, no invented characters, action matches"
+    }
+   ],
+   "qc": "fail",
+   "qc_note": "off-model: kid turns into a bald plain skull (no hair, no cartoon face)",
+   "selected_file": "video/VID-S03-02.mp4"
   },
   "VID-S04-01": {
    "shot": "S04",
@@ -45,7 +64,9 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Red-orange storm thickens and presses against the ribs inside the translucent chest. Camera: Static; very slow push-in. End: Chest full of storm. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "3cd456e3848207c8a2542d5d97baaa8a",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/7e9b52bb-a585-4794-8c19-690eb830c940/generated/0c68f508-9bce-48ab-b50c-7c1a58e2a84c/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/7e9b52bb-a585-4794-8c19-690eb830c940/generated/0c68f508-9bce-48ab-b50c-7c1a58e2a84c/generated_video.mp4",
+   "qc": "pass",
+   "selected_file": "video/VID-S04-01.mp4"
   },
   "VID-S05-01": {
    "shot": "S05",
@@ -55,7 +76,9 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Kid walks off in tears; bedroom door swings shut; small storm puffs drift from the head. Camera: Static side profile. End: Door closed, storm puffs fading. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "a84783b634933adb9de797cbb5b9a728",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/405c198f-9412-4890-934b-82d45afe0dd2/generated/cf235a18-850a-44dd-9c2c-2dc75d396b0b/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/405c198f-9412-4890-934b-82d45afe0dd2/generated/cf235a18-850a-44dd-9c2c-2dc75d396b0b/generated_video.mp4",
+   "qc": "pass",
+   "selected_file": "video/VID-S05-01.mp4"
   },
   "VID-S06-01": {
    "shot": "S06",
@@ -65,7 +88,22 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Mom in pyjamas at night rubs her own chest; faint storm glow in her chest. Camera: Static frontal medium shot. End: Mom still, tired. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "2654ae229c5a2fef80fe1dd8334ef11c",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/31fe3cf5-15de-4496-a72e-5563f9be53bb/generated/9feac64d-58a4-44c1-aa7a-c81d63251e90/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/31fe3cf5-15de-4496-a72e-5563f9be53bb/generated/9feac64d-58a4-44c1-aa7a-c81d63251e90/generated_video.mp4",
+   "retries": [
+    {
+     "attempt": 1,
+     "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Only one character in the entire clip: a friendly cartoon skeleton mom with long wavy auburn hair, an orange terry headband, big brown cartoon eyes and a small closed-mouth smile with no visible teeth. No children and no other skeletons appear at any point. Night bedroom. She wears mustard polka-dot pyjamas with a sleep mask pushed up on her head, as in the start frame. She slowly rubs her own glass chest, where a faint orange storm glow flickers; she looks tired. Camera: static frontal medium shot. End: mom still, tired. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, nothing scary, no speech.",
+     "kie_task_id": "546ec55cce5e147653d465646480ea30",
+     "state": "success",
+     "result_url": "https://tempfile.aiquickdraw.com/ggg/users/b48b10db-abaf-4e50-820e-1be7391f468e/generated/4708bc84-387e-4fec-9023-7e5cdeaff994/generated_video.mp4",
+     "file": "video/VID-S06-02.mp4",
+     "qc": "pass",
+     "qc_note": "on-model mom/kid, no invented characters, action matches"
+    }
+   ],
+   "qc": "fail",
+   "qc_note": "off-model: invented bald skull kid appears in the background",
+   "selected_file": "video/VID-S06-02.mp4"
   },
   "VID-S07-01": {
    "shot": "S07",
@@ -75,7 +113,9 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Mom offers a plate of vegetables; kid's head storm flares; mom freezes mid-gesture. Camera: Static, slightly low angle across the table. End: Mom frozen, plate held out. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "f31e222a457f19733e946595ae88aff4",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/dc2e2e4e-5663-46d6-bccc-c20e801cefaa/generated/77866c8b-edbc-414a-8215-39b16e9657db/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/dc2e2e4e-5663-46d6-bccc-c20e801cefaa/generated/77866c8b-edbc-414a-8215-39b16e9657db/generated_video.mp4",
+   "qc": "pass",
+   "selected_file": "video/VID-S07-01.mp4"
   },
   "VID-S08-01": {
    "shot": "S08",
@@ -85,7 +125,22 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Mom at the front door with a backpack, eyes closed, shoulders rising. Camera: Static medium shot. End: Mom bracing. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "d1ea5877a0749c18bb90936ecf7a2c32",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/ee8a6999-43cf-4fbd-971b-40f4b9d3aabc/generated/9eb3b17d-11b7-4ed1-8729-ce39477c0107/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/ee8a6999-43cf-4fbd-971b-40f4b9d3aabc/generated/9eb3b17d-11b7-4ed1-8729-ce39477c0107/generated_video.mp4",
+   "retries": [
+    {
+     "attempt": 1,
+     "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Only one character in the entire clip: a friendly cartoon skeleton mom with long wavy auburn hair, an orange terry headband, big brown cartoon eyes and a small closed-mouth smile with no visible teeth. No children and no other skeletons appear at any point. At the open front door she holds a small daisy-print backpack, squeezes her eyes shut with a worried frown, and her shoulders rise as she takes a nervous breath, bracing herself. Camera: static medium shot. End: mom bracing. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, nothing scary, no speech.",
+     "kie_task_id": "297a7e23bf8c42534c7b6639831ce3d7",
+     "state": "success",
+     "result_url": "https://tempfile.aiquickdraw.com/ggg/users/8470f088-e3e0-424b-8aec-554b7bf8d9ae/generated/63b3a776-193a-4f63-88e3-5892614d05af/generated_video.mp4",
+     "file": "video/VID-S08-02.mp4",
+     "qc": "pass",
+     "qc_note": "on-model mom/kid, no invented characters, action matches"
+    }
+   ],
+   "qc": "fail",
+   "qc_note": "off-model: invented bald skull kid in the background; mom smiling, not bracing",
+   "selected_file": "video/VID-S08-02.mp4"
   },
   "VID-S09-01": {
    "shot": "S09",
@@ -95,7 +150,9 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Mom sets plates, glances nervously at the kid's glowing head behind. Camera: Static; quick cut. End: Mom mid-glance. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "89ba016a8c5e2b0edb77845b005b4a8c",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/4764825d-0d2d-4e5a-9c06-dcd3350bcbcc/generated/37f854bf-08eb-48ac-88cb-db61d2befd72/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/4764825d-0d2d-4e5a-9c06-dcd3350bcbcc/generated/37f854bf-08eb-48ac-88cb-db61d2befd72/generated_video.mp4",
+   "qc": "pass",
+   "selected_file": "video/VID-S09-01.mp4"
   },
   "VID-S10-01": {
    "shot": "S10",
@@ -105,7 +162,22 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Mom at the kid's bedroom door, hand on the light switch, bracing. Camera: Static; quick cut. End: Mom bracing at the door. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "581834d5fbb6c34494dd2dac85b1d37f",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/254facba-bfb9-4814-b3e4-0dc1ec8db24c/generated/adf82d89-9a0d-471a-b7e1-f29fe7fea9ca/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/254facba-bfb9-4814-b3e4-0dc1ec8db24c/generated/adf82d89-9a0d-471a-b7e1-f29fe7fea9ca/generated_video.mp4",
+   "retries": [
+    {
+     "attempt": 1,
+     "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Only one character in the entire clip: a friendly cartoon skeleton mom with long wavy auburn hair, an orange terry headband, big brown cartoon eyes and a small closed-mouth smile with no visible teeth. No children and no other skeletons appear at any point. She stands at a dark bedroom doorway with one hand on the light switch, takes a nervous breath and braces herself. The doorway behind her stays empty. Camera: static. End: mom bracing at the door. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, nothing scary, no speech.",
+     "kie_task_id": "8764884dac4ba03acc0f08b4e8116767",
+     "state": "success",
+     "result_url": "https://tempfile.aiquickdraw.com/ggg/users/7e9b52bb-a585-4794-8c19-690eb830c940/generated/0afb9b7c-1d83-4580-8ae8-d7de565af535/generated_video.mp4",
+     "file": "video/VID-S10-02.mp4",
+     "qc": "pass",
+     "qc_note": "on-model mom/kid, no invented characters, action matches"
+    }
+   ],
+   "qc": "fail",
+   "qc_note": "off-model: invented bald skull kid in the doorway",
+   "selected_file": "video/VID-S10-02.mp4"
   },
   "VID-S11-01": {
    "shot": "S11",
@@ -115,7 +187,9 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Board game set up; mom watches the kid warily instead of playing. Camera: Static medium shot. End: Mom watching. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "03ec5283b93a3cade3df541046d83703",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/72457196-4fc6-45c2-b0f6-b282e65dc69a/generated/e82ce2f7-14e3-466d-8254-13cdbd77fe39/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/72457196-4fc6-45c2-b0f6-b282e65dc69a/generated/e82ce2f7-14e3-466d-8254-13cdbd77fe39/generated_video.mp4",
+   "qc": "pass",
+   "selected_file": "video/VID-S11-01.mp4"
   },
   "VID-S12-01": {
    "shot": "S12",
@@ -125,7 +199,22 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Mom on the edge of a dark bed, hands clasped, waiting; red glow through the doorway. Camera: Static frontal. End: Mom waiting. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "c476452afe01ec8be5583c1eda7c408a",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/55e04102-7898-42c8-aa3a-b859cdaabfb6/generated/ddd912d5-ba3b-4126-9fac-7696fd78d759/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/55e04102-7898-42c8-aa3a-b859cdaabfb6/generated/ddd912d5-ba3b-4126-9fac-7696fd78d759/generated_video.mp4",
+   "retries": [
+    {
+     "attempt": 1,
+     "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Only one character in the entire clip: a friendly cartoon skeleton mom with long wavy auburn hair, an orange terry headband, big brown cartoon eyes and a small closed-mouth smile with no visible teeth. No children and no other skeletons appear at any point. She sits on the edge of a dark bed, hands clasped, waiting and worried. A warm red-orange glow shines through the open doorway behind her; the doorway stays empty. Camera: static frontal. End: mom waiting. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, nothing scary, no speech.",
+     "kie_task_id": "7b273fb64f40925eaf6fda6bc2223174",
+     "state": "success",
+     "result_url": "https://tempfile.aiquickdraw.com/ggg/users/405c198f-9412-4890-934b-82d45afe0dd2/generated/5059cdc0-9b7e-42d1-ad50-0274e7fdd37f/generated_video.mp4",
+     "file": "video/VID-S12-02.mp4",
+     "qc": "pass",
+     "qc_note": "on-model mom/kid, no invented characters, action matches"
+    }
+   ],
+   "qc": "fail",
+   "qc_note": "off-model and unsettling: bald skeleton walks out of the dark red doorway",
+   "selected_file": "video/VID-S12-02.mp4"
   },
   "VID-S13-01": {
    "shot": "S13",
@@ -135,7 +224,22 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Over-the-shoulder mirror shot; exhausted reflection with faint chest storm. Camera: Near-static, slight push. End: Mom looking at reflection. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "2e488e3f1c0b7fdaf99455827cc05176",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/a5d2238a-1133-4c13-ad67-6d3effdfe12a/generated/e6200300-75bd-4cea-8cfd-4c5c7b7ad43a/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/a5d2238a-1133-4c13-ad67-6d3effdfe12a/generated/e6200300-75bd-4cea-8cfd-4c5c7b7ad43a/generated_video.mp4",
+   "retries": [
+    {
+     "attempt": 1,
+     "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Only one character in the entire clip: a friendly cartoon skeleton mom with long wavy auburn hair, an orange terry headband, big brown cartoon eyes and a small closed-mouth smile with no visible teeth. No children and no other skeletons appear at any point. Over-the-shoulder shot of her looking into a full-length mirror; her reflection looks exhausted, with a faint orange storm glow in her glass chest. Nobody else enters the room or the mirror. Camera: near-static, slight push-in. End: mom looking at her reflection. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, nothing scary, no speech.",
+     "kie_task_id": "7ba31c87990f56a7934fecb9faec98f1",
+     "state": "success",
+     "result_url": "https://tempfile.aiquickdraw.com/ggg/users/a5d2238a-1133-4c13-ad67-6d3effdfe12a/generated/56524143-b0ec-47bb-8bc3-b893bd1c36fb/generated_video.mp4",
+     "file": "video/VID-S13-02.mp4",
+     "qc": "pass",
+     "qc_note": "on-model mom/kid, no invented characters, action matches"
+    }
+   ],
+   "qc": "fail",
+   "qc_note": "off-model + action mismatch: invented bald kid enters and hugs the mom in the mirror",
+   "selected_file": "video/VID-S13-02.mp4"
   },
   "VID-S14-01": {
    "shot": "S14",
@@ -145,7 +249,9 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Inside the kid's head: storm clouds swirl, tiny lightning flickers. Camera: Slow drift through the clouds. End: Storm still churning. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "f7bdf12e31aa1a2be82c7e3c43cad996",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/6e8a3534-8b1c-4aae-9a4f-9c6495851fc1/generated/fad166ed-98d5-4dce-97b0-385df0f6a94b/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/6e8a3534-8b1c-4aae-9a4f-9c6495851fc1/generated/fad166ed-98d5-4dce-97b0-385df0f6a94b/generated_video.mp4",
+   "qc": "pass",
+   "selected_file": "video/VID-S14-01.mp4"
   },
   "VID-S15-01": {
    "shot": "S15",
@@ -155,7 +261,22 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Mom rests her head on folded arms on the counter, eyes closed. Camera: Static medium close-up. End: Mom still, exhausted. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "a7319f0d24724c2bfafe854a168dd8e6",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/a4692156-3fa7-4b0a-8535-b68170599b52/generated/bd19c5dc-bc2c-41e6-b632-a2c9a07eafd9/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/a4692156-3fa7-4b0a-8535-b68170599b52/generated/bd19c5dc-bc2c-41e6-b632-a2c9a07eafd9/generated_video.mp4",
+   "retries": [
+    {
+     "attempt": 1,
+     "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Only one character in the entire clip: a friendly cartoon skeleton mom with long wavy auburn hair, an orange terry headband, big brown cartoon eyes and a small closed-mouth smile with no visible teeth. No children and no other skeletons appear at any point. In a bright kitchen she rests her head on her folded arms on the counter, eyes closed, exhausted; only her breathing moves. The background stays empty. Camera: static medium close-up. End: mom still, exhausted. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, nothing scary, no speech.",
+     "kie_task_id": "12c659346d1297d41a2b3b4d330956b6",
+     "state": "success",
+     "result_url": "https://tempfile.aiquickdraw.com/ggg/users/43587a93-f9ef-4fd8-8798-96bce8e03074/generated/00415bf3-acb2-4899-8c1e-1374fa5198c7/generated_video.mp4",
+     "file": "video/VID-S15-02.mp4",
+     "qc": "pass",
+     "qc_note": "on-model mom/kid, no invented characters, action matches"
+    }
+   ],
+   "qc": "fail",
+   "qc_note": "off-model: invented bald skeleton waves behind the mom",
+   "selected_file": "video/VID-S15-02.mp4"
   },
   "VID-S16-01": {
    "shot": "S16",
@@ -165,7 +286,22 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Dense dark storm swirls slowly inside the kid's head, heavy and trapped. Camera: Very slow push-in. End: Darkest frame. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "d912c2f79b764477d0c81b4378e51591",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/40d25f36-da1c-47e5-b250-0f5c83a3c9c9/generated/4e2307ea-0280-4c48-adfa-b815c3884a3b/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/40d25f36-da1c-47e5-b250-0f5c83a3c9c9/generated/4e2307ea-0280-4c48-adfa-b815c3884a3b/generated_video.mp4",
+   "retries": [
+    {
+     "attempt": 1,
+     "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Only one character in the entire clip: one small skeleton boy with messy spiky brown hair on top of a see-through glass head, big round brown cartoon eyes and a soft cartoon face inside the glass, and a see-through glass chest. He keeps his brown hair and cartoon face in every frame. The mom does not appear. Close-up of the kid's glass head: dense dark grey storm clouds with orange streaks swirl slowly inside it, heavy and trapped. Lighting stays steady, no fade to black. Camera: very slow push-in. End: dark storm still swirling. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, nothing scary, no speech.",
+     "kie_task_id": "3fce4804bc108283dbcecda8094b9579",
+     "state": "success",
+     "result_url": "https://tempfile.aiquickdraw.com/ggg/users/985b5699-77b2-44c4-b98f-6c4d3cb02501/generated/8ff7e82e-c9cc-471d-aa9c-8e6904f5c114/generated_video.mp4",
+     "file": "video/VID-S16-02.mp4",
+     "qc": "pass",
+     "qc_note": "on-model mom/kid, no invented characters, action matches"
+    }
+   ],
+   "qc": "fail",
+   "qc_note": "off-model + too dark: mom becomes a toothy grinning skull, picture fades to black",
+   "selected_file": "video/VID-S16-02.mp4"
   },
   "VID-S17-01": {
    "shot": "S17",
@@ -175,7 +311,9 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Bright white bedroom. Mom and kid sit on the bed holding a printed feelings chart; the kid points at one drawn face and looks up at mom, who smiles; a soft calm blue glow gently brightens inside the kid's see-through head. Static camera, high angle. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "e9d1303c133b1d536d1748450820623e",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/a5d2238a-1133-4c13-ad67-6d3effdfe12a/generated/1e409713-5cfe-4c20-98e8-f6767fe59f2f/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/a5d2238a-1133-4c13-ad67-6d3effdfe12a/generated/1e409713-5cfe-4c20-98e8-f6767fe59f2f/generated_video.mp4",
+   "qc": "pass",
+   "selected_file": "video/VID-S17-01.mp4"
   },
   "VID-S18-01": {
    "shot": "S18",
@@ -185,7 +323,22 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. A gold-blue light path travels from the eyes through the storm, which thins. Camera: Slow pull-back to the head silhouette. End: Storm thinning, path lit. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "c1751816d5cdf9030e7b2a4370484448",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/4b73c116-34be-4aec-8578-e345a5f1dbf2/generated/921e3918-dd39-444f-ad5a-f9f74fcdc822/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/4b73c116-34be-4aec-8578-e345a5f1dbf2/generated/921e3918-dd39-444f-ad5a-f9f74fcdc822/generated_video.mp4",
+   "retries": [
+    {
+     "attempt": 1,
+     "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Only one character in the entire clip: one small skeleton boy with messy spiky brown hair on top of a see-through glass head, big round brown cartoon eyes and a soft cartoon face inside the glass, and a see-through glass chest. He keeps his brown hair and cartoon face in every frame. The mom does not appear. On a soft pale background, a gold-blue light path travels from the kid's eyes down through the orange storm inside his glass head and chest, and the storm thins into soft wisps. His face, eyes and hair stay visible and he smiles. Camera: slow pull-back. End: storm thinning, light path lit. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, nothing scary, no speech.",
+     "kie_task_id": "0101253c873ead173ca78ab11e8f3938",
+     "state": "success",
+     "result_url": "https://tempfile.aiquickdraw.com/ggg/users/1dff90b9-68c1-4685-972b-606cc8c0fe35/generated/2b67b6cd-1a28-4370-afa4-31c9a24fc064/generated_video.mp4",
+     "file": "video/VID-S18-02.mp4",
+     "qc": "pass",
+     "qc_note": "on-model mom/kid, no invented characters, action matches"
+    }
+   ],
+   "qc": "fail",
+   "qc_note": "off-model + unsettling: kid's face disappears into a black void, toothy mom",
+   "selected_file": "video/VID-S18-02.mp4"
   },
   "VID-S19-01": {
    "shot": "S19",
@@ -195,7 +348,9 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Mom and kid smile, double thumbs up; kid's head glows calm blue. Camera: Static frontal, small bounce. End: Both smiling. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "27f65e7de2ffcb070b7ee40294b5cc45",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/168839a5-00fc-4f82-8971-6fadcfe731f2/generated/04082660-4e3c-42a7-8e40-9638c04f0a6e/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/168839a5-00fc-4f82-8971-6fadcfe731f2/generated/04082660-4e3c-42a7-8e40-9638c04f0a6e/generated_video.mp4",
+   "qc": "pass",
+   "selected_file": "video/VID-S19-01.mp4"
   },
   "VID-S20-01": {
    "shot": "S20",
@@ -205,7 +360,22 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Old state: mom tense in the kitchen doorway about to ask; red glow behind. Camera: Static. End: Mom hesitating. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "b2b719b21d2e36f3b7a7b30f9538c9e6",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/aec35ccf-ba19-4146-b763-4a2dceeabb9a/generated/8ca339c7-7086-41b7-8f84-d55d8f15fed2/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/aec35ccf-ba19-4146-b763-4a2dceeabb9a/generated/8ca339c7-7086-41b7-8f84-d55d8f15fed2/generated_video.mp4",
+   "retries": [
+    {
+     "attempt": 1,
+     "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Only one character in the entire clip: a friendly cartoon skeleton mom with long wavy auburn hair, an orange terry headband, big brown cartoon eyes and a small closed-mouth smile with no visible teeth. No children and no other skeletons appear at any point. She stands tense in a kitchen doorway, about to ask something, hand raised hesitantly, with a red glow behind her. Camera: static. End: mom hesitating. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, nothing scary, no speech.",
+     "kie_task_id": "ff361cf8d04f037f5a143e26fdf2021b",
+     "state": "success",
+     "result_url": "https://tempfile.aiquickdraw.com/ggg/users/b7ca5000-ed9a-45b1-b73f-9c7d23136861/generated/77b8b6cf-1a6e-4b0b-83a0-734b730afc79/generated_video.mp4",
+     "file": "video/VID-S20-02.mp4",
+     "qc": "pass",
+     "qc_note": "on-model mom/kid, no invented characters, action matches"
+    }
+   ],
+   "qc": "fail",
+   "qc_note": "off-model: invented bald skull kid beside the mom",
+   "selected_file": "video/VID-S20-02.mp4"
   },
   "VID-S21-01": {
    "shot": "S21",
@@ -215,7 +385,9 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Old state: kid wide-eyed in bed, storm swirling. Camera: Static, high angle. End: Kid worried. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "78d04d3a5cedb6f0a4cd87dd70a029f3",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/03a7bcda-f871-46b8-b3bc-0d7b86002ba1/generated/5f9b75c3-52a2-420f-8e94-c5e14b671704/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/03a7bcda-f871-46b8-b3bc-0d7b86002ba1/generated/5f9b75c3-52a2-420f-8e94-c5e14b671704/generated_video.mp4",
+   "qc": "pass",
+   "selected_file": "video/VID-S21-01.mp4"
   },
   "VID-S22-01": {
    "shot": "S22",
@@ -225,7 +397,22 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Inside the kid's head: calm blue light, a small glowing smiley shape. Camera: Static; gentle float. End: Calm interior. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "593fc08d35b9c96fac7bfe8a0670ba38",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/3d8cd4be-a558-4846-b0c7-1ed27df8e594/generated/62908343-f93d-451f-8f43-875ce3974004/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/3d8cd4be-a558-4846-b0c7-1ed27df8e594/generated/62908343-f93d-451f-8f43-875ce3974004/generated_video.mp4",
+   "retries": [
+    {
+     "attempt": 1,
+     "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Exactly two characters and nobody else: a friendly cartoon skeleton mom with long wavy auburn hair, an orange terry headband, big brown cartoon eyes and a small closed-mouth smile with no visible teeth, and one small skeleton boy with messy spiky brown hair on top of a see-through glass head, big round brown cartoon eyes and a soft cartoon face inside the glass, and a see-through glass chest. The kid keeps his brown hair and cartoon face in every frame. The mom stands behind the kid with a hand on his shoulder, both smiling softly. Inside the kid's glass head a calm blue light and a small glowing smiley shape float gently, while his own cartoon face, big brown eyes and messy brown hair stay visible. Camera: static, gentle float. End: calm blue glow. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, nothing scary, no speech.",
+     "kie_task_id": "4bf8fd2985fd8c6b59a9b7af64884200",
+     "state": "success",
+     "result_url": "https://tempfile.aiquickdraw.com/ggg/users/f8ca8039-f6c5-4cdb-8a73-0813a7019ac5/generated/9aaf14f8-6657-47d9-933d-bd0db1f740d7/generated_video.mp4",
+     "file": "video/VID-S22-02.mp4",
+     "qc": "pass",
+     "qc_note": "on-model mom/kid, no invented characters, action matches"
+    }
+   ],
+   "qc": "fail",
+   "qc_note": "off-model: kid has a bare glass bubble head with no hair or face",
+   "selected_file": "video/VID-S22-02.mp4"
   },
   "VID-S23-01": {
    "shot": "S23",
@@ -235,7 +422,22 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Blue X-ray of kid's head and chest glowing steady cyan. Camera: Static. End: Steady glow. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "f3d8274faf6cdd90c5a1041daf266495",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/72457196-4fc6-45c2-b0f6-b282e65dc69a/generated/bf4f3441-62b3-4984-bc31-cfebb517db63/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/72457196-4fc6-45c2-b0f6-b282e65dc69a/generated/bf4f3441-62b3-4984-bc31-cfebb517db63/generated_video.mp4",
+   "retries": [
+    {
+     "attempt": 1,
+     "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Only one character in the entire clip: one small skeleton boy with messy spiky brown hair on top of a see-through glass head, big round brown cartoon eyes and a soft cartoon face inside the glass, and a see-through glass chest. He keeps his brown hair and cartoon face in every frame. The mom does not appear. On a dark blue background the kid's whole body glows as a steady cyan X-ray, head and chest glowing calm blue; he keeps his messy brown hair and big cartoon eyes and smiles softly while the glow pulses gently. Camera: static. End: steady cyan glow. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, nothing scary, no speech.",
+     "kie_task_id": "cdb362aac4365949100ff615e6a22a55",
+     "state": "success",
+     "result_url": "https://tempfile.aiquickdraw.com/ggg/users/98dee5b4-38e4-489b-9387-88b06072ad85/generated/5d87cd96-5aa6-45b0-b7d1-62d87ef74248/generated_video.mp4",
+     "file": "video/VID-S23-02.mp4",
+     "qc": "pass",
+     "qc_note": "on-model mom/kid, no invented characters, action matches"
+    }
+   ],
+   "qc": "fail",
+   "qc_note": "off-model: kid without hair, toothy-grin mom added to a kid-only shot",
+   "selected_file": "video/VID-S23-02.mp4"
   },
   "VID-S24-01": {
    "shot": "S24",
@@ -245,7 +447,9 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Mom and kid in bed laugh and stretch arms overhead, settle. Camera: Static medium shot. End: Relaxed, smiling. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "2b276b5a0d7a23de94895a506f00eaf6",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/0ace4fc1-d29a-4007-8aee-d12aa79d78b5/generated/6b44e2e0-d0cf-42dd-91d3-b2697fa352fc/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/0ace4fc1-d29a-4007-8aee-d12aa79d78b5/generated/6b44e2e0-d0cf-42dd-91d3-b2697fa352fc/generated_video.mp4",
+   "qc": "pass",
+   "selected_file": "video/VID-S24-01.mp4"
   },
   "VID-S25-01": {
    "shot": "S25",
@@ -255,7 +459,9 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Mom pins a chart to the fridge; kid points; gold glow spirals in the kid's chest. Camera: Static medium-full. End: Chart on fridge, glow spiralling. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "d207819ffc58faae8abeed89284ea40e",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/20b46bff-f7f4-4982-8ee7-815f895f504b/generated/b5ae7afd-f062-4fb7-93a7-691cfbbecc6f/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/20b46bff-f7f4-4982-8ee7-815f895f504b/generated/b5ae7afd-f062-4fb7-93a7-691cfbbecc6f/generated_video.mp4",
+   "qc": "pass",
+   "selected_file": "video/VID-S25-01.mp4"
   },
   "VID-S26-01": {
    "shot": "S26",
@@ -265,7 +471,9 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Gold light bursts through the kid's head and chest; dark storm wisps break up and float away. Camera: Static (hard cut, same framing). End: Kid wide-eyed and smiling, clear glow. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "0b9264aa2694f6e256f4899f3f3e6ee8",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/a5d2238a-1133-4c13-ad67-6d3effdfe12a/generated/283e7e1f-7027-44f9-8b03-624a045795b4/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/a5d2238a-1133-4c13-ad67-6d3effdfe12a/generated/283e7e1f-7027-44f9-8b03-624a045795b4/generated_video.mp4",
+   "qc": "pass",
+   "selected_file": "video/VID-S26-01.mp4"
   },
   "VID-S27-01": {
    "shot": "S27",
@@ -275,7 +483,28 @@
    "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Characters stay exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair and an orange terry headband, and a small skeleton kid with a see-through glass head and chest. Bright white tiled room. The mom lifts the closed plain cream workbook slightly higher at shoulder height and smiles at camera; the kid beside her smiles with a calm blue glow in the head. The book cover stays plain. Static frontal camera. Keep lighting, palette and character designs consistent with the start frame. No text, no logos, no gore, no speech.",
    "kie_task_id": "37ee874a36f102f35b7404bcd5acea58",
    "state": "success",
-   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/dc2e2e4e-5663-46d6-bccc-c20e801cefaa/generated/30dd1944-f683-4a46-bd63-f170235575e6/generated_video.mp4"
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/dc2e2e4e-5663-46d6-bccc-c20e801cefaa/generated/30dd1944-f683-4a46-bd63-f170235575e6/generated_video.mp4",
+   "qc": "pass",
+   "selected_file": "video/VID-S27-01.mp4"
   }
+ },
+ "credits_retry_round_1": {
+  "credit_before": 1102.8,
+  "credit_after": 945.3,
+  "credits_used": 157.5,
+  "shots": [
+   "S03",
+   "S06",
+   "S08",
+   "S10",
+   "S12",
+   "S13",
+   "S15",
+   "S16",
+   "S18",
+   "S20",
+   "S22",
+   "S23"
+  ]
  }
 }
