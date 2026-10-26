@@ -44,11 +44,13 @@ Strategists read these messages fast, often on a phone, then forward parts to ed
 
 ---
 ## ✍️ Options
-[hook table] [bridge table] [body / concept tables]
+[hook table] [bridge table, if this borrow has one] [body / concept tables]
+[⚠️ Calls needed table (Q1…), if any]
 
 ---
 ## 👉 Your pick
 [one short line saying exactly what to reply with, plus an example]
+[if visuals were Unknown: one line asking for the video or screenshots of exactly those beats]
 ```
 
 ## Layout: message 2 (after picks)

@@ -10,6 +10,7 @@
 | `B1…` | Body script |
 | `F1…` | Format fill (concept) |
 | `C1…` | CTA |
+| `Q1…` | A decision only the strategist can make (from ⚠️ rows): `ID \| Question \| Options a/b` |
 
 Show options as compact tables under `## ✍️ Options`, not as paragraphs (see `output-style.md`):
 

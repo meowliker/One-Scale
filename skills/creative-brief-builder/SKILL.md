@@ -71,7 +71,7 @@ Read `references/breakdown.md`. Every inspiration gets the team's standard **bea
 
 It's followed by a hook card and a short format summary. Full copy, format, and visual-hook runs also get a shot-detail table underneath. The file also covers how to get at the video (file, link, transcript, screenshots), exact cut timings, evidence labels, and word counts.
 
-**Never invent what you didn't see or hear.** If you only have a transcript, you can't describe the visuals. Say so and ask for the video or screenshots. A made-up breakdown produces a brief for a video that never existed.
+**Never invent what you didn't see or hear.** If part of the video is missing (e.g. a transcript but no visuals for some beats), carry on with what you have and mark the gaps `Unknown`. In the pick message, ask for the video or screenshots of exactly those beats. Stop and ask before doing anything only when there's nothing usable (a bare link nothing can open). A made-up breakdown produces a brief for a video that never existed.
 
 ## Step 2: Our product data
 
@@ -94,12 +94,12 @@ The borrow file gives the specific steps. These rules apply to every borrow type
 
 **Product truth.** Use only facts, numbers, results, prices, testimonials, and credentials that appear in the product file or the strategist's message. If an option needs a proof point we don't have, write it with a `[NEED: proof]` placeholder and flag it. Respect the "claims we can't make" list completely. Invented proof creates ad rejections and refunds, and makes strategists stop trusting the tool.
 
-**Easy to pick.** Number everything with short IDs (`H1–H6` hooks, `BR1–BR3` bridges, `B1–B3` bodies, `VH1–VH3` visual hooks). The strategist should be able to reply "H2, H5, BR1, B2" and you know exactly what they mean. Accept edits in the reply ("H2 but softer", "mix H1 and H4") and apply them without re-running everything.
+**Easy to pick.** Number everything with short IDs (`H1–H6` hooks, `BR1–BR3` bridges, `B1–B3` bodies, `VH1–VH3` visual hooks, `Q1…` for decisions only the strategist can make). The strategist should be able to reply "H2, H5, BR1, B2" and you know exactly what they mean. Accept edits in the reply ("H2 but softer", "mix H1 and H4") and apply them without re-running everything.
 
 End the options message with a clear pick request, for example:
 
 ```
-👉 Pick what goes into the brief: hooks (one or several to test as V1/V2/V3), one bridge, one body.
+👉 Pick what goes into the brief: hooks (one or several to test as V1/V2/V3), one bridge (if this borrow has bridges), one body, and answers to any Q-calls.
    Edits are fine: "H3 but shorter", "B1 with the CTA from B2".
 ```
 

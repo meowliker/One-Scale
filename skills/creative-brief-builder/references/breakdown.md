@@ -93,6 +93,7 @@ When the borrow needs us to recreate visuals, add a shot table under the beat ta
 | S01 | 0.000–2.703 | Split screen: left, hunched X-ray skeleton, belly swells, green gas cloud; right, upright skeleton | Static, centred, dark background, 3D render | "Always Feeling BLOATED?" white bold, top | VO starts at 0.0s, low music |
 
 - One row per shot, using the same IDs as the beat table.
+- If cut times inside a beat aren't known, give the shot the beat's range with `within B0X` (e.g. `within 2.703–12.813`). If a beat's visuals are completely unknown, use **one grouped row** (`S07–S12 | 12.813–23.157 | Unknown (no video)`) rather than six empty rows.
 - For a visual-hook borrow, show only the hook shots, split into ~0.5s steps if a lot happens.
 
 ## 6. Format summary (always, short)
