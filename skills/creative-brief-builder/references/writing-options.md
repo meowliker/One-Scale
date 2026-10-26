@@ -11,17 +11,16 @@
 | `F1…` | Format fill (concept) |
 | `C1…` | CTA |
 
-Show options as compact tables, not paragraphs:
+Show options as compact tables under `## ✍️ Options`, not as paragraphs (see `output-style.md`):
 
-```
-HOOKS: match their text hook: 6 words (±2)
+**Hooks:** match their text hook, 6 words (±2)
+
 | ID | On-screen text | Spoken (if any) | Words | Mechanism | Visual under it | Why (evidence) |
 |---|---|---|---|---|---|---|
 | H1 | "Quit coffee. / Slept 8 hours." | — | 5 | Swap | Hand pushes mug away, overhead | 📊 customer word "finally slept" (14 reviews) |
 | H2 | ... |
-```
 
-Put the **data card** (5–8 lines) above the options so the strategist sees what they're built on.
+Bridges and bodies use the same table style: an ID column, the exact words, a "Works with" column for bridges, and a one-line "Why" column with evidence tags.
 
 ## Hook mechanisms
 

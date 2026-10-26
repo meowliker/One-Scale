@@ -7,19 +7,17 @@ How this differs from full copy: in full copy, their script is the template and 
 ## Steps
 
 ### 1. Format breakdown
-Do the full second-by-second table from `breakdown.md`. Then turn it into a **format skeleton**: each beat described by job + timing + visual approach, with their specific content stripped out:
+Do the beat table, hook card, shot details, and format summary from `breakdown.md`. Then turn the beat table into a **format skeleton**: the same beats (B01…), each described by job + timing + visual approach, with their specific content stripped out:
 
-```
-FORMAT SKELETON: [one-line format name, e.g. "3-reasons list, selfie UGC, text-led, 24s"]
-| Slot | Time | Job | Visual approach | Text / VO pattern |
+**Format skeleton:** [one-line format name, e.g. "3-reasons list, selfie UGC, text-led, 24s"]
+
+| Beat | Start–end (s) | Job | Visual approach | Text / VO pattern |
 |---|---|---|---|---|
-| 1 | 0:00–0:02 | Hook | Selfie, close, creator mid-sentence | Big 2-line text, highlighted keyword |
-| 2 | 0:02–0:05 | Reason #1 | Cut to B-roll of product in use | Numbered text "1." + 1 short VO line |
+| B01 | 0.000–2.000 | Hook | Selfie, close, creator mid-sentence | Big 2-line text, highlighted keyword |
+| B02 | 2.000–5.000 | Reason #1 | Cut to B-roll of product in use | Numbered text "1." + 1 short VO line |
 | ... |
-Rules of this format: [3–5 bullets, e.g. "every slot ≤3s", "text always top third", "no music until slot 4"]
-```
 
-Include beat map, pacing, and visual signature.
+**Rules of this format:** [3–5 bullets, e.g. "every beat ≤3s", "text always top third", "no music until B04"]
 
 ### 2. Data card
 From `product-data.md`.
@@ -27,13 +25,12 @@ From `product-data.md`.
 ### 3. Fill the skeleton for our product: concepts F1–F3
 Write 2–3 different fills of the same skeleton, each built on a different angle or pain from our data. Usually one uses our winner's angle and one tests a new one:
 
-```
-F1: "[concept in one line]"   📊 [evidence]
-| Slot | Time | VO / talking | On-screen text | Visual (our version) |
+**F1: "[concept in one line]"**  📊 [evidence]
+
+| Beat | Start–end (s) | VO / talking | On-screen text | Visual (our version) |
 |---|---|---|---|---|
-| 1 Hook | 0:00–0:02 | [use H-options below] | ... | ... |
-| 2 ... |
-```
+| B01 Hook | 0.000–2.000 | [use H-options below] | ... | ... |
+| B02 ... |
 
 Keep the skeleton's timing and visual approach in every fill. If a slot doesn't fit our product (e.g. "unboxing" for a digital product), give the closest replacement that does the same job, and say so.
 

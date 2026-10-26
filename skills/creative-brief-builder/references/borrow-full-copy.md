@@ -1,50 +1,52 @@
-# Borrow: Full Structure
+# Borrow: Full Structure (close copy)
 
-The strategist wants the whole video rebuilt for our product: same structure, flow, and visual approach, with our angle, words, and product.
+The strategist wants the competitor's video rebuilt for our product. This is also the **default** whenever they share a competitor or inspiration video and just ask for a brief ("give me a brief for this ad", "make this for our product") without naming a specific part.
+
+**Default similarity is CLOSE.** The finished video should feel like the same ad made for our product: same beats in the same order, same timing, same visual style, same sentence shapes and rhythm. Strategists pick these ads because the structure is proven, so every change we make is a risk that has to earn its place. Only change what has to change.
+
+Switch to **LOOSE** (their structure, our winner's angle and voice) only when the strategist asks for it ("keep our winner's angle", "make it more our style", "use our persona").
+
+## What stays and what changes (close mode)
+
+| Keep the same | Change for our product | Never carry over |
+|---|---|---|
+| Beat order and number of beats | Product name, look, packaging | Their brand name, logo, product shots |
+| Beat timing (within ~10%) | How the product is used (their "2–3 drops in your navel" becomes our real usage) | Claims on our "can't say" list |
+| Shots per beat and visual style (e.g. 3D X-ray skeleton look) | Symptoms, pains, benefits that aren't true for our product, swapped for the closest true ones (prefer customer words from the data) | Any claim or result not true for our product |
+| Sentence structure, line length (word count ±15%), rhetorical devices (negation ×2 → positive list ×3, question pivot) | Proof, numbers, offer, CTA (only from our data) | Their unique slogan or trademarked phrase |
+| Hook mechanism and hook word count | Visual details that show *their* product, redrawn to show ours | Their creators' faces or voice |
+| Caption style, music feel, pacing | | |
+
+Generic lines that are true for our product (e.g. "Always feeling bloated?") can stay word for word, because that's what "highly similar" means. Rewrite only lines that are brand-specific, untrue for us, or banned.
 
 ## Steps
 
 ### 1. Full breakdown
-Do the complete breakdown from `breakdown.md`: second-by-second table, hook analysis, beat map, pacing, style, visual signature.
+From `breakdown.md`: beat table, hook card, all shot details, format summary.
 
 ### 2. Data card
-Build it from `product-data.md`. Also note which of our winners is closest in structure to the inspiration. That tells you what already works for us in this shape.
+From `product-data.md`. In close mode, the data mainly supplies *true substitutes*: our real usage, our real benefits, customer words for pains, proof, offer, CTA, and the "can't say" list. It does not change the structure.
 
-### 3. Conversion map
-Show how each beat of the inspiration becomes ours. This is the thinking step, so keep it as one compact table:
+### 3. Close conversion table
+The centrepiece, mirroring the beat table so the strategist can compare row by row:
 
-```
-| # | Their time | Their beat (job) | What they say / show | Ours: what it becomes | Source |
-|---|---|---|---|---|---|
-| 1 | 0:00–0:02 | Hook: pain callout | "I was exhausted for 3 years" / alarm slam | Hook: our buyer's pain [from data] / same alarm-slam visual with our setting | 📊 pain #1 + 🎯 visual |
-| 2 | 0:02–0:06 | Failed solutions | Coffee, pills, naps | Things OUR buyers tried [customer words] | 📊 reviews |
-| ... |
-```
+| Beat | Start–end (s) | Shots | Theirs | Ours: text / VO | Ours: visual | Changed? |
+|---|---|---|---|---|---|---|
+| B01 | 0.000–2.703 | S01 | Headline "Always Feeling BLOATED?" + VO "Every time you eat, it starts with a little bloating." | Headline "Always Feeling BLOATED?" + VO "Every time you eat, it starts with a little bloating." | Same split-screen X-ray skeleton | ✅ same |
+| B06 | 33.300–40.607 | S17–S19 | VO "Just 2 to 3 drops in your navel every day…" Dropper over navel → glowing path | VO "Just one capsule after dinner…" | Capsule enters stomach → same glowing path → thumbs-up | ✏️ usage swapped: our product is a capsule |
 
-Rules for the map:
-- Keep each beat's **job**, **timing**, and **visual approach**. Swap the **substance** (pain, solutions tried, product, proof, offer) for ours.
-- If their structure has a beat we can't honestly fill (e.g. a doctor's endorsement we don't have), say so and propose a replacement beat that does the same job with proof we have.
-- If their video is much longer than what works for us (check the data file for winning lengths), say where to compress.
-- **Don't copy distinctive phrases word for word.** Their exact hook line, slogan, or a unique script line should be rewritten. Copying the structure is fine; copying their words makes the ad a knock-off and risks the ad account.
+- **Changed?** says `✅ same`, `✏️ [what changed + why in ≤8 words]`, or `⚠️ [needs the strategist's call]`.
+- Keep the VO/text word count close to theirs line by line, so the timing still works.
+- If a beat can't be filled honestly (e.g. they show a clinical study we don't have), keep the beat's job and fill it with the nearest true thing, marked ⚠️. Or use `[NEED: proof]`.
 
 ### 4. Options
-Give, numbered (see `writing-options.md`):
-- **Hooks H1–H6:** text and/or spoken, matched to the inspiration's hook word count(s), each with a matching **visual note** taken from their visual hook.
-- **Bridges BR1–BR3:** the line(s) that carry the hook into the body.
-- **Bodies B1–B2 (or B3):** the full script after the bridge, beat by beat, following their structure. Each body is a mini table:
-
-```
-B1: "[one-line idea of this body]"   📊 [evidence]
-| Beat | Time | VO / talking | On-screen text | Visual (based on their shot #) |
-|---|---|---|---|---|
-| Pain | 0:02–0:06 | "..." | "..." | Same as their shot 2: [our version] |
-| ...  |
-```
-
-- **CTA options C1–C2** only if the data file doesn't fix a standard CTA.
+Keep this short. In close mode, the conversion table is the main deliverable:
+- **Hooks H1–H5:** H1 = closest to their hook (often the same line, if it's true for us). H2–H5 = same mechanism and word count, each leaning on a different pain or customer phrase from our data.
+- **Body:** B1 = the close conversion above. Optionally add **B2 = data-tuned**: same structure, but symptoms and benefits re-ranked toward what our data says converts. Show only the rows that differ from B1.
+- Visual notes stay "same as their S##" unless a change is needed.
 
 ### 5. Stop and ask for picks
-Hooks (one or several for V1/V2/V3), one bridge, one body, a CTA if relevant. Then wait.
+Hooks (one, or several for V1/V2/V3), B1 or B2, plus answers to any ⚠️ rows. Then wait.
 
 ### 6. Brief
-Use `editor-brief-template.md`. Under "Copy from the inspiration", list the visual signature items. Under "Do NOT copy", list their words, branding, product, faces/creators, and any claim we can't make.
+Use `editor-brief-template.md`. Under "Copy from the inspiration", say clearly that this is a **close remake**, list the visual signature, and tell the editor to match the inspiration's timing shot for shot (link + timestamps). Under "Do NOT copy", list their brand, product shots, creators, music track, and any swapped claim.

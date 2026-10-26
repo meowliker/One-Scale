@@ -30,12 +30,12 @@ Also suggest a simple **visual to put under the hook** for each (1 line). It doe
 ### 4. Bridge lines BR1–BR4 + soft product intro
 The bridge connects the hook's promise to our product without a hard sell. See bridge patterns in `writing-options.md`.
 
-For each bridge, give:
-```
-BR1: "[bridge line]"  → intro: "[subtle product introduction line]"
-     Works with: H1, H3, H5   (not every bridge fits every hook, so say which)
-     📊 [evidence]
-```
+Show them as one table. Not every bridge fits every hook, so say which:
+
+| ID | Bridge line | Soft product intro | Works with | Why |
+|---|---|---|---|---|
+| BR1 | "[bridge line]" | "[subtle product introduction line]" | H1, H3, H5 | 📊 [evidence] |
+
 The intro should feel like a natural next step from the bridge ("…that's when my sister sent me this"), not an ad voice ("Introducing the all-new…"), unless our winner's voice is direct.
 
 ### 5. What comes after the intro

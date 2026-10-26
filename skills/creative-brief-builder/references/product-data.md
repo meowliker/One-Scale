@@ -10,25 +10,24 @@ The media buyer maintains one .md file per product, ideally in the template at `
 
 ## What to pull for each run
 
-Build this short **data card** for yourself (show it to the strategist in 5–8 lines at the top of the options message, so they can see what you're working from):
+Build this short **data card** and show it to the strategist as a 2-column table under `## 📊 Our data`, so they can see what you're working from:
 
-```
-DATA CARD: [Product]
-Winner(s):        [ad name] | [key metrics] | angle: [..] | hook: "[..]"
-Working angles:   [angle → why / numbers]
-Failed angles:    [angle → what happened]  ← don't recycle these without saying so
-Best hooks:       "[..]" ([hook rate]), "[..]"
-Buyer:            [age / gender / persona, who actually buys]
-Pains / desires:  [top 3 each, in customer words if available]
-Customer words:   "[exact phrase]", "[exact phrase]"
-Offer / CTA:      [offer, price framing, standard CTA]
-Proof we can use: [reviews count, numbers, credentials, results]
-Can't say:        [banned claims / words]
-```
+| Data card: [Product] | |
+|---|---|
+| **Winner** | [ad name] · [key metrics] · angle: [..] · hook: "[..]" |
+| **Working angles** | [angle → numbers] |
+| **Failed angles** | [angle → what happened]. Don't recycle these without saying so |
+| **Best hooks** | "[..]" ([hook rate]), "[..]" |
+| **Buyer** | [age / gender / persona, who actually buys] |
+| **Pains / desires** | [top 3 each, in customer words if available] |
+| **Customer words** | "[exact phrase]", "[exact phrase]" |
+| **Offer / CTA** | [offer, price framing, standard CTA] |
+| **Proof we can use** | [review count, numbers, credentials, results] |
+| **Can't say** | [banned claims / words] |
 
 ## How to use it
 
-- **Winner first.** The current winner shows the angle and voice that convert for us right now. When a strategist adapts an inspiration, the default is: the inspiration's shape plus the winner's angle and voice, unless they say they want to test a new angle.
+- **Winner first.** The current winner shows the angle and voice that convert for us right now. In **close** full copy (the default for a plain "brief this competitor ad"), the inspiration's angle stays and the data supplies true substitutes: usage, benefits, customer words, proof, CTA. In every other borrow, and in loose full copy, the default is the inspiration's shape plus the winner's angle and voice, unless the strategist wants to test a new angle.
 - **Hook rate vs. results.** A hook with a high hook rate but a poor CPA/ROAS stops the scroll but attracts the wrong people. Tell the strategist when you use one ("strong stop rate, weak conversion; pair with a qualifying bridge"). Good conversion with a low hook rate means the body works and the hook needs a fix.
 - **Failed angles.** If an option revisits an angle the file lists as failed, label it `⚠️ previously failed: [reason]` so the strategist decides with eyes open.
 - **Customer words beat marketing words.** Use the exact phrases buyers use in reviews and comments for hooks and pains. They sound native and they're proven.

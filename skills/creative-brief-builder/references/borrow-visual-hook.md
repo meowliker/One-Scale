@@ -5,14 +5,12 @@ The strategist likes what the inspiration *shows* in its opening seconds: the sh
 ## Steps
 
 ### 1. Read the visual hook completely
-From `breakdown.md`, do the hook seconds in fine detail. Split into ~0.5s steps if a lot happens:
+From `breakdown.md`, do the beat table and hook card. Then do the shot details for the hook shots in fine detail, split into ~0.5s steps if a lot happens:
 
-```
-| Time | What we see (very specific) | Camera / framing | Motion / transition | Sound | Text on screen |
-|---|---|---|---|---|---|
-| 0:00–0:00.5 | Hand drops a full jar onto marble counter, jar bounces | Overhead, tight, static | Hard cut in, slight shake on impact | Loud thud | — |
-| 0:00.5–0:01.5 | ... |
-```
+| Shot | Start–end (s) | What we see (very specific) | Framing / camera | Motion / transition | Sound | Text on screen |
+|---|---|---|---|---|---|---|
+| S01a | 0.000–0.500 | Hand drops a full jar onto marble counter, jar bounces | Overhead, tight, static | Hard cut in, slight shake on impact | Loud thud | — |
+| S01b | 0.500–1.500 | ... |
 
 Then:
 - **Why it stops the scroll:** the pattern interrupt, the curiosity, the satisfying action, the unexpected object, the face or emotion. 2–3 lines.
@@ -23,15 +21,11 @@ Then:
 From `product-data.md`. You mostly need: product facts (what it physically looks like and how it's used), buyer, top pains and desires, winner angle, and claims we can't make.
 
 ### 3. Visual hook versions VH1–VH3
-Recreate their visual for our product. Each version:
+Recreate their visual for our product, one row per version:
 
-```
-VH1: "[short name]"  🎯 keeps: [the recognisable details]
-     Shot: [exactly what's filmed, second by second, in simple words]
-     Our product's role: [where it appears / what it does in the shot]
-     How to make it: [shoot UGC / product footage we have / stock / AI-generated]
-     Difficulty: easy / medium / hard  (+ why)
-```
+| ID | Name | Shot (step by step, with times) | Our product's role | How to make it | Difficulty | Keeps 🎯 |
+|---|---|---|---|---|---|---|
+| VH1 | Close copy | [exactly what's filmed, in simple words] | [where it appears / what it does] | UGC shoot / our footage / stock / AI | easy / medium / hard (+ why) | [the recognisable details] |
 
 Make one a **close copy** (same shot, our product) and one or two **twists** (same mechanism, adapted to how our product is used or to our winner's setting).
 

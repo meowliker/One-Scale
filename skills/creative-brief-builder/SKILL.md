@@ -45,7 +45,7 @@ The strategist tells you what they like about the inspiration. Turn that into th
 |---|---|---|
 | **Hook text** | The words of the opening (spoken or on screen) | "just take their hook line" |
 | **Visual hook** | What we *see* in the opening seconds | "love the opening shot / that first visual" |
-| **Format** | The structure and second-by-second flow of the whole video | "use this format", "same structure, our product" |
+| **Format** | The structure and beat-by-beat flow of the whole video | "use this format", "same structure, our product" |
 | **Body script** | The persuasion flow after the hook | usually comes with Format |
 | **Style** | Editing pace, captions, music feel, look | "same vibe / editing style" |
 
@@ -53,19 +53,23 @@ Route on the items:
 
 | Strategist wants | Read this file next |
 |---|---|
-| Everything / "copy the whole structure" | `references/borrow-full-copy.md` |
+| Everything / "copy the whole structure" / **just "give me a brief for this (competitor) ad" with no part named** | `references/borrow-full-copy.md`: close copy, highly similar to the original |
 | Hook text only | `references/borrow-hook-text.md` |
 | Visual hook only | `references/borrow-visual-hook.md` |
 | Format only (structure, not their words) | `references/borrow-format.md` |
 | A mix (e.g. visual hook from video A + format from video B) | Read each matching file and run them together. Tag every borrowed element with its source (A, B, …) so nothing gets blended by mistake. |
 
-If the request is ambiguous ("I like this video"), ask which of the items they want. Don't default to full copy: copying too much from a competitor is worse than asking one question.
+**Default:** when the strategist shares a competitor or inspiration video and asks for a brief, script, or "make this for our product" without naming a part, run **full copy in close mode**. Keep it highly similar to the original (same beats, timing, visuals, sentence shapes) and change only what must change for our product. Don't ask which part they want; asking slows them down when the answer is almost always "the whole thing". Ask only when there's no request at all (e.g. "thoughts on this ad?").
+
+If they name a part ("just the hook", "only the format"), that part is the borrow. If they ask to "keep our winner's angle" or "make it our style", use full copy in **loose** mode (see `borrow-full-copy.md`).
 
 ## Step 1: Breakdown
 
-Read `references/breakdown.md`. It covers how to get at the video (file, link, transcript, screenshots), the second-by-second table, hook analysis and word counts, and what to do when you can't see or hear part of it.
+Read `references/breakdown.md`. Every inspiration gets the team's standard **beat table**:
 
-Break down only what the borrow needs. A hook-text run doesn't need a 40-row shot list. A format run needs the full timeline. Each borrow file says how deep to go.
+`Beat | Start–end (s) | Shots | Original content / action | Narrative role (inferred) | Evidence`
+
+It's followed by a hook card and a short format summary. Full copy, format, and visual-hook runs also get a shot-detail table underneath. The file also covers how to get at the video (file, link, transcript, screenshots), exact cut timings, evidence labels, and word counts.
 
 **Never invent what you didn't see or hear.** If you only have a transcript, you can't describe the visuals. Say so and ask for the video or screenshots. A made-up breakdown produces a brief for a video that never existed.
 
@@ -113,14 +117,15 @@ If file tools are available, also save the brief as `brief-[product]-[short-conc
 
 Strategists often come back with "change hook V2", "make it 20 seconds", or "new bridge". Change only that part and send the updated brief (or the changed rows, if they ask for just those). Don't re-run the breakdown or regenerate options that are already settled.
 
-## Tone with the strategist
+## How the output looks
 
-Strategists are busy and sometimes write in short or mixed-language messages. Reply in simple, clear English with tables over paragraphs. Lead with the options, not a long analysis. Put the "why" in one line per option rather than an essay. Keep the full breakdown available, but collapse long tables into the essentials when the borrow doesn't need them.
+Read `references/output-style.md` before writing the first message, and follow its layouts. Every run should look the same: fixed section headers in a fixed order, tables instead of paragraphs, one-line intros, IDs on everything, and no walls of text. Strategists are busy, often read on a phone, and forward parts to editors, so a clean, predictable layout matters as much as the content. Reply in simple, clear English even when the strategist writes in short or mixed-language messages.
 
 ## Reference files
 
 | File | Read when |
 |---|---|
+| `references/output-style.md` | Before the first message, every run |
 | `references/breakdown.md` | Step 1, every run |
 | `references/product-data.md` | Step 2, every run |
 | `references/borrow-full-copy.md` | Strategist wants the whole structure |
