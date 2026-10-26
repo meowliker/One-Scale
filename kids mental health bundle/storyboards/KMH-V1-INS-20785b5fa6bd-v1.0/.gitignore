@@ -1,0 +1,19 @@
+# Rebuilt by build_assets.sh from the links in asset-sources.json
+keyframes/
+previews/
+# Rejected first-take Kie clips (re-fetch by task ID in kie-video-tasks.json)
+video/VID-S03-01.mp4
+video/VID-S06-01.mp4
+video/VID-S08-01.mp4
+video/VID-S10-01.mp4
+video/VID-S12-01.mp4
+video/VID-S13-01.mp4
+video/VID-S15-01.mp4
+video/VID-S16-01.mp4
+video/VID-S18-01.mp4
+video/VID-S20-01.mp4
+video/VID-S22-01.mp4
+video/VID-S23-01.mp4
+# build_video.py scratch
+video/_build/
+prompts/__pycache__/
