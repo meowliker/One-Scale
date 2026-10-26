@@ -19,7 +19,8 @@ From `product-data.md`. For this run you mostly need: buyer, top pains and desir
 ### 3. Converted hooks H1–H6
 Write 6 hooks for our product that keep the **mechanism** (not the exact words) of their hook:
 - Match their word count (±2 words). Show the count on every option.
-- Spread them across different pains, desires, or angles from our data, so they test different things.
+- Spread them across different pains, desires, or angles from our data, so they test different things. The mechanism stays fixed in this borrow (that's what the strategist liked), so the variety has to come from *what* the hook is about.
+- If their hook relies on something we can't honestly use (a credential, a competitor product, a banned comparison), keep the shape and swap that part for something true for us. Say what you swapped and why, in one line, above the options.
 - 1–2 can be "same mechanism, our winner's angle", and 1 can push a fresh angle (label it `⚠️ untested`).
 - Tag each with evidence (`📊` / `🎯` / `⚠️`).
 - If their hook is on-screen text, ours is too. If it's spoken, give the spoken line. If it's both, give both and keep the two separate.
