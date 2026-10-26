@@ -1,23 +1,34 @@
-# Storyboard & Approval Package — KMH-V1-INS-20785b5fa6bd · v1.0
+# Storyboard & Approval Package — KMH-V1-INS-20785b5fa6bd · v1.1
 
 | Field | Value |
 |---|---|
 | Creative ID | KMH-V1-INS-20785b5fa6bd |
-| Package version | v1.0 |
+| Package version | v1.1 (supersedes v1.0; v1.0 files kept) |
 | Date | 2026-10-26 |
 | Product | Kids Mental Health Bundle (offer: "FREE Kids Mental Health Bundle" / "free today") |
 | Selected variation | V1 — "Is your kid always dysregulated?" (#1 BEST BET) |
-| Format | 9:16 vertical, 55.055 s, 27 shots, hard cuts; English VO + burned-in captions |
+| Format | 9:16 vertical, planned 55.055 s; v1.1 draft 61.20 s, 28 shots (S28 end shot added), hard cuts; English VO + burned-in captions |
 | Reference | INS-20785b5fa6bd (`inspiration-breakdowns/INS-20785b5fa6bd-breakdown.md`) |
 | Upstream | `adaptations/INS-20785b5fa6bd-KMH-adaptation.md` (Skill 2) · `adaptations/INS-20785b5fa6bd-KMH-V1-full-script.md` (V1 full script v1.0) |
-| Production route | Kie.ai — Grok Imagine Video 1.5 (preview), 720p, 9:16, image-to-video from the keyframes |
+| Production route | Kie.ai — Grok Imagine Video 1.5 (preview), 720p, 9:16, image-to-video from the keyframes · v1.1 VO: Kie.ai Google Gemini 3.1 Flash TTS, voice Sulafat |
 | Editor / strategist | Role labels only — names not supplied |
-| **Package readiness** | **Draft video built and re-timed to the voiceover (`video/KMH-V1-INS-20785b5fa6bd-v1.0-draft.mp4`, 63.15 s). All 28 keyframes and all 27 clips inspected; 12 clips redone on Kie and passed. Not final: runs 63.15 s instead of the planned 55.055 s, and S27 still shows the plain placeholder book** |
+| **Package readiness** | **v1.1 draft built: `video/KMH-V1-INS-20785b5fa6bd-v1.1-draft.mp4` (61.20 s). New female VO, real bundle cover on the new end shot S28, no freeze frame. Not final: 61.2 s is over the ~58 s target (the VO reads at its natural pace; see §12), music is a preview bed** |
 | **Creative decision** | **Awaiting strategist approval** |
 
-> **Draft status:** the V1 draft video is built and checked — see §15 for the file, clip QC, credits and timing. The picture is re-timed to the natural-pace voiceover, so every line plays over its own shot and the cut runs 63.15 s instead of the planned 55.055 s. Still needed for final: the real bundle cover (ASSET02) to replace the placeholder book on S27, and a call on whether 63 s is acceptable.
+> **Draft status (v1.1):** the v1.1 draft is built and checked — see §16 for the file, the new voiceover, the S28 book shot, timing, QC and credits. §15 keeps the v1.0 draft record. Still open: length (61.2 s vs ~58 s target), licensed music, strategist approval.
 
-> **V1 script approval:** the V1 full script v1.0 hasn't been approved yet. This package locks that wording; any change to it creates package v1.1.
+> **V1 script approval:** the V1 full script v1.0 hasn't been approved yet. This package locks that wording; v1.1 changes no word of it (171 words, §5).
+
+### v1.1 change summary
+
+| # | Change | Where |
+|---|---|---|
+| 1 | **New voiceover**: female, warm/calm American mom read (persona: mom raising kids, 35–44). Kie.ai `google/gemini-3-1-flash-tts`, voice **Sulafat**, accent American (Gen), style Empathetic, pace Natural, task `489abffdc7c32019f376fdf298fb6737`. Exact 171-word script, all 171 words heard (Whisper). Not sped up. ElevenLabs on Kie was tried first and failed on every call (Kie-side "Internal Error", not charged) | `audio/AUD-V1-VO-v1.1.mp3`, `kie-audio-tasks.json` |
+| 2 | **Real book at the end**: the exact ASSET02 cover (3D hardcover "KIDS MENTAL HEALTH – A Parent & Educator Guide") is perspective-warped onto the book in mom's hand; no AI redraw of the cover | `assets/KF-S28-01-start-frame.png`, `build_s28.py` |
+| 3 | **New end shot S28** (2.52 s) replaces the v1.0 freeze: the start frame above animated on Kie Grok Video 1.5 (task `eeec3a57d22fca343ab8d1266cd8db0d`); Grok garbled the cover subtitle, so the exact cover is pinned back onto the book in every frame (feature tracking). "Grab yours / free." lands on S28 and stays up to the last frame | `video/VID-S28-01.mp4` → `video/VID-S28-01-cover.mp4` |
+| 4 | **Re-timed** to the new VO: cuts sit in the pause before each line, pauses between lines (incl. breaths) trimmed to ≤0.2 s; S27 cut to 0.60 s (book mid-raise) as a match cut into S28 | `build_video.py` (`python3 build_video.py` = v1.1) |
+| 5 | **Rebuilt** with captions on the new VO's Whisper word timings, S01 headline unchanged, music bed set 18 dB under the VO (integrated loudness) and running to the last frame | `video/KMH-V1-INS-20785b5fa6bd-v1.1-draft.mp4`, `-timeline.json`, `video/draft-v1.1-contact-sheet.png` |
+| 6 | **Bug fix found on the way**: the v1.0 bed (a) sat at about −64 LUFS (a fixed −18 dB on a −46 LUFS file, i.e. ~37 dB under the VO, effectively inaudible) and (b) stopped at 53.2 s because the crossfaded repeat came out empty. v1.1 fixes both; the v1.0 MP4 is kept as it was | `build_video.py` |
 
 ---
 
@@ -510,7 +521,26 @@ Intervals are start-inclusive / end-exclusive, on the reference's frame-verified
 | Transition | hard cut in → end |
 | Prompts | IMG-S27-01 · VID-S27-01 |
 | Reference shot replaced | Bottle held up |
-| Assets | ASSET01 (character reference); ASSET02 (real bundle cover — **missing**) |
+| Assets | ASSET01 (character reference); ASSET02 (real bundle cover — provided; used on S28) |
+| v1.1 | Trimmed to 0.60 s (58.08–58.68): VID-S27-01 from 0.20 s in, cut while the book is still rising so it match-cuts into S28. The blank placeholder book is visible for those 0.6 s (the book moves too fast for a clean cover overlay; it only settles in the clip's last 0.4 s). "Grab yours free." now plays over S28 |
+
+---
+
+### S28 · v1.1 58.68–61.20 s (2.52 s) · B11 CTA — product end shot (new in v1.1)
+
+| | |
+|---|---|
+| Start frame | <img src="assets/KF-S28-01-start-frame.png" width="160" alt="KF-S28-01"> KF-S28-01 — last frame of VID-S27-01 with the exact ASSET02 cover perspective-warped onto the placeholder book (10% larger), soft contact shadow, mom's fingers pasted back over the spine (`python3 build_s28.py start`) |
+| VO (A20) | "Grab yours free." (3 words, 58.78–59.65 s) |
+| On-screen text | captions: Grab yours / free. ("free." held to the last frame) |
+| Action | Mom holds the real bundle at shoulder height, smiles and gives a small proud nod; kid looks up at the book and smiles, calm blue glow pulsing. |
+| Camera | Locked off in generation; slow digital push-in 1.00→1.15 in the edit (towards mom and the book). |
+| End state | Real cover clearly visible, CTA caption on screen; clip still moving at the cut (no freeze). |
+| Transition | match cut in from S27 (book rising → book up) → end |
+| Generation | Kie.ai `grok-imagine-video-1-5-preview`, 720p, 9:16, 4 s, `image_urls` = KF-S28-01 (public raw GitHub URL of the committed file — Kie's upload host refused the proxy's credentials, see §16), task `eeec3a57d22fca343ab8d1266cd8db0d`, 18 credits |
+| QC | Mom and kid on-model, no extra characters. **Cover not exact in the raw clip** (subtitle garbled, book drifts ~6 px) → raw clip not used. Exact cover pinned onto the book in all 97 frames (`python3 build_s28.py track`: SIFT + RANSAC homography, 140–165 inliers/frame, 5-frame smoothing) → `video/VID-S28-01-cover.mp4`, checked frame by frame ✅ |
+| Prompt | see `kie-video-tasks.json` → `VID-S28-01` |
+| Assets | ASSET02 (exact cover), VID-S27-01 (last frame) |
 
 ---
 
@@ -522,7 +552,7 @@ Intervals are start-inclusive / end-exclusive, on the reference's frame-verified
 
 Total VO: 171 words (reference 171).
 
-**Caption states (1–3 words, white bold italic serif, soft shadow, centred ~74% height):**
+**Caption states (1–3 words, white bold italic serif, soft shadow, centred ~74% height; keyed by VO line — in v1.1 the S27 line "Grab yours / free." plays over S28):**
 
 - S01: Is your / kid always / dysregulated, / melting down / over little / things?
 - S02: Then the / shoes feel / wrong.
@@ -567,6 +597,7 @@ Total VO: 171 words (reference 171).
 | VO fits 55 s | ❌ **No** — AUD-V1-VO speech runs 0.49–70.81 s (≈2.4 words/s). With pauses between lines capped at 0.35 s it ends at 62.35 s; the picture is re-timed to it (63.15 s cut) instead of the planned 55.055 s | measured (silencedetect + Whisper word timings) |
 | Keyframe accuracy | ✅ all 28 keyframes on-model and on-brief (KF-S01-01/02 use the blue X-ray split-screen look by design) | inspected |
 | Problem/solution split | turn at 30.297, product at 33.300 (60.5%) ✅ | planned |
+| v1.1 VO fits ~55–57 s | ❌ **No** — AUD-V1-VO-v1.1 speech runs 0.00–65.03 s; line content (breaths trimmed) adds up to 54.9 s, so with ≤0.2 s between lines the VO ends at 59.65 s and the cut at 61.20 s (target ≤ ~58 s). Not sped up | measured (Whisper + level-based line edges) |
 
 ---
 
@@ -837,7 +868,7 @@ For every shot: first frame = the shot's keyframe; attach ASSET01; no audio from
 | Aspect ratio | 9:16 | Higgsfield gpt_image_2_5 supports 9:16 (verified for stills) | — |
 | Video model / route | Image-to-video per shot | Kie.ai `grok-imagine-video-1-5-preview`, 720p, 9:16, `image_urls` = keyframe (verified). The keyframe acts as a reference, not an exact first frame | — |
 | Clip duration | 0.63–3.64 s per shot | Kie clips generated at 2/3/4 s (whole seconds, 24 fps) | Trimmed from clip start to edit duration in `build_video.py` |
-| Voice | Warm calm female | Higgsfield seed_audio, preset "Emily" (verified) | Final voice cast in production |
+| Voice | Warm calm female (mom, 35–44, American, conversational) | v1.0: Higgsfield seed_audio, preset "Emily". v1.1: Kie.ai `google/gemini-3-1-flash-tts` (voice Sulafat, American (Gen), Empathetic, Natural, temperature 1) — verified against docs.kie.ai and used. Kie ElevenLabs (`elevenlabs/text-to-speech-multilingual-v2`, speed 0.7–1.2) verified but failing server-side | v1.1 VO used as is (no tempo change) |
 | Music | Soft pad, lift at 34 s | Local ffmpeg-synthesised preview bed | License real music in production |
 | Text | Headline + captions | Not generated by any model | Editor overlays |
 
@@ -893,14 +924,23 @@ For every shot: first frame = the shot's keyframe; attach ASSET01; no audio from
 | VO word timings | Caption timing source | `audio/AUD-V1-VO-words.json` | Whisper small.en on AUD-V1-VO (171 words) |
 | Draft video | V1 draft edit (H.264/AAC) | `video/KMH-V1-INS-20785b5fa6bd-v1.0-draft.mp4` | built by `build_video.py` |
 | Draft timeline | Shot cuts, VO placement, caption timings | `video/KMH-V1-INS-20785b5fa6bd-v1.0-draft-timeline.json` | built by `build_video.py` |
-| ASSET02 | Real bundle cover | — | **missing — needed from you** |
+| ASSET02 | Real bundle cover (3D hardcover mockup, transparent background) | `assets/ASSET02-kmh-bundle-cover.png` (+ `.webp`) | provided by you |
+| KF-S28-01 | S28 start frame (S27 end frame + exact cover) | `assets/KF-S28-01-start-frame.png` | `build_s28.py start`; sent to Kie Grok |
+| VID-S28-01 | Kie Grok clip for S28 (raw, cover garbled — not used directly) | `video/VID-S28-01.mp4` | Kie task `eeec3a57d22fca343ab8d1266cd8db0d` |
+| VID-S28-01-cover | S28 with the exact cover pinned on (used) | `video/VID-S28-01-cover.mp4` | `build_s28.py track` |
+| AUD-V1-VO-v1.1 | v1.1 voiceover (Sulafat) | `audio/AUD-V1-VO-v1.1.mp3` | Kie task `489abffdc7c32019f376fdf298fb6737` (`kie-audio-tasks.json`) |
+| VO word timings v1.1 | Caption timing source | `audio/AUD-V1-VO-v1.1-words.json` | faster-whisper small.en (171 words) |
+| Draft video v1.1 | V1 draft edit (H.264/AAC) | `video/KMH-V1-INS-20785b5fa6bd-v1.1-draft.mp4` | `python3 build_video.py` |
+| Draft timeline v1.1 | Cuts, VO placement, captions | `video/KMH-V1-INS-20785b5fa6bd-v1.1-draft-timeline.json` | `python3 build_video.py` |
+| Contact sheet v1.1 | Middle frame of each of the 28 shots | `video/draft-v1.1-contact-sheet.png` | `python3 build_video.py` |
 
 ---
 
 ## 12. Outstanding issues
 
-1. **Length (decision needed):** the draft is re-timed to the natural-pace VO and runs 63.15 s, not the planned 55.055 s. To get back to ~55 s, re-record the VO faster (~3.1 words/s, like the reference) or shorten the script (creates v1.1), then rebuild with `build_video.py`.
-1. **Real bundle cover** (ASSET02) to composite over the placeholder book on S27, and optionally real worksheet pages for S17/S25.
+1. **Length (decision needed):** v1.1 runs **61.20 s**, ~3.2 s over the ≤ ~58 s target. Pauses between lines (incl. breaths) are already trimmed to ≤0.2 s and S28 is at its minimum (2.52 s); the rest is the read itself (2.9 words/s vs the reference's 3.1). Options: (a) re-voice on Kie ElevenLabs with speed ≈1.1 once its TTS works again (it failed server-side on every call this session); (b) approve a ~×1.06 pitch-preserving tempo on this read (≈58 s); (c) accept 61 s. Rebuild with `python3 build_video.py`.
+1. **S27 placeholder book:** visible for 0.6 s while it is raised (the cut into S28 shows the real cover). Optional real worksheet pages for S17/S25.
+1. **Kie ElevenLabs TTS** returned "Internal Error" on all 10 calls (incl. Kie's docs example); **Kie's upload host** `kieai.redpandaai.co` answered 401 (the session's proxy only adds the Kie key for `api.kie.ai`/`kie.ai`), so the S28 start frame was given to Grok as a public raw GitHub URL of the committed file.
 1. **V1 script approval** (v1.0 of the full script).
 1. **Music:** the bed is a local synth preview, extended with a crossfaded repeat to 63 s; license real music for the final.
 1. **Skeleton-kid style check** for a kids' mental health audience.
@@ -911,27 +951,28 @@ For every shot: first frame = the shot's keyframe; attach ASSET01; no audio from
 | Creative ID | Version | Decision | Approver | Date | Scope | Conditions | Source |
 |---|---|---|---|---|---|---|---|
 | KMH-V1-INS-20785b5fa6bd | v1.0 | Awaiting strategist approval | — | — | Whole package | — | — |
+| KMH-V1-INS-20785b5fa6bd | v1.1 | Awaiting strategist approval | — | — | Whole package (new VO, S28 end shot, re-time) | — | — |
 
-## 14. Quality checks
+## 14. Quality checks (v1.1)
 
 | # | Check | Status | Evidence |
 |---|---|---|---|
-| 1 | Upstream fidelity | Pass | Every VO line, headline, CTA and offer copied from V1 full script v1.0 and the Skill 2 cards; captions are the §5 groups word for word |
-| 2 | Timeline | Pass (re-timed) | 27 contiguous shots re-timed to the VO, 0.000–63.153 s; each cut sits in the pause before its line |
-| 3 | Counts and copy | Pass | Headline 3, hook 10, total 171, CTA 3; Whisper heard 171 VO words |
-| 4 | Visual coverage | Pass | 28 keyframes + 6 preview frames downloaded and inspected; 27 clips inspected (frames across each edit window) |
-| 5 | Visual accuracy | Pass with note | 15 first-take clips passed; 12 failed (off-model invented bald kid, faceless kid, toothy skull mom, fade to black) and passed on 1 Kie redo. S27 book is a placeholder |
-| 6 | Timing/readability | Pass with note | Each VO line starts 0.10–0.18 s after its own shot cut; captions follow the actual VO; total 63.15 s vs planned 55.055 s |
-| 7 | Prompt usability | Pass | Original and redo prompts saved per shot in `kie-video-tasks.json` |
-| 8 | Handoff integrity | Pass | `build_assets.sh` + `build_video.py` rebuild everything from the saved links and clips |
-| 9 | Approval integrity | Pass | Status = Awaiting strategist approval; no approval recorded |
-| 10 | Execution feasibility | Issue | ASSET02 still open; 63 s length needs sign-off |
-| 11 | Audio previews | Pass | 3 mixes built; draft mix VO + bed at −18 dB, −16.4 LUFS integrated, peak −1.5 dB |
-| 12 | Variation Previews | Pass | V1–V3 blocks with local frames, layout previews and audio |
+| 1 | Upstream fidelity | Pass | VO script unchanged (171 words, §5); captions are the §5 groups word for word (96 groups = the 171 script words, checked in the build); headline, CTA and offer unchanged |
+| 2 | Timeline | Pass (re-timed) | 28 contiguous shots, 0.000–61.200 s; each cut sits in the pause before its line (S27/S28 as in §16) |
+| 3 | Counts and copy | Pass | Headline 3, hook 10, total 171, CTA 3; Whisper heard 171/171 words in the new VO and again in the final v1.1 mix |
+| 4 | Visual coverage | Pass | 28 shots on the v1.1 contact sheet; S28 checked frame by frame; S27→S28 transition and last frame inspected |
+| 5 | Visual accuracy | Pass with note | S28 shows the exact ASSET02 cover (raw Grok clip rejected for garbled cover text). S27 shows the blank placeholder for 0.6 s while the book is raised |
+| 6 | Timing/readability | Pass with note | Each VO line starts 0.00–0.10 s after its own cut; 0.0–0.2 s between lines (0.8 s beat before the CTA); shortest caption 0.24 s; CTA caption held to the end. **Total 61.20 s vs ≤ ~58 s target** |
+| 7 | Prompt usability | Pass | S28 prompt + start-frame URL in `kie-video-tasks.json`; VO settings in `kie-audio-tasks.json` |
+| 8 | Handoff integrity | Pass | `build_assets.sh` → `build_s28.py start/track` → `build_video.py` rebuild v1.1; `build_video.py v1.0` still builds v1.0 |
+| 9 | Approval integrity | Pass | v1.1 status = Awaiting strategist approval; no approval recorded |
+| 10 | Execution feasibility | Issue | 61 s length needs a decision (§12); music is a preview bed |
+| 11 | Audio | Pass | Stereo AAC 44.1 kHz; VO + bed 18 dB under the VO (bed gain +8.8 dB on the −46 LUFS file); −15.6 LUFS integrated, true peak −1.4 dBTP; bed runs and fades to the last frame |
+| 12 | Variation Previews | Pass | unchanged from v1.0 |
 
 ---
 
-## 15. V1 draft video (Kie clips)
+## 15. V1 draft video v1.0 (Kie clips) — kept for reference
 
 | Field | Value |
 |---|---|
@@ -1016,3 +1057,60 @@ Speech in AUD-V1-VO runs 0.49–70.81 s (file 77.24 s incl. 6.3 s trailing silen
 | S27 | 53.887–55.055 | 61.63–63.15 | 61.76–62.35 | normal |
 
 **Length:** 63.15 s vs the planned 55.055 s (+8.1 s). Every line now plays over its own shot. Getting back to ~55 s needs a faster VO or a shorter script — see §12.
+
+
+---
+
+## 16. V1 draft video v1.1
+
+| Field | Value |
+|---|---|
+| File | `video/KMH-V1-INS-20785b5fa6bd-v1.1-draft.mp4` (23.8 MB) |
+| Specs | H.264 720x1280, 30 fps, **61.20 s** (1,836 frames) · AAC 44.1 kHz stereo 160 kb/s · −15.6 LUFS integrated, true peak −1.4 dBTP |
+| Picture | 28 shots, hard cuts, each cut in the pause before its line. Clips play from their start; 5 shorter than their shot are slowed just enough to fill it: S01 ×1.50 (noticeable), S08 ×1.05, S17 ×1.06, S22 ×1.15, S25 ×1.11. S27 plays 0.60 s from 0.20 s in. S28 is 2.52 s of a 4.04 s clip, so **no frame is held or frozen** |
+| Overlays | S01 headline unchanged ("Kid Always" + gold "DYSREGULATED?", top ~8%, over all of S01, 0–4.49 s) · 96 caption groups (§5) timed to the v1.1 VO's Whisper word timings · "free." held to 61.20 s |
+| Voiceover | `audio/AUD-V1-VO-v1.1.mp3` — Kie.ai `google/gemini-3-1-flash-tts`, voice **Sulafat** (warm female), accent American (Gen), style Empathetic, pace Natural, temperature 1; scene "a bright, quiet family kitchen… like she is telling a friend"; context "warm, relatable parent-to-parent… never salesy or childish… brisk, flowing pace". Task `489abffdc7c32019f376fdf298fb6737` (4.66 credits); best of 5 Gemini takes (4 others rejected as slower, all 171-word complete). No tempo change. Speech 0.00–65.03 s in the file; in the edit 0.00–59.65 s |
+| VO edit | Line edges found from the Whisper word edges outwards to where the level stays under −38 dB for 60 ms (cuts breaths between lines); pauses between lines capped at 0.2 s (many lines run on with no pause); pauses inside lines kept (they add 0.36 s over 0.3 s); 0.8 s beat before "Grab yours free." |
+| Music | Preview bed, gain set from integrated loudness so it sits 18 dB under the VO (+8.8 dB on the −46 LUFS bed file), extended with a crossfaded repeat, faded out over the last 1.5 s |
+| S28 product | **Real ASSET02 cover**, exact pixels, perspective-warped and tracked onto the book in mom's hand (§4 S28 card) |
+| Build | `bash build_assets.sh` → `python3 build_s28.py start` (only to remake KF-S28-01) → `python3 build_s28.py track` → `python3 build_video.py` (v1.1; `python3 build_video.py v1.0` rebuilds v1.0). Needs ffmpeg, Pillow, numpy, opencv-python-headless |
+| Contact sheet | `video/draft-v1.1-contact-sheet.png` |
+| Kie credits (this session) | **42.44** = S28 Grok clip 18.00 + voiceover 24.44 (5 Gemini takes: 4.89 + 4.67 + 4.81 + 4.66 + 5.41; 10 ElevenLabs and 2 Gemini calls failed, not charged). Account balance 873.30 → 514.36 (−358.94): the other ~316.5 credits were used outside this session in the same period |
+| Network | Kie API ✅. Kie upload host `kieai.redpandaai.co` reachable but 401 (no key injected for that host) → start frame passed to Grok as `raw.githubusercontent.com` URL of commit `d00cc3d` (repo is public) |
+
+<img src="video/draft-v1.1-contact-sheet.png" width="100%" alt="v1.1 draft contact sheet">
+
+### Timing (v1.1, re-timed to the new VO)
+
+| Shot | Planned (s) | v1.0 shot (s) | v1.1 shot (s) | v1.1 VO line (s) | Clip use |
+|---|---|---|---|---|---|
+| S01 | 0.000–2.703 | 0.00–4.72 | 0.00–4.49 | 0.00–4.39 | ×1.50 slower |
+| S02 | 2.703–4.204 | 4.72–6.39 | 4.49–6.01 | 4.59–5.91 | normal |
+| S03 | 4.204–5.939 | 6.39–7.99 | 6.01–7.87 | 6.11–7.77 | normal |
+| S04 | 5.939–8.008 | 7.99–10.28 | 7.87–9.82 | 7.97–9.72 | normal |
+| S05 | 8.008–10.277 | 10.28–13.57 | 9.82–12.74 | 9.92–12.74 | normal |
+| S06 | 10.277–12.813 | 13.57–15.67 | 12.74–14.98 | 12.74–14.88 | normal |
+| S07 | 12.813–16.450 | 15.67–19.46 | 14.98–18.58 | 15.08–18.48 | normal |
+| S08 | 16.450–18.051 | 19.46–21.74 | 18.58–20.68 | 18.68–20.58 | ×1.05 slower |
+| S09 | 18.051–18.685 | 21.74–22.50 | 20.68–21.32 | 20.78–21.22 | normal |
+| S10 | 18.685–19.386 | 22.50–23.43 | 21.32–22.22 | 21.42–22.12 | normal |
+| S11 | 19.386–21.021 | 23.43–25.15 | 22.22–23.97 | 22.32–23.88 | normal |
+| S12 | 21.021–23.157 | 25.15–27.46 | 23.97–26.16 | 24.06–26.06 | normal |
+| S13 | 23.157–25.826 | 27.46–29.96 | 26.16–28.68 | 26.26–28.58 | normal |
+| S14 | 25.826–27.728 | 29.96–31.43 | 28.68–30.38 | 28.78–30.28 | normal |
+| S15 | 27.728–30.297 | 31.43–34.29 | 30.38–32.82 | 30.48–32.72 | normal |
+| S16 | 30.297–33.300 | 34.29–37.50 | 32.82–35.66 | 32.92–35.56 | normal |
+| S17 | 33.300–35.836 | 37.50–40.84 | 35.66–38.82 | 35.76–38.82 | ×1.06 slower |
+| S18 | 35.836–37.971 | 40.84–42.68 | 38.82–40.32 | 38.82–40.32 | normal |
+| S19 | 37.971–40.607 | 42.68–46.00 | 40.32–43.22 | 40.32–43.12 | normal |
+| S20 | 40.607–42.843 | 46.00–48.77 | 43.22–45.82 | 43.32–45.72 | normal |
+| S21 | 42.843–45.078 | 48.77–51.61 | 45.82–48.08 | 45.92–48.08 | normal |
+| S22 | 45.078–46.246 | 51.61–53.64 | 48.08–50.36 | 48.08–50.26 | ×1.15 slower |
+| S23 | 46.246–47.547 | 53.64–54.90 | 50.36–51.52 | 50.46–51.42 | normal |
+| S24 | 47.547–49.249 | 54.90–56.20 | 51.52–52.98 | 51.61–52.88 | normal |
+| S25 | 49.249–51.485 | 56.20–60.31 | 52.98–56.29 | 53.08–56.29 | ×1.11 slower |
+| S26 | 51.485–53.887 | 60.31–61.63 | 56.29–58.08 | 56.29–57.98 | normal |
+| S27 | 53.887–55.055 | 61.63–63.15 | 58.08–58.68 | — (beat after “support.”) | from 0.20 s in, cut mid-raise |
+| S28 | new end shot | new | 58.68–61.20 | 58.78–59.65 | VID-S28-01-cover, slow push-in 1.00→1.15 |
+
+**Length:** 61.20 s vs the ≤ ~58 s target (+3.2 s) — pauses already trimmed, S28 at its minimum, VO not sped up. See §12 for the options.

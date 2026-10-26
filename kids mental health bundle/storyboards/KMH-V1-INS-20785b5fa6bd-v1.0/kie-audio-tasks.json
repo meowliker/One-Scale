@@ -1,0 +1,194 @@
+{
+ "route": "Kie.ai",
+ "purpose": "V1 voiceover v1.1 (female, persona: mom raising kids, 35-44)",
+ "selected": {
+  "file": "audio/AUD-V1-VO-v1.1.mp3",
+  "kie_task_id": "489abffdc7c32019f376fdf298fb6737",
+  "model": "google/gemini-3-1-flash-tts",
+  "voice_name": "Sulafat",
+  "accent": "American (Gen)",
+  "style": "Empathetic",
+  "pace": "Natural",
+  "temperature": 1,
+  "input": {
+   "temperature": 1,
+   "scene": "A bright, quiet family kitchen. She talks straight to camera for a short social video, like she is telling a friend.",
+   "sample_context": "Warm, relatable parent-to-parent voiceover for a short social video ad. Conversational and sincere, never salesy or childish. She speaks at a brisk, flowing pace of about 3.2 words per second, like a friend catching you up quickly, and keeps pauses between sentences very short.",
+   "speakers": [
+    {
+     "speaker_id": "Speaker 1",
+     "voice_name": "Sulafat",
+     "audio_profile": "A warm, calm American mom in her late thirties raising young kids; gentle, grounded and reassuring",
+     "accent": "American (Gen)",
+     "style": "Empathetic",
+     "pace": "Natural"
+    }
+   ],
+   "dialogue_turns": [
+    {
+     "speaker_id": "Speaker 1",
+     "text": "Is your kid always dysregulated, melting down over little things? Then the shoes feel wrong. Their whole body goes rigid. Big feelings get trapped inside. Constant tears, slamming doors. And that tense feeling just won't go away. Soon, asking for something simple starts feeling like a risk. You brace yourself mornings, dinners, bedtimes. And instead of enjoying your kid, you're waiting for the next meltdown to start. Day after day, your home feels loud, tense, and exhausting, leaving you drained before your day is even over. What if your kid has been asking for a different kind of support? Just one printable feelings chart with your kid every day can help them name feelings, and leave your home feeling lighter and more peaceful. No more bracing yourself before every request. No more worrying about meltdowns or tantrums, just a kid who names feelings, calmer evenings and time to enjoy them. Add one feelings chart a day from the free Kids Mental Health Bundle and give your kid support. Grab yours free."
+    }
+   ]
+  },
+  "result_url": "https://file.aiquickdraw.com/as/489abffdc7c32019f376fdf298fb6737_1793017533815.wav",
+  "source_format": "WAV 24 kHz mono, 65.40 s (speech 0.00-65.03 s)",
+  "delivered_as": "MP3 44.1 kHz stereo (dual mono) 192 kb/s, no tempo change",
+  "words_file": "audio/AUD-V1-VO-v1.1-words.json",
+  "listen_check": "faster-whisper small.en word timestamps: 171 words heard = the 171-word script, in order (Whisper spells 'Kids Mental Health' as kid's); final v1.1 mix re-transcribed: 171/171",
+  "credits": 4.66
+ },
+ "elevenlabs_attempts": {
+  "note": "Preferred route was ElevenLabs on Kie (models confirmed by createTask validation: 'text is required'; voices and params from docs.kie.ai/market/elevenlabs/text-to-speech-multilingual-v2: voice = voice ID, speed 0.7-1.2). Every task, including Kie's own docs example, failed with 'Internal Error, Please try again later.' and was not charged.",
+  "planned_settings": {
+   "model": "elevenlabs/text-to-speech-multilingual-v2",
+   "voice": "6aDn1KB0hjpdcocrUkmq (Tiffany - Natural and Welcoming)",
+   "stability": 0.5,
+   "similarity_boost": 0.75,
+   "style": 0,
+   "speed": 1.1
+  },
+  "tasks": [
+   {
+    "task_id": "d93177ee3c088c57ea16760d5c459729",
+    "model": "elevenlabs/text-to-speech-multilingual-v2",
+    "state": "fail",
+    "fail": "Internal Error, Please try again later.",
+    "credits": 0.0
+   },
+   {
+    "task_id": "69ef615ca46cc55bd3feb831fb8d6746",
+    "model": "elevenlabs/text-to-speech-multilingual-v2",
+    "state": "fail",
+    "fail": "Internal Error, Please try again later.",
+    "credits": 0.0
+   },
+   {
+    "task_id": "223ff60a5fc42746eba17c24d5e0b167",
+    "model": "elevenlabs/text-to-speech-multilingual-v2",
+    "state": "fail",
+    "fail": "Internal Error, Please try again later.",
+    "credits": 0.0
+   },
+   {
+    "task_id": "fea6101fe637953d377481ab990119d4",
+    "model": "elevenlabs/text-to-speech-multilingual-v2",
+    "state": "fail",
+    "fail": "Internal Error, Please try again later.",
+    "credits": 0.0
+   },
+   {
+    "task_id": "e4b8e3632f75a18fdba34236d809cafd",
+    "model": "elevenlabs/text-to-speech-turbo-2-5",
+    "state": "fail",
+    "fail": "Internal Error, Please try again later.",
+    "credits": 0.0
+   },
+   {
+    "task_id": "a5b1ad4b4910aafab0a1933fea8e2641",
+    "model": "elevenlabs/text-to-speech-multilingual-v2",
+    "state": "fail",
+    "fail": "Internal Error, Please try again later.",
+    "credits": 0.0
+   },
+   {
+    "task_id": "4f171ce407dc86ac813c42f69b6f4582",
+    "model": "elevenlabs/text-to-dialogue-v3",
+    "state": "fail",
+    "fail": "Internal Error, Please try again later.",
+    "credits": 0.0
+   },
+   {
+    "task_id": "d0451f5897c7bded4d672a97408986ba",
+    "model": "elevenlabs/text-to-speech-multilingual-v2",
+    "state": "fail",
+    "fail": "Internal Error, Please try again later.",
+    "credits": 0.0
+   },
+   {
+    "task_id": "5e7003fc876f6552f8a1e23ec0ec0232",
+    "model": "elevenlabs/text-to-speech-multilingual-v2",
+    "state": "fail",
+    "fail": "Internal Error, Please try again later.",
+    "credits": 0.0
+   },
+   {
+    "task_id": "d9e983680d6f77872d584ba7763f52f9",
+    "model": "elevenlabs/text-to-speech-multilingual-v2",
+    "state": "fail",
+    "fail": "Internal Error, Please try again later.",
+    "credits": 0.0
+   }
+  ]
+ },
+ "gemini_takes": [
+  {
+   "task_id": "89bfbc278eebd0307624dbc899113fad",
+   "request": "req6",
+   "settings": "Sulafat, Empathetic, pace Natural, base context",
+   "file_s": 69.13,
+   "speech_end_s": 68.77,
+   "speech_with_gaps_capped_0p3_s": 63.07,
+   "qc": "171/171 words; too slow",
+   "credits": 4.89,
+   "model": "google/gemini-2-5-pro-tts"
+  },
+  {
+   "task_id": "dcc7a1efdff210f2293f98190db62b28",
+   "request": "req8",
+   "settings": "as above + 'brisk ~3.2 words/s, very short pauses' context",
+   "file_s": null,
+   "speech_end_s": 65.52,
+   "speech_with_gaps_capped_0p3_s": 60.02,
+   "qc": "171/171 words; still slow",
+   "credits": 4.67,
+   "model": "google/gemini-2-5-pro-tts"
+  },
+  {
+   "task_id": "8029a99c6c68e58ba463ae6d304a4920",
+   "request": "req7",
+   "settings": "as req6 with pace 'Rapid Fire'",
+   "file_s": null,
+   "speech_end_s": 67.66,
+   "speech_with_gaps_capped_0p3_s": 63.7,
+   "qc": "171/171 words; no faster",
+   "credits": 4.81,
+   "model": "google/gemini-2-5-pro-tts"
+  },
+  {
+   "task_id": "489abffdc7c32019f376fdf298fb6737",
+   "request": "req9",
+   "settings": "Gemini 3.1 Flash, same voice/settings as req8",
+   "file_s": 65.4,
+   "speech_end_s": 65.0,
+   "speech_with_gaps_capped_0p3_s": 57.38,
+   "qc": "SELECTED - 171/171 words, fastest take",
+   "credits": 4.66,
+   "model": "google/gemini-3-1-flash-tts"
+  },
+  {
+   "task_id": "72154c4765333cc13f21c75a3eb1c2b1",
+   "request": "req9",
+   "settings": "repeat of the selected settings",
+   "file_s": null,
+   "speech_end_s": 75.78,
+   "speech_with_gaps_capped_0p3_s": 65.14,
+   "qc": "171/171 words; slower",
+   "credits": 5.41,
+   "model": "google/gemini-3-1-flash-tts"
+  }
+ ],
+ "failed_without_charge": [
+  {
+   "task_id": "862cb53e02c1970e52d98e4011fad302",
+   "model": "google/gemini-2-5-pro-tts",
+   "fail": "generate task timeout."
+  },
+  {
+   "task_id": "1d9dd60b7a952775d340864957824531",
+   "model": "google/gemini-3-1-flash-tts",
+   "fail": "internal error, please try again later."
+  }
+ ],
+ "credits_audio": 24.44
+}

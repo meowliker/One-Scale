@@ -486,6 +486,23 @@
    "result_url": "https://tempfile.aiquickdraw.com/ggg/users/dc2e2e4e-5663-46d6-bccc-c20e801cefaa/generated/30dd1944-f683-4a46-bd63-f170235575e6/generated_video.mp4",
    "qc": "pass",
    "selected_file": "video/VID-S27-01.mp4"
+  },
+  "VID-S28-01": {
+   "shot": "S28",
+   "version_added": "v1.1",
+   "edit_duration_s": 2.52,
+   "clip_duration_s": 4,
+   "start_frame": "KF-S28-01 (assets/KF-S28-01-start-frame.png: last frame of VID-S27-01 + exact ASSET02 cover, build_s28.py start)",
+   "image_url": "https://raw.githubusercontent.com/meowliker/One-Scale/d00cc3d/kids%20mental%20health%20bundle/storyboards/KMH-V1-INS-20785b5fa6bd-v1.0/assets/KF-S28-01-start-frame.png",
+   "prompt": "Photoreal 3D CGI stylised explainer-ad animation, vertical 9:16. Exactly two characters and nobody else, exactly as in the start frame: a friendly cartoon skeleton mom with long wavy auburn hair, an orange terry headband, big brown cartoon eyes and a small closed-mouth smile with no visible teeth, and one small skeleton boy with messy spiky brown hair, a see-through glass head with a soft cartoon face and a calm blue glow, and a see-through glass chest. The mom keeps holding the book perfectly still at shoulder height with the cover facing the camera; the book does not move, turn or change, and its cover stays exactly as in the start frame. She smiles warmly and gives a small proud nod; the boy looks up at the book and smiles, his blue glow pulsing softly. Camera: locked off, no movement. Bright white tiled room, soft daylight. Keep lighting, palette and character designs consistent with the start frame. No new text, no logos, no gore, nothing scary, no speech.",
+   "kie_task_id": "eeec3a57d22fca343ab8d1266cd8db0d",
+   "state": "success",
+   "credits": 18.0,
+   "result_url": "https://tempfile.aiquickdraw.com/ggg/users/59946e52-886a-41de-aa76-5a0002f540aa/generated/5ba10c7d-68c1-45ea-9bb0-91011b741ab1/generated_video.mp4",
+   "file": "video/VID-S28-01.mp4",
+   "qc": "pass with fix",
+   "qc_note": "mom and kid on-model, locked-off, gentle nod/smile; Grok redraws the cover (subtitle garbled, book drifts ~6 px), so the raw clip is not used. The exact cover is pinned onto the book in every frame (build_s28.py track, SIFT homography, 140-165 inliers/frame) -> video/VID-S28-01-cover.mp4",
+   "selected_file": "video/VID-S28-01-cover.mp4"
   }
  },
  "credits_retry_round_1": {
@@ -506,5 +523,9 @@
    "S22",
    "S23"
   ]
+ },
+ "credits_v1_1": {
+  "S28": 18.0,
+  "note": "session balance 873.3 -> 514.36; this session's tasks used 42.44 (S28 video 18.0 + voiceover 24.44, see kie-audio-tasks.json); the other ~316.5 credits were used outside this session in the same period"
  }
 }
