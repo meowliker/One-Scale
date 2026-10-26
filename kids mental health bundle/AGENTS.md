@@ -14,3 +14,10 @@ This folder is the workspace for the kids mental health bundle project.
 ## Shared agent instructions
 
 Keep shared project instructions in this file so Codex and Claude use the same guidance. The root `CLAUDE.md` imports this file.
+
+## Skills
+
+Project skills live in two mirrored folders: `.agents/skills/` (read by Codex) and `.claude/skills/` (read by Claude). Keep both copies identical; when a skill changes, update it in both places.
+
+- `inspiration-breakdown` (Skill 1): analyzes a reference video ad into a timecoded breakdown and Reference Rules Sheet.
+- `data-informed-adaptation` (Skill 2): uses product-scoped Meta Ads data, audience research, and the Skill 1 breakdown to write 5 ranked ad variations.
