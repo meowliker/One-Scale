@@ -17,23 +17,56 @@ Switch to **LOOSE** (their structure, our winner's angle and voice) only when th
 | Hook mechanism and hook word count | Visual details that show *their* product, redrawn to show ours | Their creators' faces or voice |
 | Caption style, music feel, pacing | | |
 
-Generic lines that are true for our product (e.g. "Always feeling bloated?") can stay word for word, because that's what "highly similar" means. Rewrite only lines that are brand-specific, untrue for us, or banned.
+## The core method: keep their sentence, swap their problem for ours
+
+Our product often solves a **different problem** from theirs (they sell a bloating oil, we sell a nervous-system product). Close copy then doesn't mean keeping their words. It means **keeping every sentence's frame and swapping only the problem-specific words for our equivalents**, in the same position. Wherever they mention their pain, we mention ours. Wherever they list their symptoms, we list ours, in the same count and order.
+
+| Their line | Frame (kept) | Their slot → our slot | Our line |
+|---|---|---|---|
+| "Always Feeling **BLOATED**?" | Always Feeling [PAIN]? | bloated → dysregulated | "Always Feeling **DYSREGULATED**?" |
+| "Every time you **eat**, it starts with a little **bloating**." | Every time you [TRIGGER], it starts with a little [FIRST SYMPTOM]. | eat → get stressed · bloating → tension | "Every time you **get stressed**, it starts with a little **tension**." |
+| "Your **jeans feel tighter**. Your **stomach feels rock hard**." | Your [SYMPTOM 1]. Your [SYMPTOM 2]. | body symptoms → ours, same escalation | "Your **shoulders feel tighter**. Your **chest feels heavy**." |
+| "Just **2 to 3 drops in your navel** every day…" | Just [USAGE] every day… | their usage → our real usage | "Just **5 minutes of this routine** every day…" |
+
+Rules:
+- **Slots to swap:** pain, trigger, symptoms, life impact, cause, mechanism, product, usage, benefits, outcome, proof, offer, CTA. Everything else (sentence frame, rhythm, punctuation, CAPS on the same word, the number of items in a list, the question or negation pattern) stays as theirs.
+- **Same position, same weight.** Their CAPS word becomes our CAPS word. A 3-item list stays 3 items. A short punchy symptom stays short and punchy.
+- **Fill slots from our data first:** the customer words, pains, and benefits in the product file. Then use plain truthful wording. Never invent symptoms or results.
+- If their problem *is* our problem (we also sell for bloating), the slots stay the same and the line can stay word for word.
+- Rewrite more than the slots only when the frame itself can't be true for us or is on the can't-say list. Mark that row ⚠️.
 
 ## Steps
 
 ### 1. Full breakdown
-From `breakdown.md`: beat table, hook card, all shot details, format summary.
+From `breakdown.md`: run the video analysis script, then the beat table (every line quoted), hook card, all shot details, format summary.
 
 ### 2. Data card
-From `product-data.md`. In close mode, the data mainly supplies *true substitutes*: our real usage, our real benefits, customer words for pains, proof, offer, CTA, and the "can't say" list. It does not change the structure.
+From `product-data.md`. In close mode, the data mainly supplies *true substitutes*: our pain, triggers, symptoms, real usage, real benefits, customer words, proof, offer, CTA, and the "can't say" list. It does not change the structure.
+
+### 2b. Pain map: their problem → our problem
+Before converting lines, map every problem-specific slot in their ad to ours, one row per slot. This fixes the vocabulary so the whole script stays consistent (the pain is "dysregulated" everywhere, not three different words):
+
+| Slot | Theirs (with beat) | Ours | Source |
+|---|---|---|---|
+| Main pain | bloated (B01) | dysregulated | 📊 product file: main pain |
+| Trigger | eating (B01) | stress | 📊 pains |
+| Symptoms ×5 (B02, escalating) | jeans tighter → stomach rock hard → gas trapped → burping → heavy | shoulders tight → chest heavy → racing thoughts → snapping at people → wired but tired | 📊 customer words |
+| Life impact ×3 (B03) | … | … | |
+| Hidden cause (B05) | … | … | |
+| Usage (B06) | 2–3 drops in navel | … | 📊 product facts |
+| Benefits (B07) | … | … | |
+
+Keep the same **number** of items as theirs in every list slot. If our data has fewer true items, mark the gap `[NEED]` rather than padding with invented ones.
 
 ### 3. Close conversion table
 The centrepiece, mirroring the beat table so the strategist can compare row by row:
 
 | Beat | Start–end (s) | Shots | Theirs | Ours: text / VO | Ours: visual | Changed? |
 |---|---|---|---|---|---|---|
-| B01 | 0.000–2.703 | S01 | Headline "Always Feeling BLOATED?" + VO "Every time you eat, it starts with a little bloating." | Headline "Always Feeling BLOATED?" + VO "Every time you eat, it starts with a little bloating." | Same split-screen X-ray skeleton | ✅ same |
-| B06 | 33.300–40.607 | S17–S19 | VO "Just 2 to 3 drops in your navel every day…" Dropper over navel → glowing path | VO "Just one capsule after dinner…" | Capsule enters stomach → same glowing path → thumbs-up | ✏️ usage swapped: our product is a capsule |
+| B01 | 0.000–2.703 | S01 | Headline "Always Feeling BLOATED?" + VO "Every time you eat, it starts with a little bloating." | Headline "Always Feeling **DYSREGULATED**?" + VO "Every time you **get stressed**, it starts with a little **tension**." | Same split screen: hunched, tense skeleton with a red glow along the spine vs. upright, calm skeleton | ✏️ pain slots swapped (pain map) |
+| B06 | 33.300–40.607 | S17–S19 | VO "Just 2 to 3 drops in your navel every day…" Dropper over navel → glowing path | VO "Just **5 minutes of this routine** every day…" | Same glowing path, travelling along the nervous system instead of the gut | ✏️ usage swapped to ours |
+
+**Bold the swapped words** in the "Ours" column so the strategist can see exactly what changed and that everything else is theirs.
 
 - **Changed?** says `✅ same`, `✏️ [what changed + why in ≤8 words]`, or `⚠️ [needs a call → Q#]`. Combine them when a row has both (`✏️ usage swapped · ⚠️ Q2`).
 - **CTA:** use our standard CTA from the data file, because it's the one proven for us, even if it runs longer than their end beat. Stretch the last beat and note the new total length in one line. Only make it a Q-call if the data file has no standard CTA.
@@ -43,7 +76,7 @@ The centrepiece, mirroring the beat table so the strategist can compare row by r
 
 ### 4. Options
 Keep this short. In close mode, the conversion table is the main deliverable:
-- **Hooks H1–H5:** H1 = closest to their hook (often the same line, if it's true for us). H2–H5 = same mechanism and word count, each leaning on a different pain or customer phrase from our data.
+- **Hooks H1–H5:** H1 = their hook with only the pain slots swapped (from the pain map). H2–H5 = same mechanism and word count, each leaning on a different pain or customer phrase from our data.
 - **Body:** B1 = the close conversion above. Optionally add **B2 = data-tuned**: same structure, but symptoms and benefits re-ranked toward what our data says converts. Show only the rows that differ from B1.
 - Visual notes stay "same as their S##" unless a change is needed.
 - No separate bridge table: in close mode the bridge is their own transition beat, converted in the table above.

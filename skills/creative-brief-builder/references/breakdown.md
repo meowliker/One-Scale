@@ -15,11 +15,26 @@ How to break down the inspiration video. Every run starts with the **beat table*
 
 ## 1. Getting at the video
 
-Use whatever the chat can actually do. Don't assume a tool exists.
+### If there's a video file: run the analysis script first, every time
+
+Exact timings like `2.703` come from measuring the file, not from watching it. Before writing anything, run:
+
+```bash
+python <skill-dir>/scripts/analyze_video.py <video file> --out video_analysis
+```
+
+It prints a shot list with **frame-accurate cut times**, the VO words spoken in each shot (when speech-to-text is available), and saves frames: start/middle/end of every shot, the hook every 0.25s, and contact sheets. Then:
+1. **Look at every contact sheet and every hook frame.** Read the on-screen text from the frames and describe what you see. Don't skip shots.
+2. If the shot count looks wrong (soft cuts missed in animation, or shaky UGC split into too many shots), re-run with `--threshold 0.2` or `--threshold 0.4`.
+3. If ASR isn't installed, try `pip install faster-whisper` once and re-run. If that fails, take the VO from captions in the frames, a transcript, or an ad-library tool. Then mark VO evidence `Provided` or `Observed (captions)`.
+4. Build the beat table from these results. **Beat boundaries sit on the measured cut times or VO timestamps**, never on rounded guesses.
+
+If ffmpeg isn't available, say so in one line, use the other rows below, and mark timings `estimated`.
+
+### Other situations
 
 | What you have | What to do |
 |---|---|
-| Video file uploaded, code execution available | Get duration and size with `ffprobe`. Find the exact cut points with scene detection, e.g. `ffmpeg -i in.mp4 -vf "select='gt(scene,0.3)',showinfo" -f null - 2>&1 \| grep pts_time`. Each cut starts a new shot and gives frame-accurate times like `2.703`. Extract frames (`-vf fps=2`, or `fps=4` for fast openings) and look at them in order. Transcribe the audio with any available speech-to-text (ASR). |
 | Ad library / creative tool connected (one that can transcribe or break down an ad from a link) | Use it for the transcript and any shot data. Still look at frames if you can get them. |
 | Link only, nothing can open it | Say so. Ask for the file, a screen recording, or a transcript plus 4–8 screenshots. Don't build a breakdown from the URL, title, or thumbnail. |
 | Transcript only | Beat table with words only. Visuals and shot columns say `Unknown — no video`. Ask for screenshots if the borrow needs visuals. |
@@ -60,7 +75,7 @@ How to fill each column:
 - **Beat:** `B01, B02…` in order. Split at every change of job, including re-hooks and pivots.
 - **Start–end (s):** seconds, start of the beat to the start of the next beat.
 - **Shots:** the shot IDs inside this beat (`S01`, `S02–S06`). Shots are numbered by cuts across the whole video.
-- **Original content / action:** in this order: on-screen text as `Headline "…"` or `Text "…"` (keep their CAPS and punctuation), then `VO "…"` (exact words, original language, with a translation in brackets if needed), then a plain, specific description of the visual. For lists or escalations, use `→` between items. For rhetorical patterns, name them briefly (e.g. "negation ×2 → positive list ×3").
+- **Original content / action:** quote **every** line. All on-screen text and the full VO for the beat, word for word, never summarised ("Symptom stack: …" is only allowed as a lead-in before the full quoted lines). The conversion copies these exact lines, so anything summarised here gets lost. Order: on-screen text as `Headline "…"` or `Text "…"` (keep their CAPS and punctuation), then `VO "…"` (exact words, original language, with a translation in brackets if needed), then a plain, specific description of the visual. For lists or escalations, use `→` between items. For rhetorical patterns, name them briefly (e.g. "negation ×2 → positive list ×3").
 - **Narrative role (inferred):** the beat's job in 3–8 words, plus a few words on how it does it.
 - **Evidence:** the labels from section 2.
 

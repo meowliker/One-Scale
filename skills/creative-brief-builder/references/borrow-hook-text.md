@@ -17,7 +17,7 @@ Keep it short: the hook block plus 2–4 lines of "why it works for them".
 From `product-data.md`. For this run you mostly need: buyer, top pains and desires, customer words, best existing hooks, the winner's angle, and claims we can't make.
 
 ### 3. Converted hooks H1–H6
-Write 6 hooks for our product that keep the **mechanism** (not the exact words) of their hook:
+Write 6 hooks for our product. **H1 is always the slot swap:** their exact sentence, with only the pain, trigger, or symptom words swapped for ours ("Always Feeling BLOATED?" → "Always Feeling DYSREGULATED?"), same CAPS position, same word count. H2–H6 keep the **mechanism** but vary the wording:
 - Match their word count (±2 words). Show the count on every option.
 - Spread them across different pains, desires, or angles from our data, so they test different things. The mechanism stays fixed in this borrow (that's what the strategist liked), so the variety has to come from *what* the hook is about.
 - If their hook relies on something we can't honestly use (a credential, a competitor product, a banned comparison), keep the shape and swap that part for something true for us. Say what you swapped and why, in one line, above the options.

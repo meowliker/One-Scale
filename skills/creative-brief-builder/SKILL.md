@@ -69,7 +69,7 @@ Read `references/breakdown.md`. Every inspiration gets the team's standard **bea
 
 `Beat | Start–end (s) | Shots | Original content / action | Narrative role (inferred) | Evidence`
 
-It's followed by a hook card and a short format summary. Full copy, format, and visual-hook runs also get a shot-detail table underneath. The file also covers how to get at the video (file, link, transcript, screenshots), exact cut timings, evidence labels, and word counts.
+When there's a video file, **always run `scripts/analyze_video.py` first**. It measures the exact cut times (e.g. `2.703`), matches voiceover words to shots, and saves frames to look at. Then quote every line of VO and on-screen text in the table. The table is followed by a hook card and a short format summary. Full copy, format, and visual-hook runs also get a shot-detail table underneath. The file also covers how to get at the video (file, link, transcript, screenshots), exact cut timings, evidence labels, and word counts.
 
 **Never invent what you didn't see or hear.** If part of the video is missing (e.g. a transcript but no visuals for some beats), carry on with what you have and mark the gaps `Unknown`. In the pick message, ask for the video or screenshots of exactly those beats. Stop and ask before doing anything only when there's nothing usable (a bare link nothing can open). A made-up breakdown produces a brief for a video that never existed.
 
@@ -82,6 +82,8 @@ Pull out what this run needs. Everything you write later should trace back to ei
 ## Step 3 and 4: Convert, then options
 
 The borrow file gives the specific steps. These rules apply to every borrow type:
+
+**Keep their sentence, swap their problem.** When we copy their words (full copy, hook text), keep each sentence's frame and swap only the problem-specific words for ours, in the same position: their pain → our pain, their symptoms → our symptoms (same count, same order), their usage → our usage. "Always Feeling BLOATED?" becomes "Always Feeling DYSREGULATED?". Build a **pain map** first (see `borrow-full-copy.md`) so the swaps stay consistent across the script.
 
 **What the inspiration gives vs. what our data gives.** The inspiration supplies the *shape*: structure, timing, visual approach, hook mechanism, word count. Our data supplies the *substance*: angle, persona, pain, desire, proof, product facts, the voice that converts for us. The most common failure is copying the competitor's angle or voice along with their format. If their hook speaks to a pain our buyers don't have, keep the mechanism and swap the pain for ours.
 

@@ -47,6 +47,7 @@ Use these to make sure options really differ. Pick the mechanisms that fit the b
 - **Word count:** match the inspiration's count for each channel (text and spoken counted separately), within ±2. Show the count. Short hooks are short for a reason: they must be readable in about 1.5–2 seconds.
 - **On-screen text readability:** about 3 words per second of screen time, max 2 lines, and ~6 words per line on 9:16.
 - **Text hook ≠ spoken hook** unless the inspiration uses captions that copy the VO. When both exist, the text usually carries the punch and the VO adds context. Don't make the VO read the text word for word unless the inspiration does.
+- **H1 = slot swap** in full copy and hook-text borrows: their exact frame, with only the problem words swapped for ours (see the pain map in `borrow-full-copy.md`).
 - **Customer words first:** where the data has an exact buyer phrase that fits, use it.
 - **No fake specifics:** a number, duration, or result in a hook must come from the data. Otherwise use a `[NEED: proof]` placeholder.
 
