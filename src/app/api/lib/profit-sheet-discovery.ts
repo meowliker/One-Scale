@@ -389,7 +389,7 @@ export async function runDiscovery(job: Job) {
         // need reconnection, rather than an endless background retry.
         const transient = e instanceof MetaRateLimitError || /timeout|time budget|fetch failed|network|Incomplete Meta|50[0234]|Settings changed/i.test(String(e));
         if (transient) retryAt = Math.max(retryAt, Date.now() + delay);
-        warnings.push(`${account.name}: ${e instanceof MetaRateLimitError ? "Meta temporarily limited requests. Saved mappings are retained; matching will retry automatically after the cooldown." : `Creative scan incomplete. Saved mappings retained. ${safeSheetError(e)}${transient ? " Automatic retry scheduled." : ""}`}`);
+        warnings.push(`${account.name}: ${e instanceof MetaRateLimitError ? (e.reason === "scheduled" ? "Matching is queued while shared Meta request capacity recovers. Saved mappings remain available and matching will retry automatically." : "Meta temporarily limited requests. Saved mappings are retained; matching will retry automatically after the cooldown.") : `Creative scan incomplete. Saved mappings retained. ${safeSheetError(e)}${transient ? " Automatic retry scheduled." : ""}`}`);
 
       }
     }

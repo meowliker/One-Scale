@@ -350,6 +350,7 @@ function Workspace({
     daily.data?.jobs.filter(
       (j) => j.status === "queued" || j.status === "running",
     ).length || 0;
+  const waiting = daily.data?.jobs.filter(j => j.status === "queued" && j.retry_at && Date.parse(j.retry_at) > Date.now()).length || 0;
   const failures = daily.data?.jobs.filter((j) => j.status === "error") || [];
   const warnings = [
     ...new Set(daily.data?.days.flatMap((d) => d.warnings) || []),
@@ -476,11 +477,10 @@ function Workspace({
           className="flex items-center gap-2 rounded-lg bg-primary/10 p-3 text-sm text-text-secondary"
         >
           <Loader2 className="h-4 w-4 animate-spin" />
-          {pending}{" "}
-          {missing.length
-            ? "reporting days queued or syncing in this range."
-            : "saved reporting days refreshing in the background."}{" "}
-          Cached figures remain visible.
+          {waiting === pending
+            ? "Updates are scheduled while Meta capacity recovers. They will resume automatically."
+            : `${pending} reporting days refreshing in the background.`}{" "}
+          Saved figures remain visible; their last sync time has not changed.
         </p>
       )}
       {missing.length > 0 && !pending && !daily.isPending && (

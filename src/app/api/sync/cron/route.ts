@@ -188,8 +188,7 @@ export async function GET(request: NextRequest) {
   const requestedStoreId = (params.get('storeId') || params.get('store_id') || '').trim();
   const forceAll = params.get('full') === '1';
   const explicitAuto = params.get('auto') === '1';
-  const isVercelCron = (request.headers.get('x-vercel-cron') || '').length > 0;
-  const autoMode = !forceAll && (explicitAuto || (isVercelCron && requestedStoreId.length === 0));
+  const autoMode = !forceAll && (explicitAuto || requestedStoreId.length === 0);
 
   const today = new Date().toISOString().slice(0, 10);
   const dateRange = { since: today, until: today };

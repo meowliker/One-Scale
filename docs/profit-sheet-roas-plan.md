@@ -56,3 +56,13 @@ Shopify's documented [CustomerJourneySummary](https://shopify.dev/docs/api/admin
 - The frontend shows candidate URLs and automatic retry status, and refreshes saved configurations after background scans.
 
 Validation: `node --test tests/profit-sheet.test.mjs tests/meta-connection.test.mjs`; `tests/profit-sheet-mapping.sql` must run inside a transaction and roll back. No advertising objects are edited at Meta.
+
+### Shared Meta request budget (27 October 2026)
+
+Migration 053 reserves request slots in Supabase across server instances (app, hashed credential, and account). The shared client reads app/account/BUC/insights usage headers on successful responses, slows at 75%, and queues at 90%. Provider retry durations are respected; a 429 is recorded once instead of retried after two seconds. No access tokens are stored in the budget table or request URLs. Identical concurrent reads within a worker share one request.
+
+Background cron routes previously depended on `x-vercel-cron`, which is not Vercel's documented marker. A scheduled request without that header could enter all-store/seven-day mode. No-store calls now default to bounded rotation unless `full=1`; scheduled paths explicitly include `auto=1`, and heavy cron runs are staggered. Campaign identity catalogs stay cached for two hours, and report Refresh no longer invalidates the entire catalog.
+
+Profit Sheet jobs have a durable `retry_at`. Both cron and browser workers respect it. Deferral preserves existing complete reports; a first-time sync may publish Shopify figures with missing Meta values, then retries automatically. This reduces avoidable requests and keeps the dashboard usable; it does not guarantee unlimited freshness under Meta quotas. Direct advertising mutations and external applications using the same Meta credentials are outside this read-client budget.
+
+Tests: `node --test tests/meta-request-budget.test.mjs tests/profit-sheet.test.mjs tests/meta-connection.test.mjs`; SQL budget/pacing tests are in `tests/meta-request-budget.sql` (run transactionally and roll back).

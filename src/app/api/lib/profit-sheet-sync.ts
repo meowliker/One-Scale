@@ -3,7 +3,7 @@ import { rest } from "./supabase-persistence";
 import { loadConfig } from "./profit-sheet-repository";
 import { fetchFromShopify } from "./shopify-client";
 import { getShopifyToken } from "./tokens";
-import { fetchFromMeta } from "./meta-client";
+import { fetchFromMeta, MetaRateLimitError } from "./meta-client";
 import { safeSheetError } from "./profit-sheet-access";
 import { dayWindow, type SheetJob } from "@/lib/profit-sheet/model";
 import {
@@ -25,13 +25,9 @@ const enc = encodeURIComponent;
 export async function enqueueDays(
   storeId: string,
   dates: string[],
-  refreshCatalog = false,
+  _refreshCatalog = false,
 ) {
-  if (refreshCatalog)
-    await rest(`/profit_sheet_meta_catalogs?store_id=eq.${enc(storeId)}`, {
-      method: "PATCH",
-      body: JSON.stringify({ synced_at: "1970-01-01T00:00:00Z" }),
-    });
+  void _refreshCatalog; // Refresh report data without invalidating the entire identity catalog.
   await rest("/rpc/profit_sheet_enqueue", {
     method: "POST",
     body: JSON.stringify({ p_store: storeId, p_dates: dates }),
@@ -181,6 +177,13 @@ async function metaDay(
   }
   throw new Error("Meta report exceeded pagination limit");
 }
+async function deferDay(job: SheetJob, retryAt: number) {
+  await rest(`/profit_sheet_jobs?store_id=eq.${enc(job.store_id)}&date=eq.${job.date}&lease_id=eq.${job.lease_id}`, {
+    method: "PATCH", body: JSON.stringify({ status: "queued", retry_at: new Date(retryAt).toISOString(),
+      error: "Meta sync is scheduled automatically. Saved figures remain available.", lease_until: null, updated_at: new Date().toISOString() }),
+  });
+  return { ok: true, deferred: true, date: job.date, retryAt: new Date(retryAt).toISOString() };
+}
 export async function syncSheetDay(job: SheetJob) {
   const deadline = Date.now() + 235000;
   try {
@@ -260,6 +263,7 @@ export async function syncSheetDay(job: SheetJob) {
     const errors: string[] = [];
     const metrics: CampaignMetric[] = [];
     let adsComplete = true;
+    let retryAt = 0;
     const store = rows.get("store")!;
     // Older cached reports lack these fields. Mark the new format even on a
     // provider error, so navigation does not create an automatic retry loop.
@@ -310,6 +314,7 @@ export async function syncSheetDay(job: SheetJob) {
               );
           } catch (error) {
             adsComplete = false;
+            if (error instanceof MetaRateLimitError) retryAt = Math.max(retryAt, Date.now() + error.retryAfterMs);
             errors.push(
               `${account.name}: ${account.currency !== currency ? "Account currency differs from store currency." : safeSheetError(error)}`,
             );
@@ -341,6 +346,7 @@ export async function syncSheetDay(job: SheetJob) {
         metrics,
       );
     } catch (error) {
+      if (error instanceof MetaRateLimitError) retryAt = Math.max(retryAt, Date.now() + error.retryAfterMs);
       const message = `Order attribution could not be updated: ${safeSheetError(error)}`;
       errors.push(message);
       attribution = {
@@ -371,6 +377,12 @@ export async function syncSheetDay(job: SheetJob) {
           : []),
       ],
     }));
+    if (retryAt) {
+      // Preserve complete saved figures during cooldown. On the very first sync,
+      // still publish Shopify data with unavailable Meta fields before retrying.
+      const saved = await rest<Array<{ date: string }>>(`/profit_sheet_days?store_id=eq.${enc(job.store_id)}&date=eq.${job.date}&scope_id=eq.store&select=date&limit=1`);
+      if (saved.length) return deferDay(job, retryAt);
+    }
     await rest("/rpc/profit_sheet_publish_attribution", {
       method: "POST",
       body: JSON.stringify({
@@ -383,6 +395,7 @@ export async function syncSheetDay(job: SheetJob) {
         p_attribution: attribution,
       }),
     });
+    if (retryAt) return deferDay(job, retryAt);
     if (errors.length)
       await rest(
         `/profit_sheet_jobs?store_id=eq.${enc(job.store_id)}&date=eq.${job.date}&lease_id=eq.${job.lease_id}`,

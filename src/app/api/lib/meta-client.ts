@@ -1,3 +1,4 @@
+import { budgetKeys, reserveMetaRequest, recordMetaPressure } from "./meta-request-budget";
 import type {
   Campaign,
   AdSet,
@@ -51,17 +52,16 @@ interface MetaAdAccount {
 
 export class MetaRateLimitError extends Error {
   readonly retryAfterMs: number;
-  constructor(endpoint: string, retryAfterMs = 15 * 60 * 1000) {
-    super(`Meta API rate limited on ${endpoint} — try again in a minute`);
+  readonly reason: "quota" | "scheduled";
+  constructor(endpoint: string, retryAfterMs = 15 * 60 * 1000, reason: "quota" | "scheduled" = "quota") {
+    super(`Meta sync is queued for ${endpoint}; saved data remains available while requests wait for capacity.`);
     this.name = 'MetaRateLimitError';
     this.retryAfterMs = retryAfterMs;
+    this.reason = reason;
   }
 }
 
 // ------ Generic Fetch with Rate-Limit Retry ------
-
-const MAX_RETRIES = 2;
-const BASE_DELAY_MS = 2000; // 2 seconds — keep retries fast, fail early if still limited
 
 export function isRateLimitError(status: number, body: string): boolean {
   if (status === 429) return true;
@@ -87,75 +87,49 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const pendingReads = new Map<string, Promise<unknown>>();
 export async function fetchFromMeta<T>(
-  token: string,
-  endpoint: string,
-  params: Record<string, string> = {},
-  timeoutMs: number = 15000,
-  maxRetriesOverride?: number
+  token: string, endpoint: string, params: Record<string, string> = {},
+  timeoutMs = 15000, _maxRetriesOverride?: number,
 ): Promise<T> {
-  let lastError: Error | null = null;
-  const retries = typeof maxRetriesOverride === 'number' ? Math.max(0, maxRetriesOverride) : MAX_RETRIES;
-
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    // On retries, wait with exponential backoff BEFORE acquiring a slot
-    if (attempt > 0) {
-      const backoffMs = BASE_DELAY_MS * Math.pow(2, attempt - 1); // 2s, 4s (max ~6s total)
-      console.log(`[Meta] Rate limit retry ${attempt}/${retries} for ${endpoint} — waiting ${backoffMs}ms`);
-      await delay(backoffMs);
-    }
-
-    await acquireSlot();
-    try {
-      const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-      const url = new URL(`${META_GRAPH_URL}${normalizedEndpoint}`);
-      url.searchParams.set('access_token', token);
-      for (const [key, value] of Object.entries(params)) {
-        url.searchParams.set(key, value);
-      }
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-      try {
-        const response = await fetch(url.toString(), { signal: controller.signal });
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-          const errorBody = await response.text();
-
-          // Check for rate limit error — retry with backoff or throw specific error
-          if (isRateLimitError(response.status, errorBody)) {
-            if (attempt < retries) {
-              lastError = new Error(`Meta API rate limit (${response.status}): ${errorBody}`);
-              console.warn(`[Meta] Rate limited on ${endpoint} (attempt ${attempt + 1}/${retries + 1})`);
-              continue; // will retry after backoff at top of loop
-            }
-            // Last attempt — throw specific rate limit error for route handlers to detect
-            console.error(`[Meta] Rate limit exhausted for ${endpoint} after ${retries + 1} attempts`);
-            throw new MetaRateLimitError(endpoint, metaRetryAfter(response.headers));
-          }
-
-          throw new Error(`Meta API error (${response.status}): ${errorBody}`);
-        }
-
-        return response.json() as Promise<T>;
-      } catch (err) {
-        clearTimeout(timeoutId);
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          throw new Error(`Meta API timeout (${timeoutMs}ms) for ${endpoint}`);
-        }
-        // If this is a rate limit error we set via continue, it was already handled
-        // For other errors, don't retry
-        throw err;
-      }
-    } finally {
-      releaseSlot();
-    }
+  void _maxRetriesOverride; // Kept for callers; retries are now scheduled after a shared cooldown.
+  const keys = budgetKeys(token, endpoint);
+  const key = JSON.stringify([keys[1], endpoint, Object.entries(params).sort(([a], [b]) => a.localeCompare(b)), timeoutMs]);
+  let pending = pendingReads.get(key);
+  if (!pending) {
+    pending = fetchMetaRequest<T>(token, endpoint, params, timeoutMs, keys);
+    pendingReads.set(key, pending);
+    void pending.finally(() => pendingReads.delete(key)).catch(() => {});
   }
-
-  // If we exhausted all retries — throw a specific rate limit error so routes can return 429
-  throw new MetaRateLimitError(endpoint);
+  return structuredClone(await pending) as T;
+}
+async function fetchMetaRequest<T>(token: string, endpoint: string, params: Record<string, string>, timeoutMs: number, keys: string[]): Promise<T> {
+  await acquireSlot();
+  try {
+    let reservation;
+    try { reservation = await reserveMetaRequest(keys); }
+    catch { throw new MetaRateLimitError(endpoint, 60000, "scheduled"); }
+    if (!reservation.reserved) throw new MetaRateLimitError(endpoint, Math.max(60000, reservation.waitMs), "scheduled");
+    if (reservation.waitMs > 0) await delay(reservation.waitMs);
+    const url = new URL(`${META_GRAPH_URL}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`);
+    for (const [key, value] of Object.entries(params)) if (key !== 'access_token') url.searchParams.set(key, value);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { signal: controller.signal, headers: { Authorization: `Bearer ${token}` } });
+      const errorBody = response.ok ? '' : await response.text();
+      const limited = !response.ok && isRateLimitError(response.status, errorBody);
+      const retryAfter = limited ? metaRetryAfter(response.headers) : 0;
+      // Even a successful response can say we are close to exhausting the quota.
+      await recordMetaPressure(keys, response.headers, retryAfter);
+      if (limited) throw new MetaRateLimitError(endpoint, retryAfter);
+      if (!response.ok) throw new Error(`Meta API error (${response.status}): ${errorBody}`);
+      return await response.json() as T;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') throw new Error(`Meta API timeout (${timeoutMs}ms) for ${endpoint}`);
+      throw error;
+    } finally { clearTimeout(timeout); }
+  } finally { releaseSlot(); }
 }
 
 export async function fetchFromMetaBatched<T>(
@@ -785,10 +759,12 @@ export async function fetchMetaCampaigns(
     let nextUrl = insightsResponse.paging?.next;
     while (nextUrl) {
       try {
-        const nextResponse = await fetch(nextUrl);
-        if (!nextResponse.ok) break;
+        const pageUrl = new URL(nextUrl);
+        if (pageUrl.hostname !== 'graph.facebook.com') throw new Error('Unexpected Meta pagination host');
+        const pageParams = Object.fromEntries(pageUrl.searchParams);
+        delete pageParams.access_token;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const nextData = await nextResponse.json() as { data: Record<string, any>[]; paging?: { next?: string } };
+        const nextData = await fetchFromMeta<{ data: Record<string, any>[]; paging?: { next?: string } }>(token, `/${accountId}/insights`, pageParams);
         if (nextData.data) {
           for (const row of nextData.data) {
             if (row.campaign_id) {
@@ -1722,13 +1698,10 @@ export async function fetchAdCreativeUrls(
   const results: Array<{ adId: string; adName: string; url: string }> = [];
 
   try {
-    const res = await fetch(
-      `https://graph.facebook.com/v18.0/${campaignId}/ads` +
-      `?fields=id,name,creative{object_story_spec,asset_feed_spec,effective_object_story_id,object_url,link_url}` +
-      `&limit=100&access_token=${token}`,
-    );
-    if (!res.ok) return results;
-    const data = await res.json();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = await fetchFromMeta<{ data: Record<string, any>[] }>(token, `/${campaignId}/ads`, {
+      fields: 'id,name,creative{object_story_spec,asset_feed_spec,effective_object_story_id,object_url,link_url}', limit: '100',
+    });
 
     for (const ad of data.data ?? []) {
       const creative = ad.creative ?? {};

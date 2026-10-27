@@ -41,6 +41,8 @@ export function safeSheetError(error: unknown): string {
     return "No usable Meta integration is saved for this store. In Settings → Integrations, reuse a saved ad-account token or connect Meta.";
   if (/190|OAuthException|expired.*token/i.test(message))
     return "Meta access token is expired or invalid. Update it in Manage ad accounts.";
+  if (/Meta sync is queued/i.test(message))
+    return "Meta sync is scheduled automatically. Saved figures remain available.";
   if (/rate.limit|429/i.test(message))
     return "Provider rate limit reached. Retry shortly.";
   if (/Settings changed/i.test(message))

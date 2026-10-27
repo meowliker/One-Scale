@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
         `/profit_sheet_days?${filter}&scope_id=eq.${encodeURIComponent(scope)}&select=*&order=date.asc`,
       ),
       fetchAllRestRows(
-        `/profit_sheet_jobs?${filter}&select=store_id,date,status,error,updated_at,lease_until&order=date.asc`,
+        `/profit_sheet_jobs?${filter}&select=store_id,date,status,error,updated_at,lease_until,retry_at&order=date.asc`,
       ),
     ]);
     return sheetJson({ days, jobs });

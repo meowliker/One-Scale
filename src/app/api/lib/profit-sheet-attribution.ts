@@ -24,7 +24,7 @@ export async function loadMetaCatalog(
   ]);
   if (cached.length >= 100000)
     throw new Error("Meta catalog exceeded storage pagination limit");
-  if (state[0] && Date.parse(state[0].synced_at) > Date.now() - 30 * 60000)
+  if (state[0] && Date.parse(state[0].synced_at) > Date.now() - 2 * 60 * 60000)
     return cached.map((r) => r.entity);
   const entities: Entity[] = [];
   for (const kind of ["campaign", "adset", "ad"] as const) {

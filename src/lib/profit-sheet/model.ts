@@ -60,6 +60,7 @@ export type SheetJob = {
   error: string | null;
   lease_id: string;
   lease_until?: string | null;
+  retry_at?: string | null;
   updated_at: string;
 };
 // 11:30 IST = 06:00 UTC. The exclusive end includes every instant before next day's 11:30.
@@ -233,8 +234,9 @@ export function currentSavedDay(
 export function runnableJob(jobs: SheetJob[], now = Date.now()) {
   return jobs.find(
     (j) =>
-      j.status === "queued" ||
+      (!j.retry_at || Date.parse(j.retry_at) <= now) &&
+      (j.status === "queued" ||
       (j.status === "running" &&
-        (!j.lease_until || Date.parse(j.lease_until) <= now)),
+        (!j.lease_until || Date.parse(j.lease_until) <= now))),
   );
 }

@@ -36,12 +36,12 @@
   },
   "crons": [
     {
-      "path": "/api/sync/cron",
+      "path": "/api/sync/cron?auto=1",
       "schedule": "*/10 * * * *"
     },
     {
-      "path": "/api/cron/materialize-meta-entities",
-      "schedule": "0 */2 * * *"
+      "path": "/api/cron/materialize-meta-entities?auto=1",
+      "schedule": "7 */2 * * *"
     },
     {
       "path": "/api/cron/refresh-clickup",
@@ -56,8 +56,8 @@
       "schedule": "30 */2 * * *"
     },
     {
-      "path": "/api/cron/sync-meta-spend",
-      "schedule": "*/10 * * * *"
+      "path": "/api/cron/sync-meta-spend?auto=1",
+      "schedule": "3,13,23,33,43,53 * * * *"
     },
     {
       "path": "/api/cron/daily-pnl-dispatch",

@@ -549,7 +549,7 @@ function compiled(path, dependencies) {
       require: (name) => {
         if (!(name in dependencies))
           throw new Error(`Unexpected dependency ${name}`);
-        return dependencies[name];
+        return name.endsWith("meta-client") ? { MetaRateLimitError: TestRateLimitError, ...dependencies[name] } : dependencies[name];
       },
     },
   );
@@ -1839,7 +1839,7 @@ test("creative cache resumes completed batches, isolates credentials, and honors
  assert.ok(calls.length>count+1);
 });
 test("Meta error codes and provider cooldown headers are recognized", () => {
- const meta=compiled("src/app/api/lib/meta-client.ts",{});
+ const meta=compiled("src/app/api/lib/meta-client.ts",{"./meta-request-budget":{}});
  assert.equal(meta.isRateLimitError(400,JSON.stringify({error:{code:80004}})),true);
  assert.equal(meta.isRateLimitError(403,JSON.stringify({error:{code:4}})),true);
  assert.equal(meta.isRateLimitError(400,JSON.stringify({error:{code:190}})),false);
@@ -1849,4 +1849,9 @@ test("Meta error codes and provider cooldown headers are recognized", () => {
 
 test("existing post destinations unwrap Meta link shims without treating Facebook video URLs as products",()=>{
  assert.deepEqual(Array.from(discovery.postDestinationLinks({attachments:{data:[{url:"https://l.facebook.com/l.php?u=https%3A%2F%2Fstore.test%2Fproducts%2Fquilt",target:{url:"https://www.facebook.com/video/123"}}]}})),["https://store.test/products/quilt"]);
+});
+test("cooldown jobs wait until due without a browser worker retry loop",()=>{
+ const m=model();const job={status:"queued",date:"2020-01-01",retry_at:"2020-01-01T01:00:00Z"};
+ assert.equal(m.runnableJob([job],Date.parse("2020-01-01T00:59:00Z")),undefined);
+ assert.equal(m.runnableJob([job],Date.parse("2020-01-01T01:00:01Z")).date,job.date);
 });

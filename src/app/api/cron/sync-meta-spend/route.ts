@@ -272,8 +272,7 @@ export async function GET(req: NextRequest) {
   }
   const forceAll = params.get('full') === '1';
   const explicitAuto = params.get('auto') === '1';
-  const isVercelCron = (req.headers.get('x-vercel-cron') || '').length > 0;
-  const autoMode = !forceAll && (explicitAuto || (isVercelCron && requestedStoreId.length === 0));
+  const autoMode = !forceAll && (explicitAuto || requestedStoreId.length === 0);
   const days = parseDaysParam(params.get('days'), autoMode ? 1 : 7);
 
   let targetStores: StoreLike[] = requestedStoreId
