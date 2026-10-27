@@ -11,7 +11,7 @@ import type {
 const META_GRAPH_URL = 'https://graph.facebook.com/v21.0';
 
 // ------ Concurrency Limiter ------
-// Meta API rate limits: ~200 calls/hour per token.
+// Meta applies app, account and business-use-case limits; quotas vary by request.
 // More importantly, too many simultaneous TCP connections overloads Node.
 const MAX_CONCURRENT = 5;
 let activeRequests = 0;
@@ -50,9 +50,11 @@ interface MetaAdAccount {
 // ------ Rate Limit Error (exported for route handlers) ------
 
 export class MetaRateLimitError extends Error {
-  constructor(endpoint: string) {
+  readonly retryAfterMs: number;
+  constructor(endpoint: string, retryAfterMs = 15 * 60 * 1000) {
     super(`Meta API rate limited on ${endpoint} — try again in a minute`);
     this.name = 'MetaRateLimitError';
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -61,22 +63,24 @@ export class MetaRateLimitError extends Error {
 const MAX_RETRIES = 2;
 const BASE_DELAY_MS = 2000; // 2 seconds — keep retries fast, fail early if still limited
 
-function isRateLimitError(status: number, body: string): boolean {
-  // Meta rate limit: error code 17 or 32, subcode 2446079, or HTTP 429
+export function isRateLimitError(status: number, body: string): boolean {
   if (status === 429) return true;
-  if (status === 400 || status === 403) {
-    return (
-      body.includes('"code":17') ||
-      body.includes('"code": 17') ||
-      body.includes('"code":32') ||
-      body.includes('"code": 32') ||
-      body.includes('Too Many') ||
-      body.includes('User request limit reached') ||
-      body.includes('too many api calls') ||
-      body.includes('2446079')
-    );
-  }
-  return false;
+  try {
+    const error = JSON.parse(body).error;
+    if ([4, 17, 32, 613, 80000, 80001, 80002, 80003, 80004, 80005, 80006].includes(Number(error?.code)) || Number(error?.error_subcode) === 2446079) return true;
+  } catch { /* A proxy may return plain text. */ }
+  return /too many|request limit reached|too many api calls/i.test(body);
+}
+export function metaRetryAfter(headers: Headers): number {
+  const value = headers.get('retry-after');
+  let delay = value ? (Number.isFinite(Number(value)) ? Number(value) * 1000 : Date.parse(value) - Date.now()) : 0;
+  try {
+    const usage = JSON.parse(headers.get('x-business-use-case-usage') || '{}');
+    for (const rows of Object.values(usage))
+      if (Array.isArray(rows)) for (const row of rows)
+        delay = Math.max(delay, Number(row.estimated_time_to_regain_access || 0) * 60000);
+  } catch { /* Fall back to a conservative cooldown. */ }
+  return Math.max(15 * 60000, Number.isFinite(delay) ? delay : 0);
 }
 
 function delay(ms: number): Promise<void> {
@@ -129,7 +133,7 @@ export async function fetchFromMeta<T>(
             }
             // Last attempt — throw specific rate limit error for route handlers to detect
             console.error(`[Meta] Rate limit exhausted for ${endpoint} after ${retries + 1} attempts`);
-            throw new MetaRateLimitError(endpoint);
+            throw new MetaRateLimitError(endpoint, metaRetryAfter(response.headers));
           }
 
           throw new Error(`Meta API error (${response.status}): ${errorBody}`);

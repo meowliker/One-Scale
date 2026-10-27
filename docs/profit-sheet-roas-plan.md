@@ -45,3 +45,14 @@ Shopify's documented [CustomerJourneySummary](https://shopify.dev/docs/api/admin
 - Product dialogs open as compact summary cards. Edit expands one card; Save verifies links and persists the configuration, then collapses cards. Add manually retains the manual product and ad-account workflows.
 - Hosted discovery scheduler: `/api/cron/profit-sheet-discovery?enqueue=1` at `0 6 * * *` (11:30 AM IST), plus a minute worker that claims queued stores. The local worker has an independent discovery lane with once-per-reporting-day queue deduplication. Vercel schedules take effect when this code is deployed.
 - Live verification: Artfania analytics returned both main landing pages with sessions on all five days, plus an additional qualifying product. Recent creative scanning completed; its connected Meta integration currently needs reconnection, while its saved manual ad-account token works. Database rollback assertions verified metadata round trips, unlink tombstones, exclusive claims and daily deduplication without retaining test data.
+
+### Automatic mapping reliability (27 October 2026)
+
+- Migration 052 makes the store's linked Meta accounts common to Integrations and Profit Sheet. Account membership changes enqueue discovery atomically. Profit Sheet keeps account running dates and manual-token accounts; linking a workspace login does not select every available ad account.
+- Product edits and explicit report refreshes queue discovery. The existing minute cron consumes the queue; the 11:30 AM IST discovery cron remains in place. A request during an active scan queues a subsequent scan. Configuration versions prevent stale workers from overwriting edits.
+- Creative scan membership is cached for 30 minutes and creative details for one hour, scoped to store/account/token hash. Each completed batch is saved to Supabase. Provider cooldowns survive deployments and cannot be bypassed by repeated Discover clicks. Incomplete scans are marked partial or queued for retry, not silently successful.
+- Product matching requires every readable destination to belong to the same saved product. Different Shopify handles in one product tab are allowed. Shared campaigns use exact ad IDs. Names/copy are not attribution evidence. Prior verified intervals survive unreadable destinations; a confirmed destination change closes the earlier interval without backdating the new one.
+- Existing-post ads use public destination attachments when Meta permits the read. Missing Page permission or dynamic catalog destinations appear in review. Manual overrides and unlink exclusions remain authoritative.
+- The frontend shows candidate URLs and automatic retry status, and refreshes saved configurations after background scans.
+
+Validation: `node --test tests/profit-sheet.test.mjs tests/meta-connection.test.mjs`; `tests/profit-sheet-mapping.sql` must run inside a transaction and roll back. No advertising objects are edited at Meta.

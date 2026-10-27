@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
   try {
     const [jobs, exclusions] = await Promise.all([
       rest<unknown[]>(
-        `/profit_sheet_discovery?store_id=eq.${encodeURIComponent(id)}&select=status,checked_at,error,report`,
+        `/profit_sheet_discovery?store_id=eq.${encodeURIComponent(id)}&select=status,checked_at,error,report,retry_at`,
       ),
       loadExclusions(id),
     ]);
@@ -51,6 +51,7 @@ export async function DELETE(req: NextRequest) {
       `/profit_sheet_exclusions?store_id=eq.${encodeURIComponent(id)}&key=eq.${encodeURIComponent(body.key)}`,
       { method: "DELETE" },
     );
+    await queueDiscovery(id);
     return sheetJson({ ok: true });
   } catch (e) {
     return sheetJson({ error: safeSheetError(e) }, 502);

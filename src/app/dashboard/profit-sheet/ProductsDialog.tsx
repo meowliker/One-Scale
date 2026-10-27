@@ -352,7 +352,7 @@ export function ProductsDialog({
                     </label>
                     <p className="text-xs text-text-muted">
                       Enabling automatic matching replaces manual selections on
-                      save. Run discovery to find matching ads; new mappings
+                      save. Matching runs automatically after saving; new mappings
                       start from the day they are first verified. You can unlink
                       individual campaigns below.
                     </p>
@@ -477,7 +477,7 @@ export function ProductsDialog({
                     )}
                     {!config.accounts.length && (
                       <p className="text-xs text-text-muted">
-                        Add ad accounts using Manage ad accounts before
+                        Link ad accounts in Settings → Integrations or Manage ad accounts before
                         assigning campaigns.
                       </p>
                     )}

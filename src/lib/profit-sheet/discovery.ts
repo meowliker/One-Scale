@@ -101,3 +101,40 @@ export function creativeLinks(creative: Record<string, unknown>): string[] {
   walk(creative, 0);
   return [...urls];
 }
+
+// Every destination must resolve to the same saved product. Several Shopify
+// handles may belong to one product tab; a shared campaign alone proves nothing.
+export function creativeOwner(
+  links: string[], products: SheetProduct[],
+  catalog: Array<{ id: string | number; handle: string }>, domains: Set<string>,
+): SheetProduct | undefined {
+  if (!links.length) return undefined;
+  const owners = links.map(link => {
+    const handle = productHandle(link, domains);
+    const item = handle && catalog.find(p => p.handle === handle);
+    return item ? products.find(p => p.shopifyIds.includes(String(item.id))) : undefined;
+  });
+  return owners[0] && owners.every(p => p?.id === owners[0]?.id) ? owners[0] : undefined;
+}
+
+export function postDestinationLinks(post: {
+  attachments?: { data?: Array<{ url?: string; target?: { url?: string }; subattachments?: { data?: unknown[] } }> };
+}): string[] {
+  const links = new Set<string>();
+  const visit = (item: unknown) => {
+    if (!item || typeof item !== "object") return;
+    const a = item as { url?: string; target?: { url?: string }; subattachments?: { data?: unknown[] } };
+    for (const raw of [a.url, a.target?.url]) {
+      if (!raw) continue;
+      try {
+        let url = new URL(raw);
+        if (["l.facebook.com", "lm.facebook.com"].includes(url.hostname) && url.pathname === "/l.php")
+          url = new URL(url.searchParams.get("u") || "");
+        if (["https:", "http:"].includes(url.protocol) && !/(^|\.)facebook\.com$/.test(url.hostname)) links.add(url.href);
+      } catch { /* Not a usable destination. */ }
+    }
+    a.subattachments?.data?.forEach(visit);
+  };
+  post.attachments?.data?.forEach(visit);
+  return [...links];
+}

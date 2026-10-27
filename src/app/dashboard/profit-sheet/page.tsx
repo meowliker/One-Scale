@@ -596,6 +596,7 @@ function StoreSheet({
         { signal },
       ),
     retry: false,
+    refetchInterval: 30000,
   });
   if (config.isPending)
     return (

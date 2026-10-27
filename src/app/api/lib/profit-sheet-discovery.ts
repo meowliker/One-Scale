@@ -1,4 +1,4 @@
-import { checkMetaConnection } from "./meta-connection-health";
+import { MetaRateLimitError } from "./meta-client";
 import { loadExclusions } from "./profit-sheet-exclusions";
 import { randomUUID } from "crypto";
 import { rest } from "./supabase-persistence";
@@ -9,7 +9,6 @@ import { shopifyGraphQL } from "./shopify-graphql";
 import { encryptSecret } from "./crypto";
 import { safeSheetError } from "./profit-sheet-access";
 import {
-  connectedAccounts,
   recentCreatives,
 } from "./profit-sheet-meta-discovery";
 import { addDays } from "@/lib/profit-sheet";
@@ -21,11 +20,12 @@ import {
 } from "@/lib/profit-sheet/model";
 import {
   creativeLinks,
+  creativeOwner,
   productHandle,
   assignmentMatches,
   type DiscoveryFinding,
 } from "@/lib/profit-sheet/discovery";
-type Job = { store_id: string; lease: string; run_day: string };
+type Job = { store_id: string; lease: string; run_day: string; attempts?: number };
 type Product = {
   id: number | string;
   handle: string;
@@ -77,8 +77,6 @@ export async function runDiscovery(job: Job) {
   const storeId = job.store_id,
     deadline = Date.now() + 230000;
   try {
-    // Validation is read-only at Meta; revoked tokens stay saved with a clear status.
-    try { await checkMetaConnection(storeId); } catch { /* Provider retry is surfaced by account discovery below. */ }
     const config = await loadConfig(storeId);
     const token = await getShopifyToken(storeId);
     if (!token?.shopDomain) throw new Error("Missing Shopify connection");
@@ -246,13 +244,8 @@ export async function runDiscovery(job: Job) {
           },
         });
     }
-    try {
-      await connectedAccounts(storeId, deadline);
-    } catch (e) {
-      warnings.push(
-        `Connected Meta account discovery: ${safeSheetError(e).replace("Update it in Manage ad accounts.", "Reconnect Meta in Settings → Integrations.")} Saved manual accounts can still be scanned.`,
-      );
-    }
+    let metaComplete = true;
+    let retryAt = 0;
     for (const account of config.accounts) {
       check(deadline);
       try {
@@ -262,6 +255,7 @@ export async function runDiscovery(job: Job) {
           addDays(from, -1),
           day,
           deadline,
+          storeId,
         );
         const proposed = new Map<
           string,
@@ -269,34 +263,17 @@ export async function runDiscovery(job: Job) {
         >();
         for (const ad of ads) {
           const links = creativeLinks(ad.creative || {});
-          const handles = links.map((l) => productHandle(l, domains));
-          const ids = new Set(
-            handles
-              .filter(Boolean)
-              .flatMap((h) =>
-                catalog.filter((p) => p.handle === h).map((p) => String(p.id)),
-              ),
-          );
-          const owners = products.filter((p) =>
-            p.shopifyIds.some((id) => ids.has(id)),
-          );
-          // Close prior observation periods when a fully read creative changes destination.
-          // Old periods remain available for historical reports; never backdate the new URL.
+          if (!links.length) links.push(...(ad.destinationLinks || []));
+          const owner = creativeOwner(links, products, catalog, domains);
+          // Close mappings only after a complete scan, and never manufacture an
+          // inverted interval when a creative changes twice on the same day.
           for (const product of products)
             if (product.source === "auto" && !product.manualOverride) {
-              const assignment = product.assignments.find(
-                (a) => a.accountId === account.adAccountId,
-              );
-              for (const link of assignment?.adLinks || [])
-                if (
-                  link.adId === ad.id &&
-                  !link.to &&
-                  (owners.length !== 1 ||
-                    owners[0].id !== product.id ||
-                    handles.some((h) => !h) ||
-                    ids.size !== 1)
-                )
-                  link.to = addDays(day, -1);
+              const assignment = product.assignments.find(a => a.accountId === account.adAccountId);
+              if (assignment?.adLinks) assignment.adLinks = assignment.adLinks.flatMap(link => {
+                if (link.adId !== ad.id || link.to || !links.length || owner?.id === product.id) return [link];
+                return link.from >= day ? [] : [{ ...link, to: addDays(day, -1) }];
+              });
             }
           const relevant = links.some((l) => {
             try {
@@ -305,28 +282,30 @@ export async function runDiscovery(job: Job) {
               return false;
             }
           });
-          if (
-            owners.length !== 1 ||
-            handles.some((h) => !h) ||
-            ids.size !== 1
-          ) {
+          if (!owner) {
             if (relevant || !links.length)
               findings.push({
                 key: `ad:${account.adAccountId}:${ad.id}`,
                 kind: "ad",
                 status: "review",
                 title: ad.name,
+                links,
                 accountId: account.adAccountId,
                 campaignId: ad.campaign_id,
                 adId: ad.id,
                 detail: !links.length
-                  ? "No readable destination; may use a catalog or existing post. No automatic spend allocation."
+                  ? "Meta did not expose a destination URL. Existing-post ads may require Page read permission; catalog ads may have dynamic destinations. Keep a manual mapping or reconnect with the necessary permission. No automatic spend allocation."
                   : "Destination is shared, unrecognized, or not a qualifying product. No automatic spend allocation.",
               });
             continue;
           }
-          const owner = owners[0];
-          if (owner.source !== "auto" || owner.manualOverride) continue;
+          if (owner.source !== "auto" || owner.manualOverride) {
+            if (!owner.assignments.some(a => assignmentMatches(a, { accountId: account.adAccountId, campaignId: ad.campaign_id, adId: ad.id }, day)))
+              findings.push({ key: `ad:${account.adAccountId}:${ad.id}`, kind: "ad", status: "review", title: ad.name,
+                links, accountId: account.adAccountId, campaignId: ad.campaign_id, adId: ad.id,
+                detail: `Destination matches ${owner.name}, but this product uses manual selections. Enable automatic matching to include it.` });
+            continue;
+          }
           if (
             excludedKeys.has(`account:${owner.id}:${account.adAccountId}`) ||
             excludedKeys.has(
@@ -404,9 +383,14 @@ export async function runDiscovery(job: Job) {
           ];
         }
       } catch (e) {
-        warnings.push(
-          `${account.name}: creative discovery failed. Existing assignments retained. ${safeSheetError(e)}`,
-        );
+        metaComplete = false;
+        const delay = e instanceof MetaRateLimitError ? e.retryAfterMs : Math.min(3600000, 60000 * 2 ** Math.min(job.attempts || 1, 6));
+        // Retry transient failures with a durable cooldown. Authentication failures
+        // need reconnection, rather than an endless background retry.
+        const transient = e instanceof MetaRateLimitError || /timeout|time budget|fetch failed|network|Incomplete Meta|50[0234]|Settings changed/i.test(String(e));
+        if (transient) retryAt = Math.max(retryAt, Date.now() + delay);
+        warnings.push(`${account.name}: ${e instanceof MetaRateLimitError ? "Meta temporarily limited requests. Saved mappings are retained; matching will retry automatically after the cooldown." : `Creative scan incomplete. Saved mappings retained. ${safeSheetError(e)}${transient ? " Automatic retry scheduled." : ""}`}`);
+
       }
     }
     validateProducts(products, config.accounts);
@@ -424,6 +408,8 @@ export async function runDiscovery(job: Job) {
       warnings,
       productsAdded: products.length - config.products.length,
       analyticsComplete,
+      metaComplete,
+      retryAt: retryAt ? new Date(retryAt).toISOString() : null,
     };
     await rest("/rpc/profit_sheet_finish_discovery", {
       method: "POST",
@@ -447,7 +433,8 @@ export async function runDiscovery(job: Job) {
       {
         method: "PATCH",
         body: JSON.stringify({
-          status: "error",
+          status: /Settings changed|time budget|timeout|fetch|network/i.test(String(e)) ? "queued" : "error",
+          retry_at: /Settings changed|time budget|timeout|fetch|network/i.test(String(e)) ? new Date(Date.now() + 60000).toISOString() : null,
           lease_until: null,
           error,
           checked_at: new Date().toISOString(),

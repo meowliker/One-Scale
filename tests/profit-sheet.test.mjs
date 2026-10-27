@@ -543,6 +543,7 @@ function compiled(path, dependencies) {
       Map,
       Buffer,
       structuredClone,
+      Headers,
       URL,
       process,
       require: (name) => {
@@ -615,7 +616,8 @@ test("daily refresh queues only the requested day; viewer cannot enqueue or proc
       "@/app/api/lib/profit-sheet-access": access,
       "@/lib/profit-sheet/model": model(),
       "@/app/api/lib/profit-sheet-repository": { loadConfig: async () => ({}) },
-      "@/app/api/lib/profit-sheet-sync": {
+      "@/app/api/lib/profit-sheet-discovery": { queueDiscovery: async () => {} },
+    "@/app/api/lib/profit-sheet-sync": {
         enqueueDays: async (...args) => calls.push(args),
         claimDay: async () => null,
         syncSheetDay: async () => {
@@ -1029,6 +1031,7 @@ test("automatic range fills use missing-only queue, while explicit refresh can f
     "@/app/api/lib/profit-sheet-repository": {
       loadConfig: async () => ({ products: [] }),
     },
+    "@/app/api/lib/profit-sheet-discovery": { queueDiscovery: async () => {} },
     "@/app/api/lib/profit-sheet-sync": {
       enqueueMissingDays: async (...args) => {
         calls.push(args);
@@ -1761,17 +1764,18 @@ test("shared automatic campaigns count each ad once and honor observation dates"
   assert.equal(attribution.summarizeAttribution([snap],"a").campaigns[0].spend,30);
   assert.equal(attribution.summarizeAttribution([snap],"store").campaigns[0].spend,100);
 });
+class TestRateLimitError extends Error { retryAfterMs = 900000; }
 function discoveryEngine({excluded=[],products=[],analyticsError=false,metaError=false}={}) {
  const writes=[];const config={version:4,accounts:[{...saved,adAccountId:"act_1"}],products};
  const engine=compiled("src/app/api/lib/profit-sheet-discovery.ts",{
-  "./meta-connection-health":{checkMetaConnection:async()=>({})},
+  "./meta-client":{MetaRateLimitError:TestRateLimitError},
   "./profit-sheet-exclusions":{loadExclusions:async()=>excluded.map(key=>({key}))},
   crypto:{randomUUID:()=>"new-product"},"./supabase-persistence":{rest:async(path,init)=>{if(!init)return excluded.map(key=>({key}));writes.push({path,body:JSON.parse(init.body)});return null;}},
   "./profit-sheet-repository":{loadConfig:async()=>config},"./tokens":{getShopifyToken:async()=>({accessToken:"secret",shopDomain:"store.test"})},
   "./shopify-client":{fetchFromShopify:async(_t,_d,path)=>path==="/shop.json"?{shop:{domain:"store.test",myshopify_domain:"x.myshopify.com"}}:path==="/products.json"?{products:[{id:1,handle:"quilt",title:"Quilt",status:"active"},{id:2,handle:"wire",title:"Wire",status:"active"}]}:{orders:[{id:1,test:false,financial_status:"paid",line_items:[{product_id:1}]}]}},
   "./shopify-graphql":{shopifyGraphQL:async()=>{if(analyticsError)throw new Error("denied");return {shopifyqlQuery:{parseErrors:[],tableData:{rows:[...Array.from({length:3},(_,i)=>({landing_page_path:"/products/quilt",day:`2020-01-0${i+1}`,sessions:"10"})),{landing_page_path:"/products/wire",day:"2020-01-01",sessions:"50"}]}}};}},
   "./crypto":{encryptSecret:()=>"encrypted"},"./profit-sheet-access":{safeSheetError:()=>"Provider unavailable"},
-  "./profit-sheet-meta-discovery":{connectedAccounts:async()=>({}),recentCreatives:async()=>{if(metaError)throw new Error("failed");return [{id:"300",campaign_id:"100",name:"Quilt ad",creative:{object_story_spec:{link_data:{link:"https://store.test/products/quilt"}}}},{id:"301",campaign_id:"100",name:"Mixed carousel",creative:{asset_feed_spec:{link_urls:[{website_url:"https://store.test/products/quilt"},{website_url:"https://store.test/products/wire"}]}}}];}},
+  "./profit-sheet-meta-discovery":{connectedAccounts:async()=>({}),recentCreatives:async()=>{if(metaError)throw metaError instanceof Error ? metaError : new Error("failed");return [{id:"300",campaign_id:"100",name:"Quilt ad",creative:{object_story_spec:{link_data:{link:"https://store.test/products/quilt"}}}},{id:"301",campaign_id:"100",name:"Mixed carousel",creative:{asset_feed_spec:{link_urls:[{website_url:"https://store.test/products/quilt"},{website_url:"https://store.test/products/wire"}]}}}];}},
   "@/lib/profit-sheet":sheet,"@/lib/profit-sheet/model":model(),"@/lib/profit-sheet/discovery":discovery
  });return {engine,writes};
 }
@@ -1791,8 +1795,58 @@ test("integration accounts use the server token rather than a browser token and 
 test("recent creative scans include paused delivered ads, paginate, and query only the discovered IDs",async()=>{
  const calls=[];
  const api=compiled("src/app/api/lib/profit-sheet-meta-discovery.ts",{
+  crypto:require("node:crypto"),"@/lib/profit-sheet/discovery":discovery,
   "./meta-client":{fetchFromMeta:async(_t,endpoint,params)=>{calls.push({endpoint,params});if(params.fields==="id")return {data:[{id:"300"}]};if(endpoint.endsWith("insights"))return {data:[{ad_id:"301"}]};return {data:[{id:"300"},{id:"301"}]};}},
-  "./tokens":{},"./supabase-persistence":{},"./profit-sheet-access":{},
+  "./tokens":{},"./supabase-persistence":{rest:async()=>[]},"./profit-sheet-access":{},
  });
- const ads=await api.recentCreatives("secret","act_1","2020-01-01","2020-01-06",Date.now()+10000);assert.equal(ads.length,2);assert.deepEqual(JSON.parse(calls.at(-1).params.filtering)[0].value,["300","301"]);assert.equal(calls[0].params.effective_status,'["ACTIVE"]');
+ const ads=await api.recentCreatives("secret","act_1","2020-01-01","2020-01-06",Date.now()+10000,"store-1");assert.equal(ads.length,2);assert.deepEqual(JSON.parse(calls.at(-1).params.filtering)[0].value,["300","301"]);assert.equal(calls[0].params.effective_status,'["ACTIVE"]');
+});
+
+test("destination mapping accepts grouped product links but never a mixed or foreign destination", () => {
+ const products=[{id:"group",shopifyIds:["1","2"]},{id:"other",shopifyIds:["3"]}];
+ const catalog=[{id:1,handle:"quilt"},{id:2,handle:"quilt-free"},{id:3,handle:"wire"}],domains=new Set(["store.test"]);
+ const match=(links)=>discovery.creativeOwner(links,products,catalog,domains)?.id;
+ assert.equal(match(["https://store.test/products/quilt?utm_campaign=1","https://store.test/products/quilt-free"]),"group");
+ assert.equal(match(["https://store.test/products/quilt","https://store.test/products/wire"]),undefined);
+ assert.equal(match(["https://other.test/products/quilt"]),undefined);
+ assert.equal(match([]),undefined);
+});
+test("rate-limited discovery persists a partial report and schedules a cooldown instead of claiming success", async () => {
+ const before=Date.now();const {engine,writes}=discoveryEngine({metaError:new TestRateLimitError("limited")});
+ const r=await engine.runDiscovery({store_id:"s",lease:"l",run_day:"2020-01-06"});
+ assert.equal(r.metaComplete,false);assert.ok(Date.parse(r.retryAt)>=before+900000);
+ assert.equal(writes.at(-1).body.p_report.metaComplete,false);
+ assert.match(r.warnings[0],/retry automatically/);
+});
+test("creative cache resumes completed batches, isolates credentials, and honors cooldown before any Meta call", async () => {
+ let stored=null,fail=true;const calls=[];
+ const ids=Array.from({length:51},(_,i)=>String(i+100));
+ const api=compiled("src/app/api/lib/profit-sheet-meta-discovery.ts",{
+  crypto:require("node:crypto"),"@/lib/profit-sheet/discovery":discovery,"./tokens":{},"./profit-sheet-access":{},
+  "./supabase-persistence":{rest:async(_path,init)=>{if(init){stored=JSON.parse(init.body);return null;}return stored?[structuredClone(stored)]:[];}},
+  "./meta-client":{MetaRateLimitError:TestRateLimitError,fetchFromMeta:async(_token,endpoint,p)=>{
+   calls.push(p);if(p.fields==="id")return {data:ids.map(id=>({id}))};if(endpoint.endsWith("insights"))return {data:[]};
+   const batch=JSON.parse(p.filtering)[0].value;if(batch.length===1&&fail)throw new TestRateLimitError("limited");
+   return {data:batch.map(id=>({id,campaign_id:"1"}))};
+  }},
+ });
+ const run=()=>api.recentCreatives("token-a","act_1","2020-01-01","2020-01-06",Date.now()+10000,"store-1");
+ await assert.rejects(run,TestRateLimitError);assert.equal(Object.keys(stored.snapshot.ads).length,50);
+ const count=calls.length;await assert.rejects(run,TestRateLimitError);assert.equal(calls.length,count);
+ stored.snapshot.cooldownUntil=0;fail=false;assert.equal((await run()).length,51);assert.equal(calls.length,count+1);
+ assert.equal((await run()).length,51);assert.equal(calls.length,count+1);
+ await api.recentCreatives("new-token","act_1","2020-01-01","2020-01-06",Date.now()+10000,"store-1");
+ assert.ok(calls.length>count+1);
+});
+test("Meta error codes and provider cooldown headers are recognized", () => {
+ const meta=compiled("src/app/api/lib/meta-client.ts",{});
+ assert.equal(meta.isRateLimitError(400,JSON.stringify({error:{code:80004}})),true);
+ assert.equal(meta.isRateLimitError(403,JSON.stringify({error:{code:4}})),true);
+ assert.equal(meta.isRateLimitError(400,JSON.stringify({error:{code:190}})),false);
+ assert.equal(meta.metaRetryAfter(new Headers({"retry-after":"1800"})),1800000);
+ assert.equal(meta.metaRetryAfter(new Headers({"x-business-use-case-usage":JSON.stringify({"1":[{estimated_time_to_regain_access:60}]})})),3600000);
+});
+
+test("existing post destinations unwrap Meta link shims without treating Facebook video URLs as products",()=>{
+ assert.deepEqual(Array.from(discovery.postDestinationLinks({attachments:{data:[{url:"https://l.facebook.com/l.php?u=https%3A%2F%2Fstore.test%2Fproducts%2Fquilt",target:{url:"https://www.facebook.com/video/123"}}]}})),["https://store.test/products/quilt"]);
 });

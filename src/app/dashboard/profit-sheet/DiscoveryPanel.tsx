@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, ScanSearch } from "lucide-react";
 import type { SheetConfig } from "@/lib/profit-sheet/model";
@@ -10,6 +10,7 @@ type Result = {
     status: string;
     checked_at: string | null;
     error: string | null;
+    retry_at: string | null;
     report: {
       findings?: DiscoveryFinding[];
       warnings?: string[];
@@ -33,6 +34,7 @@ export function DiscoveryPanel({
   const client = useQueryClient();
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
+  const seenCheck = useRef<string | null>(null);
   const query = useQuery({
     queryKey: ["profit-sheet-discovery", storeId],
     queryFn: ({ signal }) =>
@@ -45,6 +47,21 @@ export function DiscoveryPanel({
         ? 5000
         : false,
   });
+  // A cron scan can finish while the dialog is open. Refresh the saved cards
+  // without replacing unsaved edits; their version check still prevents races.
+  const checkedAt = query.data?.job?.checked_at;
+  useEffect(() => {
+    if (!checkedAt || disabled || seenCheck.current === checkedAt) return;
+    let cancelled = false;
+    void request<SheetConfig>(`/api/profit-sheet/config?storeId=${encodeURIComponent(storeId)}`).then(config => {
+      if (cancelled) return;
+      seenCheck.current = checkedAt;
+      onUpdated(config);
+      void client.invalidateQueries({ queryKey: ["profit-sheet-config", storeId] });
+      void client.invalidateQueries({ queryKey: ["profit-sheet-daily", storeId] });
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [checkedAt, disabled, storeId, onUpdated, client]);
   async function run() {
     setRunning(true);
     setError("");
@@ -90,7 +107,8 @@ export function DiscoveryPanel({
     }
   }
   const job = query.data?.job;
-  const busy = running || ["queued", "running"].includes(job?.status || "");
+  const busy = running || job?.status === "running";
+  const waiting = job?.status === "queued";
   useEffect(() => {
     onBusy(busy);
     return () => onBusy(false);
@@ -101,13 +119,13 @@ export function DiscoveryPanel({
         <div>
           <h3 className="text-sm font-medium">Automatic discovery</h3>
           <p className="mt-1 text-xs text-text-muted">
-            Daily at 11:30 AM IST · checks the previous 5 reporting days
+            Runs after account or product changes, on refresh, and daily at 11:30 AM IST
           </p>
         </div>
         <button
           type="button"
           className={buttonClass}
-          disabled={disabled || busy}
+          disabled={disabled || busy || waiting}
           onClick={() => void run()}
         >
           {busy ? (
@@ -115,7 +133,7 @@ export function DiscoveryPanel({
           ) : (
             <ScanSearch className="h-4 w-4" />
           )}
-          {busy ? "Checking products & ads…" : "Discover now"}
+          {busy ? "Checking products & ads…" : waiting ? "Matching queued" : "Discover now"}
         </button>
       </div>
       <p className="text-xs text-text-secondary">
@@ -127,6 +145,13 @@ export function DiscoveryPanel({
             ? `Last checked ${new Date(job.checked_at).toLocaleString()}.`
             : "No discovery check saved yet."}
       </p>
+      {waiting && (
+        <p className="text-xs text-cyan-300" role="status">
+          {job?.retry_at && Date.parse(job.retry_at) > Date.now()
+            ? `Meta scan will retry automatically after ${new Date(job.retry_at).toLocaleTimeString()}. Saved mappings remain available.`
+            : "Automatic matching is queued. You can close this window; the background worker will save the results."}
+        </p>
+      )}
       {(error || query.error || job?.error) && (
         <p role="alert" className="text-xs text-red-400">
           {error || query.error?.message || job?.error}
@@ -164,6 +189,10 @@ export function DiscoveryPanel({
                   </span>
                 </div>
                 <p className="mt-1 text-text-muted">{f.detail}</p>
+                {f.links?.filter(link => /^https?:\/\//i.test(link)).map(link => (
+                  <a key={link} href={link} target="_blank" rel="noopener noreferrer"
+                    className="mt-2 block break-all text-cyan-300 underline underline-offset-2">{link}</a>
+                ))}
               </div>
             ))}
           </div>

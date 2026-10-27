@@ -1,3 +1,4 @@
+import { sheetAccess } from "@/app/api/lib/profit-sheet-access";
 import { NextRequest, NextResponse } from 'next/server';
 import {
   getStoreAdAccounts,
@@ -23,6 +24,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
 
+  const denied = await sheetAccess(request, storeId);
+  if (denied) return denied;
   try {
     const accounts = isSupabasePersistenceEnabled()
       ? await listPersistentStoreAdAccounts(storeId)
@@ -63,6 +66,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    const denied = await sheetAccess(request, storeId, true);
+    if (denied) return denied;
 
     // Verify store exists
     const store = getStore(storeId);
@@ -126,6 +132,9 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
+    const denied = await sheetAccess(request, storeId, true);
+    if (denied) return denied;
+
     removeStoreAdAccount(storeId, adAccountId);
     if (isSupabasePersistenceEnabled()) {
       await deletePersistentStoreAdAccount(storeId, adAccountId);
@@ -156,6 +165,9 @@ export async function PATCH(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    const denied = await sheetAccess(request, storeId, true);
+    if (denied) return denied;
 
     toggleStoreAdAccount(storeId, adAccountId, isActive);
     if (isSupabasePersistenceEnabled()) {
