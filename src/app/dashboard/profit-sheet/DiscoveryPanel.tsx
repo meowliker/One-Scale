@@ -137,7 +137,8 @@ export function DiscoveryPanel({
         </button>
       </div>
       <p className="text-xs text-text-secondary">
-        Products qualify with sessions on at least 3 of 5 days and a paid order.
+        Products qualify with sessions on at least 3 of 5 days and a paid order
+        that landed on and purchased that product. Upsell sales alone do not qualify.
         Existing manual selections stay protected.{" "}
         {disabled
           ? "Save your changes before running discovery."

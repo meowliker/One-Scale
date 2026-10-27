@@ -1765,15 +1765,15 @@ test("shared automatic campaigns count each ad once and honor observation dates"
   assert.equal(attribution.summarizeAttribution([snap],"store").campaigns[0].spend,100);
 });
 class TestRateLimitError extends Error { retryAfterMs = 900000; }
-function discoveryEngine({excluded=[],products=[],analyticsError=false,metaError=false}={}) {
+function discoveryEngine({excluded=[],products=[],analyticsError=false,metaError=false,orders,activity}={}) {
  const writes=[];const config={version:4,accounts:[{...saved,adAccountId:"act_1"}],products};
  const engine=compiled("src/app/api/lib/profit-sheet-discovery.ts",{
   "./meta-client":{MetaRateLimitError:TestRateLimitError},
   "./profit-sheet-exclusions":{loadExclusions:async()=>excluded.map(key=>({key}))},
   crypto:{randomUUID:()=>"new-product"},"./supabase-persistence":{rest:async(path,init)=>{if(!init)return excluded.map(key=>({key}));writes.push({path,body:JSON.parse(init.body)});return null;}},
   "./profit-sheet-repository":{loadConfig:async()=>config},"./tokens":{getShopifyToken:async()=>({accessToken:"secret",shopDomain:"store.test"})},
-  "./shopify-client":{fetchFromShopify:async(_t,_d,path)=>path==="/shop.json"?{shop:{domain:"store.test",myshopify_domain:"x.myshopify.com"}}:path==="/products.json"?{products:[{id:1,handle:"quilt",title:"Quilt",status:"active"},{id:2,handle:"wire",title:"Wire",status:"active"}]}:{orders:[{id:1,test:false,financial_status:"paid",line_items:[{product_id:1}]}]}},
-  "./shopify-graphql":{shopifyGraphQL:async()=>{if(analyticsError)throw new Error("denied");return {shopifyqlQuery:{parseErrors:[],tableData:{rows:[...Array.from({length:3},(_,i)=>({landing_page_path:"/products/quilt",day:`2020-01-0${i+1}`,sessions:"10"})),{landing_page_path:"/products/wire",day:"2020-01-01",sessions:"50"}]}}};}},
+  "./shopify-client":{fetchFromShopify:async(_t,_d,path)=>path==="/shop.json"?{shop:{domain:"store.test",myshopify_domain:"x.myshopify.com"}}:path==="/products.json"?{products:[{id:1,handle:"quilt",title:"Quilt",status:"active"},{id:2,handle:"wire",title:"Wire",status:"active"}]}:{orders:orders ?? [{id:1,test:false,financial_status:"paid",landing_site:"/products/quilt",line_items:[{product_id:1}]}]}},
+  "./shopify-graphql":{shopifyGraphQL:async()=>{if(analyticsError)throw new Error("denied");return {shopifyqlQuery:{parseErrors:[],tableData:{rows:activity ?? [...Array.from({length:3},(_,i)=>({landing_page_path:"/products/quilt",day:`2020-01-0${i+1}`,sessions:"10"})),{landing_page_path:"/products/wire",day:"2020-01-01",sessions:"50"}]}}};}},
   "./crypto":{encryptSecret:()=>"encrypted"},"./profit-sheet-access":{safeSheetError:()=>"Provider unavailable"},
   "./profit-sheet-meta-discovery":{connectedAccounts:async()=>({}),recentCreatives:async()=>{if(metaError)throw metaError instanceof Error ? metaError : new Error("failed");return [{id:"300",campaign_id:"100",name:"Quilt ad",creative:{object_story_spec:{link_data:{link:"https://store.test/products/quilt"}}}},{id:"301",campaign_id:"100",name:"Mixed carousel",creative:{asset_feed_spec:{link_urls:[{website_url:"https://store.test/products/quilt"},{website_url:"https://store.test/products/wire"}]}}}];}},
   "@/lib/profit-sheet":sheet,"@/lib/profit-sheet/model":model(),"@/lib/profit-sheet/discovery":discovery
@@ -1784,6 +1784,36 @@ test("discovery creates only qualified sold products and maps unambiguous ads, k
 });
 test("discovery preserves unlink exclusions and refuses activation when analytics is incomplete",async()=>{
  for(const options of [{excluded:["product:1"]},{analyticsError:true}]){const {engine,writes}=discoveryEngine(options);const r=await engine.runDiscovery({store_id:"s",lease:"l",run_day:"2020-01-06"});assert.equal(r.ok,true);assert.equal(writes.at(-1).body.p_products,null);}
+});
+test("upsell line items and incidental sessions never activate a product without its own landing purchase", async () => {
+ const orders = Array.from({length:68}, (_,i)=>({id:i+1,test:false,financial_status:"paid",landing_site:"/products/quilt?utm_source=facebook",line_items:[{product_id:1},{product_id:2},{product_id:2}]}));
+ const activity = ["quilt","wire"].flatMap(handle=>Array.from({length:4},(_,i)=>({landing_page_path:`/products/${handle}`,day:`2020-01-0${i+1}`,sessions:i===0?"3":"1"})));
+ const {engine,writes}=discoveryEngine({orders,activity});
+ const result=await engine.runDiscovery({store_id:"s",lease:"l",run_day:"2020-01-06"});
+ assert.equal(result.ok,true);
+ const upsell=result.findings.find(f=>f.productId==="2");
+ assert.equal(upsell.sales,68);assert.equal(upsell.sessions,6);assert.equal(upsell.activeDays,4);
+ assert.equal(upsell.landingSales,0);assert.equal(upsell.status,"candidate");
+ assert.match(upsell.detail,/upsell\/order-line sales alone/);
+ assert.deepEqual(Array.from(writes.at(-1).body.p_products,p=>p.shopifyIds[0]),["1"]);
+ assert.equal(result.findings.find(f=>f.productId==="1").landingSales,68);
+});
+test("missing, unrelated and untrusted landing evidence leaves sold products as candidates", async () => {
+ for (const landing_site of [null,"/", "/products/wire", "https://evil.test/products/quilt", "//evil.test/products/quilt"]) {
+  const orders=[{id:1,test:false,financial_status:"paid",landing_site,line_items:[{product_id:1}]}];
+  const {engine,writes}=discoveryEngine({orders});
+  const result=await engine.runDiscovery({store_id:"s",lease:"l",run_day:"2020-01-06"});
+  assert.equal(result.ok,true);assert.equal(writes.at(-1).body.p_products,null);
+  assert.equal(result.findings.find(f=>f.productId==="1").status,"candidate");
+ }
+});
+test("landing purchases support store aliases, localized URLs and free offers, but reject cancelled or unpaid orders", () => {
+ const domains=new Set(["store.test","x.myshopify.com"]),catalog=[{id:1,handle:"quilt"}];
+ const order={id:1,test:false,financial_status:"paid",landing_site:"/products/quilt",line_items:[{product_id:1,price:"0.00"}]};
+ for (const landing_site of ["/products/quilt?variant=2", "https://www.store.test/en/products/quilt", "https://x.myshopify.com/collections/guides/products/quilt"])
+  assert.equal(discovery.landingPurchaseProduct({...order,landing_site},catalog,domains),"1");
+ for(const override of [{test:true},{cancelled_at:"2020-01-01"},...['pending','authorized','partially_paid','refunded','voided'].map(financial_status=>({financial_status})),{line_items:[]},{landing_site:"javascript:alert(1)"}])
+  assert.equal(discovery.landingPurchaseProduct({...order,...override},catalog,domains),null);
 });
 test("manual assignments survive automatic discovery and provider failure",async()=>{
  const products=[{id:"manual",name:"Quilt",shopifyIds:["1"],links:["https://store.test/products/quilt"],assignments:[{accountId:"act_1",campaignIds:["100"]}]}];

@@ -23,6 +23,8 @@ import {
   creativeOwner,
   productHandle,
   assignmentMatches,
+  landingPurchaseProduct,
+  type DiscoveryOrder,
   type DiscoveryFinding,
 } from "@/lib/profit-sheet/discovery";
 type Job = { store_id: string; lease: string; run_day: string; attempts?: number };
@@ -31,12 +33,6 @@ type Product = {
   handle: string;
   title: string;
   status: string;
-};
-type Sale = {
-  id: string | number;
-  test: boolean;
-  financial_status: string;
-  line_items: Array<{ product_id: string | number | null }>;
 };
 const check = (deadline: number) => {
   if (Date.now() > deadline) throw new Error("Sync time budget exceeded");
@@ -104,7 +100,7 @@ export async function runDiscovery(job: Job) {
         { fields: "id,handle,title,status" },
         deadline,
       ),
-      restPages<Sale>(
+      restPages<DiscoveryOrder>(
         token.accessToken,
         token.shopDomain,
         "/orders.json",
@@ -115,7 +111,7 @@ export async function runDiscovery(job: Job) {
           created_at_max: new Date(
             Date.parse(dayWindow(day).start) - 1,
           ).toISOString(),
-          fields: "id,test,financial_status,line_items",
+          fields: "id,test,cancelled_at,financial_status,landing_site,line_items",
         },
         deadline,
       ),
@@ -123,6 +119,11 @@ export async function runDiscovery(job: Job) {
     ]);
     const excludedKeys = new Set(excluded.map((x) => x.key));
     const sales = new Map<string, number>();
+    const landingSales = new Map<string, number>();
+    for (const order of orders) {
+      const id = landingPurchaseProduct(order, catalog, domains);
+      if (id) landingSales.set(id, (landingSales.get(id) || 0) + 1);
+    }
     for (const o of orders)
       if (
         !o.test &&
@@ -194,12 +195,13 @@ export async function runDiscovery(job: Job) {
         a = activity.get(p.handle);
       if (!a) continue;
       const sold = sales.get(id) || 0,
+        landingSold = landingSales.get(id) || 0,
         existing = products.find((x) => x.shopifyIds.includes(id)),
         blocked = excludedKeys.has(`product:${id}`);
       const qualifies =
         analyticsComplete &&
         a.days.size >= 3 &&
-        sold > 0 &&
+        landingSold > 0 &&
         p.status === "active";
       findings.push({
         key: `product:${id}`,
@@ -210,10 +212,11 @@ export async function runDiscovery(job: Job) {
         sessions: a.sessions,
         activeDays: a.days.size,
         sales: sold,
+        landingSales: landingSold,
         links: [...a.links],
         detail: blocked
           ? "Unlinked by you; automatic discovery will not add it again."
-          : `${a.sessions} sessions on ${a.days.size}/5 reporting days; ${sold} orders containing this product.`,
+          : `${a.sessions} sessions on ${a.days.size}/5 reporting days; ${sold} orders containing this product; ${landingSold} paid orders landed on this product and purchased it.${!landingSold ? " No qualifying landing-page purchase evidence; upsell/order-line sales alone do not activate a product." : ""}`,
       });
       if (blocked) continue;
       if (existing) {

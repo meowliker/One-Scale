@@ -17,6 +17,7 @@ export type DiscoveryFinding = {
   sessions?: number;
   activeDays?: number;
   sales?: number;
+  landingSales?: number;
   links?: string[];
   accountId?: string;
   campaignId?: string;
@@ -79,6 +80,38 @@ export function productHandle(value: string, domains?: Set<string>) {
       return null;
     const handle = u.pathname.match(/(?:^|\/)products\/([^/]+)\/?$/)?.[1];
     return handle ? decodeURIComponent(handle) : null;
+  } catch {
+    return null;
+  }
+}
+
+export type DiscoveryOrder = {
+  id: string | number;
+  test: boolean;
+  cancelled_at?: string | null;
+  financial_status: string;
+  landing_site?: string | null;
+  line_items: Array<{ product_id: string | number | null }>;
+};
+
+// A paid order containing a product is not acquisition evidence: post-purchase
+// upsells also become line items. Require the order's own landing page to match
+// that purchased product. Unknown landing evidence never activates a product.
+export function landingPurchaseProduct(
+  order: DiscoveryOrder,
+  catalog: Array<{ id: string | number; handle: string }>,
+  domains: Set<string>,
+): string | null {
+  if (
+    order.test || order.cancelled_at || !order.landing_site ||
+    !["paid", "partially_refunded"].includes(order.financial_status)
+  ) return null;
+  try {
+    const url = new URL(order.landing_site, `https://${[...domains][0]}`);
+    const handle = productHandle(url.href, domains);
+    const product = handle && catalog.find(p => p.handle === handle);
+    return product && order.line_items.some(l => String(l.product_id) === String(product.id))
+      ? String(product.id) : null;
   } catch {
     return null;
   }
