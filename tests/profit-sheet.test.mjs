@@ -366,7 +366,7 @@ test("default and saved ranges are independent per store", () => {
   assert.equal(
     m.defaultRange({ savedFrom: null, savedTo: null, endToday: true }, now)
       .from,
-    "2026-10-01",
+    "2026-10-24",
   );
   assert.equal(
     m.defaultRange(
@@ -593,10 +593,10 @@ test("cached daily endpoint scopes every read to the authorized store and never 
   );
   assert.equal(result.status, 200);
   assert.equal(result.headers.get("cache-control"), "private, no-store");
-  assert.equal(reads.length, 2);
+  assert.equal(reads.length, 3);
   assert.ok(
     reads.every(
-      (p) => p.includes("store_id=eq.store-1") && p.includes("order=date.asc"),
+      (p) => p.includes("store_id=eq.store-1") && p.includes("order="),
     ),
   );
   assert.match(reads[0], /scope_id=eq.product-1/);
@@ -606,7 +606,7 @@ test("cached daily endpoint scopes every read to the authorized store and never 
     ),
   );
   assert.equal(denied.status, 403);
-  assert.equal(reads.length, 2);
+  assert.equal(reads.length, 3);
 });
 test("daily refresh queues only the requested day; viewer cannot enqueue or process jobs", async () => {
   const calls = [];
@@ -1012,7 +1012,7 @@ test("range changes recognize saved reports and workers prioritize visible jobs 
     lease_until: new Date(now + 10000).toISOString(),
   };
   const queued = { date: "2026-10-25", status: "queued" };
-  assert.equal(m.runnableJob([live, queued], now), queued);
+  assert.equal(m.runnableJob([live, queued], now), undefined);
   assert.equal(m.runnableJob([live], now), undefined);
   assert.equal(
     m.runnableJob(
@@ -1717,24 +1717,25 @@ test("Meta catalog loads all pages and paused entities, preserves old names and 
   assert.equal(writes.length, before);
 });
 
-test("changed-order scans revisit saved historical days, overlap cursors, and advance only after complete pagination", async () => {
-  const writes = [], queries = [];
+test("changed-order scans refresh only the recent window, overlap cursors, and advance only after complete pagination", async () => {
+  const writes = [], queries = [], reads = [];
   let fail = false;
   const scan = compiled("src/app/api/lib/profit-sheet-attribution-updates.ts", {
     "./supabase-persistence": { rest: async (p, init) => {
       if (p.includes("claim_update_scan")) return [{ store_id: "store-1", scanned_until: "2026-10-25T10:00:00Z", checked_at: "2026-10-26T10:00:00Z" }];
-      if (p.startsWith("/profit_sheet_days")) return [{ date: "2026-10-01" }];
+      if (p.startsWith("/profit_sheet_days")) { reads.push(p); return [{ date: "2026-10-25" }]; }
       if (p.startsWith("/profit_sheet_attribution?")) return [];
       if (init) writes.push({ p, ...JSON.parse(init.body) });
       return [];
     } },
-    "./shopify-graphql": { shopifyGraphQL: async (id, query, vars) => { queries.push({ id, vars }); if (fail) throw new Error("private error"); return { orders: { nodes: [{ createdAt: "2026-10-01T07:00:00Z" }], pageInfo: { hasNextPage: false } } }; } },
-    "@/lib/profit-sheet/model": model(), "./profit-sheet-access": { safeSheetError: () => "Provider unavailable" },
+    "./shopify-graphql": { shopifyGraphQL: async (id, query, vars) => { queries.push({ id, vars }); if (fail) throw new Error("private error"); return { orders: { nodes: [{ createdAt: "2026-10-01T07:00:00Z" }, { createdAt: "2026-10-25T07:00:00Z" }], pageInfo: { hasNextPage: false } } }; } },
+    "@/lib/profit-sheet": sheet, "@/lib/profit-sheet/model": { ...model(), reportingDay: (date) => date ? model().reportingDay(date) : "2026-10-26" }, "./profit-sheet-access": { safeSheetError: () => "Provider unavailable" },
   });
   await scan.queueChangedAttributionDays();
   assert.match(queries[0].vars.query, /2026-10-25T09:55:00.000Z/);
-  assert.equal(writes[0].p_store, "store-1"); assert.deepEqual(JSON.parse(JSON.stringify(writes[0].p_dates)), ["2026-10-01"]);
+  assert.equal(writes[0].p_store, "store-1"); assert.deepEqual(JSON.parse(JSON.stringify(writes[0].p_dates)), ["2026-10-25"]);
   assert.ok(writes.at(-1).scanned_until);
+  assert.ok(!reads[0].includes("2026-10-01"));
   writes.length = 0; fail = true; await scan.queueChangedAttributionDays();
   assert.equal(writes.length, 1); assert.equal(writes[0].scanned_until, undefined); assert.equal(writes[0].error, "Provider unavailable");
 });
@@ -1780,7 +1781,7 @@ function discoveryEngine({excluded=[],products=[],analyticsError=false,metaError
  });return {engine,writes};
 }
 test("discovery creates only qualified sold products and maps unambiguous ads, keeping mixed destinations for review",async()=>{
- const {engine,writes}=discoveryEngine();const r=await engine.runDiscovery({store_id:"s",lease:"l",run_day:"2020-01-06"});assert.equal(r.ok,true);const finish=writes.at(-1).body;assert.equal(finish.p_products.length,1);assert.equal(finish.p_products[0].shopifyIds[0],"1");assert.equal(finish.p_products[0].assignments[0].adLinks[0].adId,"300");assert.equal(finish.p_products[0].startDate,"2020-01-06");assert.equal(r.findings.find(f=>f.adId==="301").status,"review");
+ const {engine,writes}=discoveryEngine();const r=await engine.runDiscovery({store_id:"s",lease:"l",run_day:"2020-01-06"});assert.equal(r.ok,true);const finish=writes.at(-1).body;assert.equal(finish.p_products.length,1);assert.equal(finish.p_products[0].shopifyIds[0],"1");assert.equal(finish.p_products[0].assignments[0].adLinks[0].adId,"300");assert.equal(finish.p_products[0].startDate,"2020-01-04");assert.equal(r.findings.find(f=>f.adId==="301").status,"review");
 });
 test("discovery preserves unlink exclusions and refuses activation when analytics is incomplete",async()=>{
  for(const options of [{excluded:["product:1"]},{analyticsError:true}]){const {engine,writes}=discoveryEngine(options);const r=await engine.runDiscovery({store_id:"s",lease:"l",run_day:"2020-01-06"});assert.equal(r.ok,true);assert.equal(writes.at(-1).body.p_products,null);}
@@ -1884,4 +1885,26 @@ test("cooldown jobs wait until due without a browser worker retry loop",()=>{
  const m=model();const job={status:"queued",date:"2020-01-01",retry_at:"2020-01-01T01:00:00Z"};
  assert.equal(m.runnableJob([job],Date.parse("2020-01-01T00:59:00Z")),undefined);
  assert.equal(m.runnableJob([job],Date.parse("2020-01-01T01:00:01Z")).date,job.date);
+});
+
+test("removing an ad account detaches its product assignments without deleting the product", async () => {
+ const writes=[];
+ const products=[{id:"p",name:"Product",shopifyIds:["1"],links:["https://store.test/products/quilt"],assignments:[{accountId:"act_1",campaignIds:["100"]},{accountId:"act_2",campaignIds:["200"]}]}];
+ const storage=compiled("src/app/api/lib/profit-sheet-storage.ts",{
+  "./profit-sheet-repository":{loadConfig:async()=>({version:3,products}),saveConfig:async(...args)=>writes.push(args)},
+  "@/lib/profit-sheet/model":model(),
+ });
+ await storage.saveSheetAccounts("store-1",[{...saved,adAccountId:"act_2"}],3);
+ const result=writes[0][2];assert.equal(result.products.length,1);assert.equal(result.products[0].id,"p");
+ assert.deepEqual(Array.from(result.products[0].assignments,a=>a.accountId),["act_2"]);
+ await storage.saveSheetAccounts("store-1",[],3);
+ assert.equal(writes[1][2].products[0].assignments.length,0);
+ await assert.rejects(()=>storage.saveSheetAccounts("store-1",[],2),/Settings changed/);
+ assert.equal(writes.length,2);
+});
+
+test("default three-day window crosses month boundaries at the IST reporting cutoff", () => {
+ const m=model(),settings={savedFrom:null,savedTo:null,endToday:true};
+ assert.equal(JSON.stringify(m.defaultRange(settings,new Date("2026-11-01T06:00:00Z"))),JSON.stringify({from:"2026-10-30",to:"2026-11-01"}));
+ assert.equal(JSON.stringify(m.defaultRange(settings,new Date("2026-11-01T05:59:59Z"))),JSON.stringify({from:"2026-10-29",to:"2026-10-31"}));
 });

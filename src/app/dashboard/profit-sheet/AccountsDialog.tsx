@@ -27,6 +27,7 @@ export function AccountsDialog({
   const [drafts, setDrafts] = useState<SheetDraft[]>(() =>
     accounts.map((a) => ({ ...a, accessToken: "" })),
   );
+  const [baseVersion] = useState(version);
   const [search, setSearch] = useState("");
   const [business, setBusiness] = useState("");
   const connected = useQuery({
@@ -87,7 +88,7 @@ export function AccountsDialog({
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ storeId, accounts: drafts, version }),
+          body: JSON.stringify({ storeId, accounts: drafts, version: baseVersion }),
           signal: AbortSignal.timeout(60_000),
         },
       );
@@ -138,7 +139,7 @@ export function AccountsDialog({
         </div>
         <div className="space-y-4 p-6">
           <p className="text-sm text-text-secondary">
-            Add every Meta account used by this store. Active accounts run from
+            Removing an account also unlinks it from product assignments and Integrations. Add every Meta account used by this store. Active accounts run from
             their start time through now. Uncheck Active to set an end time.
           </p>
           <p className="text-xs text-text-muted">

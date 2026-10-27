@@ -24,15 +24,16 @@ export async function GET(req: NextRequest) {
   }
   try {
     const filter = `store_id=eq.${encodeURIComponent(id)}&date=gte.${from}&date=lte.${to}`;
-    const [days, jobs] = await Promise.all([
+    const [days, jobs, discovery] = await Promise.all([
       fetchAllRestRows(
         `/profit_sheet_days?${filter}&scope_id=eq.${encodeURIComponent(scope)}&select=*&order=date.asc`,
       ),
       fetchAllRestRows(
         `/profit_sheet_jobs?${filter}&select=store_id,date,status,error,updated_at,lease_until,retry_at&order=date.asc`,
       ),
+      fetchAllRestRows(`/profit_sheet_discovery?store_id=eq.${encodeURIComponent(id)}&select=status,error,retry_at&order=store_id.asc`),
     ]);
-    return sheetJson({ days, jobs });
+    return sheetJson({ days, jobs, discovery: discovery[0] || null });
   } catch (error) {
     return sheetJson({ error: safeSheetError(error) }, 503);
   }

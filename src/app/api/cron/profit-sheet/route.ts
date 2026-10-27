@@ -26,10 +26,10 @@ export async function GET(req: NextRequest) {
   // previous day to capture late-arriving orders and Meta attribution adjustments.
   if (req.nextUrl.searchParams.get("enqueue") === "1") {
     const stores = await rest<Array<{ store_id: string }>>(
-      "/profit_sheet_stores?select=store_id",
+      "/profit_sheet_stores?select=store_id,profit_sheet_accounts!inner(account_id)",
     );
     for (const store of stores)
-      await enqueueDays(store.store_id, [addDays(day, -1), day]);
+      await enqueueDays(store.store_id, [addDays(day, -2), addDays(day, -1), day]);
   }
   await queueChangedAttributionDays();
   const job = await claimDay();

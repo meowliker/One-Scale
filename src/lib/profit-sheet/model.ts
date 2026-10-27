@@ -76,7 +76,7 @@ export function dayWindow(date: string) {
 export function defaultRange(settings: SheetSettings, now = new Date()) {
   const to = reportingDay(now);
   return {
-    from: settings.savedFrom || `${to.slice(0, 7)}-01`,
+    from: settings.savedFrom || addDays(to, -2),
     to: settings.endToday ? to : settings.savedTo || to,
   };
 }
@@ -232,6 +232,7 @@ export function currentSavedDay(
   );
 }
 export function runnableJob(jobs: SheetJob[], now = Date.now()) {
+  if (jobs.some(j => j.status === "running" && j.lease_until && Date.parse(j.lease_until) > now)) return undefined;
   return jobs.find(
     (j) =>
       (!j.retry_at || Date.parse(j.retry_at) <= now) &&

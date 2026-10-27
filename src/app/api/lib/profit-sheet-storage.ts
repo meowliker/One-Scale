@@ -28,6 +28,10 @@ export async function saveSheetAccounts(
   const config = await loadConfig(storeId);
   if (expectedVersion !== undefined && config.version !== expectedVersion)
     throw new Error("Settings changed. Reload and retry.");
-  validateProducts(config.products, accounts);
-  await saveConfig(storeId, config, { accounts });
+  const retained = new Set(accounts.map(a => a.adAccountId));
+  const products = config.products.map(p => ({
+    ...p, assignments: p.assignments.filter(a => retained.has(a.accountId)),
+  }));
+  validateProducts(products, accounts);
+  await saveConfig(storeId, config, { accounts, products });
 }

@@ -1,5 +1,6 @@
 import { rest } from "./supabase-persistence";
 import { shopifyGraphQL } from "./shopify-graphql";
+import { addDays } from "@/lib/profit-sheet";
 import { reportingDay } from "@/lib/profit-sheet/model";
 import { safeSheetError } from "./profit-sheet-access";
 // Rotate one store per worker tick. Resume only after all changed-order pages have
@@ -55,7 +56,8 @@ export async function queueChangedAttributionDays() {
       throw new Error("Changed-order report exceeded pagination limit");
     // A refund/order edit on an old order refreshes its saved report, not an
     // arbitrary new historical range. Missing ranges are handled by the UI queue.
-    const changed = [...dates];
+    const today = reportingDay();
+    const changed = [...dates].filter(d => d >= addDays(today, -2) && d <= today);
     for (let i = 0; i < changed.length; i += 100) {
       const saved = await rest<Array<{ date: string }>>(
         `/profit_sheet_days?store_id=eq.${encodeURIComponent(scan.store_id)}&scope_id=eq.store&date=in.(${changed.slice(i, i + 100).join(",")})&select=date`,

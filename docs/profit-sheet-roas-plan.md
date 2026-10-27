@@ -70,3 +70,13 @@ Tests: `node --test tests/meta-request-budget.test.mjs tests/profit-sheet.test.m
 ### Upsell-only discovery guard (27 October 2026)
 
 The former independent session/order checks admitted Artfania's mystery box with six sessions across four days and 68 orders containing it. Discovery now reads `landing_site` and `cancelled_at` in the same paginated Shopify order requests and requires an exact store-domain/product-handle match to a purchased item. Findings persist both total orders containing the product and qualifying landing purchases, with a candidate explanation when the latter is zero. No extra Meta or per-order Shopify calls are needed. Missing evidence does not activate a product; manual additions, existing history, and persistent unlink exclusions remain protected. This is conservative acquisition evidence, not a universal classifier for app-specific upsell metadata.
+
+### Sequential setup and bounded automatic reports (27 October 2026)
+
+Migration 054 limits automatic reports to the latest three IST reporting days, including today. Saved custom date ranges remain viewable; older dates require an explicit Sync selected range or row refresh. The database enforces the bound even for older browser tabs, cron callers and changed-order scans. Explicit requests carry a persisted manual marker so workers can process historical dates. Old pending automatic history jobs are cancelled; existing saved reports are retained.
+
+Account links are saved first. Product discovery must finish before any report can be claimed for that store. Both claim functions share a short transaction lock; only one day per store runs at a time, and discovery waits for any already-running day. Configuration changes reject stale results and requeue rather than presenting a permanent red failure. Empty setups wait for an account link; manual Shopify-only reports remain supported. New automatic product tabs include the latest three days, while verified ad assignment periods remain explicit.
+
+Unlink removes the account from both Integrations and Profit Sheet, including legacy/manual copies with the same ID, and detaches its product assignments. Removing a whole-store account does not permanently exclude it from those products if relinked later. Modal saves retain their opening version to prevent a stale account list from restoring an unlinked account. Users can still unlink individual product/campaign assignments persistently.
+
+Validation: `tests/profit-sheet-pipeline.sql` and `tests/profit-sheet-mapping.sql` run transactionally; Node regression tests cover three-day boundaries, account removal, provider safeguards and preserved reports.

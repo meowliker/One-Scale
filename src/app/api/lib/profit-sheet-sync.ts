@@ -25,12 +25,11 @@ const enc = encodeURIComponent;
 export async function enqueueDays(
   storeId: string,
   dates: string[],
-  _refreshCatalog = false,
+  manual = false,
 ) {
-  void _refreshCatalog; // Refresh report data without invalidating the entire identity catalog.
-  await rest("/rpc/profit_sheet_enqueue", {
+  await rest("/rpc/profit_sheet_enqueue_requested", {
     method: "POST",
-    body: JSON.stringify({ p_store: storeId, p_dates: dates }),
+    body: JSON.stringify({ p_store: storeId, p_dates: dates, p_manual: manual }),
   });
 }
 export async function enqueueMissingDays(
@@ -414,19 +413,21 @@ export async function syncSheetDay(job: SheetJob) {
       error: errors.join(" ") || null,
     };
   } catch (error) {
+    const changed = /Settings changed|Sync lease expired/i.test(String(error));
     const message = safeSheetError(error);
     await rest(
       `/profit_sheet_jobs?store_id=eq.${enc(job.store_id)}&date=eq.${job.date}&lease_id=eq.${job.lease_id}`,
       {
         method: "PATCH",
         body: JSON.stringify({
-          status: "error",
-          error: message,
+          status: changed ? "queued" : "error",
+          error: changed ? null : message,
+          retry_at: changed ? new Date(Date.now() + 5000).toISOString() : null,
           lease_until: null,
           updated_at: new Date().toISOString(),
         }),
       },
     ).catch(() => {});
-    return { ok: false, date: job.date, error: message };
+    return changed ? { ok: true, queued: true, date: job.date } : { ok: false, date: job.date, error: message };
   }
 }

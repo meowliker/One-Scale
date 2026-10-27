@@ -350,8 +350,8 @@ export async function upsertPersistentStoreAdAccount(data: {
 
 export async function deletePersistentStoreAdAccount(storeId: string, adAccountId: string): Promise<void> {
   await rest(
-    `/store_ad_accounts?store_id=eq.${encodeURIComponent(storeId)}&ad_account_id=eq.${encodeURIComponent(adAccountId)}`,
-    { method: 'DELETE' }
+    "/rpc/profit_sheet_unlink_account",
+    { method: "POST", body: JSON.stringify({ p_store: storeId, p_account: adAccountId }) }
   );
 }
 

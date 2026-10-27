@@ -39,6 +39,8 @@ async function authorize(request: NextRequest, storeId: string, write = false) {
 }
 function failure(error: unknown) {
   const message = error instanceof Error ? error.message : "";
+  if (/Settings changed/i.test(message))
+    return json({ error: "Accounts or products changed while this window was open. Close it and reopen to load the latest settings." }, 409);
   const text = /190|expired|OAuthException/i.test(message)
     ? "The Meta token is invalid or expired. Update the account token and retry."
     : /rate.?limit|429/i.test(message)
@@ -134,7 +136,6 @@ export async function PUT(request: NextRequest) {
             (a) => a.adAccountId === account.adAccountId,
           );
           if (
-            account.credentialSource !== "integration" &&
             previous?.accessToken === account.accessToken &&
             previous.timezone
           )

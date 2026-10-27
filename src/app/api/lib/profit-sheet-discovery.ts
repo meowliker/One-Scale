@@ -237,7 +237,7 @@ export async function runDiscovery(job: Job) {
           name: p.title,
           links: [...a.links],
           shopifyIds: [id],
-          startDate: day,
+          startDate: addDays(day, -2),
           assignments: [],
           discovery: {
             sessions: a.sessions,

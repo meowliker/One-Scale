@@ -1,4 +1,3 @@
-import { queueDiscovery } from "@/app/api/lib/profit-sheet-discovery";
 import { NextRequest } from "next/server";
 import {
   sheetAccess,
@@ -44,7 +43,6 @@ export async function POST(req: NextRequest) {
               body.metaVersion === 1 ? 1 : 0,
               body.attributionVersion === 1 ? 1 : 0,
             );
-      if (body.force === true) await queueDiscovery(id);
       return sheetJson({ ok: true, queued });
     }
     if (body.date) {

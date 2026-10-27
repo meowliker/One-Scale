@@ -13,7 +13,7 @@ import {
 import { DateRangePicker } from "@/components/ui/DateRangePicker";
 import { useStoreStore } from "@/stores/storeStore";
 import { formatDateInTimezone } from "@/lib/timezone";
-import { type StoreSheetDay } from "@/lib/profit-sheet";
+import { addDays, type StoreSheetDay } from "@/lib/profit-sheet";
 import {
   defaultRange,
   currentSavedDay,
@@ -30,7 +30,7 @@ import { ProfitTable } from "./ProfitTable";
 import { AccountsDialog } from "./AccountsDialog";
 import { ProductsDialog } from "./ProductsDialog";
 import { buttonClass, inputClass, request } from "./shared";
-type Report = { days: SavedDay[]; jobs: SheetJob[] };
+type Report = { days: SavedDay[]; jobs: SheetJob[]; discovery?: { status: string; error: string | null; retry_at: string | null } | null };
 function Workspace({
   storeId,
   storeName,
@@ -82,8 +82,8 @@ function Workspace({
   }, []);
   useEffect(() => {
     if (endToday)
-      setRange((r) => (r.to === currentDay ? r : { ...r, to: currentDay }));
-  }, [currentDay, endToday]);
+      setRange((r) => (r.to === currentDay ? r : { ...r, from: !config.settings.savedFrom && r.from === addDays(r.to, -2) ? addDays(currentDay, -2) : r.from, to: currentDay }));
+  }, [currentDay, endToday, config.settings.savedFrom]);
   const actualScope = config.products.some((p) => p.id === scope)
     ? scope
     : "store";
@@ -115,12 +115,15 @@ function Workspace({
     retry: false,
     enabled: hasDates,
     refetchInterval: (query) =>
-      query.state.data?.jobs.some(
+      ["queued", "running"].includes(query.state.data?.discovery?.status || "") || query.state.data?.jobs.some(
         (j) => j.status === "queued" || j.status === "running",
       )
         ? 4000
         : false,
   });
+  const discoveryPending = ["queued", "running"].includes(daily.data?.discovery?.status || "");
+  const automaticFrom = reportFrom > addDays(currentDay, -2) ? reportFrom : addDays(currentDay, -2);
+  const automaticTo = range.to < currentDay ? range.to : currentDay;
   const dates = hasDates ? sheetDates(reportFrom, range.to) : [];
   const missing = dates.filter(
     (d) =>
@@ -136,6 +139,7 @@ function Workspace({
           ),
       ),
   );
+  const automaticMissing = missing.some(d => d >= automaticFrom && d <= automaticTo);
   async function reload() {
     await client.invalidateQueries({
       queryKey: ["profit-sheet-daily", storeId],
@@ -169,9 +173,9 @@ function Workspace({
       setBusy(false);
     }
   }
-  // First visit/new range/configuration: fill missing days without requiring a trip to another page.
+  // Automatic work is restricted to the last three reporting days. Older dates require an explicit sync.
   useEffect(() => {
-    if (!daily.data || !missing.length) return;
+    if (!daily.data || !config.accounts.length || discoveryPending || automaticFrom > automaticTo || !automaticMissing) return;
     const key = `${storeId}:${reportFrom}:${range.to}:${actualScope}:${config.version}:finance1:meta${metaRequired ? 1 : 0}:attribution${attributionRequired ? 1 : 0}`;
     if (queued.current.has(key)) return;
     queued.current.add(key);
@@ -181,8 +185,8 @@ function Workspace({
       body: JSON.stringify({
         storeId,
         action: "queue",
-        from: reportFrom,
-        to: range.to,
+        from: automaticFrom,
+        to: automaticTo,
         scope: actualScope,
         metaVersion: metaRequired ? 1 : 0,
         attributionVersion: attributionRequired ? 1 : 0,
@@ -194,7 +198,11 @@ function Workspace({
       .catch((e) => setError(e.message));
   }, [
     daily.data,
-    missing.length,
+    automaticMissing,
+    config.accounts.length,
+    discoveryPending,
+    automaticFrom,
+    automaticTo,
     storeId,
     reportFrom,
     range.to,
@@ -207,7 +215,7 @@ function Workspace({
   // The durable queue continues on cron; while this page is open it can also process a day immediately.
   useEffect(() => {
     const job = runnableJob(daily.data?.jobs || []);
-    if (processing || !job) return;
+    if (processing || discoveryPending || !job) return;
     setProcessing(true);
     void request("/api/profit-sheet/sync", {
       method: "POST",
@@ -224,7 +232,7 @@ function Workspace({
         });
         setProcessing(false);
       });
-  }, [daily.data, storeId, client, processing]);
+  }, [daily.data, storeId, client, processing, discoveryPending]);
   async function refreshDate(date: string) {
     setBusy(true);
     setError("");
@@ -482,6 +490,20 @@ function Workspace({
             : `${pending} reporting days refreshing in the background.`}{" "}
           Saved figures remain visible; their last sync time has not changed.
         </p>
+      )}
+      {discoveryPending && (
+        <p role="status" className="rounded-xl bg-primary/10 p-4 text-sm text-text-secondary">
+          Ad accounts saved → discovering products and campaign links → Profit Sheet data.
+          Reports will sync after discovery finishes{daily.data?.discovery?.retry_at ? "; discovery is waiting for its scheduled retry" : ""}.
+        </p>
+      )}
+      {!config.accounts.length && (
+        <p className="rounded-xl border border-border p-4 text-sm text-text-secondary">
+          Link an ad account to start automatic setup. Then products are discovered and the latest three reporting days are synced. You can also sync Shopify-only reports manually.
+        </p>
+      )}
+      {daily.data?.discovery?.status === "error" && (
+        <p role="alert" className="text-sm text-amber-500">Product discovery needs attention: {daily.data.discovery.error || "Open Manage products to check discovery."}</p>
       )}
       {missing.length > 0 && !pending && !daily.isPending && (
         <p className="text-sm text-text-muted">

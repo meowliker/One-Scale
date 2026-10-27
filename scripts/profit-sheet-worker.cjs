@@ -33,7 +33,7 @@ async function tick() {
 }
 tick();
 
-// Separate lane: discovery never holds up the financial-report queue.
+// Independent polling lanes share database claims: discovery finishes before reports for that store.
 async function discoveryTick() {
   try {
     const res = await fetch(`${base}/api/cron/profit-sheet-discovery?enqueue=1`, {
