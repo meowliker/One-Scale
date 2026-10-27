@@ -162,6 +162,11 @@ export async function getAllPersistentMetaConnections(): Promise<Array<{
 }
 
 export async function copyPersistentMetaConnection(fromStoreId: string, toStoreId: string): Promise<void> {
+  const memberships = await rest<Array<{ workspace_id: string; store_id: string }>>(
+    `/workspace_stores?store_id=in.(${encodeURIComponent(fromStoreId)},${encodeURIComponent(toStoreId)})&select=workspace_id,store_id`
+  );
+  if (memberships.length !== 2 || memberships[0].workspace_id !== memberships[1].workspace_id)
+    throw new Error('Meta connections can only be shared within the same account.');
   const source = await getPersistentConnection(fromStoreId, 'meta');
   if (!source) {
     throw new Error(`No Meta connection found for store ${fromStoreId}`);
@@ -173,8 +178,6 @@ export async function copyPersistentMetaConnection(fromStoreId: string, toStoreI
     accessToken: source.access_token,
     refreshToken: source.refresh_token ?? undefined,
     expiresAt: source.expires_at ?? undefined,
-    accountId: source.account_id ?? undefined,
-    accountName: source.account_name ?? undefined,
     scopes: source.scopes ?? undefined,
     metadata: source.metadata ?? undefined,
   });
@@ -237,6 +240,23 @@ export async function upsertPersistentConnection(data: {
   scopes?: string;
   metadata?: string;
 }): Promise<void> {
+  if (data.platform === 'meta') {
+    // The RPC updates every store mirror atomically, preserving store selections.
+    await rest('/rpc/workspace_meta_save', {
+      method: 'POST',
+      body: JSON.stringify({
+        p_store: data.storeId,
+        p_connection: {
+          access_token: encryptSecret(data.accessToken),
+          refresh_token: data.refreshToken ? encryptSecret(data.refreshToken) : null,
+          expires_at: data.expiresAt ?? null,
+          scopes: data.scopes ?? null,
+          metadata: data.metadata ?? null,
+        },
+      }),
+    });
+    return;
+  }
   await rest(
     '/connections?on_conflict=store_id,platform',
     {
@@ -285,6 +305,12 @@ export async function updatePersistentConnectionAccount(
 }
 
 export async function deletePersistentConnection(storeId: string, platform: OAuthPlatform): Promise<void> {
+  if (platform === 'meta') {
+    await rest('/rpc/workspace_meta_disconnect', {
+      method: 'POST', body: JSON.stringify({ p_store: storeId }),
+    });
+    return;
+  }
   await rest(`/connections?store_id=eq.${encodeURIComponent(storeId)}&platform=eq.${platform}`, { method: 'DELETE' });
 }
 

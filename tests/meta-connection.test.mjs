@@ -52,5 +52,32 @@ test('SQLite clears a previous expiry only when an explicit no-expiry replacemen
 test('validation outage keeps the saved connection; confirmed revocation updates status with a race guard',async()=>{
  for(const kind of ['unavailable','invalid']){const writes=[];const conn={access_token:'secret',metadata:JSON.stringify(info),last_synced:'2026-10-26T00:00:00Z'};const api=compile('src/app/api/lib/meta-connection-health.ts',{
   './tokens':{getMetaConnectionHealth:async()=>({conn,health:{status:'connected'}})},'./meta-token':{MetaTokenError:pure.MetaTokenError,inspectMetaToken:async()=>{throw new pure.MetaTokenError(kind);}},'./db':{},'./crypto':{},'./supabase-persistence':{isSupabasePersistenceEnabled:()=>true,rest:async(path,init)=>writes.push({path,body:JSON.parse(init.body)})},
- });if(kind==='unavailable'){await assert.rejects(()=>api.checkMetaConnection('s'));assert.equal(writes.length,0);}else{await api.checkMetaConnection('s');assert.match(writes[0].path,/last_synced=eq\./);assert.equal(JSON.parse(writes[0].body.metadata).validation,'invalid');assert.equal('access_token' in writes[0].body,false);}}
+ });if(kind==='unavailable'){await assert.rejects(()=>api.checkMetaConnection('s'));assert.equal(writes.length,0);}else{await api.checkMetaConnection('s');assert.equal(writes[0].path,'/rpc/workspace_meta_validate');assert.equal(writes[0].body.p_expected_synced,conn.last_synced);assert.equal(JSON.parse(writes[0].body.p_metadata).validation,'invalid');assert.equal('access_token' in writes[0].body,false);}}
+});
+test('Meta persistence sends encrypted credentials to the workspace RPC without copying ad-account selections',async()=>{
+ const calls=[];
+ const api=compile('src/app/api/lib/supabase-persistence.ts',{
+  '@/app/api/lib/db':{},'crypto':{},'@/app/api/lib/crypto':{encryptSecret:x=>'encrypted:'+x,decryptSecret:x=>x},
+ },{process:{env:{SUPABASE_URL:'https://example.invalid',SUPABASE_SERVICE_ROLE_KEY:'test'}},Map,
+ fetch:async(url,init)=>{calls.push({url,body:JSON.parse(init.body)});return new Response(null,{status:204});}});
+ await api.upsertPersistentConnection({storeId:'store-a',platform:'meta',accessToken:'private',refreshToken:'refresh',accountId:'act_a',accountName:'Only A',expiresAt:null});
+ assert.match(calls[0].url,/\/rpc\/workspace_meta_save$/);
+ assert.equal(calls[0].body.p_connection.access_token,'encrypted:private');
+ assert.equal(calls[0].body.p_connection.refresh_token,'encrypted:refresh');
+ assert.equal(calls[0].body.p_connection.expires_at,null);
+ assert.equal('account_id' in calls[0].body.p_connection,false);
+ await api.deletePersistentConnection('store-a','meta');
+ assert.match(calls[1].url,/\/rpc\/workspace_meta_disconnect$/);
+ assert.equal(calls[1].body.p_store,'store-a');
+});
+test('shared disconnect rejects unauthorized requests before changing credentials',async()=>{
+ let cleared=false;
+ const denied=new Response('{}',{status:403});
+ const api=compile('src/app/api/auth/disconnect/route.ts',{
+  'next/server':{NextResponse:{json:(b,o)=>new Response(JSON.stringify(b),o)}},
+  '@/app/api/lib/tokens':{clearToken:async()=>{cleared=true;}},
+  '@/app/api/lib/profit-sheet-access':{sheetAccess:async()=>denied},
+ });
+ const r=await api.POST({json:async()=>({platform:'meta',storeId:'other-account-store'})});
+ assert.equal(r.status,403);assert.equal(cleared,false);
 });

@@ -6,6 +6,8 @@ import {
   createPersistentOAuthState,
 } from '@/app/api/lib/supabase-persistence';
 import { getAppUrl } from '@/app/api/lib/url';
+import { sheetAccess } from '@/app/api/lib/profit-sheet-access';
+import { readSessionFromRequest } from '@/lib/auth/request-session';
 
 const DEFAULT_META_SCOPES = [
   'ads_management',
@@ -27,11 +29,16 @@ function resolveMetaRedirectUri(configuredRedirectUri: string | undefined | null
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const storeId = searchParams.get('storeId');
-  const workspaceId = searchParams.get('workspaceId') || undefined;
 
   if (!storeId) {
     return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
   }
+
+  const denied = await sheetAccess(request, storeId, true);
+  if (denied) return denied;
+  const session = await readSessionFromRequest(request);
+  // Never trust a caller-supplied workspace when authorizing a shared connection.
+  const workspaceId = session.workspaceId;
 
   // Derive the external-facing URL (handles ngrok, proxies, etc.)
   const appUrl = getAppUrl(request);

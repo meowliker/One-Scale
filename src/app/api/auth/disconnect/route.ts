@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { clearToken } from '@/app/api/lib/tokens';
 import type { OAuthPlatform } from '@/types/auth';
+import { sheetAccess } from '@/app/api/lib/profit-sheet-access';
 
 const VALID_PLATFORMS: OAuthPlatform[] = ['meta', 'shopify', 'google_drive'];
 
@@ -26,6 +27,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const denied = await sheetAccess(request, storeId, true);
+    if (denied) return denied;
     await clearToken(platform, storeId);
 
     return NextResponse.json({ success: true });

@@ -2,7 +2,7 @@
 
 import { useCallback, useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Copy, Loader2 } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import type { Integration } from '@/types/integrations';
 import { getIntegrations } from '@/services/integrations';
@@ -18,16 +18,12 @@ import { ClickUpConnectionDetails } from '@/components/integrations/ClickUpConne
 import { GoogleDriveConnectModal } from '@/components/settings/GoogleDriveConnectModal';
 
 export function IntegrationsClient() {
+  const queryClient = useQueryClient();
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [activeIntegration, setActiveIntegration] = useState<string | null>(null);
 
-  // Available Meta connections from other stores (for reuse)
-  const [availableMetaConnections, setAvailableMetaConnections] = useState<
-    Array<{ storeId: string; storeName: string; accountId: string | null; accountName: string | null; connectedAt: string }>
-  >([]);
-  const [copyingConnection, setCopyingConnection] = useState(false);
   const [workspaceId, setWorkspaceId] = useState<string | undefined>();
 
   // Modal states
@@ -80,7 +76,9 @@ export function IntegrationsClient() {
 
       if (platform === 'meta') {
         if (status === 'connected') {
-          toast.success('Meta Ads connected! Link ad accounts below.');
+          toast.success('Meta connected for all stores in this account.');
+          void queryClient.invalidateQueries({ queryKey: ['meta-token-health'] });
+          void queryClient.invalidateQueries({ queryKey: ['profit-sheet-connected-accounts'] });
           if (activeStoreId) void refreshStatus(activeStoreId);
           setIntegrations((prev) =>
             prev.map((intg) =>
@@ -130,7 +128,7 @@ export function IntegrationsClient() {
 
     window.addEventListener('message', handleOAuthMessage);
     return () => window.removeEventListener('message', handleOAuthMessage);
-  }, [activeStoreId, fetchGoogleDriveStatus, refreshStatus]);
+  }, [activeStoreId, fetchGoogleDriveStatus, refreshStatus, queryClient]);
 
   // Also check URL params for non-popup fallback (if popup was blocked)
   useEffect(() => {
@@ -138,7 +136,9 @@ export function IntegrationsClient() {
     const shopifyParam = searchParams.get('shopify');
 
     if (metaParam === 'connected') {
-      toast.success('Meta Ads connected! Link ad accounts below.');
+      toast.success('Meta connected for all stores in this account.');
+      void queryClient.invalidateQueries({ queryKey: ['meta-token-health'] });
+      void queryClient.invalidateQueries({ queryKey: ['profit-sheet-connected-accounts'] });
     } else if (metaParam === 'error') {
       const message = searchParams.get('message') || 'Unknown error';
       toast.error(`Meta connection failed: ${message}`);
@@ -154,7 +154,7 @@ export function IntegrationsClient() {
     if (metaParam || shopifyParam) {
       window.history.replaceState({}, '', window.location.pathname);
     }
-  }, [searchParams]);
+  }, [searchParams, queryClient]);
 
   // Load connection status on mount
   useEffect(() => {
@@ -193,45 +193,6 @@ export function IntegrationsClient() {
       }),
     );
   }, [connectionStatus]);
-
-  // Fetch available Meta connections from other stores (for "reuse existing" feature)
-  useEffect(() => {
-    if (!activeStoreId) return;
-    fetch(`/api/auth/meta/available-connections?excludeStoreId=${encodeURIComponent(activeStoreId)}`)
-      .then((res) => (res.ok ? res.json() : { connections: [] }))
-      .then((data) => setAvailableMetaConnections(data.connections || []))
-      .catch(() => setAvailableMetaConnections([]));
-  }, [activeStoreId]);
-
-  // Handler: copy an existing Meta connection from another store
-  const handleCopyMetaConnection = async (fromStoreId: string, fromStoreName: string) => {
-    setCopyingConnection(true);
-    try {
-      const res = await fetch('/api/auth/meta/copy-connection', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fromStoreId, toStoreId: activeStoreId }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Failed' }));
-        throw new Error(err.error || 'Failed to copy connection');
-      }
-      if (activeStoreId) await refreshStatus(activeStoreId);
-      toast.success(`Meta connection copied from "${fromStoreName}". Now link your ad accounts below.`);
-      // Update integration card status
-      setIntegrations((prev) =>
-        prev.map((intg) =>
-          intg.platform === 'meta'
-            ? { ...intg, status: 'connected' as const, lastSynced: new Date().toISOString() }
-            : intg
-        )
-      );
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to copy connection');
-    } finally {
-      setCopyingConnection(false);
-    }
-  };
 
   // Handler: Google Drive connected successfully
   const handleGoogleDriveConnected = async () => {
@@ -347,14 +308,17 @@ export function IntegrationsClient() {
     // Handle Meta connect/disconnect
     if (integration.platform === 'meta') {
       if (isConnected) {
-        // Disconnect
+        if (!window.confirm('Disconnect Meta from all stores in this OneScale account? Your store ad-account selections will be kept.')) return;
         try {
-          await fetch('/api/auth/disconnect', {
+          const res = await fetch('/api/auth/disconnect', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ platform: 'meta', storeId: activeStoreId }),
           });
-          toast.success('Meta Ads disconnected');
+          if (!res.ok) throw new Error('Could not disconnect Meta');
+          await queryClient.invalidateQueries({ queryKey: ['meta-token-health'] });
+          await queryClient.invalidateQueries({ queryKey: ['profit-sheet-connected-accounts'] });
+          toast.success('Meta disconnected from all stores in this account.');
           refreshStatus(activeStoreId);
           // Update local state
           setIntegrations((prev) =>
@@ -526,56 +490,10 @@ export function IntegrationsClient() {
 
       {activeStoreId && <MetaTokenSettings key={activeStoreId} storeId={activeStoreId} />}
 
-      {/* Reuse Existing Meta Connection — shown when Meta is NOT connected but other stores have it */}
-      {!integrations.some((i) => i.platform === 'meta' && i.status === 'connected') &&
-        availableMetaConnections.length > 0 && (
-        <div className="rounded-lg border border-border bg-surface-elevated overflow-hidden">
-          <div className="px-5 py-4">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
-                <Copy className="h-4 w-4 text-primary" />
-              </div>
-              <div>
-                <h3 className="text-sm font-semibold text-text-primary">Use Existing Facebook Connection</h3>
-                <p className="text-xs text-text-secondary">
-                  You already have Meta connected on other stores. Reuse the same connection here.
-                </p>
-              </div>
-            </div>
-            <div className="space-y-2">
-              {availableMetaConnections.map((conn) => (
-                <div
-                  key={conn.storeId}
-                  className="flex items-center justify-between rounded-lg border border-border p-3 bg-surface-hover/50"
-                >
-                  <div className="min-w-0">
-                    <span className="text-sm font-medium text-text-primary">{conn.storeName}</span>
-                    {conn.accountName && (
-                      <span className="ml-2 text-xs text-text-muted">· {conn.accountName}</span>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => handleCopyMetaConnection(conn.storeId, conn.storeName)}
-                    disabled={copyingConnection}
-                    className="shrink-0 ml-3 flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-50 transition-colors"
-                  >
-                    {copyingConnection ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <Copy className="h-3 w-3" />
-                    )}
-                    Use This Connection
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Meta Connection Details — shown when Meta is connected */}
       {integrations.some((i) => i.platform === 'meta' && i.status === 'connected') && (
         <MetaConnectionDetails
+          key={activeStoreId}
           storeId={activeStoreId}
           storeName={activeStoreName}
           onAccountSelected={() => refreshStatus(activeStoreId)}

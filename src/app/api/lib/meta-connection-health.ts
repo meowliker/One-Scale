@@ -53,17 +53,15 @@ export async function checkMetaConnection(storeId: string) {
   }
   // Validation never deletes credentials; a transient provider outage cannot disconnect a store.
   if (isSupabasePersistenceEnabled()) {
-    const version = conn.last_synced
-      ? `eq.${encodeURIComponent(conn.last_synced)}`
-      : "is.null";
     await rest(
-      `/connections?store_id=eq.${encodeURIComponent(storeId)}&platform=eq.meta&last_synced=${version}`,
+      "/rpc/workspace_meta_validate",
       {
-        method: "PATCH",
+        method: "POST",
         body: JSON.stringify({
-          metadata,
-          ...(expiry !== undefined ? { expires_at: expiry } : {}),
-          last_synced: new Date().toISOString(),
+          p_store: storeId,
+          p_expected_synced: conn.last_synced || null,
+          p_metadata: metadata,
+          p_expiry: expiry !== undefined ? { value: expiry } : null,
         }),
       },
     );

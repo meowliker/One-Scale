@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, ShieldCheck } from "lucide-react";
 import { useConnectionStore } from "@/stores/connectionStore";
 import {
@@ -18,6 +18,7 @@ type Health = {
   noScheduledExpiry: boolean;
 };
 export function MetaTokenSettings({ storeId }: { storeId: string }) {
+  const client = useQueryClient();
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [message, setMessage] = useState(""),
@@ -51,11 +52,14 @@ export function MetaTokenSettings({ storeId }: { storeId: string }) {
         signal: AbortSignal.timeout(55000),
       });
       setToken("");
-      await q.refetch();
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["meta-token-health"] }),
+        client.invalidateQueries({ queryKey: ["profit-sheet-connected-accounts"] }),
+      ]);
       await refresh(storeId);
       setMessage(
         r.health.status === "connected"
-          ? "Connection verified and saved in Supabase."
+          ? "Connection verified and saved for all stores in this account."
           : "Meta requires reconnection. Your saved credentials have been retained.",
       );
     } catch (e) {
@@ -70,7 +74,7 @@ export function MetaTokenSettings({ storeId }: { storeId: string }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <ShieldCheck className="h-5 w-5 text-primary" />
-          <h3 className="text-sm font-semibold">Meta connection storage</h3>
+          <h3 className="text-sm font-semibold">Meta connection · all stores</h3>
         </div>
         <button
           type="button"
@@ -92,7 +96,7 @@ export function MetaTokenSettings({ storeId }: { storeId: string }) {
               }
             >
               {h.status === "missing"
-                ? "No Meta integration saved for this store"
+                ? "Connect Meta once to use it across all stores in this account"
                 : h.status === "connected"
                   ? "Saved securely · connected"
                   : h.status === "expired"
@@ -115,8 +119,9 @@ export function MetaTokenSettings({ storeId }: { storeId: string }) {
         )
       )}
       <p className="text-xs text-text-muted">
-        Credentials are encrypted in Supabase and survive server restarts and
-        deployments. Saving a token does not extend its Meta expiry.
+        Your Meta login is shared across all stores in this OneScale account,
+        including new stores. Choose ad accounts separately for each store.
+        Credentials are encrypted in Supabase. Saving a token does not extend its Meta expiry.
       </p>
       {h?.status !== "connected" && !!q.data?.savedAccounts.length && (
         <div className="space-y-2">

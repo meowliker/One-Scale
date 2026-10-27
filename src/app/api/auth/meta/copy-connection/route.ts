@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { copyMetaConnection, getStore } from '@/app/api/lib/db';
 import { isSupabasePersistenceEnabled, getPersistentStore, copyPersistentMetaConnection } from '@/app/api/lib/supabase-persistence';
 import { getMetaToken } from '@/app/api/lib/tokens';
+import { sheetAccess } from '@/app/api/lib/profit-sheet-access';
 
 /**
  * POST /api/auth/meta/copy-connection
@@ -28,6 +29,11 @@ export async function POST(request: NextRequest) {
         { error: 'Source and target stores must be different' },
         { status: 400 }
       );
+    }
+
+    for (const storeId of [fromStoreId, toStoreId]) {
+      const denied = await sheetAccess(request, storeId, true);
+      if (denied) return denied;
     }
 
     const sb = isSupabasePersistenceEnabled();

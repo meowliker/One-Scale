@@ -8,6 +8,7 @@ import {
 import { saveVerifiedMetaToken } from '@/app/api/lib/meta-connection-health';
 import { getAppUrl } from '@/app/api/lib/url';
 import type { MetaTokenPayload } from '@/types/auth';
+import { canWorkspaceAccessStore } from '@/app/api/lib/auth-users';
 
 function resolveMetaRedirectUri(configuredRedirectUri: string | undefined | null, appUrl: string): string {
   const trimmed = configuredRedirectUri?.trim();
@@ -56,6 +57,9 @@ export async function GET(request: NextRequest) {
 
     const storeId = oauthState.store_id;
     const workspaceId = oauthState.workspace_id || undefined;
+    if (workspaceId && !(await canWorkspaceAccessStore(workspaceId, storeId))) {
+      throw new Error('Store no longer belongs to this account.');
+    }
 
     // Read credentials from DB first, fallback to env
     const dbCreds = isSupabasePersistenceEnabled()

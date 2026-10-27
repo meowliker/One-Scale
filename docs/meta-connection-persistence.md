@@ -22,4 +22,10 @@ Investigated 27 October 2026, before deployment.
 
 Nine focused token/storage tests plus the Profit Sheet regression suite cover remote-save failures, cache failures, token expiry and scopes, ambiguous expiry, explicit null replacement, revoked vs transient errors, account metadata and secret redaction. Live verification uses existing tokens only; no new Meta permissions or system users were created.
 
-No application deployment or Git push was performed for this change. Supabase credential restorations are already saved, and the code is running locally.
+## Account-wide sharing (27 October 2026)
+
+Migration 051 adds `workspace_meta_connections`, an encrypted, server-only login per OneScale workspace. Saving or reconnecting Meta atomically updates compatibility rows for that workspace's stores. Store-level ad-account selections and Profit Sheet assignments remain separate. New stores inherit the saved login when they join the workspace; a store moved to a different workspace loses the previous workspace's login. Deleting a store does not disconnect the remaining stores.
+
+Validation uses a compare guard so a slow response cannot overwrite newer credentials, and propagates expiry/revocation to the whole workspace. Disconnect explicitly applies to every store in the account and removes the shared login, preventing new stores from reviving it. Mutation routes check store access, and OAuth uses the authenticated workspace rather than a supplied workspace ID. Other workspaces are never included.
+
+The existing Artfania token was verified with Meta and shared with the 12 stores in its workspace, including Palette Vista. Original encrypted rows were backed up outside the repository. Migration 051 is applied in Supabase. `tests/workspace-meta.sql` exercises sharing, isolation, selection preservation, new stores, stale validation, moves, deletion and disconnect using synthetic fixtures inside a rolled-back transaction.

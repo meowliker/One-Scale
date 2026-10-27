@@ -128,7 +128,9 @@ export function IntegrationCard({
           )}
 
           <p className="mt-1 text-xs text-gray-500 line-clamp-2">
-            {integration.description}
+            {integration.platform === 'meta'
+              ? 'Shared across all stores in this account. Choose ad accounts separately for each store.'
+              : integration.description}
           </p>
 
           <div className="mt-3 flex items-center justify-between">
@@ -151,7 +153,7 @@ export function IntegrationCard({
                   : 'bg-blue-600 text-white hover:bg-blue-700'
               )}
             >
-              {isConnected ? 'Disconnect' : 'Connect'}
+              {isConnected ? integration.platform === 'meta' ? 'Disconnect all stores' : 'Disconnect' : 'Connect'}
             </button>
           </div>
         </div>
