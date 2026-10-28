@@ -343,6 +343,7 @@ export async function upsertPersistentStoreAdAccount(data: {
         platform: data.platform || 'meta',
         currency: data.currency ?? null,
         timezone: data.timezone ?? null,
+        is_active: true,
       }]),
     }
   );

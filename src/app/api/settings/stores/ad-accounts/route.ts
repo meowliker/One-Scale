@@ -1,5 +1,7 @@
 import { sheetAccess } from "@/app/api/lib/profit-sheet-access";
-import { NextRequest, NextResponse } from 'next/server';
+import { kickProfitSheetDiscovery } from '@/app/api/lib/profit-sheet-kick';
+import { loadConfig, publicConfig } from '@/app/api/lib/profit-sheet-repository';
+import { NextRequest, NextResponse, after } from 'next/server';
 import {
   getStoreAdAccounts,
   addStoreAdAccount,
@@ -15,6 +17,21 @@ import {
   togglePersistentStoreAdAccount,
   upsertPersistentStoreAdAccount,
 } from '@/app/api/lib/supabase-persistence';
+
+export const maxDuration = 300;
+export const dynamic = 'force-dynamic';
+async function linkedSheet(storeId: string) {
+  if (!isSupabasePersistenceEnabled()) return undefined;
+  const config = publicConfig(await loadConfig(storeId));
+  kickProfitSheetDiscovery(storeId);
+  after(async () => {
+    try {
+      const active = (await listPersistentStoreAdAccounts(storeId)).filter(a => Number(a.is_active) === 1).map(a => a.ad_account_id);
+      await prunePersistentStoreMetaDataToActiveAccounts(storeId, active);
+    } catch { console.warn('Account cache cleanup deferred'); }
+  });
+  return config;
+}
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -94,13 +111,11 @@ export async function POST(request: NextRequest) {
         currency,
         timezone,
       });
-      const activeAfter = (await listPersistentStoreAdAccounts(storeId))
-        .filter((a) => Number(a.is_active) === 1)
-        .map((a) => a.ad_account_id);
-      await prunePersistentStoreMetaDataToActiveAccounts(storeId, activeAfter);
     }
 
+    const profitSheet = await linkedSheet(storeId);
     return NextResponse.json({
+      profitSheet,
       account: {
         id: account.ad_account_id,
         name: account.ad_account_name,
@@ -138,12 +153,8 @@ export async function DELETE(request: NextRequest) {
     removeStoreAdAccount(storeId, adAccountId);
     if (isSupabasePersistenceEnabled()) {
       await deletePersistentStoreAdAccount(storeId, adAccountId);
-      const activeAfter = (await listPersistentStoreAdAccounts(storeId))
-        .filter((a) => Number(a.is_active) === 1)
-        .map((a) => a.ad_account_id);
-      await prunePersistentStoreMetaDataToActiveAccounts(storeId, activeAfter);
     }
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, profitSheet: await linkedSheet(storeId) });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json({ error: msg }, { status: 500 });
@@ -172,12 +183,8 @@ export async function PATCH(request: NextRequest) {
     toggleStoreAdAccount(storeId, adAccountId, isActive);
     if (isSupabasePersistenceEnabled()) {
       await togglePersistentStoreAdAccount(storeId, adAccountId, isActive);
-      const activeAfter = (await listPersistentStoreAdAccounts(storeId))
-        .filter((a) => Number(a.is_active) === 1)
-        .map((a) => a.ad_account_id);
-      await prunePersistentStoreMetaDataToActiveAccounts(storeId, activeAfter);
     }
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, profitSheet: await linkedSheet(storeId) });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json({ error: msg }, { status: 500 });

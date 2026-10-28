@@ -407,6 +407,7 @@ export async function syncSheetDay(job: SheetJob) {
           }),
         },
       );
+    if (!errors.length) await rest("/rpc/profit_sheet_sync_status", { method: "POST", body: JSON.stringify({ p_store: job.store_id }) }).catch(() => {});
     return {
       ok: !errors.length,
       date: job.date,

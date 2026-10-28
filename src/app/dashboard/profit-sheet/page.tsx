@@ -25,6 +25,7 @@ import {
   type SavedDay,
   type SheetJob,
 } from "@/lib/profit-sheet/model";
+import { StoreSyncStatus } from "./StoreSyncStatus";
 import { AttributionPanel } from "./AttributionPanel";
 import { ProfitTable } from "./ProfitTable";
 import { AccountsDialog } from "./AccountsDialog";
@@ -113,6 +114,8 @@ function Workspace({
         { signal },
       ),
     retry: false,
+    staleTime: 0,
+    refetchOnMount: "always",
     enabled: hasDates,
     refetchInterval: (query) =>
       ["queued", "running"].includes(query.state.data?.discovery?.status || "") || query.state.data?.jobs.some(
@@ -375,6 +378,7 @@ function Workspace({
             {config.accounts.length} ad accounts · {config.products.length}{" "}
             products · {currency || "Loading currency"}
           </p>
+          <StoreSyncStatus storeId={storeId} />
         </div>
         <div className="flex flex-wrap gap-2">
           <button className={buttonClass} onClick={() => setDialog("products")}>
@@ -618,7 +622,9 @@ function StoreSheet({
         { signal },
       ),
     retry: false,
-    refetchInterval: 30000,
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchInterval: 5000,
   });
   if (config.isPending)
     return (

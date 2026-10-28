@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Store } from '@/types/store';
+import { refreshLinkedSheet } from '@/lib/profit-sheet/client-cache';
+import type { SheetConfig } from '@/lib/profit-sheet/model';
 import { clearCachePrefix } from '@/services/perfCache';
 
 async function readJsonSafe<T>(res: Response): Promise<T> {
@@ -142,6 +144,8 @@ export const useStoreStore = create<StoreState>()(
           }),
         });
         if (!res.ok) throw new Error('Failed to link ad account');
+        const result = await readJsonSafe<{ profitSheet?: SheetConfig }>(res);
+        await refreshLinkedSheet(storeId, result.profitSheet);
 
         // Refresh stores from server
         await get().fetchStores();
@@ -154,6 +158,8 @@ export const useStoreStore = create<StoreState>()(
           body: JSON.stringify({ storeId, adAccountId }),
         });
         if (!res.ok) throw new Error('Failed to unlink ad account');
+        const result = await readJsonSafe<{ profitSheet?: SheetConfig }>(res);
+        await refreshLinkedSheet(storeId, result.profitSheet);
 
         await get().fetchStores();
       },
@@ -174,6 +180,8 @@ export const useStoreStore = create<StoreState>()(
           }),
         });
         if (!res.ok) throw new Error('Failed to toggle ad account');
+        const result = await readJsonSafe<{ profitSheet?: SheetConfig }>(res);
+        await refreshLinkedSheet(storeId, result.profitSheet);
 
         await get().fetchStores();
       },

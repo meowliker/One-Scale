@@ -1,3 +1,5 @@
+import { refreshLinkedSheet } from '@/lib/profit-sheet/client-cache';
+import type { SheetConfig } from '@/lib/profit-sheet/model';
 import type { Store, AdAccount } from '@/types/store';
 
 async function readJsonSafe<T>(response: Response): Promise<T> {
@@ -35,4 +37,6 @@ export async function updateAdAccountStatus(
     body: JSON.stringify({ storeId, adAccountId: accountId, isActive }),
   });
   if (!response.ok) throw new Error('Failed to update ad account');
+  const result = await readJsonSafe<{ profitSheet?: SheetConfig }>(response);
+  await refreshLinkedSheet(storeId, result.profitSheet);
 }

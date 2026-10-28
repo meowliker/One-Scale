@@ -1,3 +1,4 @@
+import { kickProfitSheetDiscovery } from "@/app/api/lib/profit-sheet-kick";
 import { getMetaToken } from "@/app/api/lib/tokens";
 import { NextRequest, NextResponse } from "next/server";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
@@ -18,7 +19,7 @@ import {
 } from "@/lib/profit-sheet";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 const headers = { "Cache-Control": "private, no-store" };
 const json = (body: unknown, status = 200) =>
   NextResponse.json(body, { status, headers });
@@ -162,6 +163,7 @@ export async function PUT(request: NextRequest) {
       );
     }
     await saveSheetAccounts(storeId, saved, body.version);
+    kickProfitSheetDiscovery(storeId);
     return json({ accounts: publicSheetAccounts(saved) });
   } catch (error) {
     return failure(error);

@@ -30,6 +30,7 @@ function route({
   const calls = [];
   const writes = [];
   const dependencies = {
+    "@/app/api/lib/profit-sheet-kick": {kickProfitSheetDiscovery:()=>{}},
     "@/app/api/lib/tokens": {getMetaToken: async()=>({accessToken:"integration-secret"})},
     "next/server": { NextRequest, NextResponse },
     "date-fns-tz": require("date-fns-tz"),
