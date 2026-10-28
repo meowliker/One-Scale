@@ -14,6 +14,7 @@ import {
   type SheetLayout,
 } from "@/lib/profit-sheet/columns";
 import type { StoreSheetDay } from "@/lib/profit-sheet";
+import { formatSheetDate } from "@/lib/profit-sheet/date-label";
 import { buttonClass, inputClass, request } from "./shared";
 type Props = {
   storeId: string;
@@ -214,7 +215,7 @@ function LayoutTable({
                 <span className="inline-flex items-center gap-2">
                   {total
                     ? "Total"
-                    : `${Number(row.date.slice(5, 7))}/${Number(row.date.slice(8, 10))}/${row.date.slice(0, 4)}`}
+                    : formatSheetDate(row.date)}
                   {!total && (
                     <button
                       disabled={props.busy}
@@ -518,7 +519,7 @@ function LayoutTable({
                   )}
                   <button
                     disabled={disabled}
-                    className="inline-flex w-full cursor-grab items-center justify-end gap-2 rounded py-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 active:cursor-grabbing"
+                    className={`inline-flex w-full cursor-grab items-center ${id === "date" ? "justify-start" : "justify-end"} gap-2 rounded py-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 active:cursor-grabbing`}
                     aria-label={`Move ${COLUMNS[id].label}`}
                     onKeyDown={(e) => {
                       if (
@@ -530,7 +531,7 @@ function LayoutTable({
                       }
                     }}
                   >
-                    <GripVertical className="h-3 w-3 shrink-0 text-text-muted" />
+                    <GripVertical className={`h-3 w-3 shrink-0 text-text-muted ${id === "date" ? "order-last" : ""}`} />
                     {COLUMNS[id].label}
                   </button>
                   {slot === layout.columns.length &&

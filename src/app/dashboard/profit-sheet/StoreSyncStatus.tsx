@@ -1,6 +1,7 @@
 "use client";
 import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { formatSheetDate } from "@/lib/profit-sheet/date-label";
 import { request } from "./shared";
 
 type SyncStatus = {
@@ -40,7 +41,7 @@ export function StoreSyncStatus({ storeId }: { storeId: string }) {
     <div className="mt-1 space-y-1 text-xs text-text-muted" role="status">
       <p>Last full store sync: {timestamp ? <time dateTime={data.lastCompletedAt!}>{timestamp} IST</time> : "Not completed yet"}</p>
       <p>{stages[data.stage]}.</p>
-      {data.lastCompletedFrom && <p>Last completed report range: {data.lastCompletedFrom} – {data.lastCompletedTo}.</p>}
+      {data.lastCompletedFrom && <p>Last completed report range: {formatSheetDate(data.lastCompletedFrom)} – {data.lastCompletedTo && formatSheetDate(data.lastCompletedTo)}.</p>}
     </div>
   );
 }
