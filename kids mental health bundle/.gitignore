@@ -1,0 +1,2 @@
+# Track this folder's Claude skills (the repo root ignores .claude/)
+!.claude/
