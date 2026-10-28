@@ -1,10 +1,10 @@
-# Storyboard & Approval Package — KMH-V1-INS-20785b5fa6bd · v1.1
+# Storyboard & Approval Package — KMH-V1-INS-20785b5fa6bd · v1.2
 
 | Field | Value |
 |---|---|
 | Creative ID | KMH-V1-INS-20785b5fa6bd |
-| Package version | v1.1 (supersedes v1.0; v1.0 files kept) |
-| Date | 2026-10-26 |
+| Package version | v1.2 (supersedes v1.1 and v1.0; their files kept) |
+| Date | 2026-10-28 (v1.2) · 2026-10-26 (v1.0, v1.1) |
 | Product | Kids Mental Health Bundle (offer: "FREE Kids Mental Health Bundle" / "free today") |
 | Selected variation | V1 — "Is your kid always dysregulated?" (#1 BEST BET) |
 | Format | 9:16 vertical, planned 55.055 s; v1.1 draft 61.20 s, 28 shots (S28 end shot added), hard cuts; English VO + burned-in captions |
@@ -12,8 +12,10 @@
 | Upstream | `adaptations/INS-20785b5fa6bd-KMH-adaptation.md` (Skill 2) · `adaptations/INS-20785b5fa6bd-KMH-V1-full-script.md` (V1 full script v1.0) |
 | Production route | Kie.ai — Grok Imagine Video 1.5 (preview), 720p, 9:16, image-to-video from the keyframes · v1.1 VO: Kie.ai Google Gemini 3.1 Flash TTS, voice Sulafat |
 | Editor / strategist | Role labels only — names not supplied |
-| **Package readiness** | **v1.1 draft built: `video/KMH-V1-INS-20785b5fa6bd-v1.1-draft.mp4` (61.20 s). New female VO, real bundle cover on the new end shot S28, no freeze frame. Not final: 61.2 s is over the ~58 s target (the VO reads at its natural pace; see §12), music is a preview bed** |
+| **Package readiness** | **v1.2 draft built: `video/KMH-V1-INS-20785b5fa6bd-v1.2-draft.mp4` (61.20 s) — v1.1 with the blank-book shot S27 removed, so the real cover is on screen whenever the book is (§17). v1.1: New female VO, real bundle cover on the new end shot S28, no freeze frame. Not final: 61.2 s is over the ~58 s target (the VO reads at its natural pace; see §12), music is a preview bed** |
 | **Creative decision** | **Awaiting strategist approval** |
+
+> **Draft status (v1.2):** v1.1 showed a blank placeholder book for 0.6 s (S27, 58.08–58.68 s) before the real cover appeared. v1.2 drops S27 and starts the real-cover end shot S28 at 58.08 s — see §17.
 
 > **Draft status (v1.1):** the v1.1 draft is built and checked — see §16 for the file, the new voiceover, the S28 book shot, timing, QC and credits. §15 keeps the v1.0 draft record. Still open: length (61.2 s vs ~58 s target), licensed music, strategist approval.
 
@@ -939,7 +941,7 @@ For every shot: first frame = the shot's keyframe; attach ASSET01; no audio from
 ## 12. Outstanding issues
 
 1. **Length (decision needed):** v1.1 runs **61.20 s**, ~3.2 s over the ≤ ~58 s target. Pauses between lines (incl. breaths) are already trimmed to ≤0.2 s and S28 is at its minimum (2.52 s); the rest is the read itself (2.9 words/s vs the reference's 3.1). Options: (a) re-voice on Kie ElevenLabs with speed ≈1.1 once its TTS works again (it failed server-side on every call this session); (b) approve a ~×1.06 pitch-preserving tempo on this read (≈58 s); (c) accept 61 s. Rebuild with `python3 build_video.py`.
-1. **S27 placeholder book:** visible for 0.6 s while it is raised (the cut into S28 shows the real cover). Optional real worksheet pages for S17/S25.
+1. ~~**S27 placeholder book:** visible for 0.6 s while it is raised~~ — fixed in v1.2 (S27 removed, §17). Optional real worksheet pages for S17/S25.
 1. **Kie ElevenLabs TTS** returned "Internal Error" on all 10 calls (incl. Kie's docs example); **Kie's upload host** `kieai.redpandaai.co` answered 401 (the session's proxy only adds the Kie key for `api.kie.ai`/`kie.ai`), so the S28 start frame was given to Grok as a public raw GitHub URL of the committed file.
 1. **V1 script approval** (v1.0 of the full script).
 1. **Music:** the bed is a local synth preview, extended with a crossfaded repeat to 63 s; license real music for the final.
@@ -952,6 +954,7 @@ For every shot: first frame = the shot's keyframe; attach ASSET01; no audio from
 |---|---|---|---|---|---|---|---|
 | KMH-V1-INS-20785b5fa6bd | v1.0 | Awaiting strategist approval | — | — | Whole package | — | — |
 | KMH-V1-INS-20785b5fa6bd | v1.1 | Awaiting strategist approval | — | — | Whole package (new VO, S28 end shot, re-time) | — | — |
+| KMH-V1-INS-20785b5fa6bd | v1.2 | Awaiting strategist approval | — | — | Whole package (v1.1 minus S27 blank book) | — | — |
 
 ## 14. Quality checks (v1.1)
 
@@ -1114,3 +1117,17 @@ Speech in AUD-V1-VO runs 0.49–70.81 s (file 77.24 s incl. 6.3 s trailing silen
 | S28 | new end shot | new | 58.68–61.20 | 58.78–59.65 | VID-S28-01-cover, slow push-in 1.00→1.15 |
 
 **Length:** 61.20 s vs the ≤ ~58 s target (+3.2 s) — pauses already trimmed, S28 at its minimum, VO not sped up. See §12 for the options.
+
+## 17. V1 draft video v1.2 — real cover whenever the book is on screen
+
+| Item | Value |
+|---|---|
+| File | `video/KMH-V1-INS-20785b5fa6bd-v1.2-draft.mp4` (61.20 s, 720×1280, 30 fps) |
+| Fix | User review: the book showed no front cover near the end. Cause: S27 (58.08–58.68 s) played VID-S27-01, where mom raises the **blank placeholder book** before the cut to S28. v1.2 drops S27; S28 (`VID-S28-01-cover.mp4`, exact ASSET02 cover tracked onto the book) now runs **58.08–61.20 s (3.12 s of its 4.04 s clip, not slowed)** |
+| Unchanged | VO (Sulafat), all captions and their timings, S01–S26, music bed, total length 61.20 s. "support." now ends over the opening of S28, then "Grab yours / free." |
+| Shots | 27 in the edit (S01–S26, S28); S27 stays in the package and in `kie-video-tasks.json` but is not used |
+| QC | Every frame from 58.0 s to the end checked: the real cover ("KIDS MENTAL HEALTH – A Parent & Educator Guide") is readable from the first S28 frame; no blank book anywhere in the video |
+| Build | `python3 build_video.py` (= v1.2, config `drop_s27`); `python3 build_video.py v1.1` still rebuilds v1.1 |
+| Contact sheet | `video/draft-v1.2-contact-sheet.png` |
+| Kie credits | 0 (re-edit only, no new generations) |
+

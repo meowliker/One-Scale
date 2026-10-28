@@ -1,6 +1,7 @@
 """Builds the V1 draft video from the Kie clips, the V1 voiceover and the music bed.
 
-  python3 build_video.py          -> v1.1 draft (new VO AUD-V1-VO-v1.1, real-cover end shot S28)
+  python3 build_video.py          -> v1.2 draft (v1.1 without S27's blank book: S28 starts where S27 did)
+  python3 build_video.py v1.1     -> v1.1 draft (new VO AUD-V1-VO-v1.1, real-cover end shot S28)
   python3 build_video.py v1.0     -> v1.0 draft (original VO, ends on S27)
 
 Picture is re-timed to the VO: each shot runs from the pause before its VO line to the
@@ -22,7 +23,7 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, "prompts")
 from shots import SHOTS  # noqa: E402
 
-VERSION = sys.argv[1] if len(sys.argv) > 1 else "v1.1"
+VERSION = sys.argv[1] if len(sys.argv) > 1 else "v1.2"
 CFG = {
     "v1.0": dict(vo="audio/AUD-V1-VO.mp3", words="audio/AUD-V1-VO-words.json", max_gap=0.35, end_shot=None),
     # S27 plays VID-S27-01 from s27_in and is cut while the book is still rising (match cut into S28);
@@ -30,6 +31,11 @@ CFG = {
     "v1.1": dict(vo="audio/AUD-V1-VO-v1.1.mp3", words="audio/AUD-V1-VO-v1.1-words.json", max_gap=0.2, edges="energy", bed_rel_db=-18,
                  end_shot=dict(cta_gap=0.8, s27_in=0.2, tail=1.55, file="video/VID-S28-01-cover.mp4",
                               push=(1.15, 250, 520))),
+    # v1.2: same as v1.1, but S27 (mom raising a blank placeholder book) is dropped and S28 (exact cover)
+    # starts at S27's cut, so the book never appears without the real cover
+    "v1.2": dict(vo="audio/AUD-V1-VO-v1.1.mp3", words="audio/AUD-V1-VO-v1.1-words.json", max_gap=0.2, edges="energy", bed_rel_db=-18,
+                 end_shot=dict(cta_gap=0.8, s27_in=0.2, tail=1.55, file="video/VID-S28-01-cover.mp4",
+                              push=(1.15, 250, 520), drop_s27=True)),
 }[VERSION]
 W, H, FPS = 720, 1280, 30
 MAX_GAP = CFG["max_gap"]
@@ -168,6 +174,8 @@ shots_out = []
 pics = [(s[0], s[1], s[2], cut[i], cut[i + 1]) for i, s in enumerate(SHOTS)]
 if END:
     pics.append(("S28", SHOTS[-1][1], SHOTS[-1][2], cut[-2], cut[-1]))
+    if END.get("drop_s27"):
+        pics[-2:] = [("S28", SHOTS[-1][1], SHOTS[-1][2], cut[-3], cut[-1])]
 for name, p0, p1, c0, c1 in pics:
     clip = tasks["clips"][f"VID-{name}-01"]
     f = END["file"] if name == "S28" and END else f"video/VID-{name}-01.mp4"

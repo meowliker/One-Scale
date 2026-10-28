@@ -1,0 +1,1216 @@
+{
+ "version": "v1.2",
+ "vo": "audio/AUD-V1-VO-v1.1.mp3",
+ "fps": 30,
+ "size": [
+  720,
+  1280
+ ],
+ "planned_end": 55.055,
+ "final_end": 61.2,
+ "max_gap_s": 0.2,
+ "bed_db": 8.8,
+ "shots": [
+  {
+   "shot": "S01",
+   "file": "video/VID-S01-01.mp4",
+   "planned_start": 0.0,
+   "planned_end": 2.703,
+   "in_s": 0.0,
+   "start": 0.0,
+   "end": 4.49,
+   "clip_s": 3.042,
+   "slow": 1.501,
+   "frames": 135
+  },
+  {
+   "shot": "S02",
+   "file": "video/VID-S02-01.mp4",
+   "planned_start": 2.703,
+   "planned_end": 4.204,
+   "in_s": 0.0,
+   "start": 4.49,
+   "end": 6.01,
+   "clip_s": 2.042,
+   "slow": 1.0,
+   "frames": 45
+  },
+  {
+   "shot": "S03",
+   "file": "video/VID-S03-02.mp4",
+   "planned_start": 4.204,
+   "planned_end": 5.939,
+   "in_s": 0.0,
+   "start": 6.01,
+   "end": 7.87,
+   "clip_s": 2.042,
+   "slow": 1.0,
+   "frames": 56
+  },
+  {
+   "shot": "S04",
+   "file": "video/VID-S04-01.mp4",
+   "planned_start": 5.939,
+   "planned_end": 8.008,
+   "in_s": 0.0,
+   "start": 7.87,
+   "end": 9.82,
+   "clip_s": 3.042,
+   "slow": 1.0,
+   "frames": 59
+  },
+  {
+   "shot": "S05",
+   "file": "video/VID-S05-01.mp4",
+   "planned_start": 8.008,
+   "planned_end": 10.277,
+   "in_s": 0.0,
+   "start": 9.82,
+   "end": 12.74,
+   "clip_s": 3.042,
+   "slow": 1.0,
+   "frames": 87
+  },
+  {
+   "shot": "S06",
+   "file": "video/VID-S06-02.mp4",
+   "planned_start": 10.277,
+   "planned_end": 12.813,
+   "in_s": 0.0,
+   "start": 12.74,
+   "end": 14.98,
+   "clip_s": 3.042,
+   "slow": 1.0,
+   "frames": 67
+  },
+  {
+   "shot": "S07",
+   "file": "video/VID-S07-01.mp4",
+   "planned_start": 12.813,
+   "planned_end": 16.45,
+   "in_s": 0.0,
+   "start": 14.98,
+   "end": 18.58,
+   "clip_s": 4.042,
+   "slow": 1.0,
+   "frames": 108
+  },
+  {
+   "shot": "S08",
+   "file": "video/VID-S08-02.mp4",
+   "planned_start": 16.45,
+   "planned_end": 18.051,
+   "in_s": 0.0,
+   "start": 18.58,
+   "end": 20.68,
+   "clip_s": 2.042,
+   "slow": 1.054,
+   "frames": 63
+  },
+  {
+   "shot": "S09",
+   "file": "video/VID-S09-01.mp4",
+   "planned_start": 18.051,
+   "planned_end": 18.685,
+   "in_s": 0.0,
+   "start": 20.68,
+   "end": 21.32,
+   "clip_s": 2.042,
+   "slow": 1.0,
+   "frames": 20
+  },
+  {
+   "shot": "S10",
+   "file": "video/VID-S10-02.mp4",
+   "planned_start": 18.685,
+   "planned_end": 19.386,
+   "in_s": 0.0,
+   "start": 21.32,
+   "end": 22.22,
+   "clip_s": 2.042,
+   "slow": 1.0,
+   "frames": 27
+  },
+  {
+   "shot": "S11",
+   "file": "video/VID-S11-01.mp4",
+   "planned_start": 19.386,
+   "planned_end": 21.021,
+   "in_s": 0.0,
+   "start": 22.22,
+   "end": 23.97,
+   "clip_s": 2.042,
+   "slow": 1.0,
+   "frames": 52
+  },
+  {
+   "shot": "S12",
+   "file": "video/VID-S12-02.mp4",
+   "planned_start": 21.021,
+   "planned_end": 23.157,
+   "in_s": 0.0,
+   "start": 23.97,
+   "end": 26.16,
+   "clip_s": 3.042,
+   "slow": 1.0,
+   "frames": 66
+  },
+  {
+   "shot": "S13",
+   "file": "video/VID-S13-02.mp4",
+   "planned_start": 23.157,
+   "planned_end": 25.826,
+   "in_s": 0.0,
+   "start": 26.16,
+   "end": 28.68,
+   "clip_s": 3.042,
+   "slow": 1.0,
+   "frames": 75
+  },
+  {
+   "shot": "S14",
+   "file": "video/VID-S14-01.mp4",
+   "planned_start": 25.826,
+   "planned_end": 27.728,
+   "in_s": 0.0,
+   "start": 28.68,
+   "end": 30.38,
+   "clip_s": 2.042,
+   "slow": 1.0,
+   "frames": 51
+  },
+  {
+   "shot": "S15",
+   "file": "video/VID-S15-02.mp4",
+   "planned_start": 27.728,
+   "planned_end": 30.297,
+   "in_s": 0.0,
+   "start": 30.38,
+   "end": 32.82,
+   "clip_s": 3.042,
+   "slow": 1.0,
+   "frames": 74
+  },
+  {
+   "shot": "S16",
+   "file": "video/VID-S16-02.mp4",
+   "planned_start": 30.297,
+   "planned_end": 33.3,
+   "in_s": 0.0,
+   "start": 32.82,
+   "end": 35.66,
+   "clip_s": 4.042,
+   "slow": 1.0,
+   "frames": 85
+  },
+  {
+   "shot": "S17",
+   "file": "video/VID-S17-01.mp4",
+   "planned_start": 33.3,
+   "planned_end": 35.836,
+   "in_s": 0.0,
+   "start": 35.66,
+   "end": 38.82,
+   "clip_s": 3.042,
+   "slow": 1.056,
+   "frames": 95
+  },
+  {
+   "shot": "S18",
+   "file": "video/VID-S18-02.mp4",
+   "planned_start": 35.836,
+   "planned_end": 37.971,
+   "in_s": 0.0,
+   "start": 38.82,
+   "end": 40.32,
+   "clip_s": 3.042,
+   "slow": 1.0,
+   "frames": 45
+  },
+  {
+   "shot": "S19",
+   "file": "video/VID-S19-01.mp4",
+   "planned_start": 37.971,
+   "planned_end": 40.607,
+   "in_s": 0.0,
+   "start": 40.32,
+   "end": 43.22,
+   "clip_s": 3.042,
+   "slow": 1.0,
+   "frames": 87
+  },
+  {
+   "shot": "S20",
+   "file": "video/VID-S20-02.mp4",
+   "planned_start": 40.607,
+   "planned_end": 42.843,
+   "in_s": 0.0,
+   "start": 43.22,
+   "end": 45.82,
+   "clip_s": 3.042,
+   "slow": 1.0,
+   "frames": 78
+  },
+  {
+   "shot": "S21",
+   "file": "video/VID-S21-01.mp4",
+   "planned_start": 42.843,
+   "planned_end": 45.078,
+   "in_s": 0.0,
+   "start": 45.82,
+   "end": 48.08,
+   "clip_s": 3.042,
+   "slow": 1.0,
+   "frames": 67
+  },
+  {
+   "shot": "S22",
+   "file": "video/VID-S22-02.mp4",
+   "planned_start": 45.078,
+   "planned_end": 46.246,
+   "in_s": 0.0,
+   "start": 48.08,
+   "end": 50.36,
+   "clip_s": 2.042,
+   "slow": 1.145,
+   "frames": 69
+  },
+  {
+   "shot": "S23",
+   "file": "video/VID-S23-02.mp4",
+   "planned_start": 46.246,
+   "planned_end": 47.547,
+   "in_s": 0.0,
+   "start": 50.36,
+   "end": 51.515,
+   "clip_s": 2.042,
+   "slow": 1.0,
+   "frames": 34
+  },
+  {
+   "shot": "S24",
+   "file": "video/VID-S24-01.mp4",
+   "planned_start": 47.547,
+   "planned_end": 49.249,
+   "in_s": 0.0,
+   "start": 51.515,
+   "end": 52.98,
+   "clip_s": 2.042,
+   "slow": 1.0,
+   "frames": 44
+  },
+  {
+   "shot": "S25",
+   "file": "video/VID-S25-01.mp4",
+   "planned_start": 49.249,
+   "planned_end": 51.485,
+   "in_s": 0.0,
+   "start": 52.98,
+   "end": 56.29,
+   "clip_s": 3.042,
+   "slow": 1.106,
+   "frames": 100
+  },
+  {
+   "shot": "S26",
+   "file": "video/VID-S26-01.mp4",
+   "planned_start": 51.485,
+   "planned_end": 53.887,
+   "in_s": 0.0,
+   "start": 56.29,
+   "end": 58.08,
+   "clip_s": 3.042,
+   "slow": 1.0,
+   "frames": 53
+  },
+  {
+   "shot": "S28",
+   "file": "video/VID-S28-01-cover.mp4",
+   "planned_start": 53.887,
+   "planned_end": 55.055,
+   "in_s": 0.0,
+   "start": 58.08,
+   "end": 61.2,
+   "clip_s": 4.042,
+   "slow": 1.0,
+   "frames": 94
+  }
+ ],
+ "vo_lines": [
+  {
+   "picture": "S01",
+   "shot": "S01",
+   "text": "Is your kid always dysregulated, melting down over little things?",
+   "cut_start": 0.0,
+   "cut_end": 4.49,
+   "out_on": 0.0,
+   "out_off": 4.39,
+   "src_on": 0.0,
+   "src_off": 4.39
+  },
+  {
+   "picture": "S02",
+   "shot": "S02",
+   "text": "Then the shoes feel wrong.",
+   "cut_start": 4.49,
+   "cut_end": 6.01,
+   "out_on": 4.59,
+   "out_off": 5.91,
+   "src_on": 4.82,
+   "src_off": 6.14
+  },
+  {
+   "picture": "S03",
+   "shot": "S03",
+   "text": "Their whole body goes rigid.",
+   "cut_start": 6.01,
+   "cut_end": 7.87,
+   "out_on": 6.11,
+   "out_off": 7.77,
+   "src_on": 6.34,
+   "src_off": 8.0
+  },
+  {
+   "picture": "S04",
+   "shot": "S04",
+   "text": "Big feelings get trapped inside.",
+   "cut_start": 7.87,
+   "cut_end": 9.82,
+   "out_on": 7.97,
+   "out_off": 9.72,
+   "src_on": 8.48,
+   "src_off": 10.23
+  },
+  {
+   "picture": "S05",
+   "shot": "S05",
+   "text": "Constant tears, slamming doors. And that",
+   "cut_start": 9.82,
+   "cut_end": 12.74,
+   "out_on": 9.92,
+   "out_off": 12.74,
+   "src_on": 10.78,
+   "src_off": 13.6
+  },
+  {
+   "picture": "S06",
+   "shot": "S06",
+   "text": "tense feeling just won't go away.",
+   "cut_start": 12.74,
+   "cut_end": 14.98,
+   "out_on": 12.74,
+   "out_off": 14.88,
+   "src_on": 13.6,
+   "src_off": 15.74
+  },
+  {
+   "picture": "S07",
+   "shot": "S07",
+   "text": "Soon, asking for something simple starts feeling like a risk.",
+   "cut_start": 14.98,
+   "cut_end": 18.58,
+   "out_on": 15.08,
+   "out_off": 18.48,
+   "src_on": 16.53,
+   "src_off": 19.93
+  },
+  {
+   "picture": "S08",
+   "shot": "S08",
+   "text": "You brace yourself mornings,",
+   "cut_start": 18.58,
+   "cut_end": 20.68,
+   "out_on": 18.68,
+   "out_off": 20.58,
+   "src_on": 20.38,
+   "src_off": 22.28
+  },
+  {
+   "picture": "S09",
+   "shot": "S09",
+   "text": "dinners,",
+   "cut_start": 20.68,
+   "cut_end": 21.32,
+   "out_on": 20.78,
+   "out_off": 21.22,
+   "src_on": 22.5,
+   "src_off": 22.94
+  },
+  {
+   "picture": "S10",
+   "shot": "S10",
+   "text": "bedtimes.",
+   "cut_start": 21.32,
+   "cut_end": 22.22,
+   "out_on": 21.42,
+   "out_off": 22.12,
+   "src_on": 23.2,
+   "src_off": 23.9
+  },
+  {
+   "picture": "S11",
+   "shot": "S11",
+   "text": "And instead of enjoying your kid,",
+   "cut_start": 22.22,
+   "cut_end": 23.97,
+   "out_on": 22.32,
+   "out_off": 23.88,
+   "src_on": 24.38,
+   "src_off": 25.94
+  },
+  {
+   "picture": "S12",
+   "shot": "S12",
+   "text": "you're waiting for the next meltdown to start.",
+   "cut_start": 23.97,
+   "cut_end": 26.16,
+   "out_on": 24.06,
+   "out_off": 26.06,
+   "src_on": 26.12,
+   "src_off": 28.12
+  },
+  {
+   "picture": "S13",
+   "shot": "S13",
+   "text": "Day after day, your home feels loud,",
+   "cut_start": 26.16,
+   "cut_end": 28.68,
+   "out_on": 26.26,
+   "out_off": 28.58,
+   "src_on": 28.76,
+   "src_off": 31.08
+  },
+  {
+   "picture": "S14",
+   "shot": "S14",
+   "text": "tense, and exhausting,",
+   "cut_start": 28.68,
+   "cut_end": 30.38,
+   "out_on": 28.78,
+   "out_off": 30.28,
+   "src_on": 31.28,
+   "src_off": 32.78
+  },
+  {
+   "picture": "S15",
+   "shot": "S15",
+   "text": "leaving you drained before your day is even over.",
+   "cut_start": 30.38,
+   "cut_end": 32.82,
+   "out_on": 30.48,
+   "out_off": 32.72,
+   "src_on": 33.32,
+   "src_off": 35.56
+  },
+  {
+   "picture": "S16",
+   "shot": "S16",
+   "text": "What if your kid has been asking for a different kind of support?",
+   "cut_start": 32.82,
+   "cut_end": 35.66,
+   "out_on": 32.92,
+   "out_off": 35.56,
+   "src_on": 36.46,
+   "src_off": 39.1
+  },
+  {
+   "picture": "S17",
+   "shot": "S17",
+   "text": "Just one printable feelings chart with your kid every day",
+   "cut_start": 35.66,
+   "cut_end": 38.82,
+   "out_on": 35.76,
+   "out_off": 38.82,
+   "src_on": 39.84,
+   "src_off": 42.9
+  },
+  {
+   "picture": "S18",
+   "shot": "S18",
+   "text": "can help them name feelings,",
+   "cut_start": 38.82,
+   "cut_end": 40.32,
+   "out_on": 38.82,
+   "out_off": 40.32,
+   "src_on": 42.9,
+   "src_off": 44.4
+  },
+  {
+   "picture": "S19",
+   "shot": "S19",
+   "text": "and leave your home feeling lighter and more peaceful.",
+   "cut_start": 40.32,
+   "cut_end": 43.22,
+   "out_on": 40.32,
+   "out_off": 43.12,
+   "src_on": 44.4,
+   "src_off": 47.2
+  },
+  {
+   "picture": "S20",
+   "shot": "S20",
+   "text": "No more bracing yourself before every request.",
+   "cut_start": 43.22,
+   "cut_end": 45.82,
+   "out_on": 43.32,
+   "out_off": 45.72,
+   "src_on": 47.92,
+   "src_off": 50.32
+  },
+  {
+   "picture": "S21",
+   "shot": "S21",
+   "text": "No more worrying about meltdowns or tantrums,",
+   "cut_start": 45.82,
+   "cut_end": 48.08,
+   "out_on": 45.92,
+   "out_off": 48.08,
+   "src_on": 50.74,
+   "src_off": 52.9
+  },
+  {
+   "picture": "S22",
+   "shot": "S22",
+   "text": "just a kid who names feelings,",
+   "cut_start": 48.08,
+   "cut_end": 50.36,
+   "out_on": 48.08,
+   "out_off": 50.26,
+   "src_on": 52.9,
+   "src_off": 55.08
+  },
+  {
+   "picture": "S23",
+   "shot": "S23",
+   "text": "calmer evenings",
+   "cut_start": 50.36,
+   "cut_end": 51.515,
+   "out_on": 50.46,
+   "out_off": 51.42,
+   "src_on": 55.44,
+   "src_off": 56.4
+  },
+  {
+   "picture": "S24",
+   "shot": "S24",
+   "text": "and time to enjoy them.",
+   "cut_start": 51.515,
+   "cut_end": 52.98,
+   "out_on": 51.61,
+   "out_off": 52.88,
+   "src_on": 56.59,
+   "src_off": 57.86
+  },
+  {
+   "picture": "S25",
+   "shot": "S25",
+   "text": "Add one feelings chart a day from the free Kids Mental Health Bundle",
+   "cut_start": 52.98,
+   "cut_end": 56.29,
+   "out_on": 53.08,
+   "out_off": 56.29,
+   "src_on": 58.65,
+   "src_off": 61.86
+  },
+  {
+   "picture": "S26",
+   "shot": "S26",
+   "text": "and give your kid support.",
+   "cut_start": 56.29,
+   "cut_end": 58.08,
+   "out_on": 56.29,
+   "out_off": 57.98,
+   "src_on": 61.86,
+   "src_off": 63.55
+  },
+  {
+   "picture": "S28",
+   "shot": "S27",
+   "text": "Grab yours free.",
+   "cut_start": 58.68,
+   "cut_end": 61.2,
+   "out_on": 58.78,
+   "out_off": 59.65,
+   "src_on": 64.16,
+   "src_off": 65.03
+  }
+ ],
+ "captions": [
+  {
+   "shot": "S01",
+   "text": "Is your",
+   "start": 0.0,
+   "end": 0.62
+  },
+  {
+   "shot": "S01",
+   "text": "kid always",
+   "start": 0.62,
+   "end": 1.38
+  },
+  {
+   "shot": "S01",
+   "text": "dysregulated,",
+   "start": 1.38,
+   "end": 2.74
+  },
+  {
+   "shot": "S01",
+   "text": "melting down",
+   "start": 2.74,
+   "end": 3.32
+  },
+  {
+   "shot": "S01",
+   "text": "over little",
+   "start": 3.32,
+   "end": 3.8
+  },
+  {
+   "shot": "S01",
+   "text": "things?",
+   "start": 3.8,
+   "end": 4.59
+  },
+  {
+   "shot": "S02",
+   "text": "Then the",
+   "start": 4.59,
+   "end": 4.93
+  },
+  {
+   "shot": "S02",
+   "text": "shoes feel",
+   "start": 4.93,
+   "end": 5.45
+  },
+  {
+   "shot": "S02",
+   "text": "wrong.",
+   "start": 5.45,
+   "end": 6.11
+  },
+  {
+   "shot": "S03",
+   "text": "Their whole",
+   "start": 6.11,
+   "end": 6.69
+  },
+  {
+   "shot": "S03",
+   "text": "body goes",
+   "start": 6.69,
+   "end": 7.21
+  },
+  {
+   "shot": "S03",
+   "text": "rigid.",
+   "start": 7.21,
+   "end": 7.97
+  },
+  {
+   "shot": "S04",
+   "text": "Big feelings",
+   "start": 7.97,
+   "end": 8.57
+  },
+  {
+   "shot": "S04",
+   "text": "get trapped",
+   "start": 8.57,
+   "end": 9.13
+  },
+  {
+   "shot": "S04",
+   "text": "inside.",
+   "start": 9.13,
+   "end": 9.92
+  },
+  {
+   "shot": "S05",
+   "text": "Constant tears,",
+   "start": 9.92,
+   "end": 11.1
+  },
+  {
+   "shot": "S05",
+   "text": "slamming doors.",
+   "start": 11.1,
+   "end": 12.44
+  },
+  {
+   "shot": "S05",
+   "text": "And that",
+   "start": 12.44,
+   "end": 12.74
+  },
+  {
+   "shot": "S06",
+   "text": "tense feeling",
+   "start": 12.74,
+   "end": 13.58
+  },
+  {
+   "shot": "S06",
+   "text": "just won't",
+   "start": 13.58,
+   "end": 14.24
+  },
+  {
+   "shot": "S06",
+   "text": "go away.",
+   "start": 14.24,
+   "end": 15.08
+  },
+  {
+   "shot": "S07",
+   "text": "Soon,",
+   "start": 15.08,
+   "end": 15.69
+  },
+  {
+   "shot": "S07",
+   "text": "asking for",
+   "start": 15.69,
+   "end": 16.13
+  },
+  {
+   "shot": "S07",
+   "text": "something simple",
+   "start": 16.13,
+   "end": 16.93
+  },
+  {
+   "shot": "S07",
+   "text": "starts feeling",
+   "start": 16.93,
+   "end": 17.63
+  },
+  {
+   "shot": "S07",
+   "text": "like a",
+   "start": 17.63,
+   "end": 18.01
+  },
+  {
+   "shot": "S07",
+   "text": "risk.",
+   "start": 18.01,
+   "end": 18.68
+  },
+  {
+   "shot": "S08",
+   "text": "You brace",
+   "start": 18.68,
+   "end": 19.12
+  },
+  {
+   "shot": "S08",
+   "text": "yourself mornings,",
+   "start": 19.12,
+   "end": 20.78
+  },
+  {
+   "shot": "S09",
+   "text": "dinners,",
+   "start": 20.78,
+   "end": 21.42
+  },
+  {
+   "shot": "S10",
+   "text": "bedtimes.",
+   "start": 21.42,
+   "end": 22.32
+  },
+  {
+   "shot": "S11",
+   "text": "And instead",
+   "start": 22.32,
+   "end": 22.82
+  },
+  {
+   "shot": "S11",
+   "text": "of enjoying",
+   "start": 22.82,
+   "end": 23.3
+  },
+  {
+   "shot": "S11",
+   "text": "your kid,",
+   "start": 23.3,
+   "end": 24.06
+  },
+  {
+   "shot": "S12",
+   "text": "you're waiting",
+   "start": 24.06,
+   "end": 24.52
+  },
+  {
+   "shot": "S12",
+   "text": "for the",
+   "start": 24.52,
+   "end": 24.84
+  },
+  {
+   "shot": "S12",
+   "text": "next meltdown",
+   "start": 24.84,
+   "end": 25.48
+  },
+  {
+   "shot": "S12",
+   "text": "to start.",
+   "start": 25.48,
+   "end": 26.26
+  },
+  {
+   "shot": "S13",
+   "text": "Day after",
+   "start": 26.26,
+   "end": 26.82
+  },
+  {
+   "shot": "S13",
+   "text": "day,",
+   "start": 26.82,
+   "end": 27.32
+  },
+  {
+   "shot": "S13",
+   "text": "your home",
+   "start": 27.32,
+   "end": 27.68
+  },
+  {
+   "shot": "S13",
+   "text": "feels loud,",
+   "start": 27.68,
+   "end": 28.78
+  },
+  {
+   "shot": "S14",
+   "text": "tense,",
+   "start": 28.78,
+   "end": 29.52
+  },
+  {
+   "shot": "S14",
+   "text": "and exhausting,",
+   "start": 29.52,
+   "end": 30.48
+  },
+  {
+   "shot": "S15",
+   "text": "leaving you",
+   "start": 30.48,
+   "end": 31.0
+  },
+  {
+   "shot": "S15",
+   "text": "drained before",
+   "start": 31.0,
+   "end": 31.58
+  },
+  {
+   "shot": "S15",
+   "text": "your day",
+   "start": 31.58,
+   "end": 31.92
+  },
+  {
+   "shot": "S15",
+   "text": "is even",
+   "start": 31.92,
+   "end": 32.26
+  },
+  {
+   "shot": "S15",
+   "text": "over.",
+   "start": 32.26,
+   "end": 32.92
+  },
+  {
+   "shot": "S16",
+   "text": "What if",
+   "start": 32.92,
+   "end": 33.24
+  },
+  {
+   "shot": "S16",
+   "text": "your kid",
+   "start": 33.24,
+   "end": 33.54
+  },
+  {
+   "shot": "S16",
+   "text": "has been",
+   "start": 33.54,
+   "end": 33.78
+  },
+  {
+   "shot": "S16",
+   "text": "asking for",
+   "start": 33.78,
+   "end": 34.34
+  },
+  {
+   "shot": "S16",
+   "text": "a different",
+   "start": 34.34,
+   "end": 34.86
+  },
+  {
+   "shot": "S16",
+   "text": "kind of",
+   "start": 34.86,
+   "end": 35.24
+  },
+  {
+   "shot": "S16",
+   "text": "support?",
+   "start": 35.24,
+   "end": 35.76
+  },
+  {
+   "shot": "S17",
+   "text": "Just one",
+   "start": 35.76,
+   "end": 36.44
+  },
+  {
+   "shot": "S17",
+   "text": "printable feelings",
+   "start": 36.44,
+   "end": 37.32
+  },
+  {
+   "shot": "S17",
+   "text": "chart with",
+   "start": 37.32,
+   "end": 37.72
+  },
+  {
+   "shot": "S17",
+   "text": "your kid",
+   "start": 37.72,
+   "end": 38.08
+  },
+  {
+   "shot": "S17",
+   "text": "every day",
+   "start": 38.08,
+   "end": 38.82
+  },
+  {
+   "shot": "S18",
+   "text": "can help",
+   "start": 38.82,
+   "end": 39.26
+  },
+  {
+   "shot": "S18",
+   "text": "them name",
+   "start": 39.26,
+   "end": 39.78
+  },
+  {
+   "shot": "S18",
+   "text": "feelings,",
+   "start": 39.78,
+   "end": 40.32
+  },
+  {
+   "shot": "S19",
+   "text": "and leave",
+   "start": 40.32,
+   "end": 41.04
+  },
+  {
+   "shot": "S19",
+   "text": "your home",
+   "start": 41.04,
+   "end": 41.36
+  },
+  {
+   "shot": "S19",
+   "text": "feeling lighter",
+   "start": 41.36,
+   "end": 42.04
+  },
+  {
+   "shot": "S19",
+   "text": "and more",
+   "start": 42.04,
+   "end": 42.66
+  },
+  {
+   "shot": "S19",
+   "text": "peaceful.",
+   "start": 42.66,
+   "end": 43.32
+  },
+  {
+   "shot": "S20",
+   "text": "No more",
+   "start": 43.32,
+   "end": 43.82
+  },
+  {
+   "shot": "S20",
+   "text": "bracing yourself",
+   "start": 43.82,
+   "end": 44.46
+  },
+  {
+   "shot": "S20",
+   "text": "before every",
+   "start": 44.46,
+   "end": 45.18
+  },
+  {
+   "shot": "S20",
+   "text": "request.",
+   "start": 45.18,
+   "end": 45.92
+  },
+  {
+   "shot": "S21",
+   "text": "No more",
+   "start": 45.92,
+   "end": 46.34
+  },
+  {
+   "shot": "S21",
+   "text": "worrying about",
+   "start": 46.34,
+   "end": 46.88
+  },
+  {
+   "shot": "S21",
+   "text": "meltdowns or",
+   "start": 46.88,
+   "end": 47.62
+  },
+  {
+   "shot": "S21",
+   "text": "tantrums,",
+   "start": 47.62,
+   "end": 48.08
+  },
+  {
+   "shot": "S22",
+   "text": "just a",
+   "start": 48.08,
+   "end": 48.96
+  },
+  {
+   "shot": "S22",
+   "text": "kid who",
+   "start": 48.96,
+   "end": 49.3
+  },
+  {
+   "shot": "S22",
+   "text": "names feelings,",
+   "start": 49.3,
+   "end": 50.46
+  },
+  {
+   "shot": "S23",
+   "text": "calmer evenings",
+   "start": 50.46,
+   "end": 51.61
+  },
+  {
+   "shot": "S24",
+   "text": "and time",
+   "start": 51.61,
+   "end": 51.98
+  },
+  {
+   "shot": "S24",
+   "text": "to enjoy",
+   "start": 51.98,
+   "end": 52.54
+  },
+  {
+   "shot": "S24",
+   "text": "them.",
+   "start": 52.54,
+   "end": 53.08
+  },
+  {
+   "shot": "S25",
+   "text": "Add one",
+   "start": 53.08,
+   "end": 53.61
+  },
+  {
+   "shot": "S25",
+   "text": "feelings chart",
+   "start": 53.61,
+   "end": 54.23
+  },
+  {
+   "shot": "S25",
+   "text": "a day",
+   "start": 54.23,
+   "end": 54.53
+  },
+  {
+   "shot": "S25",
+   "text": "from the",
+   "start": 54.53,
+   "end": 54.85
+  },
+  {
+   "shot": "S25",
+   "text": "free Kids",
+   "start": 54.85,
+   "end": 55.57
+  },
+  {
+   "shot": "S25",
+   "text": "Mental Health",
+   "start": 55.57,
+   "end": 55.99
+  },
+  {
+   "shot": "S25",
+   "text": "Bundle",
+   "start": 55.99,
+   "end": 56.29
+  },
+  {
+   "shot": "S26",
+   "text": "and give",
+   "start": 56.29,
+   "end": 57.03
+  },
+  {
+   "shot": "S26",
+   "text": "your kid",
+   "start": 57.03,
+   "end": 57.41
+  },
+  {
+   "shot": "S26",
+   "text": "support.",
+   "start": 57.41,
+   "end": 58.41
+  },
+  {
+   "shot": "S28",
+   "text": "Grab yours",
+   "start": 58.78,
+   "end": 59.26
+  },
+  {
+   "shot": "S28",
+   "text": "free.",
+   "start": 59.26,
+   "end": 61.2
+  }
+ ]
+}
